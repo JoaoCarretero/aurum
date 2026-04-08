@@ -63,6 +63,7 @@ from backtest import (
     _tf_params, RUN_ID, log as _bk_log,
 )
 import backtest as _bk
+from telegram_bot import TelegramNotifier
 
 # ── CONFIG ────────────────────────────────────────────────────
 LIVE_MODE         = False          # False = PAPER  |  True = LIVE/TESTNET
@@ -728,6 +729,7 @@ class LiveEngine:
         self._symbol_pnl: dict[str, list] = {}         # symbol → lista de PnLs recentes
         _mode_lbl = "DEMO" if DEMO_MODE else "TESTNET" if TESTNET_MODE else "LIVE" if LIVE_MODE else "PAPER"
         log.info(f"LiveEngine init — {_mode_lbl} mode — {LIVE_RUN_ID}")
+        self.telegram = TelegramNotifier(self)
 
     # ── SEED ──────────────────────────────────────────────────
     async def seed(self):
@@ -881,6 +883,7 @@ class LiveEngine:
                   f"entry={real_entry:.6f}  stop={sig['stop']:.6f}  "
                   f"target={sig['target']:.6f}  size={sig['size']}  "
                   f"score={sig['score']:.3f}  rr={sig['rr']:.2f}")
+        await self.telegram.notify_open(sig, real_entry)
 
     async def _close_position(self, pos: Position, result: str, exit_price: float):
         """Fecha posição, calcula PnL real, actualiza kill-switch e drift."""
@@ -961,6 +964,7 @@ class LiveEngine:
                 rec["drift"]  = round(real_r - pos.expected_r, 4)
                 break
         self._save_state()
+        await self.telegram.notify_close(trade)
 
         # alerta de drift
         drift_sum = self.drift.summary()
@@ -1001,6 +1005,7 @@ class LiveEngine:
         ks_triggered, ks_reason = self.kill_sw.check()
         if ks_triggered:
             log.warning(f"  KILL-SWITCH: {ks_reason} — novos sinais bloqueados")
+            await self.telegram.notify_killswitch(ks_reason)
             return
 
         # 3. Streak / sym_loss cooldown
@@ -1284,11 +1289,13 @@ class LiveEngine:
         # Lança WebSocket por símbolo
         tasks = [asyncio.create_task(self._ws_listen(sym)) for sym in SYMBOLS]
         tasks.append(asyncio.create_task(self._status_ticker()))
+        tasks.append(asyncio.create_task(self.telegram.start()))
         self._ws_tasks = tasks
 
         _run_mode = "DEMO" if DEMO_MODE else "TESTNET" if TESTNET_MODE else "LIVE" if LIVE_MODE else "PAPER"
         log.info(f"Live engine iniciado — {len(SYMBOLS)} símbolos  mode={_run_mode}")
         self._print_banner()
+        await self.telegram.notify_startup(_run_mode, SYMBOLS)
 
         try:
             await asyncio.gather(*tasks)
@@ -1296,9 +1303,11 @@ class LiveEngine:
             pass
         finally:
             self.running = False
+            self.telegram.stop()
             for t in tasks: t.cancel()
             self._save_state()
             self._save_report()
+            await self.telegram.notify_shutdown()
             log.info("LiveEngine encerrado.")
 
     def _print_banner(self):
@@ -1322,7 +1331,7 @@ class LiveEngine:
 
 
 # ── INTERACTIVE MENU ──────────────────────────────────────────
-def _menu():
+def _menu() -> str:
     W = 66
     print(f"\n  {'╔'+'═'*(W-2)+'╗'}")
     print(f"  ║{'':^{W-2}}║")
@@ -1338,8 +1347,10 @@ def _menu():
     print(f"  {'─'*W}")
     print(f"  [0]  Sair")
     print(f"  {'─'*W}")
+    _map = {"1": "paper", "2": "demo", "3": "testnet", "4": "live", "5": "diag", "0": "exit"}
     op = input("\n  Opcao > ").strip()
-    return op
+    return _map.get(op, "exit")
+
 
 async def _run_diagnostic():
     """Testa conexão REST, seed, e indicadores sem entrar no loop live."""
@@ -1347,7 +1358,6 @@ async def _run_diagnostic():
     engine = LiveEngine()
     await engine.seed()
 
-    # testa indicadores no último candle de cada símbolo
     for sym in SYMBOLS[:3]:
         df = engine.buffer.to_df(sym)
         if df is None: log.warning(f"  {sym}: buffer vazio"); continue
@@ -1362,30 +1372,80 @@ async def _run_diagnostic():
 
     ks_status = engine.kill_sw.status()
     log.info(f"Kill-switch status: {ks_status}")
+
+    # Telegram connectivity test
+    from telegram_bot import TelegramNotifier
+    tg = TelegramNotifier(engine)
+    if tg.enabled:
+        await tg.send("🔧 <b>AURUM Diagnóstico</b> — Telegram OK ✓")
+        log.info("Telegram: conexão OK ✓")
+    else:
+        log.warning("Telegram: não configurado (adiciona 'telegram' a config/keys.json)")
+
     log.info("Diagnóstico completo — sistema OK para trading")
 
+
+def _launch(mode: str, leverage: float = 1.0, no_telegram: bool = False):
+    """Lança o engine com o modo especificado."""
+    global LIVE_MODE, TESTNET_MODE, DEMO_MODE
+
+    if mode == "live":
+        print(f"\n  ⚠  LIVE MODE — capital real será utilizado")
+        confirm = input("  Confirmas? (escreve 'SIM' para continuar) > ").strip()
+        if confirm != "SIM":
+            print("  Cancelado."); sys.exit(0)
+        import backtest as _bk2
+        _bk2.LEVERAGE = leverage
+
+    LIVE_MODE    = (mode == "live")
+    DEMO_MODE    = (mode == "demo")
+    TESTNET_MODE = (mode == "testnet")
+
+    engine = LiveEngine()
+
+    if no_telegram:
+        engine.telegram.enabled = False
+        log.info("Telegram desactivado via --no-telegram")
+
+    asyncio.run(engine.run())
+
+
 if __name__ == "__main__":
-    op = _menu()
+    import argparse
 
-    if op == "0":
-        print("\n  Ate logo.\n"); sys.exit(0)
+    ap = argparse.ArgumentParser(
+        description="☿ AURUM Finance — Live Engine v1.0",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemplos:
+  python live.py                   # menu interactivo
+  python live.py paper             # paper trading directo
+  python live.py demo              # demo Binance Futures
+  python live.py live --leverage 2 # live com leverage 2x
+  python live.py diag              # diagnóstico rápido
+  python live.py paper --no-telegram  # sem notificações Telegram
+        """,
+    )
+    ap.add_argument(
+        "mode", nargs="?",
+        choices=["paper", "demo", "testnet", "live", "diag"],
+        help="Modo de execução (omitir para menu interactivo)",
+    )
+    ap.add_argument("--leverage", type=float, default=1.0, help="Leverage para LIVE mode (default: 1)")
+    ap.add_argument("--no-telegram", action="store_true", help="Desactiva notificações Telegram")
 
-    elif op == "5":
+    args = ap.parse_args()
+
+    # Se sem argumentos → menu interactivo
+    if args.mode is None:
+        args.mode = _menu()
+
+    if args.mode == "exit":
+        print("\n  Ate logo.\n")
+        sys.exit(0)
+
+    elif args.mode == "diag":
         asyncio.run(_run_diagnostic())
 
-    elif op in ("1", "2", "3", "4"):
-
-        if op == "4":  # LIVE
-            print(f"\n  ⚠  LIVE MODE — capital real será utilizado")
-            confirm = input("  Confirmas? (escreve 'SIM' para continuar) > ").strip()
-            if confirm != "SIM":
-                print("  Cancelado."); sys.exit(0)
-            import backtest as _bk2
-            _bk2.LEVERAGE = float(input("  Leverage [1] > ").strip() or "1")
-
-        LIVE_MODE    = (op == "4")
-        DEMO_MODE    = (op == "2")
-        TESTNET_MODE = (op == "3")
-
-        engine = LiveEngine()
-        asyncio.run(engine.run())
+    else:
+        _launch(args.mode, args.leverage, args.no_telegram)
