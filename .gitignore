@@ -26,5 +26,9 @@ config/keys.json
 
 # Node
 node_modules/
-dist/
 .env
+
+# PyInstaller
+build/
+dist/
+*.spec
