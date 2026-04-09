@@ -245,46 +245,137 @@ class App(tk.Tk):
             self._kb("<BackSpace>", lambda: self._menu("main"))
             self._kb("<Key-0>", lambda: self._menu("main"))
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text=title, font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 16))
+        # ─── MAIN MENU: Fibonacci design ─────────────────
+        if key == "main":
+            f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True)
 
-        for i, (name, target, desc) in enumerate(items):
-            num = i + 1
-            row = tk.Frame(f, bg=BG, cursor="hand2")
-            row.pack(fill="x", padx=60, pady=1)
+            # Fibonacci spiral overlay (canvas behind everything)
+            fib_canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=800, height=500)
+            fib_canvas.place(relx=0.5, rely=0.5, anchor="center")
 
-            # Number badge
-            tk.Label(row, text=f" {num} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER, width=3).pack(side="left")
+            # Golden ratio proportions
+            phi = 1.618
+            cx, cy = 400, 250
 
-            # Name
-            nl = tk.Label(row, text=f"  {name}", font=(FONT, 10, "bold"), fg=WHITE, bg=BG3, anchor="w", padx=6, pady=4, width=14)
-            nl.pack(side="left")
+            # Fibonacci arcs (subtle, decorative)
+            fib_sizes = [21, 34, 55, 89, 144, 233]
+            for i, r in enumerate(fib_sizes):
+                opacity_hex = ["08", "06", "05", "04", "03", "02"][i]
+                fib_canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                    start=90 * i, extent=90, outline=f"#ff8c00",
+                    width=1, style="arc", dash=(2, 4 + i))
 
-            # Desc
-            dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
-            dl.pack(side="left", fill="x", expand=True)
+            # Corner ornaments — golden ratio rectangles
+            for ox, oy, anchor in [(24, 24, "nw"), (776, 24, "ne"), (24, 476, "sw"), (776, 476, "se")]:
+                # Small golden rect (phi proportioned)
+                w, h = 34, int(34 / phi)
+                x0 = ox if "w" in anchor else ox - w
+                y0 = oy if "n" in anchor else oy - h
+                fib_canvas.create_rectangle(x0, y0, x0 + w, y0 + h, outline=AMBER_D, width=1, dash=(1, 3))
+                # Dot at corner
+                dx = x0 if "w" in anchor else x0 + w
+                dy = y0 if "n" in anchor else y0 + h
+                fib_canvas.create_oval(dx - 2, dy - 2, dx + 2, dy + 2, fill=AMBER_D, outline="")
 
-            # Action
-            if key == "main":
-                # target is a menu key
+            # Horizontal golden lines connecting the grid
+            for y_off in [-120, -48, 24, 96, 168]:
+                y = cy + y_off
+                fib_canvas.create_line(80, y, 720, y, fill=BORDER, width=1, dash=(1, 8))
+                # Fibonacci tick marks at phi positions
+                for px in [0.236, 0.382, 0.5, 0.618, 0.786]:
+                    tx = 80 + px * 640
+                    fib_canvas.create_line(tx, y - 3, tx, y + 3, fill=DIM2, width=1)
+
+            # Vertical guide lines at phi ratios
+            for px in [0.382, 0.618]:
+                x = 80 + px * 640
+                fib_canvas.create_line(x, cy - 140, x, cy + 200, fill=BORDER, width=1, dash=(1, 12))
+
+            # Golden spiral hint (quarter arcs)
+            fib_canvas.create_arc(cx - 89, cy - 89, cx + 89, cy + 89,
+                start=0, extent=90, outline=AMBER_D, width=1, dash=(3, 6))
+            fib_canvas.create_arc(cx - 55, cy - 55, cx + 55, cy + 55,
+                start=90, extent=90, outline=AMBER_D, width=1, dash=(3, 6))
+            fib_canvas.create_arc(cx - 34, cy - 34, cx + 34, cy + 34,
+                start=180, extent=90, outline=AMBER_D, width=1, dash=(3, 6))
+
+            # Phi label
+            fib_canvas.create_text(cx + 100, cy - 130, text="φ = 1.618", font=(FONT, 7),
+                                    fill=DIM2, anchor="w")
+
+            # Title over canvas
+            title_frame = tk.Frame(f, bg=BG)
+            title_frame.place(relx=0.5, rely=0.12, anchor="center")
+            tk.Label(title_frame, text="MAIN", font=(FONT, 16, "bold"), fg=AMBER, bg=BG).pack()
+            tk.Label(title_frame, text="Select operation", font=(FONT, 8), fg=DIM, bg=BG).pack()
+
+            # Menu items overlaid on canvas — positioned with Fibonacci spacing
+            menu_frame = tk.Frame(f, bg=BG)
+            menu_frame.place(relx=0.5, rely=0.52, anchor="center")
+
+            for i, (name, target, desc) in enumerate(items):
+                num = i + 1
+                row = tk.Frame(menu_frame, bg=BG, cursor="hand2")
+                row.pack(fill="x", pady=2)
+
+                # Left accent — fibonacci height (proportional)
+                accent_h = max(2, int(8 / phi ** (i * 0.3)))
+
+                tk.Label(row, text=f" {num} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER, width=3).pack(side="left")
+
+                # Connecting dot
+                tk.Label(row, text="─", font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left")
+
+                nl = tk.Label(row, text=f" {name}", font=(FONT, 10, "bold"), fg=WHITE, bg=BG3,
+                              anchor="w", padx=8, pady=5, width=14)
+                nl.pack(side="left")
+
+                dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=8, pady=5)
+                dl.pack(side="left", fill="x", expand=True)
+
+                # Right phi indicator
+                tk.Label(row, text="›", font=(FONT, 10), fg=DIM2, bg=BG3, padx=6).pack(side="right")
+
                 if target in ("data", "procs", "config"):
                     cmd = lambda t=target: self._special(t)
                 else:
                     cmd = lambda t=target: self._menu(t)
-            else:
-                # target is a script path
+
+                for w in [row, nl, dl]:
+                    w.bind("<Enter>", lambda e, r=row, n=nl: (r.configure(bg=BG3), n.configure(fg=AMBER)))
+                    w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
+                    w.bind("<Button-1>", lambda e, c=cmd: c())
+
+                self._kb(f"<Key-{num}>", cmd)
+
+        # ─── SUBMENUS: clean list ─────────────────────────
+        else:
+            f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
+            tk.Label(f, text=title, font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 6))
+            tk.Label(f, text="Select engine", font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 16))
+
+            for i, (name, target, desc) in enumerate(items):
+                num = i + 1
+                row = tk.Frame(f, bg=BG, cursor="hand2")
+                row.pack(fill="x", padx=60, pady=1)
+
+                tk.Label(row, text=f" {num} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER, width=3).pack(side="left")
+                nl = tk.Label(row, text=f"  {name}", font=(FONT, 10, "bold"), fg=WHITE, bg=BG3, anchor="w", padx=6, pady=4, width=14)
+                nl.pack(side="left")
+                dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
+                dl.pack(side="left", fill="x", expand=True)
+
                 cmd = lambda n=name, t=target, d=desc, k=key: self._run(n, t, d, k)
 
-            for w in [row, nl, dl]:
-                w.bind("<Enter>", lambda e, r=row, n=nl: (r.configure(bg=BG3), n.configure(fg=AMBER)))
-                w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
-                w.bind("<Button-1>", lambda e, c=cmd: c())
+                for w in [row, nl, dl]:
+                    w.bind("<Enter>", lambda e, r=row, n=nl: (r.configure(bg=BG3), n.configure(fg=AMBER)))
+                    w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
+                    w.bind("<Button-1>", lambda e, c=cmd: c())
 
-            self._kb(f"<Key-{num}>", cmd)
+                self._kb(f"<Key-{num}>", cmd)
 
-        # Back/Quit row
-        tk.Frame(f, bg=BG, height=10).pack()
-        if key != "main":
+            # Back row
+            tk.Frame(f, bg=BG, height=10).pack()
             brow = tk.Frame(f, bg=BG, cursor="hand2"); brow.pack(fill="x", padx=60, pady=1)
             tk.Label(brow, text=" 0 ", font=(FONT, 9, "bold"), fg=WHITE, bg=DIM2, width=3).pack(side="left")
             bl = tk.Label(brow, text="  BACK", font=(FONT, 10), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
