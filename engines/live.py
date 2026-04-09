@@ -55,8 +55,6 @@ from core import (
     prepare_htf, merge_all_htf_to_ltf, fetch_all, validate,
     score_omega, score_chop,
 )
-from engines.backtest import RUN_ID, log as _bk_log
-import engines.backtest as _bk
 from bot.telegram import TelegramNotifier
 
 # ── CONFIG ────────────────────────────────────────────────────
@@ -830,8 +828,8 @@ class LiveEngine:
 
                 # sincroniza ACCOUNT_SIZE com saldo real — position_size() usa este valor
                 if balance > 0:
-                    import backtest as _bk_sync
-                    _bk_sync.ACCOUNT_SIZE = balance
+                    import config.params as _params
+                    _params.ACCOUNT_SIZE = balance
                     self.account      = balance
                     self.peak_equity  = balance
                     self.kill_sw.account = balance
@@ -1440,8 +1438,8 @@ def _launch(mode: str, leverage: float = 1.0, no_telegram: bool = False):
         confirm = input("  Confirmas? (escreve 'SIM' para continuar) > ").strip()
         if confirm != "SIM":
             print("  Cancelado."); sys.exit(0)
-        import backtest as _bk2
-        _bk2.LEVERAGE = leverage
+        import config.params as _params
+        _params.LEVERAGE = leverage
 
     LIVE_MODE    = (mode == "live")
     DEMO_MODE    = (mode == "demo")
