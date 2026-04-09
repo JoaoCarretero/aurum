@@ -15,6 +15,7 @@ from typing import Dict,List,Optional,Tuple
 from collections import deque
 
 sys.path.insert(0,str(Path(__file__).parent.parent))
+from config.params import safe_input
 from bot.telegram import TelegramNotifier
 
 ARB_LIVE,ARB_DEMO=False,False
@@ -1627,7 +1628,7 @@ def _menu():
     print(f"\n  {'═'*W}\n  AURUM Finance | Arbitrage Engine v5.0\n  13 venues | Ω scoring | split execution\n  +Depth +Latency +Regime +Hedge +FillProb +Adversarial +ΩV2 +Kelly +Flow\n  {'═'*W}")
     print(f"  [1] DASHBOARD — scan all venues, show opportunities")
     print(f"  [2] PAPER  [3] DEMO  [4] LIVE  [0] Exit\n  {'═'*W}")
-    return{"1":"scan","2":"paper","3":"demo","4":"live","0":"exit"}.get(input("\n  > ").strip(),"exit")
+    return{"1":"scan","2":"paper","3":"demo","4":"live","0":"exit"}.get(safe_input("\n  > ").strip(),"exit")
 
 if __name__=="__main__":
     import argparse
@@ -1643,7 +1644,7 @@ if __name__=="__main__":
         asyncio.run(_s())
     elif args.mode in("paper","demo","live"):
         if args.mode=="live":
-            if input("  LIVE. Type YES > ").strip()!="YES":sys.exit(0)
+            if safe_input("  LIVE. Type YES > ").strip()!="YES":sys.exit(0)
             ARB_LIVE=True
         elif args.mode=="demo":ARB_DEMO=True
         asyncio.run(Engine(venues).run())

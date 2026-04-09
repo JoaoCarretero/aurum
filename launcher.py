@@ -176,6 +176,71 @@ BRIEFINGS = {
     },
 }
 
+BRIEFINGS["PAPER"] = BRIEFINGS["DEMO"] = BRIEFINGS["TESTNET"] = BRIEFINGS["LIVE"] = {
+    "philosophy": "The market is a living system. Live trading is the final test — where your algorithms meet reality. Every tick is a vote, every trade a thesis. Paper mode lets you observe without risk. Demo validates execution. Live is where conviction meets capital.",
+    "logic": [
+        "Connect to Binance Futures API (paper/demo/testnet/live)",
+        "Seed historical data for all symbols — build indicator state",
+        "Run scan cycle every 15m candle — same logic as backtest",
+        "Execute orders via REST API with HMAC-signed requests",
+        "Monitor positions: trailing stops, funding, kill-switch",
+    ],
+    "edge": "Same edge as backtest, validated on live market microstructure.",
+    "risk": "Slippage, API latency, exchange downtime. Start with paper/demo.",
+}
+
+BRIEFINGS["ARBITRAGE"] = {
+    "philosophy": "In an efficient market, the same asset should cost the same everywhere. But markets aren't efficient — funding rates diverge, prices lag between exchanges, and liquidity fragments. NEUTRINO captures these inefficiencies: delta-neutral, mathematical, pure arbitrage.",
+    "logic": [
+        "Scan 10 venues simultaneously: Binance, Bybit, OKX, Gate, Bitget + 5 more",
+        "Detect 4 types: funding rate arb, spot-perp basis, cross-venue spread, internal",
+        "Score with Omega v2: edge × fill probability × adversarial discount",
+        "Execute split orders (5 parts) with latency profiling per venue",
+        "Hedge monitor ensures delta-neutral at all times",
+    ],
+    "edge": "Market-neutral. Profits from exchange inefficiency, not direction.",
+    "risk": "Execution risk, withdrawal delays between venues, funding rate changes.",
+}
+
+BRIEFINGS["DARWIN"] = {
+    "philosophy": "Natural selection applied to trading strategies. Each engine is an organism competing for capital. The fittest survive, the weak are pruned. Over time, the portfolio evolves — adapting to the market as it changes.",
+    "logic": [
+        "Evaluate fitness per engine: Sortino (40%) + Profit Factor (20%) + Win Rate (20%) + Stability (20%)",
+        "Rank engines and allocate capital: top performer 35%, above median 25%, below 10%",
+        "Kill zone: 3 consecutive negative windows → engine paused at 5% minimum",
+        "Mutation: every 100 trades, perturb parameters ±10% and test improvement",
+        "Crossover: combine DNA of two high-performing engines in same regime",
+    ],
+    "edge": "Adapts portfolio allocation automatically based on real performance.",
+    "risk": "Requires sufficient trade history. May over-allocate to lucky streaks.",
+}
+
+BRIEFINGS["NEXUS API"] = {
+    "philosophy": "Control is freedom. NEXUS opens the AURUM platform to the world — REST API, WebSocket streaming, JWT authentication. Your phone, your dashboard, your integrations. The terminal expands beyond the terminal.",
+    "logic": [
+        "FastAPI server on port 8000 with Swagger docs at /docs",
+        "JWT authentication with bcrypt password hashing",
+        "Endpoints: auth, account, trading, analytics, live WebSocket",
+        "SQLite database for users, trades, deposits, engine state",
+        "Real-time streaming of engine status and trade events",
+    ],
+    "edge": "Remote control. Mobile access. Third-party integrations.",
+    "risk": "Expose only on localhost or behind VPN. Never on public internet without auth.",
+}
+
+BRIEFINGS["CHRONOS"] = {
+    "philosophy": "Traditional indicators look at what happened. CHRONOS looks at the invisible structure of time — hidden regimes, volatility clusters, momentum decay, fractal dimensions. The patterns that exist beneath the candles.",
+    "logic": [
+        "Hidden Markov Model: P(bull), P(bear), P(chop) as continuous probabilities",
+        "GARCH(1,1): forecast volatility for next 4-8 candles proactively",
+        "Momentum decay: exponential decay rate — detect fading trends before reversal",
+        "Hurst exponent: H>0.5 trending, H<0.5 mean-reverting, H≈0.5 random walk",
+        "Seasonality: hour × day-of-week edge scoring from historical patterns",
+    ],
+    "edge": "Sees regime transitions before they complete. Proactive sizing.",
+    "risk": "ML dependencies (hmmlearn, arch). Falls back gracefully if not installed.",
+}
+
 BASKETS_UI = [
     ("DEFAULT",  "", ["BNB","INJ","LINK","RENDER","NEAR","SUI","ARB","SAND","XRP","FET","OP"]),
     ("TOP 12",   "2", ["BTC","ETH","BNB","SOL","XRP","DOGE","ADA","AVAX","LINK","DOT","MATIC","SUI"]),
@@ -535,25 +600,29 @@ class App(tk.Tk):
 
         tk.Frame(f, bg=BG, height=14).pack()
 
-        # Is this a backtest engine? Show config screen
+        # Route to correct config screen
         is_bt = parent_menu == "backtest"
+        is_live = parent_menu == "live"
+        is_tool = parent_menu == "tools"
 
-        # Action buttons
         btn_f = tk.Frame(f, bg=BG)
         btn_f.pack()
 
         if is_bt:
-            run_btn = tk.Label(btn_f, text="  CONFIGURE & RUN  ", font=(FONT, 10, "bold"),
-                               fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
-            run_btn.pack(side="left", padx=4)
-            run_btn.bind("<Button-1>", lambda e: self._config_backtest(name, script, desc, parent_menu))
-            self._kb("<Return>", lambda: self._config_backtest(name, script, desc, parent_menu))
+            next_fn = lambda: self._config_backtest(name, script, desc, parent_menu)
+            btn_text = "  CONFIGURE & RUN  "
+        elif is_live:
+            next_fn = lambda: self._config_live(name, script, desc, parent_menu)
+            btn_text = "  SELECT MODE & RUN  "
         else:
-            run_btn = tk.Label(btn_f, text="  EXECUTE  ", font=(FONT, 10, "bold"),
-                               fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
-            run_btn.pack(side="left", padx=4)
-            run_btn.bind("<Button-1>", lambda e: self._exec(name, script, desc, parent_menu, []))
-            self._kb("<Return>", lambda: self._exec(name, script, desc, parent_menu, []))
+            next_fn = lambda: self._exec(name, script, desc, parent_menu, [])
+            btn_text = "  EXECUTE  "
+
+        run_btn = tk.Label(btn_f, text=btn_text, font=(FONT, 10, "bold"),
+                           fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
+        run_btn.pack(side="left", padx=4)
+        run_btn.bind("<Button-1>", lambda e: next_fn())
+        self._kb("<Return>", next_fn)
 
         back_btn = tk.Label(btn_f, text="  BACK  ", font=(FONT, 10), fg=DIM, bg=BG3,
                             cursor="hand2", padx=12, pady=4)
@@ -690,6 +759,84 @@ class App(tk.Tk):
             self._exec(name, script, desc, parent_menu, inputs)
 
         run_btn = tk.Label(btn_f, text="  RUN BACKTEST  ", font=(FONT, 11, "bold"),
+                           fg=BG, bg=AMBER, cursor="hand2", padx=16, pady=5)
+        run_btn.pack(side="left", padx=4)
+        run_btn.bind("<Button-1>", lambda e: do_run())
+        self._kb("<Return>", do_run)
+
+        back_btn = tk.Label(btn_f, text="  BACK  ", font=(FONT, 10), fg=DIM, bg=BG3,
+                            cursor="hand2", padx=12, pady=5)
+        back_btn.pack(side="left", padx=4)
+        back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
+        self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
+
+    # ─── LIVE CONFIG (clickable mode select) ───────────
+    def _config_live(self, name, script, desc, parent_menu):
+        """Config screen for live engines — select mode then run."""
+        self._clr(); self._unbind()
+        self.h_path.configure(text=f"> {parent_menu.upper()} > {name} > CONFIG")
+        self.h_stat.configure(text="CONFIGURE", fg=AMBER_D)
+        self.f_lbl.configure(text="Select mode then RUN  |  ESC back to briefing")
+
+        # For arbitrage vs live, different modes
+        is_arb = "arbitrage" in script
+        if is_arb:
+            modes = [
+                ("DASHBOARD", "1", "Scan all venues and show opportunities"),
+                ("PAPER",     "2", "Simulated — no real orders"),
+                ("DEMO",      "3", "Exchange demo/sandbox API"),
+                ("LIVE",      "4", "REAL CAPITAL — extreme caution"),
+            ]
+        else:
+            modes = [
+                ("PAPER",    "1", "Simulated execution — observe without risk"),
+                ("DEMO",     "2", "Binance Futures Demo API — real orderbook, fake money"),
+                ("TESTNET",  "3", "Binance Testnet — test environment"),
+                ("LIVE",     "4", "REAL CAPITAL — your money on the line"),
+            ]
+
+        self._live_mode = modes[0][1]  # default to first
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True, padx=30, pady=16)
+
+        tk.Label(f, text=f"{name} — SELECT MODE", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 14))
+
+        self._mode_btns = []
+        for label, val, hint in modes:
+            row = tk.Frame(f, bg=BG, cursor="hand2")
+            row.pack(fill="x", pady=2)
+
+            color = RED if "LIVE" == label else AMBER if "DEMO" == label else GREEN
+            is_default = val == self._live_mode
+
+            btn = tk.Label(row, text=f" {label} ", font=(FONT, 9, "bold"),
+                           fg=BG if is_default else DIM, bg=color if is_default else BG3,
+                           cursor="hand2", padx=10, pady=4)
+            btn.pack(side="left", padx=2)
+
+            hl = tk.Label(row, text=f"  {hint}", font=(FONT, 8), fg=DIM, bg=BG, anchor="w", padx=4)
+            hl.pack(side="left")
+
+            self._mode_btns.append((btn, val, color))
+
+            def select_mode(event, v=val):
+                self._live_mode = v
+                for b, bv, c in self._mode_btns:
+                    b.configure(fg=BG if bv == v else DIM, bg=c if bv == v else BG3)
+            btn.bind("<Button-1>", select_mode)
+            hl.bind("<Button-1>", select_mode)
+
+        tk.Frame(f, bg=BG, height=16).pack()
+        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
+
+        btn_f = tk.Frame(f, bg=BG)
+        btn_f.pack()
+
+        def do_run():
+            self._exec(name, script, desc, parent_menu, [self._live_mode])
+
+        run_btn = tk.Label(btn_f, text="  START ENGINE  ", font=(FONT, 11, "bold"),
                            fg=BG, bg=AMBER, cursor="hand2", padx=16, pady=5)
         run_btn.pack(side="left", padx=4)
         run_btn.bind("<Button-1>", lambda e: do_run())
