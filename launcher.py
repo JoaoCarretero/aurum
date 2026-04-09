@@ -98,6 +98,103 @@ BANNER = """
     ╩ ╩ ╚═╝ ╩╚═ ╚═╝ ╩ ╩
 """
 
+# ═══════════════════════════════════════════════════════════
+# STRATEGY BRIEFINGS — philosophy + logic before execution
+# ═══════════════════════════════════════════════════════════
+BRIEFINGS = {
+    "AZOTH": {
+        "philosophy": "Markets are fractal. The same patterns that form on a 15m chart echo on the 4h and daily. AZOTH reads this self-similarity — detecting trend structure across scales, scoring confluence, and entering only when the math converges.",
+        "logic": [
+            "Detect macro regime via BTC slope200 (BULL / BEAR / CHOP)",
+            "Identify swing structure fractals on multiple timeframes",
+            "Score signals with Omega 5D: struct + flow + cascade + momentum + pullback",
+            "Size positions with Kelly fractional + drawdown scaling",
+            "CHOP mode: mean-reversion via Bollinger + RSI when market is lateral",
+        ],
+        "edge": "Trend-following with fractal confirmation. Profitable in directional markets.",
+        "risk": "Underperforms in extended chop. Max drawdown historically ~5%.",
+    },
+    "MERCURIO": {
+        "philosophy": "Price is the last thing to move. Before price breaks, volume shifts. Taker buy/sell pressure, cumulative delta, and order flow imbalances reveal intent before the candle closes. MERCURIO listens to what the market whispers.",
+        "logic": [
+            "Compute Cumulative Volume Delta (CVD) — taker buy minus taker sell",
+            "Detect CVD divergence: price makes new high but CVD doesn't (distribution)",
+            "Measure volume imbalance: taker buy ratio over rolling window",
+            "Identify liquidation cascades via volume + ATR spikes",
+            "Composite score: 30% CVD div + 25% imbalance + 30% structure + 15% trend",
+        ],
+        "edge": "Sees institutional flow before retail. Works in all regimes.",
+        "risk": "False signals in low-volume markets. Requires liquid pairs.",
+    },
+    "THOTH": {
+        "philosophy": "When everyone is greedy, be fearful. When everyone is fearful, be greedy. THOTH quantifies crowd sentiment — funding rates, open interest shifts, and long/short ratios — to find contrarian extremes where the crowd is wrong.",
+        "logic": [
+            "Z-score of funding rate over 30 periods of 8h — extreme funding = reversal",
+            "Delta Open Interest vs price — rising OI + falling price = forced selling",
+            "Long/Short ratio contrarian — ratio > 2.0 = too many longs, fade them",
+            "Composite: 40% funding + 30% OI + 30% LS ratio",
+            "Direction from sentiment extremes, confirmed by price structure",
+        ],
+        "edge": "Catches reversals at sentiment extremes. High win rate.",
+        "risk": "Sentiment can stay extreme longer than expected. Timing risk.",
+    },
+    "NEWTON": {
+        "philosophy": "Two connected assets that diverge must converge. Cointegration is not correlation — it's a mathematical bond. When the spread between two cointegrated pairs stretches beyond normal, gravity pulls it back. NEWTON trades this gravity.",
+        "logic": [
+            "Engle-Granger cointegration test across all symbol pairs",
+            "Calculate spread z-score with rolling OLS half-life estimation",
+            "Entry when |z-score| > 2.0 — spread is 2 standard deviations from mean",
+            "Exit when z-score crosses 0 — mean reversion complete",
+            "Stop when |z-score| > 3.5 — cointegration may have broken",
+        ],
+        "edge": "Market-neutral. Profits regardless of market direction.",
+        "risk": "Cointegration can break permanently. Requires careful pair selection.",
+    },
+    "HADRON": {
+        "philosophy": "No single strategy survives all market conditions. But a portfolio of uncorrelated strategies, each strong in different regimes, creates an edge that persists. HADRON orchestrates — combining signals, managing correlation, allocating capital where the math says to.",
+        "logic": [
+            "Runs all engines simultaneously on the same data",
+            "Aggregates signals at the trade level — not prediction level",
+            "Weights by rolling Sortino ratio per engine per regime",
+            "Kill-switch: pauses any engine with Sortino(20) < -0.5",
+            "Portfolio-level drawdown management across all positions",
+        ],
+        "edge": "Smoothest equity curve. Diversified across strategies.",
+        "risk": "If all strategies correlate in a crash, diversification fails.",
+    },
+    "PROMETEU": {
+        "philosophy": "Can a machine learn which strategy will dominate the next market phase? PROMETEU uses the trades of all engines as training data, learning patterns of when each strategy performs best — and allocating before the regime changes.",
+        "logic": [
+            "Collect trade history from all engines as features",
+            "Build target: which engine has best R-multiple in next N trades",
+            "Train gradient-boosted model on market regime + performance features",
+            "Predict optimal allocation per engine for current conditions",
+            "Rebalance portfolio weights based on ML predictions",
+        ],
+        "edge": "Adapts allocation proactively, not reactively.",
+        "risk": "ML overfitting. Requires diverse training data to generalize.",
+    },
+}
+
+BASKETS_UI = [
+    ("DEFAULT",   "11 assets — BNB, INJ, LINK, RENDER, NEAR + 6 more", ""),
+    ("TOP 12",    "12 assets — BTC, ETH, BNB, SOL, XRP + 7 more",     "2"),
+    ("DEFI",      "10 assets — LINK, AAVE, UNI, MKR, SNX + 5 more",   "3"),
+    ("LAYER 1",   "10 assets — BTC, ETH, SOL, AVAX, NEAR + 5 more",   "4"),
+    ("LAYER 2",   "6 assets — ARB, OP, MATIC, STRK, MANTA + 1",       "5"),
+    ("AI",        "6 assets — FET, RENDER, TAO, NEAR, WLD + 1",        "6"),
+    ("MEME",      "6 assets — DOGE, SHIB, PEPE, BONK, FLOKI + 1",     "7"),
+    ("MAJORS",    "5 assets — BTC, ETH, BNB, SOL, XRP",                "8"),
+    ("BLUECHIP",  "20 assets — full institutional universe",             "9"),
+]
+
+PERIODS_UI = [
+    ("30 DAYS",   "~1 month — quick validation",     "30"),
+    ("90 DAYS",   "~3 months — standard backtest",    "90"),
+    ("180 DAYS",  "~6 months — medium-term",          "180"),
+    ("365 DAYS",  "~1 year — full cycle test",        "365"),
+]
+
 
 class App(tk.Tk):
     def __init__(self):
@@ -365,7 +462,7 @@ class App(tk.Tk):
                 dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
                 dl.pack(side="left", fill="x", expand=True)
 
-                cmd = lambda n=name, t=target, d=desc, k=key: self._run(n, t, d, k)
+                cmd = lambda n=name, t=target, d=desc, k=key: self._brief(n, t, d, k)
 
                 for w in [row, nl, dl]:
                     w.bind("<Enter>", lambda e, r=row, n=nl: (r.configure(bg=BG3), n.configure(fg=AMBER)))
@@ -383,8 +480,221 @@ class App(tk.Tk):
             for w in [brow, bl]:
                 w.bind("<Button-1>", lambda e: self._menu("main"))
 
-    # ─── RUN ENGINE ──────────────────────────────────────
-    def _run(self, name, script, desc, parent_menu):
+    # ─── STRATEGY BRIEFING ──────────────────────────────
+    def _brief(self, name, script, desc, parent_menu):
+        """Show strategy philosophy and logic before running."""
+        self._clr(); self._unbind()
+        self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
+        self.h_stat.configure(text="BRIEFING", fg=AMBER_D)
+        self.f_lbl.configure(text="ENTER execute  |  ESC back")
+
+        brief = BRIEFINGS.get(name, {})
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True, padx=30, pady=16)
+
+        # Header
+        hdr = tk.Frame(f, bg=BG)
+        hdr.pack(fill="x", pady=(0, 12))
+        tk.Label(hdr, text=f" {name} ", font=(FONT, 10, "bold"), fg=BG, bg=AMBER).pack(side="left")
+        tk.Label(hdr, text=f"  {desc}", font=(FONT, 9), fg=DIM, bg=BG).pack(side="left", padx=6)
+
+        tk.Frame(f, bg=AMBER_D, height=1).pack(fill="x", pady=(0, 14))
+
+        # Philosophy (italic feel with dimmer color)
+        if brief.get("philosophy"):
+            tk.Label(f, text='"' + brief["philosophy"] + '"', font=(FONT, 9), fg=AMBER_D,
+                     bg=BG, wraplength=700, justify="left", anchor="w").pack(fill="x", pady=(0, 14))
+
+        # Logic steps
+        if brief.get("logic"):
+            tk.Label(f, text="LOGIC", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+            for i, step in enumerate(brief["logic"]):
+                row = tk.Frame(f, bg=BG)
+                row.pack(fill="x", pady=1)
+                tk.Label(row, text=f"  {i+1}.", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, width=4, anchor="e").pack(side="left")
+                tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG, anchor="w").pack(side="left", padx=4)
+
+        # Edge + Risk side by side
+        if brief.get("edge") or brief.get("risk"):
+            tk.Frame(f, bg=BG, height=10).pack()
+            er = tk.Frame(f, bg=BG)
+            er.pack(fill="x")
+            if brief.get("edge"):
+                ef = tk.Frame(er, bg=BG)
+                ef.pack(side="left", fill="x", expand=True)
+                tk.Label(ef, text="EDGE", font=(FONT, 7, "bold"), fg=GREEN, bg=BG, anchor="w").pack(anchor="w")
+                tk.Label(ef, text=brief["edge"], font=(FONT, 8), fg=DIM, bg=BG, anchor="w", wraplength=350).pack(anchor="w")
+            if brief.get("risk"):
+                rf = tk.Frame(er, bg=BG)
+                rf.pack(side="right", fill="x", expand=True)
+                tk.Label(rf, text="RISK", font=(FONT, 7, "bold"), fg=RED, bg=BG, anchor="w").pack(anchor="w")
+                tk.Label(rf, text=brief["risk"], font=(FONT, 8), fg=DIM, bg=BG, anchor="w", wraplength=350).pack(anchor="w")
+
+        tk.Frame(f, bg=BG, height=14).pack()
+
+        # Is this a backtest engine? Show config screen
+        is_bt = parent_menu == "backtest"
+
+        # Action buttons
+        btn_f = tk.Frame(f, bg=BG)
+        btn_f.pack()
+
+        if is_bt:
+            run_btn = tk.Label(btn_f, text="  CONFIGURE & RUN  ", font=(FONT, 10, "bold"),
+                               fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
+            run_btn.pack(side="left", padx=4)
+            run_btn.bind("<Button-1>", lambda e: self._config_backtest(name, script, desc, parent_menu))
+            self._kb("<Return>", lambda: self._config_backtest(name, script, desc, parent_menu))
+        else:
+            run_btn = tk.Label(btn_f, text="  EXECUTE  ", font=(FONT, 10, "bold"),
+                               fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
+            run_btn.pack(side="left", padx=4)
+            run_btn.bind("<Button-1>", lambda e: self._exec(name, script, desc, parent_menu, []))
+            self._kb("<Return>", lambda: self._exec(name, script, desc, parent_menu, []))
+
+        back_btn = tk.Label(btn_f, text="  BACK  ", font=(FONT, 10), fg=DIM, bg=BG3,
+                            cursor="hand2", padx=12, pady=4)
+        back_btn.pack(side="left", padx=4)
+        back_btn.bind("<Button-1>", lambda e: self._menu(parent_menu))
+        self._kb("<Escape>", lambda: self._menu(parent_menu))
+
+    # ─── BACKTEST CONFIG (clickable inputs) ──────────────
+    def _config_backtest(self, name, script, desc, parent_menu):
+        self._clr(); self._unbind()
+        self.h_path.configure(text=f"> {parent_menu.upper()} > {name} > CONFIG")
+        self.h_stat.configure(text="CONFIGURE", fg=AMBER_D)
+        self.f_lbl.configure(text="Click options to select  |  ENTER run with selections")
+
+        # State
+        self._cfg_period = "90"
+        self._cfg_basket = ""  # empty = default
+        self._cfg_plots = "n"
+        self._cfg_leverage = ""
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True, padx=30, pady=16)
+
+        tk.Label(f, text=f"{name} — BACKTEST CONFIG", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 14))
+
+        # ── PERIOD ──
+        tk.Label(f, text="PERIOD", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+        per_f = tk.Frame(f, bg=BG)
+        per_f.pack(fill="x", pady=(0, 14))
+
+        self._per_btns = []
+        for label, hint, val in PERIODS_UI:
+            btn = tk.Label(per_f, text=f" {label} ", font=(FONT, 9, "bold"),
+                           fg=BG if val == "90" else DIM, bg=AMBER if val == "90" else BG3,
+                           cursor="hand2", padx=10, pady=4)
+            btn.pack(side="left", padx=2)
+            self._per_btns.append((btn, val))
+
+            def select_period(event, v=val):
+                self._cfg_period = v
+                for b, bv in self._per_btns:
+                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
+            btn.bind("<Button-1>", select_period)
+
+        # ── BASKET ──
+        tk.Label(f, text="ASSET BASKET", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+        bsk_f = tk.Frame(f, bg=BG)
+        bsk_f.pack(fill="x", pady=(0, 14))
+
+        self._bsk_btns = []
+        for label, hint, val in BASKETS_UI[:5]:  # show first 5, rest scrollable
+            btn = tk.Label(bsk_f, text=f" {label} ", font=(FONT, 8, "bold"),
+                           fg=BG if val == "" else DIM, bg=AMBER if val == "" else BG3,
+                           cursor="hand2", padx=8, pady=3)
+            btn.pack(side="left", padx=2)
+            self._bsk_btns.append((btn, val))
+
+            def select_basket(event, v=val):
+                self._cfg_basket = v
+                for b, bv in self._bsk_btns:
+                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
+            btn.bind("<Button-1>", select_basket)
+
+        # Second row of baskets
+        bsk_f2 = tk.Frame(f, bg=BG)
+        bsk_f2.pack(fill="x", pady=(0, 14))
+        for label, hint, val in BASKETS_UI[5:]:
+            btn = tk.Label(bsk_f2, text=f" {label} ", font=(FONT, 8, "bold"),
+                           fg=DIM, bg=BG3, cursor="hand2", padx=8, pady=3)
+            btn.pack(side="left", padx=2)
+            self._bsk_btns.append((btn, val))
+
+            def select_basket2(event, v=val):
+                self._cfg_basket = v
+                for b, bv in self._bsk_btns:
+                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
+            btn.bind("<Button-1>", select_basket2)
+
+        # ── OPTIONS ──
+        opt_f = tk.Frame(f, bg=BG)
+        opt_f.pack(fill="x", pady=(0, 14))
+
+        # Charts toggle
+        self._plot_btn = tk.Label(opt_f, text=" CHARTS OFF ", font=(FONT, 8, "bold"),
+                                   fg=DIM, bg=BG3, cursor="hand2", padx=8, pady=3)
+        self._plot_btn.pack(side="left", padx=2)
+        def toggle_plots(event):
+            self._cfg_plots = "s" if self._cfg_plots == "n" else "n"
+            on = self._cfg_plots == "s"
+            self._plot_btn.configure(text=" CHARTS ON " if on else " CHARTS OFF ",
+                                      fg=BG if on else DIM, bg=GREEN if on else BG3)
+        self._plot_btn.bind("<Button-1>", toggle_plots)
+
+        # Leverage
+        tk.Label(opt_f, text="  LEVERAGE:", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="left", padx=(12, 4))
+        self._lev_btns = []
+        for lev in ["1.0", "2.0", "3.0", "5.0"]:
+            btn = tk.Label(opt_f, text=f" {lev}x ", font=(FONT, 8, "bold"),
+                           fg=BG if lev == "1.0" else DIM, bg=AMBER if lev == "1.0" else BG3,
+                           cursor="hand2", padx=6, pady=3)
+            btn.pack(side="left", padx=1)
+            self._lev_btns.append((btn, lev))
+            def select_lev(event, v=lev):
+                self._cfg_leverage = "" if v == "1.0" else v
+                for b, bv in self._lev_btns:
+                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
+            btn.bind("<Button-1>", select_lev)
+
+        tk.Frame(f, bg=BG, height=10).pack()
+
+        # Summary
+        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
+
+        # Run button
+        btn_f = tk.Frame(f, bg=BG)
+        btn_f.pack()
+
+        def do_run():
+            # Build inputs to auto-send: period, basket, plots (if azoth), leverage, enter to start
+            inputs = [self._cfg_period, self._cfg_basket]
+            if name == "AZOTH":
+                inputs.append(self._cfg_plots)
+            inputs.append(self._cfg_leverage)
+            inputs.append("")  # enter to start
+            self._exec(name, script, desc, parent_menu, inputs)
+
+        run_btn = tk.Label(btn_f, text="  RUN BACKTEST  ", font=(FONT, 11, "bold"),
+                           fg=BG, bg=AMBER, cursor="hand2", padx=16, pady=5)
+        run_btn.pack(side="left", padx=4)
+        run_btn.bind("<Button-1>", lambda e: do_run())
+        self._kb("<Return>", do_run)
+
+        back_btn = tk.Label(btn_f, text="  BACK  ", font=(FONT, 10), fg=DIM, bg=BG3,
+                            cursor="hand2", padx=12, pady=5)
+        back_btn.pack(side="left", padx=4)
+        back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
+        self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
+
+    # ─── EXECUTE ENGINE ──────────────────────────────────
+    def _exec(self, name, script, desc, parent_menu, auto_inputs):
         self._clr(); self._unbind()
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
         self.h_stat.configure(text="RUNNING", fg=GREEN)
@@ -471,6 +781,20 @@ class App(tk.Tk):
                 startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW, env=env)
             threading.Thread(target=self._read, daemon=True).start()
             self._poll()
+
+            # Auto-send configured inputs (from clickable config)
+            if auto_inputs:
+                def _auto():
+                    time.sleep(0.8)
+                    for val in auto_inputs:
+                        if self.proc and self.proc.poll() is None and self.proc.stdin:
+                            try:
+                                self.proc.stdin.write(val + "\n")
+                                self.proc.stdin.flush()
+                                time.sleep(0.4)
+                            except: break
+                threading.Thread(target=_auto, daemon=True).start()
+
         except Exception as e:
             self._p(f"FAILED: {e}\n", "r")
 
