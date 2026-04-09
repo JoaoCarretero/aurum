@@ -136,6 +136,12 @@ class AurumTerminal(tk.Tk):
         self.geometry("1020x700")
         self.minsize(900, 600)
 
+        # Set taskbar icon (Windows requires AppUserModelID for taskbar grouping)
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("aurum.finance.terminal")
+        except Exception:
+            pass
         try:
             ico = ROOT / "server" / "logo" / "aurum.ico"
             if ico.exists():
