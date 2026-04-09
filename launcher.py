@@ -848,6 +848,202 @@ class App(tk.Tk):
         back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
         self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
 
+    # ─── RESULTS DASHBOARD ─────────────────────────────
+    def _show_results(self, parent_menu):
+        """Parse latest backtest JSON and show visual dashboard."""
+        self._clr(); self._unbind()
+        self.h_stat.configure(text="RESULTS", fg=GREEN)
+        self.f_lbl.configure(text="ESC back to menu  |  scroll to see all")
+        self._kb("<Escape>", lambda: self._menu(parent_menu))
+
+        # Find latest report
+        data_dir = ROOT / "data"
+        reports = sorted(data_dir.rglob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        report = None
+        for r in reports:
+            if "reports" in str(r):
+                report = r; break
+
+        if not report:
+            f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
+            tk.Label(f, text="No report found.", font=(FONT, 10), fg=DIM, bg=BG).pack(pady=20)
+            return
+
+        try:
+            with open(report, "r", encoding="utf-8") as fj:
+                data = json.load(fj)
+        except Exception as e:
+            f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
+            tk.Label(f, text=f"Error reading report: {e}", font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
+            return
+
+        s = data.get("summary", {})
+        mc = data.get("monte_carlo", {})
+        bm = data.get("bear_market", {})
+        cfg = data.get("config", {})
+        trades = data.get("trades", [])
+
+        # Scrollable frame
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
+        sf = tk.Frame(canvas, bg=BG)
+        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=sf, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        # Mouse wheel scroll
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
+        pad = 24
+
+        # ── HEADER ──
+        tk.Label(sf, text=f"BACKTEST RESULTS", font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(anchor="w", padx=pad, pady=(12, 2))
+        tk.Label(sf, text=f"{data.get('version','')}  |  {data.get('run_id','')}  |  {report.name}",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=pad)
+        tk.Frame(sf, bg=AMBER_D, height=1).pack(fill="x", padx=pad, pady=8)
+
+        # ── KEY METRICS (big numbers) ──
+        met_f = tk.Frame(sf, bg=BG)
+        met_f.pack(fill="x", padx=pad, pady=(0, 8))
+
+        pnl = s.get("total_pnl", 0)
+        roi = s.get("ret", 0)
+        pnl_color = GREEN if pnl >= 0 else RED
+
+        metrics = [
+            (f"+${pnl:,.0f}" if pnl >= 0 else f"-${abs(pnl):,.0f}", "TOTAL PnL", pnl_color),
+            (f"{roi:+.1f}%", "ROI", pnl_color),
+            (f"{s.get('sharpe', 0):.2f}", "SHARPE", AMBER),
+            (f"{s.get('sortino', 0):.2f}", "SORTINO", AMBER),
+            (f"{s.get('win_rate', 0):.1f}%", "WIN RATE", WHITE),
+            (f"{s.get('total_trades', 0)}", "TRADES", WHITE),
+        ]
+
+        for val, label, color in metrics:
+            mf = tk.Frame(met_f, bg=BG3, padx=12, pady=8)
+            mf.pack(side="left", padx=2, fill="x", expand=True)
+            tk.Label(mf, text=val, font=(FONT, 16, "bold"), fg=color, bg=BG3).pack()
+            tk.Label(mf, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG3).pack()
+
+        # ── EQUITY ──
+        eq = data.get("equity", [])
+        if eq and len(eq) > 2:
+            tk.Label(sf, text="EQUITY CURVE", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(anchor="w", padx=pad, pady=(8, 4))
+            eq_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=1, highlightbackground=BORDER, height=120)
+            eq_canvas.pack(fill="x", padx=pad, pady=(0, 8))
+
+            def draw_equity(event=None):
+                eq_canvas.delete("all")
+                w = eq_canvas.winfo_width() or 700
+                h = 120
+                if len(eq) < 2: return
+                mn, mx = min(eq), max(eq)
+                rng = mx - mn or 1
+                pts = []
+                for i, v in enumerate(eq):
+                    x = 4 + (w - 8) * i / (len(eq) - 1)
+                    y = h - 4 - (h - 8) * (v - mn) / rng
+                    pts.append((x, y))
+                # Fill
+                fill_pts = [(4, h - 4)] + pts + [(w - 4, h - 4)]
+                eq_canvas.create_polygon(*[c for p in fill_pts for c in p], fill="#1a1400", outline="")
+                # Line
+                if len(pts) >= 2:
+                    eq_canvas.create_line(*[c for p in pts for c in p], fill=AMBER, width=1.5)
+                # Labels
+                eq_canvas.create_text(6, 6, text=f"${mx:,.0f}", font=(FONT, 7), fill=DIM, anchor="nw")
+                eq_canvas.create_text(6, h - 6, text=f"${mn:,.0f}", font=(FONT, 7), fill=DIM, anchor="sw")
+
+            eq_canvas.bind("<Configure>", draw_equity)
+
+        # ── MONTE CARLO ──
+        if mc:
+            tk.Label(sf, text="MONTE CARLO  (1000 simulations)", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(anchor="w", padx=pad, pady=(8, 4))
+            mc_f = tk.Frame(sf, bg=BG)
+            mc_f.pack(fill="x", padx=pad, pady=(0, 8))
+            mc_items = [
+                (f"{mc.get('pct_pos', 0):.1f}%", "POSITIVE", GREEN if mc.get('pct_pos', 0) > 50 else RED),
+                (f"${mc.get('p5', 0):,.0f}", "P5 (WORST)", DIM),
+                (f"${mc.get('median', 0):,.0f}", "MEDIAN", AMBER),
+                (f"${mc.get('p95', 0):,.0f}", "P95 (BEST)", GREEN),
+                (f"{mc.get('ror', 0):.1f}%", "RUIN RISK", GREEN if mc.get('ror', 0) == 0 else RED),
+            ]
+            for val, label, color in mc_items:
+                mf = tk.Frame(mc_f, bg=BG3, padx=10, pady=6)
+                mf.pack(side="left", padx=2, fill="x", expand=True)
+                tk.Label(mf, text=val, font=(FONT, 12, "bold"), fg=color, bg=BG3).pack()
+                tk.Label(mf, text=label, font=(FONT, 7), fg=DIM, bg=BG3).pack()
+
+        # ── REGIME PERFORMANCE ──
+        if bm:
+            tk.Label(sf, text="PERFORMANCE BY REGIME", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(anchor="w", padx=pad, pady=(8, 4))
+            for regime, rd in bm.items():
+                if not rd: continue
+                rf = tk.Frame(sf, bg=BG3)
+                rf.pack(fill="x", padx=pad, pady=1)
+                rc = GREEN if regime == "BULL" else RED if regime == "BEAR" else AMBER
+                tk.Label(rf, text=f" {regime} ", font=(FONT, 8, "bold"), fg=BG, bg=rc, padx=4).pack(side="left", padx=4, pady=4)
+                tk.Label(rf, text=f"{rd.get('n',0)} trades  WR {rd.get('wr',0):.1f}%  Sharpe {rd.get('sharpe',0):.2f}  DD {rd.get('max_dd',0):.1f}%",
+                         font=(FONT, 8), fg=WHITE, bg=BG3, padx=8).pack(side="left", pady=4)
+                pnl_r = rd.get("pnl", 0)
+                tk.Label(rf, text=f"${pnl_r:+,.0f}", font=(FONT, 9, "bold"),
+                         fg=GREEN if pnl_r >= 0 else RED, bg=BG3, padx=8).pack(side="right", pady=4)
+
+        # ── TOP TRADES ──
+        if trades:
+            tk.Label(sf, text=f"TRADES  ({len(trades)} total)", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(anchor="w", padx=pad, pady=(12, 4))
+            # Header
+            hdr_f = tk.Frame(sf, bg=BG)
+            hdr_f.pack(fill="x", padx=pad)
+            for col, w in [("SYMBOL", 10), ("DIR", 6), ("SCORE", 6), ("RR", 5), ("PnL", 10), ("RESULT", 6)]:
+                tk.Label(hdr_f, text=col, font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, width=w, anchor="w").pack(side="left")
+            tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", padx=pad, pady=1)
+
+            for t in trades[:30]:
+                tr_f = tk.Frame(sf, bg=BG)
+                tr_f.pack(fill="x", padx=pad)
+                is_win = t.get("result") == "WIN"
+                tk.Label(tr_f, text=t.get("symbol","")[:8], font=(FONT, 7), fg=WHITE, bg=BG, width=10, anchor="w").pack(side="left")
+                dir_c = GREEN if "BULL" in t.get("direction","") else RED
+                tk.Label(tr_f, text=t.get("direction","")[:4], font=(FONT, 7, "bold"), fg=dir_c, bg=BG, width=6, anchor="w").pack(side="left")
+                tk.Label(tr_f, text=f"{t.get('score',0):.3f}", font=(FONT, 7), fg=DIM, bg=BG, width=6, anchor="w").pack(side="left")
+                tk.Label(tr_f, text=f"{t.get('rr',0):.1f}x", font=(FONT, 7), fg=DIM, bg=BG, width=5, anchor="w").pack(side="left")
+                pnl_t = t.get("pnl", 0)
+                tk.Label(tr_f, text=f"${pnl_t:+.2f}", font=(FONT, 7, "bold"), fg=GREEN if pnl_t >= 0 else RED, bg=BG, width=10, anchor="w").pack(side="left")
+                tk.Label(tr_f, text=t.get("result",""), font=(FONT, 7, "bold"), fg=GREEN if is_win else RED, bg=BG, width=6, anchor="w").pack(side="left")
+
+        # ── ACTIONS ──
+        tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", padx=pad, pady=(12, 8))
+        act_f = tk.Frame(sf, bg=BG)
+        act_f.pack(padx=pad, pady=(0, 16))
+
+        # Open JSON
+        oj = tk.Label(act_f, text="  OPEN JSON  ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER,
+                      cursor="hand2", padx=10, pady=3)
+        oj.pack(side="left", padx=4)
+        oj.bind("<Button-1>", lambda e: self._open_file(report))
+
+        # Open folder
+        of = tk.Label(act_f, text="  OPEN FOLDER  ", font=(FONT, 9), fg=DIM, bg=BG3,
+                      cursor="hand2", padx=10, pady=3)
+        of.pack(side="left", padx=4)
+        of.bind("<Button-1>", lambda e: self._open_file(report.parent.parent))
+
+        # Back
+        bk = tk.Label(act_f, text="  BACK  ", font=(FONT, 9), fg=DIM, bg=BG3,
+                      cursor="hand2", padx=10, pady=3)
+        bk.pack(side="left", padx=4)
+        bk.bind("<Button-1>", lambda e: self._menu(parent_menu))
+
+    def _open_file(self, path):
+        if sys.platform == "win32": os.startfile(str(path))
+        elif sys.platform == "darwin": subprocess.run(["open", str(path)])
+        else: subprocess.run(["xdg-open", str(path)])
+
     def _select_basket(self, val):
         """Update basket selection — highlight button + show asset preview."""
         self._cfg_basket = val
@@ -868,6 +1064,7 @@ class App(tk.Tk):
     # ─── EXECUTE ENGINE ──────────────────────────────────
     def _exec(self, name, script, desc, parent_menu, auto_inputs):
         self._clr(); self._unbind()
+        self._exec_parent = parent_menu  # save for results screen
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
         self.h_stat.configure(text="RUNNING", fg=GREEN)
         self.f_lbl.configure(text="Type input below + ENTER  |  empty = accept default")
@@ -995,7 +1192,13 @@ class App(tk.Tk):
                     self._p(f"\n{'─'*60}\n", "d")
                     self._p(f"  EXIT {rc}\n", "g" if rc == 0 else "r")
                     self.h_stat.configure(text="DONE" if rc == 0 else f"EXIT {rc}", fg=GREEN if rc == 0 else RED)
-                    self.proc = None; return
+                    self.proc = None
+                    # Show results dashboard for backtests
+                    parent = getattr(self, '_exec_parent', 'main')
+                    if parent == "backtest" and rc == 0:
+                        self._p("  Loading results...\n", "a")
+                        self.after(1500, lambda: self._show_results(parent))
+                    return
                 self._p(line)
         except queue.Empty: pass
         self.after(30 if self.proc and self.proc.poll() is None else 100, self._poll)
@@ -1057,7 +1260,7 @@ class App(tk.Tk):
             lbl.pack(fill="x")
             lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=BG3, fg=WHITE))
             lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=BG, fg=DIM))
-            lbl.bind("<Button-1>", lambda e, p=r: os.startfile(str(p)) if sys.platform=="win32" else None)
+            lbl.bind("<Button-1>", lambda e, p=r: self._open_file(p))
 
     def _procs(self):
         self._clr(); self._unbind()
