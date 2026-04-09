@@ -450,7 +450,7 @@ if __name__ == "__main__":
 
     print(f"\n  Exemplos: 30=1m  90=3m  180=6m  365=1ano  730=2anos")
     print(f"  (365 dias = ~35k candles 15m + 8.5k 1h + 2.4k 4h + 465 1d × 28 símbolos)")
-    _days_in = input(f"  Período em dias [{SCAN_DAYS}] > ").strip()
+    _days_in = safe_input(f"  Período em dias [{SCAN_DAYS}] > ").strip()
     if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
         SCAN_DAYS = int(_days_in)
 
@@ -471,10 +471,10 @@ if __name__ == "__main__":
 
     SYMBOLS = select_symbols(SYMBOLS)
 
-    _plot_ans = input("  Gerar graficos? [s/N] > ").strip().lower()
+    _plot_ans = safe_input("  Gerar graficos? [s/N] > ", "n").strip().lower()
     GENERATE_PLOTS = _plot_ans in ("s", "sim", "y", "yes", "1")
 
-    _lev_in = input(f"  Leverage [{LEVERAGE}x] > ").strip()
+    _lev_in = safe_input(f"  Leverage [{LEVERAGE}x] > ").strip()
     if _lev_in:
         try:
             _lev_val = float(_lev_in.replace("x",""))
@@ -500,7 +500,7 @@ if __name__ == "__main__":
     if GENERATE_PLOTS: print(f"  charts on")
     print(f"  {RUN_DIR}/")
     print(SEP)
-    input("  enter para iniciar... ")
+    safe_input("  enter para iniciar... ")
 
     print_header()
     log.info(f"AZOTH v3.6 iniciado — {RUN_ID}  tf={INTERVAL}  nc={N_CANDLES}  plots={'on' if GENERATE_PLOTS else 'off'}")

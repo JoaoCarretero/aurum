@@ -603,7 +603,7 @@ if __name__ == "__main__":
         print("  statsmodels nao instalado — pip install statsmodels")
         sys.exit(1)
 
-    _days_in = input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
+    _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
     if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
         SCAN_DAYS = int(_days_in)
     _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2, "1h": 1, "2h": 0.5, "4h": 0.25}
@@ -611,7 +611,7 @@ if __name__ == "__main__":
 
     SYMBOLS = select_symbols(SYMBOLS)
 
-    _lev_in = input(f"  leverage [{LEVERAGE}x] > ").strip()
+    _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
     if _lev_in:
         try:
             _lev_val = float(_lev_in.replace("x", ""))
@@ -625,7 +625,7 @@ if __name__ == "__main__":
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x  ·  z-entry {NEWTON_ZSCORE_ENTRY}  ·  z-stop {NEWTON_ZSCORE_STOP}")
     print(f"  {RUN_DIR}/")
     print(SEP)
-    input("  enter para iniciar... ")
+    safe_input("  enter para iniciar... ")
 
     log.info(f"NEWTON v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 

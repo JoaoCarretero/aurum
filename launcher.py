@@ -526,7 +526,7 @@ class AurumTerminal(tk.Tk):
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = 0
             self.process = subprocess.Popen(
-                [sys.executable, "-u", str(script)], cwd=str(ROOT),
+                [sys.executable, "-X", "utf8", "-u", str(script)], cwd=str(ROOT),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE,
                 text=True, bufsize=1, encoding="utf-8", errors="replace",
                 startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW, env=env,

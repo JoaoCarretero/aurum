@@ -9,7 +9,7 @@ import math
 # Exportar tudo incluindo nomes com _ (necessário para `from config.params import *`)
 __all__ = [
     # Universo
-    "SYMBOLS", "BASKETS", "select_symbols",
+    "SYMBOLS", "BASKETS", "select_symbols", "safe_input",
     # Timeframes
     "ENTRY_TF", "INTERVAL", "SCAN_DAYS", "N_CANDLES",
     "HTF_STACK", "MTF_ENABLED", "HTF_N_CANDLES_MAP",
@@ -76,6 +76,13 @@ SYMBOLS = [
     "SUIUSDT",  "ARBUSDT", "SANDUSDT", "XRPUSDT",   "FETUSDT", "OPUSDT",
 ]
 
+def safe_input(prompt: str = "", default: str = "") -> str:
+    """input() that handles EOF/pipe gracefully — returns default on error."""
+    try:
+        return input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        return default
+
 # ── BASKETS DE ATIVOS ────────────────────────────────────────
 BASKETS = {
     "default":   SYMBOLS,
@@ -118,7 +125,7 @@ def select_symbols(current: list | None = None) -> list:
     print(f"    [{len(_keys)+1}] custom      digitar simbolos manualmente")
     print(f"    [enter]              manter atual ({len(current)} ativos)")
 
-    choice = input("\n  basket > ").strip()
+    choice = safe_input("\n  basket > ").strip()
     if not choice:
         return current
     if choice.isdigit():
@@ -129,7 +136,7 @@ def select_symbols(current: list | None = None) -> list:
             return selected
         elif idx == len(_keys):
             # custom
-            raw = input("  simbolos (separados por virgula, ex: BTC,ETH,SOL) > ").strip()
+            raw = safe_input("  simbolos (separados por virgula, ex: BTC,ETH,SOL) > ").strip()
             if raw:
                 syms = []
                 for s in raw.split(","):

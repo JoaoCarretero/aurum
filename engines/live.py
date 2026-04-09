@@ -1391,7 +1391,7 @@ def _menu() -> str:
     print(f"  [0]  Sair")
     print()
     _map = {"1": "paper", "2": "demo", "3": "testnet", "4": "live", "5": "diag", "0": "exit"}
-    op = input("  > ").strip()
+    op = safe_input("  > ").strip()
     return _map.get(op, "exit")
 
 
@@ -1435,7 +1435,7 @@ def _launch(mode: str, leverage: float = 1.0, no_telegram: bool = False):
 
     if mode == "live":
         print(f"\n  ⚠  LIVE MODE — capital real será utilizado")
-        confirm = input("  Confirmas? (escreve 'SIM' para continuar) > ").strip()
+        confirm = safe_input("  Confirmas? (escreve 'SIM' para continuar) > ").strip()
         if confirm != "SIM":
             print("  Cancelado."); sys.exit(0)
         import config.params as _params
