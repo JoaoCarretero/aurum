@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-AURUM Finance — Desktop Launcher v2
-Complete control center. All engines run embedded.
-CS 1.6 / Half-Life console aesthetic.
+AURUM Finance — Terminal v3
+Bloomberg Terminal meets Half-Life console.
 """
-import os, sys, subprocess, threading, queue, time, json, glob
+import os, sys, subprocess, threading, queue, time, json
 from pathlib import Path
 from datetime import datetime
 
@@ -17,77 +16,124 @@ import tkinter as tk
 from tkinter import messagebox
 
 # ═══════════════════════════════════════════════════════════
-# THEME — CS 1.6 / Half-Life
+# BLOOMBERG x CS 1.6 THEME
 # ═══════════════════════════════════════════════════════════
-BG       = "#0c0c0c"
-BG2      = "#111111"
-BG3      = "#1a1a1a"
-PANEL    = "#0e0e0e"
-BORDER   = "#2a2a2a"
-AMBER    = "#ff9b00"
+BG       = "#0a0a0a"
+BG2      = "#0f0f0f"
+BG3      = "#181818"
+PANEL    = "#0c0c0c"
+BORDER   = "#222222"
+BORDER2  = "#333333"
+AMBER    = "#ff8c00"       # bloomberg orange
+AMBER_B  = "#ffaa33"       # bright amber
 AMBER_D  = "#8a5500"
-GREEN    = "#00ff41"
-GREEN_D  = "#00802a"
-RED      = "#ff3333"
-CYAN     = "#00cccc"
-PURPLE   = "#cc66ff"
-ORANGE   = "#ff9933"
-BLUE     = "#6699ff"
-WHITE    = "#cccccc"
-DIM      = "#555555"
-DIM2     = "#333333"
-SEL_BG   = "#1a1a00"
+GREEN    = "#00c853"       # bloomberg green (positive)
+GREEN_D  = "#007830"
+RED      = "#ff1744"       # bloomberg red (negative)
+RED_D    = "#991030"
+CYAN     = "#00bcd4"
+BLUE     = "#448aff"
+PURPLE   = "#b388ff"
+YELLOW   = "#ffd600"
+WHITE    = "#d0d0d0"
+DIM      = "#4a4a4a"
+DIM2     = "#2a2a2a"
+DIM3     = "#1a1a1a"
+SEL_BG   = "#1a1400"
+
 FONT     = "Consolas"
 
 # ═══════════════════════════════════════════════════════════
-# COMPLETE ENGINE + FEATURE REGISTRY
+# MARKET DATA (async fetch)
+# ═══════════════════════════════════════════════════════════
+_TICKER_DATA = {}
+_TICKER_LOCK = threading.Lock()
+
+def _fetch_tickers():
+    """Background thread: fetch top crypto prices from Binance."""
+    import requests
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    while True:
+        try:
+            r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=8)
+            if r.status_code == 200:
+                data = {t["symbol"]: t for t in r.json()}
+                with _TICKER_LOCK:
+                    for sym in symbols:
+                        if sym in data:
+                            _TICKER_DATA[sym] = {
+                                "price": float(data[sym]["lastPrice"]),
+                                "chg":   float(data[sym]["priceChangePercent"]),
+                            }
+        except Exception:
+            pass
+        time.sleep(10)
+
+
+def _get_ticker_str():
+    """Format ticker tape string."""
+    with _TICKER_LOCK:
+        if not _TICKER_DATA:
+            return "  connecting..."
+        parts = []
+        for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]:
+            d = _TICKER_DATA.get(sym)
+            if d:
+                name = sym.replace("USDT", "")
+                chg = d["chg"]
+                arrow = "+" if chg >= 0 else ""
+                parts.append(f"{name} {d['price']:,.2f} {arrow}{chg:.1f}%")
+        return "   ".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════
+# ENGINE REGISTRY
 # ═══════════════════════════════════════════════════════════
 MENU_TREE = {
     "main": [
-        {"key": "backtest", "label": "BACKTEST",          "desc": "Run strategies on historical data",  "color": AMBER},
-        {"key": "live",     "label": "LIVE TRADING",      "desc": "Paper / Demo / Testnet / Live",      "color": RED},
-        {"key": "tools",    "label": "TOOLS",             "desc": "Darwin, API, Diagnostics",           "color": PURPLE},
-        {"key": "data",     "label": "DATA & REPORTS",    "desc": "Browse backtest results and logs",   "color": CYAN},
-        {"key": "procs",    "label": "PROCESSES",         "desc": "View and manage running engines",    "color": GREEN},
+        {"key": "backtest", "label": "BACKTEST",       "desc": "Historical strategy simulation",  "color": AMBER,  "fkey": "F1"},
+        {"key": "live",     "label": "LIVE",           "desc": "Paper / Demo / Testnet / Real",   "color": RED,    "fkey": "F2"},
+        {"key": "tools",    "label": "TOOLS",          "desc": "Darwin / API / Chronos",          "color": PURPLE, "fkey": "F3"},
+        {"key": "data",     "label": "DATA",           "desc": "Reports & logs browser",          "color": CYAN,   "fkey": "F4"},
+        {"key": "procs",    "label": "PROCS",          "desc": "Running engine manager",          "color": GREEN,  "fkey": "F5"},
     ],
     "backtest": [
-        {"key": "azoth",       "label": "AZOTH",           "desc": "Systematic Momentum (Graviton)",    "color": AMBER,  "script": "engines/backtest.py",      "inputs": ["days", "basket", "plots", "leverage", ""]},
-        {"key": "mercurio",    "label": "MERCURIO",        "desc": "Order Flow / CVD Analysis",         "color": GREEN,  "script": "engines/mercurio.py",      "inputs": ["days", "basket", "leverage", ""]},
-        {"key": "thoth",       "label": "THOTH",           "desc": "Sentiment Quantified",              "color": CYAN,   "script": "engines/thoth.py",         "inputs": ["days", "basket", "leverage", ""]},
-        {"key": "newton",      "label": "NEWTON",          "desc": "Pairs Mean-Reversion",              "color": BLUE,   "script": "engines/newton.py",        "inputs": ["days", "basket", "leverage", ""]},
-        {"key": "multistrat",  "label": "HADRON",          "desc": "Multi-Strategy Ensemble",           "color": PURPLE, "script": "engines/multistrategy.py", "inputs": ["1", "days", "", "", "", "", "", "n", ""]},
-        {"key": "prometeu",    "label": "PROMETEU",        "desc": "ML Meta-Ensemble",                  "color": ORANGE, "script": "engines/prometeu.py",      "inputs": [""]},
+        {"key": "azoth",      "label": "AZOTH",      "desc": "Systematic momentum / Graviton fractal",  "color": AMBER,  "script": "engines/backtest.py"},
+        {"key": "mercurio",   "label": "MERCURIO",   "desc": "Order flow CVD + volume imbalance",       "color": GREEN,  "script": "engines/mercurio.py"},
+        {"key": "thoth",      "label": "THOTH",      "desc": "Sentiment: funding + OI + LS ratio",      "color": CYAN,   "script": "engines/thoth.py"},
+        {"key": "newton",     "label": "NEWTON",     "desc": "Pairs cointegration mean-reversion",      "color": BLUE,   "script": "engines/newton.py"},
+        {"key": "hadron",     "label": "HADRON",     "desc": "Multi-strategy ensemble orchestrator",    "color": PURPLE, "script": "engines/multistrategy.py"},
+        {"key": "prometeu",   "label": "PROMETEU",   "desc": "ML meta-ensemble learning",               "color": YELLOW, "script": "engines/prometeu.py"},
     ],
     "live": [
-        {"key": "paper",   "label": "PAPER TRADING",  "desc": "Simulated — no real orders",     "color": GREEN,  "script": "engines/live.py", "inputs": ["1"]},
-        {"key": "demo",    "label": "DEMO",            "desc": "Binance Futures Demo API",       "color": AMBER,  "script": "engines/live.py", "inputs": ["2"]},
-        {"key": "testnet", "label": "TESTNET",         "desc": "Binance Futures Testnet",        "color": CYAN,   "script": "engines/live.py", "inputs": ["3"]},
-        {"key": "live",    "label": "LIVE TRADING",    "desc": "Real capital — use with caution", "color": RED,   "script": "engines/live.py", "inputs": ["4"]},
-        {"key": "arb",     "label": "ARBITRAGE",       "desc": "Cross-exchange funding arb",     "color": PURPLE, "script": "engines/arbitrage.py", "inputs": [""]},
+        {"key": "paper",    "label": "PAPER",      "desc": "Simulated execution — no real orders",   "color": GREEN,  "script": "engines/live.py"},
+        {"key": "demo",     "label": "DEMO",       "desc": "Binance Futures Demo API",               "color": AMBER,  "script": "engines/live.py"},
+        {"key": "testnet",  "label": "TESTNET",    "desc": "Binance Futures Testnet",                "color": CYAN,   "script": "engines/live.py"},
+        {"key": "real",     "label": "LIVE",        "desc": "REAL CAPITAL — use with extreme care",  "color": RED,    "script": "engines/live.py"},
+        {"key": "arb",      "label": "ARBITRAGE",  "desc": "Cross-exchange funding rate capture",    "color": PURPLE, "script": "engines/arbitrage.py"},
     ],
     "tools": [
-        {"key": "darwin",  "label": "DARWIN",     "desc": "Adaptive Strategy Evolution",  "color": PURPLE, "script": "engines/darwin.py",  "inputs": []},
-        {"key": "api",     "label": "NEXUS API",  "desc": "REST API server (port 8000)",  "color": ORANGE, "script": "run_api.py",         "inputs": []},
-        {"key": "chronos", "label": "CHRONOS",    "desc": "ML Features Test (HMM/GARCH)", "color": CYAN,   "script": "core/chronos.py",    "inputs": []},
+        {"key": "darwin",   "label": "DARWIN",    "desc": "Adaptive strategy evolution engine",  "color": PURPLE, "script": "engines/darwin.py"},
+        {"key": "api",      "label": "NEXUS",     "desc": "REST API + WebSocket (port 8000)",   "color": AMBER,  "script": "run_api.py"},
+        {"key": "chronos",  "label": "CHRONOS",   "desc": "ML features: HMM regime + GARCH",    "color": CYAN,   "script": "core/chronos.py"},
     ],
 }
 
-BANNER = r"""
-    ___   __  __ ____  __  __ __  __
-   /   | / / / // __ \/ / / //  |/  /
-  / /| |/ / / // /_/ / / / // /|_/ /
- / ___ / /_/ // _, _/ /_/ // /  / /
-/_/  |_\____//_/ |_|\____//_/  /_/
-"""
+BANNER = [
+    "    ╔═╗ ╦ ╦ ╦═╗ ╦ ╦ ╔╦╗",
+    "    ╠═╣ ║ ║ ╠╦╝ ║ ║ ║║║",
+    "    ╩ ╩ ╚═╝ ╩╚═ ╚═╝ ╩ ╩",
+]
+BANNER_COLORS = ["#ffa000", "#ff8c00", "#cc7000"]
 
 
-class AurumApp(tk.Tk):
+class AurumTerminal(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("AURUM Finance")
+        self.title("AURUM Terminal")
         self.configure(bg=BG)
-        self.geometry("960x660")
-        self.minsize(860, 580)
+        self.geometry("1020x700")
+        self.minsize(900, 600)
 
         try:
             ico = ROOT / "server" / "logo" / "aurum.ico"
@@ -98,38 +144,72 @@ class AurumApp(tk.Tk):
 
         self.process = None
         self.output_queue = queue.Queue()
-        self.nav_stack = []  # for back navigation
+        self._blink_on = True
 
-        self._build_chrome()
+        # Start market data feed
+        threading.Thread(target=_fetch_tickers, daemon=True).start()
+
+        self._build()
         self._show_splash()
+        self._tick_clock()
+        self._tick_ticker()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ─── CHROME (header/footer) ──────────────────────────
-    def _build_chrome(self):
-        tk.Frame(self, bg=AMBER, height=2).pack(fill="x")
+    # ─── BUILD CHROME ────────────────────────────────────
+    def _build(self):
+        # ── TICKER BAR (bloomberg style) ──
+        self.ticker_bar = tk.Frame(self, bg=BG2, height=20)
+        self.ticker_bar.pack(fill="x")
+        self.ticker_bar.pack_propagate(False)
 
-        hdr = tk.Frame(self, bg=BG, height=34)
+        tc = tk.Frame(self.ticker_bar, bg=BG2)
+        tc.pack(fill="both", expand=True, padx=8)
+
+        self.ticker_lbl = tk.Label(tc, text="  connecting...", font=(FONT, 7),
+                                    fg=DIM, bg=BG2, anchor="w")
+        self.ticker_lbl.pack(side="left")
+
+        self.clock_lbl = tk.Label(tc, text="", font=(FONT, 7, "bold"),
+                                   fg=AMBER_D, bg=BG2)
+        self.clock_lbl.pack(side="right")
+
+        # ── AMBER LINE ──
+        tk.Frame(self, bg=AMBER, height=1).pack(fill="x")
+
+        # ── HEADER ──
+        hdr = tk.Frame(self, bg=BG, height=28)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
         hc = tk.Frame(hdr, bg=BG)
-        hc.pack(fill="both", expand=True, padx=14)
-        tk.Label(hc, text="AURUM FINANCE", font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(side="left", pady=7)
-        self.hdr_right = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        self.hdr_right.pack(side="right", pady=7)
+        hc.pack(fill="both", expand=True, padx=12)
+
+        tk.Label(hc, text="AURUM", font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(hc, text="FINANCE", font=(FONT, 9), fg=AMBER_D, bg=BG).pack(side="left", padx=(2, 0))
+        self.hdr_path = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG)
+        self.hdr_path.pack(side="left", padx=(12, 0))
+        self.hdr_status = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG)
+        self.hdr_status.pack(side="right")
+
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
+        # ── MAIN ──
         self.main = tk.Frame(self, bg=BG)
         self.main.pack(fill="both", expand=True)
 
+        # ── FOOTER / F-KEYS BAR ──
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
-        foot = tk.Frame(self, bg=BG2, height=22)
-        foot.pack(fill="x")
-        foot.pack_propagate(False)
-        fc = tk.Frame(foot, bg=BG2)
-        fc.pack(fill="both", expand=True, padx=14)
-        tk.Label(fc, text="v2.0.0", font=(FONT, 7), fg=DIM2, bg=BG2).pack(side="left")
-        self.foot_hint = tk.Label(fc, text="", font=(FONT, 7), fg=DIM, bg=BG2)
-        self.foot_hint.pack(side="right")
+        self.fbar = tk.Frame(self, bg=BG2, height=22)
+        self.fbar.pack(fill="x")
+        self.fbar.pack_propagate(False)
+
+    def _set_fkeys(self, items):
+        """Set F-key bar items. items = [(label, color), ...]"""
+        for w in self.fbar.winfo_children():
+            w.destroy()
+        fc = tk.Frame(self.fbar, bg=BG2)
+        fc.pack(fill="both", expand=True, padx=6)
+        for label, color in items:
+            tk.Label(fc, text=label, font=(FONT, 7, "bold"), fg=color, bg=BG2).pack(side="left", padx=6, pady=3)
 
     def _clear(self):
         for w in self.main.winfo_children():
@@ -137,107 +217,225 @@ class AurumApp(tk.Tk):
 
     def _unbind(self):
         for k in ("<Return>", "<space>", "<Escape>", "<BackSpace>",
-                   *[f"<Key-{i}>" for i in range(10)]):
+                   *[f"<Key-{i}>" for i in range(10)],
+                   *[f"<F{i}>" for i in range(1, 13)]):
             try: self.unbind(k)
             except: pass
         try: self.main.unbind("<Button-1>")
         except: pass
 
+    # ─── TICKERS ─────────────────────────────────────────
+    def _tick_clock(self):
+        now = datetime.now().strftime("%H:%M:%S")
+        self.clock_lbl.configure(text=now)
+        self.after(1000, self._tick_clock)
+
+    def _tick_ticker(self):
+        raw = _get_ticker_str()
+        # Color the ticker
+        self.ticker_lbl.configure(text=raw)
+        # Alternate dim/bright for activity feel
+        with _TICKER_LOCK:
+            if _TICKER_DATA:
+                self.ticker_lbl.configure(fg=DIM if not self._blink_on else AMBER_D)
+                self._blink_on = not self._blink_on
+        self.after(5000, self._tick_ticker)
+
     # ─── SPLASH ──────────────────────────────────────────
     def _show_splash(self):
         self._clear(); self._unbind()
-        self.hdr_right.configure(text="")
-        self.foot_hint.configure(text="press any key")
+        self.hdr_path.configure(text="")
+        self.hdr_status.configure(text="READY", fg=GREEN_D)
+        self._set_fkeys([
+            ("F1 BACKTEST", AMBER_D), ("F2 LIVE", RED_D), ("F3 TOOLS", DIM),
+            ("F4 DATA", DIM), ("F5 PROCS", DIM), ("ENTER CONTINUE", AMBER_D),
+        ])
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(expand=True)
 
-        tk.Label(f, text=BANNER, font=(FONT, 11), fg=AMBER, bg=BG, justify="left").pack()
-        tk.Label(f, text="QUANTITATIVE TRADING PLATFORM", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack()
-        tk.Frame(f, bg=BORDER, height=1, width=400).pack(pady=14)
+        # Banner
+        for i, line in enumerate(BANNER):
+            tk.Label(f, text=line, font=(FONT, 14, "bold"), fg=BANNER_COLORS[i], bg=BG).pack()
 
-        info = [
-            (f"build {datetime.now().strftime('%Y.%m.%d')}  //  python {sys.version.split()[0]}", DIM),
-            ("", DIM),
-            ("ENGINES", AMBER_D),
-            ("  AZOTH        systematic momentum           backtest", GREEN_D),
-            ("  MERCURIO     order flow analysis            backtest", GREEN_D),
-            ("  THOTH        sentiment quantified           backtest", GREEN_D),
-            ("  NEWTON       pairs mean-reversion           backtest", GREEN_D),
-            ("  HADRON       multi-strategy ensemble        backtest", GREEN_D),
-            ("  PROMETEU     ML meta-ensemble               backtest", GREEN_D),
-            ("  GRAVITON     live trading engine             live", GREEN_D),
-            ("  NEUTRINO     cross-exchange arbitrage        live", GREEN_D),
-            ("", DIM),
-            ("TOOLS", AMBER_D),
-            ("  DARWIN       adaptive strategy evolution", GREEN_D),
-            ("  NEXUS        REST API server", GREEN_D),
-            ("  CHRONOS      ML features (HMM/GARCH)", GREEN_D),
-            ("", DIM),
-            ("(c) 2026 AURUM Finance", DIM2),
+        tk.Label(f, text="QUANTITATIVE TRADING TERMINAL", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=BG).pack(pady=(2, 0))
+
+        # Separator
+        sep_f = tk.Frame(f, bg=BG)
+        sep_f.pack(pady=10)
+        tk.Frame(sep_f, bg=AMBER_D, height=1, width=420).pack()
+
+        # System info panel (bloomberg style)
+        info_f = tk.Frame(f, bg=BG)
+        info_f.pack()
+
+        def _irow(parent, label, value, color=DIM):
+            r = tk.Frame(parent, bg=BG)
+            r.pack(fill="x", padx=40)
+            tk.Label(r, text=f"  {label}", font=(FONT, 8), fg=DIM, bg=BG, width=18, anchor="w").pack(side="left")
+            tk.Label(r, text=value, font=(FONT, 8, "bold"), fg=color, bg=BG, anchor="w").pack(side="left")
+
+        _irow(info_f, "BUILD", datetime.now().strftime("%Y.%m.%d"), AMBER_D)
+        _irow(info_f, "PYTHON", sys.version.split()[0], DIM)
+        _irow(info_f, "PLATFORM", f"win32 x64" if sys.platform == "win32" else sys.platform, DIM)
+        _irow(info_f, "ENGINES", "10 registered", GREEN_D)
+        _irow(info_f, "STATUS", "ALL SYSTEMS NOMINAL", GREEN)
+
+        tk.Frame(f, bg=BG, height=12).pack()
+
+        # Engine table
+        tbl_f = tk.Frame(f, bg=BG)
+        tbl_f.pack()
+
+        hdr_text = f"  {'ENGINE':<12} {'TYPE':<12} {'DESCRIPTION':<40}"
+        tk.Label(tbl_f, text=hdr_text, font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x", padx=30)
+        tk.Frame(tbl_f, bg=DIM2, height=1).pack(fill="x", padx=30, pady=1)
+
+        engines = [
+            ("AZOTH",     "BACKTEST", "Systematic momentum fractal", AMBER),
+            ("MERCURIO",  "BACKTEST", "Order flow CVD analysis", GREEN),
+            ("THOTH",     "BACKTEST", "Sentiment quantified", CYAN),
+            ("NEWTON",    "BACKTEST", "Pairs mean-reversion", BLUE),
+            ("HADRON",    "BACKTEST", "Multi-strategy ensemble", PURPLE),
+            ("PROMETEU",  "BACKTEST", "ML meta-ensemble", YELLOW),
+            ("GRAVITON",  "LIVE",     "Live trading engine", RED),
+            ("NEUTRINO",  "LIVE",     "Cross-exchange arbitrage", PURPLE),
+            ("DARWIN",    "TOOL",     "Strategy evolution", PURPLE),
+            ("NEXUS",     "TOOL",     "REST API server", AMBER),
         ]
-        for txt, col in info:
-            tk.Label(f, text=txt, font=(FONT, 8), fg=col, bg=BG, anchor="w").pack(anchor="w", padx=80)
+        for name, typ, desc, color in engines:
+            text = f"  {name:<12} {typ:<12} {desc:<40}"
+            tk.Label(tbl_f, text=text, font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(fill="x", padx=30)
 
+        tk.Frame(f, bg=BG, height=16).pack()
+        tk.Label(f, text="(c) 2026 AURUM Finance Ltd. All rights reserved.",
+                 font=(FONT, 7), fg=DIM2, bg=BG).pack()
+
+        # Bindings
         for ev in ("<Button-1>", "<Return>", "<space>"):
-            cb = lambda e: self._show_menu("main")
             if ev == "<Button-1>":
-                self.main.bind(ev, cb)
+                self.main.bind(ev, lambda e: self._show_menu("main"))
             else:
-                self.bind(ev, cb)
+                self.bind(ev, lambda e: self._show_menu("main"))
+
+        # F-key shortcuts from splash
+        self.bind("<F1>", lambda e: self._show_menu("backtest"))
+        self.bind("<F2>", lambda e: self._show_menu("live"))
+        self.bind("<F3>", lambda e: self._show_menu("tools"))
+        self.bind("<F4>", lambda e: self._show_data())
+        self.bind("<F5>", lambda e: self._show_procs())
 
     # ─── GENERIC MENU ────────────────────────────────────
-    def _show_menu(self, menu_key, from_key=None):
+    def _show_menu(self, menu_key):
+        if menu_key == "data":  self._show_data(); return
+        if menu_key == "procs": self._show_procs(); return
+
         self._clear(); self._unbind()
-        self.nav_stack.append(menu_key)
         items = MENU_TREE.get(menu_key, [])
+        titles = {"main": "MAIN", "backtest": "BACKTEST", "live": "LIVE", "tools": "TOOLS"}
+        title = titles.get(menu_key, menu_key.upper())
 
-        titles = {"main": "MAIN MENU", "backtest": "BACKTEST — SELECT ENGINE",
-                  "live": "LIVE — SELECT MODE", "tools": "TOOLS"}
-        self.hdr_right.configure(text=titles.get(menu_key, menu_key.upper()))
+        self.hdr_path.configure(text=f"> {title}")
+        self.hdr_status.configure(text="SELECT", fg=AMBER_D)
 
-        back_target = {"backtest": "main", "live": "main", "tools": "main"}.get(menu_key)
-        if back_target:
-            self.foot_hint.configure(text="click or number to select  //  ESC back")
-            self.bind("<Escape>", lambda e: self._show_menu("main"))
-            self.bind("<BackSpace>", lambda e: self._show_menu("main"))
+        is_sub = menu_key != "main"
+
+        # F-keys
+        if menu_key == "main":
+            fkeys = [(f"F{i+1} {it['label']}", it.get("color", DIM)) for i, it in enumerate(items)]
+            fkeys.append(("ESC QUIT", DIM))
         else:
-            self.foot_hint.configure(text="click or number to select  //  ESC quit")
-            self.bind("<Escape>", lambda e: self._on_close())
+            fkeys = [("ESC BACK", AMBER_D), ("0 BACK", DIM)]
+        self._set_fkeys(fkeys)
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(expand=True)
 
-        title_text = titles.get(menu_key, menu_key.upper())
-        tk.Label(f, text=f"] {title_text} [", font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 20))
+        # Title with bloomberg bracket style
+        tk.Label(f, text=f"< {title} >", font=(FONT, 14, "bold"),
+                 fg=AMBER, bg=BG).pack(pady=(0, 6))
+
+        # Subtitle
+        subs = {"main": "Select operation mode", "backtest": "Select engine to backtest",
+                "live": "Select trading mode", "tools": "Select tool to run"}
+        tk.Label(f, text=subs.get(menu_key, ""), font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 16))
 
         for i, item in enumerate(items):
             num = i + 1
             color = item.get("color", AMBER)
             desc = item.get("desc", "")
-            text = f"  [{num}]  {item['label']:<18} {desc}"
+            fkey = item.get("fkey", "")
 
-            if "script" in item:
+            # Bloomberg style: number + label + description on right
+            btn_f = tk.Frame(f, bg=BG, cursor="hand2")
+            btn_f.pack(fill="x", padx=50, pady=1)
+
+            num_lbl = tk.Label(btn_f, text=f" {num} ", font=(FONT, 9, "bold"),
+                               fg=BG, bg=color, width=3)
+            num_lbl.pack(side="left")
+
+            name_lbl = tk.Label(btn_f, text=f"  {item['label']}", font=(FONT, 10, "bold"),
+                                fg=WHITE, bg=BG3, anchor="w", padx=8, pady=5)
+            name_lbl.pack(side="left")
+
+            desc_lbl = tk.Label(btn_f, text=desc, font=(FONT, 8),
+                                fg=DIM, bg=BG3, anchor="w", padx=8, pady=5)
+            desc_lbl.pack(side="left", fill="x", expand=True)
+
+            if fkey:
+                tk.Label(btn_f, text=fkey, font=(FONT, 7, "bold"), fg=DIM2, bg=BG3,
+                         padx=6, pady=5).pack(side="right")
+
+            # Determine action
+            has_script = "script" in item
+            if has_script:
                 cmd = lambda it=item: self._run_engine(it)
             else:
                 cmd = lambda k=item["key"]: self._show_menu(k)
 
-            btn = self._make_btn(f, text, color, cmd)
-            btn.pack(fill="x", padx=60, pady=2)
-            self.bind(f"<Key-{num}>",
-                      (lambda it=item: lambda e: self._run_engine(it))(item)
-                      if "script" in item else
-                      (lambda k=item["key"]: lambda e: self._show_menu(k))(item["key"]))
+            # Hover
+            widgets = [btn_f, num_lbl, name_lbl, desc_lbl]
+            for w in widgets:
+                w.bind("<Enter>", lambda e, ws=widgets, c=color: [
+                    ws[0].configure(bg=BG3),
+                    ws[2].configure(fg=c, bg=BG3),
+                ])
+                w.bind("<Leave>", lambda e, ws=widgets: [
+                    ws[0].configure(bg=BG),
+                    ws[2].configure(fg=WHITE, bg=BG3),
+                ])
+                w.bind("<Button-1>", lambda e, c=cmd: c())
+
+            # Key binding
+            if has_script:
+                self.bind(f"<Key-{num}>", lambda e, it=item: self._run_engine(it))
+            else:
+                self.bind(f"<Key-{num}>", lambda e, k=item["key"]: self._show_menu(k))
+
+            # F-key binding for main menu
+            if fkey and menu_key == "main":
+                fn = int(fkey.replace("F", ""))
+                if has_script:
+                    self.bind(f"<F{fn}>", lambda e, it=item: self._run_engine(it))
+                else:
+                    self.bind(f"<F{fn}>", lambda e, k=item["key"]: self._show_menu(k))
 
         # Back / Quit
-        tk.Frame(f, bg="transparent", height=16).pack()
-        if back_target:
-            self._make_btn(f, "  [0]  BACK", DIM,
-                           lambda: self._show_menu("main")).pack(fill="x", padx=60, pady=2)
+        tk.Frame(f, bg="transparent", height=12).pack()
+        if is_sub:
+            self.bind("<Escape>", lambda e: self._show_menu("main"))
+            self.bind("<BackSpace>", lambda e: self._show_menu("main"))
             self.bind("<Key-0>", lambda e: self._show_menu("main"))
+            back_f = tk.Frame(f, bg=BG, cursor="hand2")
+            back_f.pack(fill="x", padx=50, pady=1)
+            tk.Label(back_f, text=" 0 ", font=(FONT, 9, "bold"), fg=WHITE, bg=DIM2, width=3).pack(side="left")
+            bl = tk.Label(back_f, text="  BACK", font=(FONT, 10), fg=DIM, bg=BG3, anchor="w", padx=8, pady=5)
+            bl.pack(side="left", fill="x", expand=True)
+            for w in [back_f, bl]:
+                w.bind("<Button-1>", lambda e: self._show_menu("main"))
         else:
-            self._make_btn(f, "  [0]  QUIT", DIM,
-                           lambda: self._on_close()).pack(fill="x", padx=60, pady=2)
+            self.bind("<Escape>", lambda e: self._on_close())
             self.bind("<Key-0>", lambda e: self._on_close())
 
     # ─── RUN ENGINE ──────────────────────────────────────
@@ -245,16 +443,25 @@ class AurumApp(tk.Tk):
         self._clear(); self._unbind()
         color = eng.get("color", GREEN)
         label = eng["label"]
-        self.hdr_right.configure(text=f"RUNNING: {label}", fg=color)
-        self.foot_hint.configure(text="type input below and press ENTER  //  STOP to terminate  //  BACK to return")
+        self.hdr_path.configure(text=f"> {label}")
+        self.hdr_status.configure(text="RUNNING", fg=GREEN)
+        self._set_fkeys([("STOP", RED), ("BACK", DIM), ("TYPE INPUT BELOW + ENTER", AMBER_D)])
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(fill="both", expand=True)
 
-        # Top bar
+        # Top status bar (bloomberg style)
         top = tk.Frame(f, bg=BG2)
         top.pack(fill="x")
-        tk.Label(top, text=f"  > {label}", font=(FONT, 10, "bold"), fg=color, bg=BG2).pack(side="left", pady=5, padx=4)
+
+        # Left: engine info
+        tk.Label(top, text=f" {label} ", font=(FONT, 8, "bold"), fg=BG, bg=color).pack(side="left", padx=(6, 4), pady=4)
+        tk.Label(top, text=eng.get("desc", ""), font=(FONT, 8), fg=DIM, bg=BG2).pack(side="left", pady=4)
+
+        # Right: controls
+        tk.Button(top, text=" STOP ", font=(FONT, 7, "bold"), fg=RED, bg=BG2,
+                  activeforeground=WHITE, activebackground=RED_D, border=0, cursor="hand2",
+                  command=self._stop_engine).pack(side="right", padx=4, pady=4)
 
         def go_back():
             self._stop_engine()
@@ -262,122 +469,101 @@ class AurumApp(tk.Tk):
             for mkey, items in MENU_TREE.items():
                 for it in items:
                     if it.get("key") == eng["key"]:
-                        parent = mkey
-                        break
+                        parent = mkey; break
             self._show_menu(parent or "main")
 
-        tk.Button(top, text="[ STOP ]", font=(FONT, 8, "bold"), fg=RED, bg=BG2,
-                  activeforeground=RED, activebackground=BG3, border=0, cursor="hand2",
-                  command=self._stop_engine).pack(side="right", padx=8, pady=5)
-        tk.Button(top, text="[ BACK ]", font=(FONT, 8, "bold"), fg=DIM, bg=BG2,
+        tk.Button(top, text=" BACK ", font=(FONT, 7, "bold"), fg=DIM, bg=BG2,
                   activeforeground=WHITE, activebackground=BG3, border=0, cursor="hand2",
-                  command=go_back).pack(side="right", pady=5)
+                  command=go_back).pack(side="right", pady=4)
 
-        tk.Frame(f, bg=BORDER, height=1).pack(fill="x")
+        tk.Frame(f, bg=color, height=1).pack(fill="x")
 
         # Console
-        console_f = tk.Frame(f, bg=PANEL)
-        console_f.pack(fill="both", expand=True)
-        sb = tk.Scrollbar(console_f, bg=BG, troughcolor=BG, activebackground=DIM2, highlightthickness=0, bd=0)
+        con_f = tk.Frame(f, bg=PANEL)
+        con_f.pack(fill="both", expand=True)
+        sb = tk.Scrollbar(con_f, bg=BG, troughcolor=BG, activebackground=DIM2,
+                           highlightthickness=0, bd=0)
         sb.pack(side="right", fill="y")
-        self.console = tk.Text(console_f, bg=PANEL, fg=GREEN, font=(FONT, 9), wrap="word",
+        self.console = tk.Text(con_f, bg=PANEL, fg=GREEN, font=(FONT, 9), wrap="word",
                                 borderwidth=0, highlightthickness=0, insertbackground=GREEN,
-                                padx=10, pady=8, state="disabled", cursor="arrow",
+                                padx=10, pady=6, state="disabled", cursor="arrow",
                                 yscrollcommand=sb.set, selectbackground=SEL_BG, selectforeground=GREEN)
         self.console.pack(fill="both", expand=True)
         sb.config(command=self.console.yview)
-        for tag, col in [("amber", AMBER), ("green", GREEN), ("red", RED), ("cyan", CYAN), ("dim", DIM), ("white", WHITE)]:
+        for tag, col in [("amber", AMBER), ("green", GREEN), ("red", RED), ("cyan", CYAN),
+                         ("dim", DIM), ("white", WHITE), ("yellow", YELLOW)]:
             self.console.tag_configure(tag, foreground=col)
 
         # Input bar
         tk.Frame(f, bg=BORDER, height=1).pack(fill="x")
         inp_bar = tk.Frame(f, bg=BG2)
         inp_bar.pack(fill="x")
-        tk.Label(inp_bar, text=" >", font=(FONT, 10, "bold"), fg=AMBER, bg=BG2).pack(side="left", padx=(8, 0), pady=5)
-        self.inp = tk.Entry(inp_bar, bg=BG2, fg=GREEN, font=(FONT, 10), insertbackground=GREEN,
+        tk.Label(inp_bar, text=" >", font=(FONT, 10, "bold"), fg=AMBER, bg=BG2).pack(side="left", padx=(6, 0), pady=4)
+        self.inp = tk.Entry(inp_bar, bg=BG2, fg=GREEN, font=(FONT, 10), insertbackground=AMBER,
                              border=0, highlightthickness=0)
-        self.inp.pack(side="left", fill="x", expand=True, padx=6, pady=5)
+        self.inp.pack(side="left", fill="x", expand=True, padx=6, pady=4)
         self.inp.focus_set()
         self.inp.bind("<Return>", self._send_input)
-        tk.Button(inp_bar, text="SEND", font=(FONT, 8, "bold"), fg=AMBER, bg=BG2,
-                  activeforeground=WHITE, activebackground=BG3, border=0, cursor="hand2",
-                  command=self._send_input).pack(side="right", padx=8, pady=5)
 
-        # Header
-        self._cprint(f"{'='*55}\n", "amber")
-        self._cprint(f"  {label}  —  {eng.get('desc', '')}\n", "amber")
-        self._cprint(f"  {datetime.now().strftime('%H:%M:%S')}  //  {ROOT}\n", "dim")
-        self._cprint(f"{'='*55}\n\n", "amber")
+        # Header in console
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._cprint(f" {label} ", "amber")
+        self._cprint(f"  {eng.get('desc', '')}  //  {ts}\n", "dim")
+        self._cprint(f"{'─'*60}\n", "dim")
 
         # Launch
         script = ROOT / eng["script"]
         if not script.exists():
-            self._cprint(f"ERROR: {script} not found\n", "red")
-            return
+            self._cprint(f"ERROR: {script} not found\n", "red"); return
 
         try:
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
             env["PYTHONUTF8"] = "1"
-
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = 0
-
             self.process = subprocess.Popen(
-                [sys.executable, "-u", str(script)],
-                cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                stdin=subprocess.PIPE, text=True, bufsize=1,
-                encoding="utf-8", errors="replace",
+                [sys.executable, "-u", str(script)], cwd=str(ROOT),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE,
+                text=True, bufsize=1, encoding="utf-8", errors="replace",
                 startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW, env=env,
             )
-
             threading.Thread(target=self._read_output, daemon=True).start()
             self._poll_output()
-
         except Exception as e:
             self._cprint(f"FAILED: {e}\n", "red")
 
     def _send_input(self, event=None):
-        text = self.inp.get()
-        self.inp.delete(0, "end")
+        text = self.inp.get(); self.inp.delete(0, "end")
         if self.process and self.process.poll() is None and self.process.stdin:
             try:
-                self.process.stdin.write(text + "\n")
-                self.process.stdin.flush()
+                self.process.stdin.write(text + "\n"); self.process.stdin.flush()
                 self._cprint(f"> {text}\n", "amber")
-            except Exception:
-                pass
+            except: pass
 
     def _read_output(self):
         try:
             for line in iter(self.process.stdout.readline, ""):
-                if line:
-                    self.output_queue.put(line)
+                if line: self.output_queue.put(line)
             self.process.stdout.close()
-        except Exception:
-            pass
+        except: pass
         self.output_queue.put(None)
 
     def _poll_output(self):
         try:
-            for _ in range(50):  # drain up to 50 lines per tick
+            for _ in range(80):
                 line = self.output_queue.get_nowait()
                 if line is None:
                     rc = self.process.poll() if self.process else -1
-                    self._cprint(f"\n{'='*55}\n", "dim")
-                    if rc == 0:
-                        self._cprint(f"  Process exited OK\n", "green")
-                    else:
-                        self._cprint(f"  Process exited (code {rc})\n", "red")
-                    self._cprint(f"{'='*55}\n", "dim")
-                    self.hdr_right.configure(text="FINISHED", fg=DIM)
-                    self.process = None
-                    return
+                    self._cprint(f"\n{'─'*60}\n", "dim")
+                    self._cprint(f"  EXIT CODE {rc}\n", "green" if rc == 0 else "red")
+                    self._cprint(f"{'─'*60}\n", "dim")
+                    self.hdr_status.configure(text="DONE" if rc == 0 else f"EXIT {rc}", fg=GREEN if rc == 0 else RED)
+                    self.process = None; return
                 else:
                     self._cprint(line)
-        except queue.Empty:
-            pass
+        except queue.Empty: pass
         if self.process and self.process.poll() is None:
             self.after(30, self._poll_output)
         else:
@@ -391,180 +577,103 @@ class AurumApp(tk.Tk):
 
     def _stop_engine(self):
         if self.process and self.process.poll() is None:
-            self._cprint("\n  >> TERMINATING...\n", "red")
+            self._cprint("\n  >> SIGTERM\n", "red")
             self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+            try: self.process.wait(timeout=5)
+            except: self.process.kill()
             self._cprint("  >> STOPPED\n", "red")
-            self.hdr_right.configure(text="STOPPED", fg=RED)
+            self.hdr_status.configure(text="STOPPED", fg=RED)
             self.process = None
 
     # ─── DATA BROWSER ────────────────────────────────────
     def _show_data(self):
         self._clear(); self._unbind()
-        self.hdr_right.configure(text="DATA & REPORTS")
-        self.foot_hint.configure(text="ESC back")
+        self.hdr_path.configure(text="> DATA")
+        self.hdr_status.configure(text="BROWSE", fg=CYAN)
+        self._set_fkeys([("ESC BACK", AMBER_D), ("CLICK TO OPEN", DIM)])
         self.bind("<Escape>", lambda e: self._show_menu("main"))
         self.bind("<BackSpace>", lambda e: self._show_menu("main"))
 
         f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True, padx=20, pady=16)
+        f.pack(fill="both", expand=True, padx=16, pady=12)
 
-        tk.Label(f, text="] DATA & REPORTS [", font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 12))
+        tk.Label(f, text="< DATA & REPORTS >", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 8))
 
-        # Scan data directory for reports
         data_dir = ROOT / "data"
         reports = []
         if data_dir.exists():
             for rpt in sorted(data_dir.rglob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
                 if "reports" in str(rpt) or "darwin" in str(rpt):
-                    rel = rpt.relative_to(ROOT)
-                    size = rpt.stat().st_size
-                    mtime = datetime.fromtimestamp(rpt.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-                    reports.append((str(rel), mtime, size))
+                    reports.append(rpt)
+
+        # Scrollable
+        canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
+        scroll_f = tk.Frame(canvas, bg=BG)
+        scroll_f.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_f, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        # Table header
+        hdr = f"  {'FILE':<60} {'MODIFIED':<18} {'SIZE':>8}"
+        tk.Label(scroll_f, text=hdr, font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x")
+        tk.Frame(scroll_f, bg=DIM2, height=1).pack(fill="x", pady=1)
 
         if not reports:
-            tk.Label(f, text="  No reports found. Run a backtest first.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w")
+            tk.Label(scroll_f, text="  No reports. Run a backtest first.", font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=8)
         else:
-            # Scrollable list
-            canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
-            sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview, bg=BG, troughcolor=BG)
-            scroll_f = tk.Frame(canvas, bg=BG)
-            scroll_f.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-            canvas.create_window((0, 0), window=scroll_f, anchor="nw")
-            canvas.configure(yscrollcommand=sb.set)
-            canvas.pack(side="left", fill="both", expand=True)
-            sb.pack(side="right", fill="y")
-
-            # Header
-            hdr_text = f"  {'FILE':<55} {'DATE':<18} {'SIZE':>8}"
-            tk.Label(scroll_f, text=hdr_text, font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x")
-            tk.Frame(scroll_f, bg=BORDER, height=1).pack(fill="x", pady=2)
-
-            for path, mtime, size in reports[:50]:
-                sz = f"{size/1024:.0f}KB" if size > 1024 else f"{size}B"
-                text = f"  {path:<55} {mtime:<18} {sz:>8}"
-                lbl = tk.Label(scroll_f, text=text, font=(FONT, 8), fg=GREEN_D, bg=BG, anchor="w", cursor="hand2")
+            for rpt in reports[:60]:
+                rel = str(rpt.relative_to(ROOT))
+                mt = datetime.fromtimestamp(rpt.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                sz = rpt.stat().st_size
+                szs = f"{sz/1024:.0f}K" if sz > 1024 else f"{sz}B"
+                text = f"  {rel:<60} {mt:<18} {szs:>8}"
+                lbl = tk.Label(scroll_f, text=text, font=(FONT, 7), fg=GREEN_D, bg=BG, anchor="w", cursor="hand2")
                 lbl.pack(fill="x")
                 lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=BG3, fg=GREEN))
                 lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=BG, fg=GREEN_D))
-                lbl.bind("<Button-1>", lambda e, p=path: self._open_file(p))
-
-        tk.Frame(f, bg="transparent", height=16).pack()
-        self._make_btn(f, "  [0]  BACK", DIM, lambda: self._show_menu("main")).pack(anchor="w")
+                lbl.bind("<Button-1>", lambda e, p=rpt: self._open_file(p))
 
     def _open_file(self, path):
-        full = ROOT / path
-        if sys.platform == "win32":
-            os.startfile(str(full))
-        elif sys.platform == "darwin":
-            subprocess.run(["open", str(full)])
-        else:
-            subprocess.run(["xdg-open", str(full)])
+        if sys.platform == "win32": os.startfile(str(path))
+        elif sys.platform == "darwin": subprocess.run(["open", str(path)])
+        else: subprocess.run(["xdg-open", str(path)])
 
     # ─── PROCESSES ───────────────────────────────────────
     def _show_procs(self):
         self._clear(); self._unbind()
-        self.hdr_right.configure(text="PROCESSES")
-        self.foot_hint.configure(text="ESC back")
+        self.hdr_path.configure(text="> PROCS")
+        self.hdr_status.configure(text="MANAGE", fg=GREEN)
+        self._set_fkeys([("ESC BACK", AMBER_D), ("R REFRESH", DIM)])
         self.bind("<Escape>", lambda e: self._show_menu("main"))
         self.bind("<BackSpace>", lambda e: self._show_menu("main"))
+        self.bind("<Key-r>", lambda e: self._show_procs())
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(expand=True)
 
-        tk.Label(f, text="] RUNNING PROCESSES [", font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 16))
+        tk.Label(f, text="< RUNNING PROCESSES >", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 12))
 
         try:
             from core.proc import list_procs, stop_proc
             procs = [p for p in list_procs() if p.get("alive")]
-        except Exception:
-            procs = []
+        except: procs = []
 
         if not procs:
             tk.Label(f, text="  No engines running.", font=(FONT, 10), fg=DIM, bg=BG).pack(pady=8)
         else:
             for i, p in enumerate(procs):
-                eng_name = p.get("engine", "?").upper()
+                eng = p.get("engine", "?").upper()
                 pid = p.get("pid", "?")
-                text = f"  [{i+1}]  {eng_name:<14} PID {pid}"
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", padx=60, pady=2)
-                tk.Label(row, text=text, font=(FONT, 10), fg=GREEN, bg=BG, anchor="w").pack(side="left")
-                tk.Button(row, text="STOP", font=(FONT, 8, "bold"), fg=RED, bg=BG,
-                          activeforeground=WHITE, activebackground=BG3, border=0, cursor="hand2",
-                          command=lambda pid=pid: (stop_proc(pid), self._show_procs())).pack(side="right")
-
-        tk.Frame(f, bg="transparent", height=16).pack()
-        self._make_btn(f, "  [0]  BACK", DIM, lambda: self._show_menu("main")).pack(fill="x", padx=60)
-
-    # ─── MENU DISPATCH (override for data/procs) ────────
-    def _show_menu(self, menu_key):
-        if menu_key == "data":
-            self._show_data(); return
-        if menu_key == "procs":
-            self._show_procs(); return
-        self._show_menu_generic(menu_key)
-
-    def _show_menu_generic(self, menu_key):
-        self._clear(); self._unbind()
-        items = MENU_TREE.get(menu_key, [])
-        titles = {"main": "MAIN MENU", "backtest": "BACKTEST — SELECT ENGINE",
-                  "live": "LIVE — SELECT MODE", "tools": "TOOLS"}
-        self.hdr_right.configure(text=titles.get(menu_key, menu_key.upper()), fg=DIM)
-
-        is_sub = menu_key != "main"
-        if is_sub:
-            self.foot_hint.configure(text="click or number to select  //  ESC back")
-            self.bind("<Escape>", lambda e: self._show_menu("main"))
-            self.bind("<BackSpace>", lambda e: self._show_menu("main"))
-        else:
-            self.foot_hint.configure(text="click or number to select  //  ESC quit")
-            self.bind("<Escape>", lambda e: self._on_close())
-
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(expand=True)
-
-        tk.Label(f, text=f"] {titles.get(menu_key, menu_key.upper())} [",
-                 font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 20))
-
-        for i, item in enumerate(items):
-            num = i + 1
-            color = item.get("color", AMBER)
-            desc = item.get("desc", "")
-            text = f"  [{num}]  {item['label']:<18} {desc}"
-
-            has_script = "script" in item
-            if has_script:
-                cmd = lambda it=item: self._run_engine(it)
-            else:
-                cmd = lambda k=item["key"]: self._show_menu(k)
-
-            self._make_btn(f, text, color, cmd).pack(fill="x", padx=60, pady=2)
-
-            if has_script:
-                self.bind(f"<Key-{num}>", lambda e, it=item: self._run_engine(it))
-            else:
-                self.bind(f"<Key-{num}>", lambda e, k=item["key"]: self._show_menu(k))
-
-        tk.Frame(f, bg="transparent", height=16).pack()
-        if is_sub:
-            self._make_btn(f, "  [0]  BACK", DIM, lambda: self._show_menu("main")).pack(fill="x", padx=60, pady=2)
-            self.bind("<Key-0>", lambda e: self._show_menu("main"))
-        else:
-            self._make_btn(f, "  [0]  QUIT", DIM, lambda: self._on_close()).pack(fill="x", padx=60, pady=2)
-            self.bind("<Key-0>", lambda e: self._on_close())
-
-    # ─── UI HELPERS ──────────────────────────────────────
-    def _make_btn(self, parent, text, color, command):
-        btn = tk.Label(parent, text=text, font=(FONT, 10), fg=color, bg=BG,
-                       anchor="w", cursor="hand2", padx=8, pady=5)
-        btn.bind("<Enter>", lambda e: btn.configure(bg=BG3, fg=WHITE if color == DIM else color))
-        btn.bind("<Leave>", lambda e: btn.configure(bg=BG, fg=color))
-        btn.bind("<Button-1>", lambda e: command())
-        return btn
+                row = tk.Frame(f, bg=BG3)
+                row.pack(fill="x", padx=50, pady=2)
+                tk.Label(row, text=f" {eng} ", font=(FONT, 8, "bold"), fg=BG, bg=GREEN).pack(side="left")
+                tk.Label(row, text=f"  PID {pid}", font=(FONT, 9), fg=WHITE, bg=BG3, padx=8, pady=4).pack(side="left")
+                tk.Button(row, text=" STOP ", font=(FONT, 7, "bold"), fg=RED, bg=BG3,
+                          activeforeground=WHITE, activebackground=RED_D, border=0, cursor="hand2",
+                          command=lambda pid=pid: (stop_proc(pid), self._show_procs())).pack(side="right", padx=4, pady=2)
 
     # ─── CLOSE ───────────────────────────────────────────
     def _on_close(self):
@@ -579,5 +688,5 @@ class AurumApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    app = AurumApp()
+    app = AurumTerminal()
     app.mainloop()
