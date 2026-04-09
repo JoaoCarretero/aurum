@@ -8,44 +8,35 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from backtest import (
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from config.params import *
+from config.params import _tf_params, _TF_MINUTES
+
+from core import (
     fetch_all, validate, indicators, swing_structure, omega,
     detect_macro, build_corr_matrix, portfolio_allows,
     calc_levels, label_trade, position_size,
-    equity_stats, calc_ratios, monte_carlo,
-    walk_forward, walk_forward_by_regime,
-    bear_market_analysis, year_by_year_analysis, symbol_robustness,
     prepare_htf, merge_all_htf_to_ltf,
-    scan_symbol as azoth_scan,
-    ACCOUNT_SIZE, BASE_RISK, MAX_RISK, KELLY_FRAC,
-    SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H,
-    SYMBOLS, INTERVAL, HTF_STACK, MTF_ENABLED,
-    SCORE_BY_REGIME, RISK_SCALE_BY_REGIME,
-    DD_RISK_SCALE, REGIME_TRANS_WINDOW, REGIME_TRANS_SIZE_MULT,
-    REGIME_TRANS_ATR_JUMP, STREAK_COOLDOWN, SYM_LOSS_COOLDOWN,
-    CORR_THRESHOLD, CORR_SOFT_THRESHOLD, CORR_SOFT_MULT,
-    MACRO_SYMBOL, MACRO_SLOPE_BULL, MACRO_SLOPE_BEAR,
-    MC_N, MC_BLOCK, WF_TRAIN, WF_TEST,
-    SCORE_THRESHOLD, REGIME_MIN_STRENGTH, VOL_RISK_SCALE,
-    RUN_DIR, RUN_ID, log,
-    plot_montecarlo, plot_dashboard,
-    N_CANDLES, SCAN_DAYS, HTF_N_CANDLES_MAP,
-    MIN_STOP_PCT, MAX_HOLD, TARGET_RR,
-    _TF_MINUTES, W_NORM, PIVOT_N,
-    LEVERAGE,
 )
+from analysis.stats import equity_stats, calc_ratios
+from analysis.montecarlo import monte_carlo
+from analysis.walkforward import walk_forward, walk_forward_by_regime
+from analysis.benchmark import bear_market_analysis, year_by_year_analysis
+from analysis.plots import plot_montecarlo, plot_dashboard
+from engines.backtest import scan_symbol as azoth_scan, RUN_DIR, RUN_ID, log
 
-# ── FORÇAR GLOBALS DO BACKTEST PARA O TF CORRECTO ─────────────
-import backtest as _backtest
-_tf_correct = _backtest._tf_params(_backtest.ENTRY_TF)
-_backtest.SLOPE_N      = _tf_correct["slope_n"]
-_backtest.PIVOT_N      = _tf_correct["pivot_n"]
-_backtest.MIN_STOP_PCT = _tf_correct["min_stop_pct"]
-_backtest.MAX_HOLD     = _tf_correct["max_hold"]
-_backtest.CHOP_S21     = _tf_correct["chop_s21"]
-_backtest.CHOP_S200    = _tf_correct["chop_s200"]
-SLOPE_N = _backtest.SLOPE_N
-PIVOT_N = _backtest.PIVOT_N
+# ── FORÇAR GLOBALS PARA O TF CORRECTO ─────────────────────────
+import config.params as _params
+_tf_correct = _tf_params(ENTRY_TF)
+_params.SLOPE_N      = _tf_correct["slope_n"]
+_params.PIVOT_N      = _tf_correct["pivot_n"]
+_params.MIN_STOP_PCT = _tf_correct["min_stop_pct"]
+_params.MAX_HOLD     = _tf_correct["max_hold"]
+_params.CHOP_S21     = _tf_correct["chop_s21"]
+_params.CHOP_S200    = _tf_correct["chop_s200"]
+SLOPE_N = _params.SLOPE_N
+PIVOT_N = _params.PIVOT_N
 
 # ── MULTISTRATEGY DIRS ────────────────────────────────────────
 from pathlib import Path as _Path
@@ -76,11 +67,6 @@ KILL_SWITCH_SORTINO= -0.5  # Sortino abaixo disto → estratégia pausada (peso=
 KILL_SWITCH_WINDOW = 20    # trades recentes para avaliação do kill-switch
 CONFIDENCE_N_MIN   = 50    # trades para confiança plena: score × sqrt(n/50)
 REGIME_LAG         = 5     # lag artificial: usa regime de 5 trades atrás → quebra feedback loop
-ENSEMBLE_MIN_W     = 0.20  # peso mínimo por estratégia (nunca zera)
-ENSEMBLE_MAX_W     = 0.80  # peso máximo por estratégia
-ENSEMBLE_STAB_WIN  = 60    # janela longa para penalidade de instabilidade
-KILL_SWITCH_SORTINO= -0.5  # Sortino abaixo disto → estratégia pausada (peso=MIN_W)
-KILL_SWITCH_WINDOW = 20    # trades recentes para avaliação do kill-switch
 
 # Regime-aware: amplifica pesos baseado no macro actual
 # TREND (BULL/BEAR) → AZOTH lidera | RANGE (CHOP) → HERMES lidera
@@ -125,7 +111,7 @@ H_RULES = {
 H_BAYESIAN_PRIOR = {"Gartley":0.65,"Bat":0.55,"Butterfly":0.50,"Crab":0.50}
 H_REGIME_RISK    = {"TREND":1.0,"RANGE":0.5,"VOLATILE":0.25}
 
-SEP = "="*80
+SEP = "─"*80
 
 def _h_pivots(df):
     n=H_PIVOT_N; h=df["high"].values; l=df["low"].values
@@ -333,7 +319,7 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None):
                 entry_cost=entry*(1-COMMISSION)
                 ep_net=ep*(1+COMMISSION+slip_exit)
                 pnl=size*(entry_cost-ep_net)+(size*entry*FUNDING_PER_8H*duration/32)
-            pnl=round(pnl*_backtest.LEVERAGE, 2)
+            pnl=round(pnl*LEVERAGE, 2)
             account=max(account+pnl,account*0.5)
             bayes.update(pat,result,rr)
             if result=="LOSS":
@@ -1090,12 +1076,12 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
         ("HERMES tem trades",any(t.get("strategy")=="HERMES" for t in closed)),
     ]
     passou=sum(1 for _,v in checks if v)
-    print(f"\n{SEP}\n  VEREDITO — MULTISTRATEGY AZOTH+HERMES\n{SEP}")
-    for nome,ok in checks: print(f"  {'ok' if ok else 'xx'}  {nome}")
-    verdict=("EDGE CONFIRMADO — pronto para testnet" if passou>=7 else
-             "PROMISSOR — validar em mais periodos" if passou>=5 else
-             "FRAGIL — ajustar parametros HERMES")
-    print(f"\n  {passou}/8   {verdict}\n{SEP}\n")
+    print(f"\n{SEP}\n  VEREDITO\n{SEP}")
+    for nome,ok in checks: print(f"  {'✓' if ok else '✗'}  {nome}")
+    verdict=("EDGE CONFIRMADO" if passou>=7 else
+             "PROMISSOR" if passou>=5 else
+             "FRAGIL")
+    print(f"\n  {passou}/8  ·  {verdict}\n{SEP}\n")
     log.info(f"MS Veredito: {passou}/8  ROI={ratios['ret']:.2f}%  WR={wr:.1f}%  MaxDD={mdd_pct:.1f}%")
 
 def export_ms_json(all_trades, eq, mc, ratios):
@@ -1127,19 +1113,30 @@ def export_ms_json(all_trades, eq, mc, ratios):
     fname=str(MS_RUN_DIR/"reports"/f"multistrategy_{INTERVAL}_v1.json")
     with open(fname,"w",encoding="utf-8") as f: json.dump(payload,f,ensure_ascii=False,indent=2,default=str)
     print(f"  JSON -> {fname}")
+    # Auto-persist to DB
+    try:
+        from core.db import save_run
+        save_run("multi", fname)
+        print(f"  DB: run persistido")
+    except Exception as _e:
+        print(f"  DB: {_e}")
 
 def _ask_periodo():
+    global SCAN_DAYS, N_CANDLES, HTF_N_CANDLES_MAP
     import backtest as _bt
     v=input(f"\n  Periodo em dias [{SCAN_DAYS}] > ").strip()
     if v.isdigit() and 7<=int(v)<=1500:
         d=int(v)
         _bt.SCAN_DAYS=d; _bt.N_CANDLES=d*24*4
         _bt.HTF_N_CANDLES_MAP={"1h":d*24+200,"4h":d*6+100,"1d":d+100}
+        SCAN_DAYS=d; N_CANDLES=d*24*4
+        HTF_N_CANDLES_MAP={"1h":d*24+200,"4h":d*6+100,"1d":d+100}
         return d
     return SCAN_DAYS
 
 def _ask_config():
-    """Pergunta conta, leverage e risk. Actualiza globals do backtest."""
+    """Pergunta conta, leverage e risk. Actualiza globals do backtest e do módulo."""
+    global ACCOUNT_SIZE, LEVERAGE, BASE_RISK, MAX_RISK, CONVEX_ALPHA
     import backtest as _bt
 
     # Conta
@@ -1169,6 +1166,11 @@ def _ask_config():
     cv = input(f"  CONVEX_ALPHA [{_bt.CONVEX_ALPHA}] > ").strip()
     if cv.replace(".","").isdigit(): _bt.CONVEX_ALPHA = max(0.0, min(float(cv), 3.0))
 
+    # Sync module-level globals for _load_dados, _metricas_e_export, etc.
+    ACCOUNT_SIZE = _bt.ACCOUNT_SIZE; LEVERAGE = _bt.LEVERAGE
+    BASE_RISK = _bt.BASE_RISK; MAX_RISK = _bt.MAX_RISK
+    CONVEX_ALPHA = _bt.CONVEX_ALPHA
+
     return _bt.ACCOUNT_SIZE, _bt.LEVERAGE, _bt.BASE_RISK, _bt.MAX_RISK, _bt.CONVEX_ALPHA
 
 def _ask_plots():
@@ -1177,7 +1179,7 @@ def _ask_plots():
 def _load_dados(generate_plots):
     global GENERATE_PLOTS
     GENERATE_PLOTS=generate_plots
-    print(f"\n{SEP}\n  DADOS   {INTERVAL}   {_backtest.N_CANDLES:,} candles\n{SEP}")
+    print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
     _fetch_syms=list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms: _fetch_syms.insert(0,MACRO_SYMBOL)
     all_dfs=fetch_all(_fetch_syms)
@@ -1319,18 +1321,12 @@ def _metricas_e_export(all_trades, label="AZOTH + HERMES"):
 
             # monte carlo
             if mc:
-                fname_mc = str(MS_RUN_DIR / "charts" / f"montecarlo_{INTERVAL}.png")
-                # reuse backtest plot_montecarlo (guarda em RUN_DIR/charts — mover depois)
-                _orig = str(_backtest.RUN_DIR / "charts" / f"montecarlo_{INTERVAL}.png")
-                plot_montecarlo(mc, eq)
-                import shutil, os
-                if os.path.exists(_orig):
-                    shutil.move(_orig, fname_mc)
-                    print(f"  Chart → {fname_mc}")
+                plot_montecarlo(mc, eq, run_dir=MS_RUN_DIR)
+                print(f"  Chart → {MS_RUN_DIR / 'charts' / f'montecarlo_{INTERVAL}.png'}")
         except Exception as _e:
             log.warning(f"Charts error: {_e}")
 
-    print(f"{SEP}\n  OUTPUT: {MS_RUN_DIR}/\n  ├── charts/    equity_{INTERVAL}.png   montecarlo_{INTERVAL}.png\n  ├── reports/   multistrategy_{INTERVAL}_v1.json\n  └── logs/      multistrategy.log\n{SEP}\n")
+    print(f"\n{SEP}\n  output  ·  {MS_RUN_DIR}/\n{SEP}\n")
 
 def _resultados_por_simbolo(all_trades, show_he=True):
     print(f"\n{SEP}\n  RESULTADOS POR SIMBOLO\n{SEP}")
@@ -1351,81 +1347,212 @@ def _resultados_por_simbolo(all_trades, show_he=True):
             print(f"  {sym:12s}  {len(c):>4d}  {wr:>5.1f}%  ${sum(t['pnl'] for t in c):>+10,.0f}")
 
 def _menu():
-    W = 68
-    print(f"\n  {'╔'+'═'*(W-2)+'╗'}")
-    print(f"  ║{'':^{W-2}}║")
-    print(f"  ║{'  ☿  AURUM Finance  ·  Backtesting Quantitativo  ':^{W-2}}║")
-    print(f"  ║{'  AZOTH  ×  HERMES  ·  v1.0  ':^{W-2}}║")
-    print(f"  ║{'':^{W-2}}║")
-    print(f"  {'╚'+'═'*(W-2)+'╝'}")
+    W = 50
+    print(f"\n  {'─'*W}")
+    print(f"  HADRON  ·  Multistrategy Backtest")
+    print(f"  {'─'*W}")
     while True:
-        print(f"\n  {'─'*W}")
-        print(f"  {'MENU PRINCIPAL':^{W}}")
-        print(f"  {'─'*W}")
-        print(f"  [1]  AZOTH + HERMES  ─  Multistrategy completo")
-        print(f"        trend-following × harmonicos Fibonacci, aggregator de sinais")
-        print(f"  [2]  AZOTH apenas    ─  Trend-following fractal")
-        print(f"        RSI-50 · estrutura · cascade · taker · MTF")
-        print(f"  [3]  HERMES apenas   ─  Harmonicos XABCD")
-        print(f"        Gartley · Bat · Butterfly · Crab · Shannon · Hurst")
-        print(f"  {'─'*W}")
+        print()
+        print(f"  [1]  GRAVITON + PHOTON")
+        print(f"  [2]  GRAVITON")
+        print(f"  [3]  PHOTON")
+        print(f"  [4]  NEWTON")
+        print(f"  [5]  MERCURIO")
+        print(f"  [6]  THOTH")
+        print(f"  [7]  ALL")
+        print(f"  [8]  PROMETEU (ML)")
         print(f"  [0]  Sair")
-        print(f"  {'─'*W}")
-        op = input("\n  Opcao > ").strip()
-        if op == "0": print("\n  Ate logo.\n"); sys.exit(0)
-        if op in ("1","2","3"): return op
-        print("  Opcao invalida.")
+        print()
+        op = input("  > ").strip()
+        if op == "0": sys.exit(0)
+        if op in ("1","2","3","4","5","6","7","8"): return op
+        print("  opcao invalida")
 
 if __name__ == "__main__":
     op = _menu()
-    W = 68
-    LABELS = {"1":"AZOTH + HERMES","2":"AZOTH","3":"HERMES"}
-    print(f"\n  {'─'*W}")
-    print(f"  Modo        : {LABELS[op]}")
-    if op == "1":
-        print(f"  Capital     : AZOTH {AZOTH_CAPITAL_WEIGHT*100:.0f}%  ·  HERMES {HERMES_CAPITAL_WEIGHT*100:.0f}%")
-        print(f"  Confirmacao : x{CONFIRM_SIZE_MULT}  (janela ±{CONFIRM_WINDOW} candles = {CONFIRM_WINDOW*15}min)")
-    elif op == "2":
-        print(f"  Sinal       : RSI-50 + estrutura + cascade + taker")
-        print(f"  U1-U5       : omega, corr-soft, chop-MR, WF-regime, trans-filter")
-    elif op == "3":
-        print(f"  Padroes     : Gartley / Bat / Butterfly / Crab  (TOL={H_TOL*100:.0f}%)")
-        print(f"  Filtros     : Entropia Shannon + Expoente Hurst + Macro + MTF")
-    print(f"  Timeframe   : {INTERVAL}  ·  Macro: {MACRO_SYMBOL}")
-    print(f"  Simbolos    : {len(SYMBOLS)} ativos  ·  Capital: ${ACCOUNT_SIZE:,.0f}")
+    LABELS = {
+        "1":"GRAVITON + PHOTON", "2":"GRAVITON", "3":"PHOTON",
+        "4":"NEWTON", "5":"MERCURIO", "6":"THOTH",
+        "7":"ALL", "8":"PROMETEU (ML)",
+    }
     days = _ask_periodo()
     acct, lev, base_r, max_r, convex = _ask_config()
     plots = _ask_plots()
 
-    est_mdd = 4.2 * lev * (1 - 0.35 * min(convex, 2.0))
-    print(f"  {'─'*W}")
-    print(f"  Periodo     : {days} dias  ({days*24*4:,} candles 15m)")
-    print(f"  Conta       : ${acct:>10,.0f}   Leverage: {lev:.0f}×")
-    print(f"  Risk/trade  : {base_r*100:.2f}% base  →  {max_r*100:.2f}% max  (Kelly-calibrado)")
-    print(f"  Convex α    : {convex:.1f}  {'(desligado)' if convex==0 else '(sizing reduz em DD, expande em HWM)'}")
-    if lev > 1 and est_mdd > 20:
-        print(f"  ⚠  MaxDD estimado {est_mdd:.1f}% — leverage elevado, monitoriza o DD")
-    print(f"  Graficos    : {'sim' if plots else 'nao'}")
-    print(f"  Output      : {MS_RUN_DIR}/")
-    print(f"  {'─'*W}")
-    input("\n  Enter para iniciar... ")
+    print(f"\n{SEP}")
+    print(f"  {LABELS[op]}  ·  {days}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
+    print(f"  ${acct:,.0f}  ·  {lev:.0f}x  ·  risk {base_r*100:.1f}–{max_r*100:.1f}%  ·  convex {convex:.1f}")
+    if plots: print(f"  charts on")
+    print(f"  {MS_RUN_DIR}/")
+    print(SEP)
+    input("\n  enter para iniciar... ")
     log.info(f"AURUM op={LABELS[op]} dias={days} — {RUN_ID}")
     all_dfs, htf_stack_by_sym, macro_series, corr = _load_dados(plots)
+
     if op == "2":
         azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
         if not azoth_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(azoth_all, show_he=False)
-        _metricas_e_export(azoth_all, label="AZOTH")
+        _metricas_e_export(azoth_all, label="GRAVITON")
+
     elif op == "3":
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         if not hermes_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(hermes_all, show_he=False)
-        _metricas_e_export(hermes_all, label="HERMES")
+        _metricas_e_export(hermes_all, label="PHOTON")
+
+    elif op == "4":
+        from engines.newton import find_cointegrated_pairs, scan_pair
+        print(f"\n{SEP}\n  COINTEGRATION ANALYSIS\n{SEP}")
+        pairs = find_cointegrated_pairs(all_dfs)
+        newton_all = []
+        for pair in pairs:
+            df_a = all_dfs.get(pair["sym_a"])
+            df_b = all_dfs.get(pair["sym_b"])
+            if df_a is None or df_b is None: continue
+            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
+                                  pair, macro_series, corr)
+            newton_all.extend(trades)
+        newton_all.sort(key=lambda t: t["timestamp"])
+        if not newton_all: print("  Sem trades."); sys.exit(1)
+        _resultados_por_simbolo(newton_all, show_he=False)
+        _metricas_e_export(newton_all, label="NEWTON")
+
+    elif op == "5":
+        from engines.mercurio import scan_mercurio
+        mercurio_all = []
+        for sym, df in all_dfs.items():
+            trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
+            mercurio_all.extend(trades)
+        mercurio_all.sort(key=lambda t: t["timestamp"])
+        if not mercurio_all: print("  Sem trades."); sys.exit(1)
+        _resultados_por_simbolo(mercurio_all, show_he=False)
+        _metricas_e_export(mercurio_all, label="MERCURIO")
+
+    elif op == "6":
+        from engines.thoth import scan_thoth, collect_sentiment
+        print(f"\n{SEP}\n  SENTIMENT DATA\n{SEP}")
+        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        thoth_all = []
+        for sym, df in all_dfs.items():
+            trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
+                                   sentiment_data=sentiment_data)
+            thoth_all.extend(trades)
+        thoth_all.sort(key=lambda t: t["timestamp"])
+        if not thoth_all: print("  Sem trades."); sys.exit(1)
+        _resultados_por_simbolo(thoth_all, show_he=False)
+        _metricas_e_export(thoth_all, label="THOTH")
+
+    elif op == "7":
+        # ALL engines
+        engine_trades = {}
+
+        azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
+        engine_trades["GRAVITON"] = azoth_all
+
+        hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
+        engine_trades["PHOTON"] = hermes_all
+
+        from engines.newton import find_cointegrated_pairs, scan_pair
+        pairs = find_cointegrated_pairs(all_dfs)
+        newton_all = []
+        for pair in pairs:
+            df_a = all_dfs.get(pair["sym_a"])
+            df_b = all_dfs.get(pair["sym_b"])
+            if df_a is None or df_b is None: continue
+            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
+                                  pair, macro_series, corr)
+            newton_all.extend(trades)
+        engine_trades["NEWTON"] = newton_all
+
+        from engines.mercurio import scan_mercurio
+        mercurio_all = []
+        for sym, df in all_dfs.items():
+            trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
+            mercurio_all.extend(trades)
+        engine_trades["MERCURIO"] = mercurio_all
+
+        from engines.thoth import scan_thoth, collect_sentiment
+        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        thoth_all = []
+        for sym, df in all_dfs.items():
+            trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
+                                   sentiment_data=sentiment_data)
+            thoth_all.extend(trades)
+        engine_trades["THOTH"] = thoth_all
+
+        # merge all
+        all_trades = []
+        for eng, trades in engine_trades.items():
+            for t in trades:
+                t = t.copy()
+                if "strategy" not in t: t["strategy"] = eng
+                all_trades.append(t)
+        all_trades.sort(key=lambda t: t["timestamp"])
+
+        if not all_trades: print("  Sem trades."); sys.exit(1)
+
+        # summary per engine
+        print(f"\n{SEP}\n  RESULTADOS POR ENGINE\n{SEP}")
+        for eng in ["GRAVITON", "PHOTON", "NEWTON", "MERCURIO", "THOTH"]:
+            ts = [t for t in all_trades if t.get("strategy") == eng and t["result"] in ("WIN","LOSS")]
+            if not ts: print(f"  {eng:12s}  sem trades"); continue
+            w = sum(1 for t in ts if t["result"] == "WIN")
+            pnl = sum(t["pnl"] for t in ts)
+            print(f"  {eng:12s}  n={len(ts):>4d}  WR={w/len(ts)*100:>5.1f}%  ${pnl:>+10,.0f}")
+
+        _metricas_e_export(all_trades, label="ALL ENGINES")
+
+    elif op == "8":
+        # PROMETEU (ML ensemble)
+        engine_trades = {}
+
+        azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
+        engine_trades["GRAVITON"] = azoth_all
+
+        hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
+        engine_trades["PHOTON"] = hermes_all
+
+        from engines.newton import find_cointegrated_pairs, scan_pair
+        pairs = find_cointegrated_pairs(all_dfs)
+        newton_all = []
+        for pair in pairs:
+            df_a = all_dfs.get(pair["sym_a"])
+            df_b = all_dfs.get(pair["sym_b"])
+            if df_a is None or df_b is None: continue
+            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
+                                  pair, macro_series, corr)
+            newton_all.extend(trades)
+        engine_trades["NEWTON"] = newton_all
+
+        from engines.mercurio import scan_mercurio
+        mercurio_all = []
+        for sym, df in all_dfs.items():
+            trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
+            mercurio_all.extend(trades)
+        engine_trades["MERCURIO"] = mercurio_all
+
+        from engines.thoth import scan_thoth, collect_sentiment
+        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        thoth_all = []
+        for sym, df in all_dfs.items():
+            trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
+                                   sentiment_data=sentiment_data)
+            thoth_all.extend(trades)
+        engine_trades["THOTH"] = thoth_all
+
+        from engines.prometeu import run_prometeu
+        all_trades = run_prometeu(engine_trades)
+
+        if not all_trades: print("  Sem trades."); sys.exit(1)
+        _metricas_e_export(all_trades, label="PROMETEU ML")
+
     else:
+        # op == "1" — original GRAVITON + PHOTON
         azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         print(f"\n{SEP}\n  SIGNAL AGGREGATOR\n{SEP}")
         all_trades = aggregate_signals(azoth_all, hermes_all)
         if not all_trades: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(all_trades, show_he=True)
-        _metricas_e_export(all_trades, label="AZOTH + HERMES")
+        _metricas_e_export(all_trades, label="GRAVITON + PHOTON")

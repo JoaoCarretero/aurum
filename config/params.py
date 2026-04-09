@@ -1,0 +1,256 @@
+"""
+☿ AURUM Finance — Parâmetros Partilhados
+==========================================
+Single source of truth para todos os engines.
+Qualquer constante usada por mais de um módulo vive aqui.
+"""
+import math
+
+# Exportar tudo incluindo nomes com _ (necessário para `from config.params import *`)
+__all__ = [
+    # Universo
+    "SYMBOLS",
+    # Timeframes
+    "ENTRY_TF", "INTERVAL", "SCAN_DAYS", "N_CANDLES",
+    "HTF_STACK", "MTF_ENABLED", "HTF_N_CANDLES_MAP",
+    # Conta & Risco
+    "ACCOUNT_SIZE", "BASE_RISK", "MAX_RISK", "LEVERAGE", "CONVEX_ALPHA", "KELLY_FRAC",
+    # Custos
+    "SLIPPAGE", "SPREAD", "COMMISSION", "FUNDING_PER_8H",
+    # Indicadores
+    "EMA_SPANS", "RSI_PERIOD", "ATR_PERIOD", "W_NORM", "PIVOT_N", "MIN_SWINGS", "TAKER_WINDOW",
+    # RSI
+    "RSI_BULL_MIN", "RSI_BULL_MAX", "RSI_BEAR_MIN", "RSI_BEAR_MAX",
+    "PULLBACK_ATR_MAX", "CASCADE_MIN",
+    # Omega & Score
+    "REGIME_MIN_STRENGTH", "SCORE_THRESHOLD", "OMEGA_MIN_COMPONENT", "OMEGA_WEIGHTS",
+    "STOP_ATR_M", "TARGET_RR", "RR_MIN", "MAX_HOLD",
+    "SCORE_BY_REGIME", "RISK_SCALE_BY_REGIME", "BULL_LONG_MIN_PULLBACK_ATR",
+    # Drawdown & Cooldown
+    "DD_RISK_SCALE", "REGIME_TRANS_WINDOW", "REGIME_TRANS_ATR_JUMP", "REGIME_TRANS_SIZE_MULT",
+    "STREAK_COOLDOWN", "SYM_LOSS_COOLDOWN",
+    # Volatilidade
+    "SCORE_THRESHOLD_HIGH_VOL", "VOL_WINDOW", "VOL_LOW_PCT", "VOL_HIGH_PCT", "VOL_RISK_SCALE",
+    # Portfolio
+    "MAX_OPEN_POSITIONS", "CORR_THRESHOLD", "CORR_SOFT_THRESHOLD", "CORR_SOFT_MULT", "CORR_LOOKBACK",
+    # Macro
+    "MACRO_SYMBOL", "MACRO_SLOPE_BULL", "MACRO_SLOPE_BEAR",
+    # MC & WF
+    "MC_N", "MC_BLOCK", "WF_TRAIN", "WF_TEST",
+    # Chop
+    "CHOP_BB_PERIOD", "CHOP_BB_STD", "CHOP_RSI_LONG", "CHOP_RSI_SHORT",
+    "CHOP_RR", "CHOP_SIZE_MULT", "CHOP_MAX_SLOPE_ABS",
+    # Omega Risk Table
+    "OMEGA_RISK_TABLE",
+    # TF Scaling (underscore-prefixed — precisa de __all__ para exportar)
+    "_TF_MINUTES", "_tf_params", "_TFP",
+    "MIN_STOP_PCT", "SLOPE_N", "CHOP_S21", "CHOP_S200",
+]
+
+# ── UNIVERSO ──────────────────────────────────────────────────
+SYMBOLS = [
+    "BNBUSDT", "INJUSDT", "LINKUSDT", "RENDERUSDT", "NEARUSDT",
+    "SUIUSDT",  "ARBUSDT", "SANDUSDT", "XRPUSDT",   "FETUSDT", "OPUSDT",
+]
+
+# ── TIMEFRAMES ────────────────────────────────────────────────
+ENTRY_TF   = "15m"
+INTERVAL   = ENTRY_TF
+SCAN_DAYS  = 90
+N_CANDLES  = SCAN_DAYS * 24 * 4
+
+HTF_STACK    = ["1h", "4h", "1d"]   # full stack (usado quando MTF_ENABLED=True)
+MTF_ENABLED  = False                 # desligado por default — backtest roda sem fractal
+
+HTF_N_CANDLES_MAP = {
+    "1h":  SCAN_DAYS * 24 + 300,
+    "4h":  SCAN_DAYS *  6 + 200,
+    "1d":  SCAN_DAYS      + 200,
+}
+
+# ── CONTA & RISCO ─────────────────────────────────────────────
+ACCOUNT_SIZE   = 10_000.0
+BASE_RISK      = 0.005
+MAX_RISK       = 0.015
+LEVERAGE       = 1.0       # multiplicador de alavancagem (aplicado ao PnL)
+CONVEX_ALPHA   = 0.0       # convex sizing: 0=desligado  0.5=suave  1.0=linear  2.0=agressivo
+KELLY_FRAC     = 0.5
+
+# ── CUSTOS ────────────────────────────────────────────────────
+SLIPPAGE       = 0.0002
+SPREAD         = 0.0001
+COMMISSION     = 0.0004
+FUNDING_PER_8H = 0.0001
+
+# ── INDICADORES ───────────────────────────────────────────────
+EMA_SPANS      = [9, 21, 50, 100, 200]
+RSI_PERIOD     = 14
+ATR_PERIOD     = 14
+W_NORM         = 120
+PIVOT_N        = 5
+MIN_SWINGS     = 3
+TAKER_WINDOW   = 20
+
+# ── RSI FILTROS ───────────────────────────────────────────────
+RSI_BULL_MIN, RSI_BULL_MAX = 42, 68
+RSI_BEAR_MIN, RSI_BEAR_MAX = 28, 60
+PULLBACK_ATR_MAX            = 1.5
+CASCADE_MIN                 = 1
+
+# ── OMEGA & SCORE ─────────────────────────────────────────────
+REGIME_MIN_STRENGTH = 0.25
+SCORE_THRESHOLD     = 0.53
+OMEGA_MIN_COMPONENT = 0.15
+OMEGA_WEIGHTS       = {
+    "struct": 0.25, "flow": 0.25,
+    "cascade": 0.20, "momentum": 0.15, "pullback": 0.15,
+}
+STOP_ATR_M          = 1.8
+TARGET_RR           = 2.0
+RR_MIN              = 1.5
+MAX_HOLD            = 48
+
+SCORE_BY_REGIME: dict[str, float] = {
+    "BEAR": 0.53,
+    "BULL": 0.55,
+    "CHOP": 0.63,
+}
+RISK_SCALE_BY_REGIME: dict[str, float] = {
+    "BEAR": 1.00,
+    "BULL": 0.85,
+    "CHOP": 0.45,
+}
+BULL_LONG_MIN_PULLBACK_ATR = 0.15
+
+# ── DRAWDOWN & COOLDOWN ──────────────────────────────────────
+DD_RISK_SCALE: dict[float, float] = {
+    0.15: 0.00,
+    0.10: 0.25,
+    0.07: 0.50,
+    0.04: 0.75,
+}
+
+REGIME_TRANS_WINDOW     = 8
+REGIME_TRANS_ATR_JUMP   = 1.50
+REGIME_TRANS_SIZE_MULT  = 0.40
+
+STREAK_COOLDOWN: dict[int, int] = {
+    7:  16,
+    5:  8,
+    3:  4,
+    2:  2,
+}
+SYM_LOSS_COOLDOWN = 3
+
+# ── VOLATILIDADE ──────────────────────────────────────────────
+SCORE_THRESHOLD_HIGH_VOL = 0.58
+
+VOL_WINDOW    = 100
+VOL_LOW_PCT   = 0.20
+VOL_HIGH_PCT  = 0.80
+VOL_RISK_SCALE = {
+    "LOW":     0.85,
+    "NORMAL":  1.00,
+    "HIGH":    0.70,
+    "EXTREME": 0.00,
+}
+
+# ── PORTFOLIO ─────────────────────────────────────────────────
+MAX_OPEN_POSITIONS   = 3
+CORR_THRESHOLD       = 0.80
+CORR_SOFT_THRESHOLD  = 0.75
+CORR_SOFT_MULT       = 0.40
+CORR_LOOKBACK        = 120
+
+# ── MACRO ─────────────────────────────────────────────────────
+MACRO_SYMBOL         = "BTCUSDT"
+MACRO_SLOPE_BULL     =  0.05
+MACRO_SLOPE_BEAR     = -0.05
+
+# ── MONTE CARLO & WALK-FORWARD ────────────────────────────────
+MC_N, MC_BLOCK = 1000, 25
+WF_TRAIN, WF_TEST = 20, 10
+
+# ── CHOP MODE ─────────────────────────────────────────────────
+CHOP_BB_PERIOD     = 20
+CHOP_BB_STD        = 2.0
+CHOP_RSI_LONG      = 32
+CHOP_RSI_SHORT     = 68
+CHOP_RR            = 1.5
+CHOP_SIZE_MULT     = 0.40
+CHOP_MAX_SLOPE_ABS = 0.025
+
+# ── OMEGA RISK TABLE ─────────────────────────────────────────
+OMEGA_RISK_TABLE: list[tuple[float, float]] = [
+    (0.65, 1.30),
+    (0.59, 1.10),
+    (0.55, 0.85),
+    (0.53, 0.70),
+    (0.00, 0.50),
+]
+
+# ── TIMEFRAME SCALING ─────────────────────────────────────────
+_TF_MINUTES: dict[str, int] = {
+    "1m":1, "3m":3, "5m":5, "15m":15, "30m":30,
+    "1h":60, "2h":120, "4h":240, "6h":360,
+    "8h":480, "12h":720, "1d":1440,
+}
+
+def _tf_params(interval: str) -> dict:
+    m   = _TF_MINUTES.get(interval, 240)
+    r   = m / 240
+    sr  = math.sqrt(r)
+    return {
+        "min_stop_pct":  max(0.002, round(0.008 * sr, 4)),
+        "slope_n":       max(3, min(80, round(1200 / m))),
+        "chop_s21":      round(0.030 * sr, 5),
+        "chop_s200":     round(0.010 * sr, 5),
+        "pivot_n":       max(5, min(30, round(360 / m))),
+        "max_hold":      max(24, min(200, round(11520 / m))),
+    }
+
+# ── NEWTON — Statistical Mean Reversion (Pairs Trading) ──────
+NEWTON_ZSCORE_ENTRY    = 2.0       # |z-score| > N para entrar
+NEWTON_ZSCORE_EXIT     = 0.0       # z-score cruza 0 para sair
+NEWTON_ZSCORE_STOP     = 3.5       # |z-score| > N para stop
+NEWTON_COINT_PVALUE    = 0.05      # p-value máximo para cointegração válida
+NEWTON_HALFLIFE_MIN    = 5         # half-life mínimo (candles)
+NEWTON_HALFLIFE_MAX    = 50        # half-life máximo (candles)
+NEWTON_SPREAD_WINDOW   = 90        # rolling window para z-score do spread
+NEWTON_RECALC_EVERY    = 120       # recalcular cointegração a cada N candles
+NEWTON_MAX_HOLD        = 96        # max candles por trade (2× o normal)
+NEWTON_SIZE_MULT       = 0.50      # position size relativo ao normal (pairs = menos risco)
+NEWTON_MIN_PAIRS       = 3         # mínimo de pares cointegrados para operar
+
+# ── MERCURIO — Order Flow / Microstructure ────────────────────
+MERCURIO_CVD_WINDOW     = 20       # janela para CVD divergence
+MERCURIO_CVD_DIV_BARS   = 10       # lookback para detectar divergência
+MERCURIO_VIMB_WINDOW    = 10       # janela para volume imbalance
+MERCURIO_VIMB_LONG      = 0.60     # imbalance > N = bullish
+MERCURIO_VIMB_SHORT     = 0.40     # imbalance < N = bearish
+MERCURIO_LIQ_VOL_MULT   = 3.0     # spike volume > N× média = liquidação
+MERCURIO_LIQ_ATR_MULT   = 2.0     # spike ATR > N× média = liquidação
+MERCURIO_MIN_SCORE      = 0.50     # score mínimo para entrada
+MERCURIO_SIZE_MULT      = 0.60     # position size multiplier
+
+# ── THOTH — Sentiment Quantificado ───────────────────────────
+THOTH_FUNDING_WINDOW    = 30       # períodos de 8h para z-score do funding
+THOTH_FUNDING_ENTRY     = 2.0      # |z-score| > N para sinal
+THOTH_OI_WINDOW         = 20       # candles para delta OI
+THOTH_LS_CONTRARIAN     = 2.0      # ratio > N = crowd long demais
+THOTH_LS_CONTRARIAN_LOW = 0.5      # ratio < N = crowd short demais
+THOTH_WEIGHT_FUNDING    = 0.40     # peso funding no composite score
+THOTH_WEIGHT_OI         = 0.30     # peso OI no composite score
+THOTH_WEIGHT_LS         = 0.30     # peso LS ratio no composite score
+THOTH_MIN_SCORE         = 0.55     # score mínimo para entrada
+THOTH_SIZE_MULT         = 0.50     # position size multiplier
+
+# Derived params para o ENTRY_TF default
+_TFP            = _tf_params(ENTRY_TF)
+MIN_STOP_PCT    = _TFP["min_stop_pct"]
+SLOPE_N         = _TFP["slope_n"]
+CHOP_S21        = _TFP["chop_s21"]
+CHOP_S200       = _TFP["chop_s200"]
+# Override PIVOT_N e MAX_HOLD com os valores derivados do TF
+PIVOT_N         = _TFP["pivot_n"]
+MAX_HOLD        = _TFP["max_hold"]

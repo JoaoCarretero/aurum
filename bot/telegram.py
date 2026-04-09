@@ -23,12 +23,12 @@ from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from live import LiveEngine
+    from engines.live import LiveEngine
 
 log = logging.getLogger("aurum.telegram")
 
 # ── CONFIG ────────────────────────────────────────────────────
-_KEYS_PATH = Path(__file__).parent / "config" / "keys.json"
+_KEYS_PATH = Path(__file__).parent.parent / "config" / "keys.json"
 _API = "https://api.telegram.org/bot{token}/{method}"
 _POLL_INTERVAL = 2          # segundos entre polls de updates
 _MAX_MSG_LEN   = 4000       # Telegram limit ~4096
@@ -141,12 +141,19 @@ class TelegramNotifier:
 
     async def notify_startup(self, mode: str, symbols: list):
         """Notificação de arranque."""
+        from config.params import ACCOUNT_SIZE, MAX_OPEN_POSITIONS, INTERVAL, MACRO_SYMBOL, SYMBOLS
+        from engines.live import LIVE_RUN_ID
         msg = (
-            f"☿ <b>AURUM Live Engine v1.0</b>\n"
+            f"☿ <b>AURUM Finance · Live Engine v1.0</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Mode: <b>{mode}</b>\n"
-            f"Symbols: {', '.join(symbols)}\n"
-            f"Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"Mode:      <b>{mode}</b>\n"
+            f"Symbols:   {len(symbols)} ({', '.join(s[:4] for s in symbols)})\n"
+            f"Timeframe: {INTERVAL}  ·  Macro: {MACRO_SYMBOL}\n"
+            f"Account:   <code>${ACCOUNT_SIZE:,.0f}</code>  ·  Max pos: {MAX_OPEN_POSITIONS}\n"
+            f"Run ID:    <code>{LIVE_RUN_ID}</code>\n"
+            f"Start:     {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Dashboard a cada 5min · /help para comandos"
         )
         await self.send(msg)
 
@@ -172,13 +179,14 @@ class TelegramNotifier:
         pnl = sum(t["pnl"] for t in e.closed_trades)
         ks = e.kill_sw.status()
 
-        from live import LIVE_MODE, TESTNET_MODE, DEMO_MODE, MACRO_SYMBOL, SYMBOLS
+        from config.params import MACRO_SYMBOL, SYMBOLS
+        from engines.live import LIVE_MODE, TESTNET_MODE, DEMO_MODE
         mode = "DEMO" if DEMO_MODE else "TESTNET" if TESTNET_MODE else "LIVE" if LIVE_MODE else "PAPER"
 
         # macro
         btc_st = e._symbol_state(MACRO_SYMBOL)
         s200 = btc_st.get("s200", 0)
-        from live import MACRO_SLOPE_BULL, MACRO_SLOPE_BEAR
+        from config.params import MACRO_SLOPE_BULL, MACRO_SLOPE_BEAR
         macro = "BULL ↑" if s200 > MACRO_SLOPE_BULL else "BEAR ↓" if s200 < MACRO_SLOPE_BEAR else "CHOP ↔"
 
         # tempo próximo candle

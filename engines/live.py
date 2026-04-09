@@ -43,27 +43,21 @@ from collections import defaultdict, deque
 from typing import Optional
 
 # ── PATH ──────────────────────────────────────────────────────
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backtest import (
+# Constantes — single source of truth
+from config.params import *   # noqa: F401,F403
+
+# Funções do backtest engine
+from core import (
     indicators, swing_structure, omega, detect_macro, build_corr_matrix,
     portfolio_allows, position_size, calc_levels, calc_levels_chop,
     prepare_htf, merge_all_htf_to_ltf, fetch_all, validate,
     score_omega, score_chop,
-    SYMBOLS, INTERVAL, ENTRY_TF, HTF_STACK, MTF_ENABLED, HTF_N_CANDLES_MAP,
-    ACCOUNT_SIZE, BASE_RISK, MAX_RISK, LEVERAGE, CONVEX_ALPHA,
-    SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H,
-    TARGET_RR, SCORE_THRESHOLD, SCORE_BY_REGIME, REGIME_MIN_STRENGTH,
-    DD_RISK_SCALE, STREAK_COOLDOWN, SYM_LOSS_COOLDOWN,
-    CORR_THRESHOLD, CORR_SOFT_THRESHOLD, CORR_SOFT_MULT,
-    MACRO_SYMBOL, MACRO_SLOPE_BULL, MACRO_SLOPE_BEAR,
-    VOL_RISK_SCALE, REGIME_TRANS_WINDOW, REGIME_TRANS_SIZE_MULT, REGIME_TRANS_ATR_JUMP,
-    MAX_OPEN_POSITIONS, OMEGA_MIN_COMPONENT, BULL_LONG_MIN_PULLBACK_ATR,
-    CHOP_S21, CHOP_S200, CHOP_SIZE_MULT,
-    _tf_params, RUN_ID, log as _bk_log,
 )
-import backtest as _bk
-from telegram_bot import TelegramNotifier
+from engines.backtest import RUN_ID, log as _bk_log
+import engines.backtest as _bk
+from bot.telegram import TelegramNotifier
 
 # ── CONFIG ────────────────────────────────────────────────────
 LIVE_MODE         = False          # False = PAPER  |  True = LIVE/TESTNET
@@ -113,6 +107,9 @@ SESSION_BLOCK_ACTIVE= False        # True = activa filtro de horário
 SYMBOL_RANK_WINDOW  = 20           # últimos N trades por símbolo para ranking
 SYMBOL_BLOCK_THRESH = -50.0        # bloqueia símbolo se PnL últimos 20 trades < -$50
 
+# Telegram dashboard
+TG_DASH_EVERY       = 10           # envia dashboard ao Telegram a cada N ticks (N*30s = 5min)
+
 # Corr matrix throttle
 CORR_REFRESH_CANDLES = 4           # recalcula corr a cada N candles BTC
 
@@ -130,7 +127,7 @@ def _load_keys(mode: str) -> tuple[str, str]:
     Lê API keys de config/keys.json.
     Estrutura: {"demo": {"api_key": ..., "api_secret": ...}, "testnet": {...}, "live": {...}}
     """
-    config_path = Path(__file__).parent / "config" / "keys.json"
+    config_path = Path(__file__).parent.parent / "config" / "keys.json"
     if not config_path.exists():
         print(f"\n  ⚠  Ficheiro de keys não encontrado: {config_path}")
         print(f"  Cria a pasta config/ e o ficheiro keys.json com a estrutura:")
@@ -153,20 +150,26 @@ def _load_keys(mode: str) -> tuple[str, str]:
 
 def _setup_logging():
     fmt = logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s")
-    handlers = [
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LIVE_DIR / "logs" / "live.log", encoding="utf-8"),
-    ]
+
+    # Desactivar root logger do backtest (evita propagação cruzada)
+    logging.getLogger().handlers = [logging.NullHandler()]
+
     live_logger = logging.getLogger("aurum.live")
-    live_logger.setLevel(logging.DEBUG)
-    live_logger.propagate = False          # evita duplicar nos handlers do backtest
-    for h in handlers: h.setFormatter(fmt); live_logger.addHandler(h)
+    if not live_logger.handlers:  # evita duplicação se chamado mais de uma vez
+        handlers = [
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(LIVE_DIR / "logs" / "live.log", encoding="utf-8"),
+        ]
+        live_logger.setLevel(logging.DEBUG)
+        live_logger.propagate = False
+        for h in handlers: h.setFormatter(fmt); live_logger.addHandler(h)
 
     trade_logger = logging.getLogger("aurum.trades")
-    trade_logger.setLevel(logging.DEBUG)
-    trade_logger.propagate = False
-    th = logging.FileHandler(LIVE_DIR / "logs" / "trades.log", encoding="utf-8")
-    th.setFormatter(fmt); trade_logger.addHandler(th)
+    if not trade_logger.handlers:
+        trade_logger.setLevel(logging.DEBUG)
+        trade_logger.propagate = False
+        th = logging.FileHandler(LIVE_DIR / "logs" / "trades.log", encoding="utf-8")
+        th.setFormatter(fmt); trade_logger.addHandler(th)
 
     return live_logger, trade_logger
 
@@ -730,6 +733,7 @@ class LiveEngine:
         _mode_lbl = "DEMO" if DEMO_MODE else "TESTNET" if TESTNET_MODE else "LIVE" if LIVE_MODE else "PAPER"
         log.info(f"LiveEngine init — {_mode_lbl} mode — {LIVE_RUN_ID}")
         self.telegram = TelegramNotifier(self)
+        self._tg_tick = 0
 
     # ── SEED ──────────────────────────────────────────────────
     async def seed(self):
@@ -1187,6 +1191,53 @@ class LiveEngine:
 
             print("\n".join(lines))
 
+            # ── Telegram dashboard mirror ─────────────────────
+            self._tg_tick += 1
+            if self._tg_tick % TG_DASH_EVERY == 0 and self.telegram.enabled:
+                tg_lines = [
+                    f"☿ <b>AURUM {mode}</b>  {now_str}  candle: {mm:02d}:{ss:02d}",
+                    f"BTC: <b>{macro_lbl}</b> (s200={s200_btc:+.4f})",
+                    f"Trades: {n_done}  WR: {wr_str}  PnL: <code>${pnl:+.2f}</code>",
+                    f"DD: {dd_str}  KS: {'✅' if ks.get('ok') else '🚨 TRIGGERED'}",
+                    f"Account: <code>${self.account:,.2f}</code>",
+                    f"",
+                ]
+                # tabela de símbolos em monospace
+                tg_sym = []
+                for sym in SYMBOLS:
+                    st = self._symbol_state(sym)
+                    if not st: continue
+                    rsi_a = "↑" if st["rsi"] > 55 else "↓" if st["rsi"] < 45 else "→"
+                    sc = f"{st['score']:.2f}" if st['score'] > 0.45 else " — "
+                    tag = ""
+                    op = next((p for p in self.positions if p.symbol == sym), None)
+                    if op:
+                        tag = f" [POS {op.direction[0]}]"
+                    elif st["score"] >= SCORE_THRESHOLD:
+                        tag = " ◄◄"
+                    tg_sym.append(f"{sym[:8]:8s} {st['close']:>9.4f} {st['rsi']:4.1f}{rsi_a} {st['struct'][:4]:4s} {sc}{tag}")
+                if tg_sym:
+                    tg_lines.append("<pre>" + "\n".join(tg_sym) + "</pre>")
+
+                # posições
+                if self.positions:
+                    tg_lines.append(f"\n<b>Posições:</b>")
+                    for p in self.positions:
+                        dur = int((datetime.now(timezone.utc) - p.open_ts).seconds / 60)
+                        df_p = self.buffer.to_df(p.symbol)
+                        curr = float(df_p["close"].iloc[-1]) if df_p is not None else p.entry
+                        unrl = (curr - p.entry) * p.size if p.direction == "BULLISH" else (p.entry - curr) * p.size
+                        ar = "🟢" if p.direction == "BULLISH" else "🔴"
+                        tg_lines.append(f"{ar} {p.symbol}  <code>${unrl:+.2f}</code>  {dur}min")
+
+                # near misses
+                if nears:
+                    tg_lines.append(f"\n⚡ <b>Near-misses:</b>")
+                    for s, v in nears:
+                        tg_lines.append(f"  {s}  score={v['score']:.3f}  falta={v['thresh']-v['score']:.3f}")
+
+                await self.telegram.send("\n".join(tg_lines))
+
     async def _ws_listen(self, symbol: str):
         """WebSocket para 1 símbolo. Auto-reconecta."""
         import websockets
@@ -1316,39 +1367,28 @@ class LiveEngine:
                     "DEMO — demo-fapi.binance.com"               if DEMO_MODE else
                     "TESTNET — testnet.binancefuture.com"        if TESTNET_MODE else
                     "⚠ LIVE TRADING — capital real")
-        print(f"\n  {'╔'+'═'*(W-2)+'╗'}")
-        print(f"  ║{'':^{W-2}}║")
-        print(f"  ║{'  ☿  AURUM Finance  ·  Live Engine v1.0  ':^{W-2}}║")
-        print(f"  ║{f'  {mode_str}  ':^{W-2}}║")
-        print(f"  ║{'':^{W-2}}║")
-        print(f"  {'╚'+'═'*(W-2)+'╝'}")
-        print(f"\n  Símbolos   : {', '.join(SYMBOLS)}")
-        print(f"  Timeframe  : {INTERVAL}  ·  Macro: {MACRO_SYMBOL}")
-        print(f"  Conta est. : ${ACCOUNT_SIZE:,.0f}  ·  Max pos: {MAX_OPEN_LIVE}")
-        print(f"  Kill-sw    : DD>{KS_DD_TRIGGER*100:.0f}%  |  WR<{KS_MIN_WR*100:.0f}%  |  exp<0")
-        print(f"  Drift alert: R-drift médio < {KS_DRIFT_TRIGGER}")
-        print(f"  Output     : {LIVE_DIR}/\n")
+        print(f"\n  {'─'*50}")
+        print(f"  GRAVITON Live  ·  {mode_str}")
+        print(f"  {len(SYMBOLS)} ativos  ·  {INTERVAL}  ·  ${ACCOUNT_SIZE:,.0f}  ·  max {MAX_OPEN_LIVE} pos")
+        print(f"  {LIVE_DIR}/")
+        print(f"  {'─'*50}\n")
 
 
 # ── INTERACTIVE MENU ──────────────────────────────────────────
 def _menu() -> str:
-    W = 66
-    print(f"\n  {'╔'+'═'*(W-2)+'╗'}")
-    print(f"  ║{'':^{W-2}}║")
-    print(f"  ║{'  ☿  AURUM Finance  ·  Live Engine v1.0  ':^{W-2}}║")
-    print(f"  ║{'':^{W-2}}║")
-    print(f"  {'╚'+'═'*(W-2)+'╝'}")
-    print(f"\n  {'─'*W}")
-    print(f"  [1]  PAPER trading   — websocket real, sem ordens reais")
-    print(f"  [2]  DEMO trading    — Binance Futures Demo (demo-fapi.binance.com)  ← recomendado")
-    print(f"  [3]  TESTNET trading — Binance Futures Testnet (testnet.binancefuture.com)")
-    print(f"  [4]  LIVE trading    — execução real (requer API keys mainnet)")
-    print(f"  [5]  Diagnóstico     — testar conexão + seed + indicadores")
-    print(f"  {'─'*W}")
+    print(f"\n  {'─'*40}")
+    print(f"  GRAVITON  ·  Live Engine")
+    print(f"  {'─'*40}")
+    print()
+    print(f"  [1]  Paper")
+    print(f"  [2]  Demo")
+    print(f"  [3]  Testnet")
+    print(f"  [4]  Live")
+    print(f"  [5]  Diagnostico")
     print(f"  [0]  Sair")
-    print(f"  {'─'*W}")
+    print()
     _map = {"1": "paper", "2": "demo", "3": "testnet", "4": "live", "5": "diag", "0": "exit"}
-    op = input("\n  Opcao > ").strip()
+    op = input("  > ").strip()
     return _map.get(op, "exit")
 
 
@@ -1374,7 +1414,7 @@ async def _run_diagnostic():
     log.info(f"Kill-switch status: {ks_status}")
 
     # Telegram connectivity test
-    from telegram_bot import TelegramNotifier
+    from bot.telegram import TelegramNotifier
     tg = TelegramNotifier(engine)
     if tg.enabled:
         await tg.send("🔧 <b>AURUM Diagnóstico</b> — Telegram OK ✓")

@@ -20,3 +20,11 @@ Thumbs.db
 
 # Keys — NUNCA versionar
 config/keys.json
+
+# Egg / editable install
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.env
