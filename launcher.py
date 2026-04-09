@@ -177,15 +177,16 @@ BRIEFINGS = {
 }
 
 BASKETS_UI = [
-    ("DEFAULT",   "11 assets — BNB, INJ, LINK, RENDER, NEAR + 6 more", ""),
-    ("TOP 12",    "12 assets — BTC, ETH, BNB, SOL, XRP + 7 more",     "2"),
-    ("DEFI",      "10 assets — LINK, AAVE, UNI, MKR, SNX + 5 more",   "3"),
-    ("LAYER 1",   "10 assets — BTC, ETH, SOL, AVAX, NEAR + 5 more",   "4"),
-    ("LAYER 2",   "6 assets — ARB, OP, MATIC, STRK, MANTA + 1",       "5"),
-    ("AI",        "6 assets — FET, RENDER, TAO, NEAR, WLD + 1",        "6"),
-    ("MEME",      "6 assets — DOGE, SHIB, PEPE, BONK, FLOKI + 1",     "7"),
-    ("MAJORS",    "5 assets — BTC, ETH, BNB, SOL, XRP",                "8"),
-    ("BLUECHIP",  "20 assets — full institutional universe",             "9"),
+    ("DEFAULT",  "", ["BNB","INJ","LINK","RENDER","NEAR","SUI","ARB","SAND","XRP","FET","OP"]),
+    ("TOP 12",   "2", ["BTC","ETH","BNB","SOL","XRP","DOGE","ADA","AVAX","LINK","DOT","MATIC","SUI"]),
+    ("DEFI",     "3", ["LINK","AAVE","UNI","MKR","SNX","COMP","CRV","SUSHI","INJ","JUP"]),
+    ("LAYER 1",  "4", ["BTC","ETH","SOL","AVAX","NEAR","SUI","APT","ATOM","DOT","ALGO"]),
+    ("LAYER 2",  "5", ["ARB","OP","MATIC","STRK","MANTA","IMX"]),
+    ("AI",       "6", ["FET","RENDER","TAO","NEAR","WLD","ARKM"]),
+    ("MEME",     "7", ["DOGE","SHIB","PEPE","BONK","FLOKI","WIF"]),
+    ("MAJORS",   "8", ["BTC","ETH","BNB","SOL","XRP"]),
+    ("BLUECHIP", "9", ["BTC","ETH","BNB","SOL","XRP","ADA","AVAX","LINK","DOT","MATIC",
+                        "ATOM","NEAR","INJ","ARB","OP","SUI","RENDER","FET","SAND","AAVE"]),
 ]
 
 PERIODS_UI = [
@@ -601,37 +602,44 @@ class App(tk.Tk):
         # ── BASKET ──
         tk.Label(f, text="ASSET BASKET", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
         tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+
+        # Basket buttons — row 1
         bsk_f = tk.Frame(f, bg=BG)
-        bsk_f.pack(fill="x", pady=(0, 14))
+        bsk_f.pack(fill="x")
 
         self._bsk_btns = []
-        for label, hint, val in BASKETS_UI[:5]:  # show first 5, rest scrollable
+        self._bsk_assets = {b[1]: b[2] for b in BASKETS_UI}  # val -> asset list
+
+        for label, val, assets in BASKETS_UI[:5]:
             btn = tk.Label(bsk_f, text=f" {label} ", font=(FONT, 8, "bold"),
                            fg=BG if val == "" else DIM, bg=AMBER if val == "" else BG3,
                            cursor="hand2", padx=8, pady=3)
             btn.pack(side="left", padx=2)
             self._bsk_btns.append((btn, val))
+            btn.bind("<Button-1>", lambda e, v=val: self._select_basket(v))
 
-            def select_basket(event, v=val):
-                self._cfg_basket = v
-                for b, bv in self._bsk_btns:
-                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
-            btn.bind("<Button-1>", select_basket)
-
-        # Second row of baskets
+        # Row 2
         bsk_f2 = tk.Frame(f, bg=BG)
-        bsk_f2.pack(fill="x", pady=(0, 14))
-        for label, hint, val in BASKETS_UI[5:]:
+        bsk_f2.pack(fill="x", pady=(2, 0))
+        for label, val, assets in BASKETS_UI[5:]:
             btn = tk.Label(bsk_f2, text=f" {label} ", font=(FONT, 8, "bold"),
                            fg=DIM, bg=BG3, cursor="hand2", padx=8, pady=3)
             btn.pack(side="left", padx=2)
             self._bsk_btns.append((btn, val))
+            btn.bind("<Button-1>", lambda e, v=val: self._select_basket(v))
 
-            def select_basket2(event, v=val):
-                self._cfg_basket = v
-                for b, bv in self._bsk_btns:
-                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
-            btn.bind("<Button-1>", select_basket2)
+        # Preview bar — shows selected assets
+        self._bsk_preview_f = tk.Frame(f, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+        self._bsk_preview_f.pack(fill="x", pady=(6, 14))
+        self._bsk_preview_count = tk.Label(self._bsk_preview_f, text="", font=(FONT, 7, "bold"),
+                                            fg=AMBER, bg=BG2, padx=6)
+        self._bsk_preview_count.pack(side="left", pady=4)
+        self._bsk_preview_lbl = tk.Label(self._bsk_preview_f, text="", font=(FONT, 7),
+                                          fg=DIM, bg=BG2, anchor="w", padx=4)
+        self._bsk_preview_lbl.pack(side="left", fill="x", expand=True, pady=4)
+
+        # Show default basket on load
+        self._select_basket("")
 
         # ── OPTIONS ──
         opt_f = tk.Frame(f, bg=BG)
@@ -692,6 +700,23 @@ class App(tk.Tk):
         back_btn.pack(side="left", padx=4)
         back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
         self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
+
+    def _select_basket(self, val):
+        """Update basket selection — highlight button + show asset preview."""
+        self._cfg_basket = val
+        # Update button highlights
+        for b, bv in self._bsk_btns:
+            b.configure(fg=BG if bv == val else DIM, bg=AMBER if bv == val else BG3)
+        # Update preview
+        assets = self._bsk_assets.get(val, [])
+        if assets:
+            count = len(assets)
+            asset_str = "  ".join(assets)
+            self._bsk_preview_count.configure(text=f" {count} ASSETS ")
+            self._bsk_preview_lbl.configure(text=asset_str)
+        else:
+            self._bsk_preview_count.configure(text="")
+            self._bsk_preview_lbl.configure(text="")
 
     # ─── EXECUTE ENGINE ──────────────────────────────────
     def _exec(self, name, script, desc, parent_menu, auto_inputs):
