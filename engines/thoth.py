@@ -440,6 +440,8 @@ if __name__ == "__main__":
         SCAN_DAYS = int(_days_in)
     N_CANDLES = SCAN_DAYS * 24 * 4
 
+    SYMBOLS = select_symbols(SYMBOLS)
+
     _lev_in = input(f"  leverage [{LEVERAGE}x] > ").strip()
     if _lev_in:
         try:

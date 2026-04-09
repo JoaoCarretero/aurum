@@ -435,12 +435,34 @@ def screen_main():
 def _quit():
     cls(); _banner()
     try:
-        from core.proc import list_procs
+        from core.proc import list_procs, stop_proc
         running = [p for p in list_procs() if p.get("alive")]
         if running:
-            print(f"  {Y}▲{Z} {D}{len(running)} engine(s) continuam em background{Z}")
-    except Exception: pass
-    print(f"  {D}ate a proxima  ☿{Z}\n")
+            print(f"\n  {Y}▲{Z} {B}{len(running)}{Z} engine(s) a correr:\n")
+            for i, p in enumerate(running):
+                print(f"    [{i+1}] {B}{p.get('engine','?'):<12}{Z} PID {p.get('pid','?')}")
+            print(f"\n    [a] Parar todas")
+            print(f"    [n] Manter todas em background")
+            print()
+            choice = input(f"  parar quais? (1,2,.. / a / n) > ").strip().lower()
+            if choice == "a":
+                for p in running:
+                    stop_proc(p["pid"])
+                    print(f"    {G}✓{Z} {p.get('engine','?')} (PID {p['pid']}) parado")
+            elif choice != "n" and choice:
+                for idx_str in choice.split(","):
+                    idx_str = idx_str.strip()
+                    if idx_str.isdigit():
+                        idx = int(idx_str) - 1
+                        if 0 <= idx < len(running):
+                            p = running[idx]
+                            stop_proc(p["pid"])
+                            print(f"    {G}✓{Z} {p.get('engine','?')} (PID {p['pid']}) parado")
+            else:
+                print(f"  {D}engines continuam em background{Z}")
+    except Exception:
+        pass
+    print(f"\n  {D}ate a proxima  ☿{Z}\n")
 
 
 # ══════════════════════════════════════════════════════════════

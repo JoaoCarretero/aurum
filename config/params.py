@@ -9,7 +9,7 @@ import math
 # Exportar tudo incluindo nomes com _ (necessário para `from config.params import *`)
 __all__ = [
     # Universo
-    "SYMBOLS",
+    "SYMBOLS", "BASKETS", "select_symbols",
     # Timeframes
     "ENTRY_TF", "INTERVAL", "SCAN_DAYS", "N_CANDLES",
     "HTF_STACK", "MTF_ENABLED", "HTF_N_CANDLES_MAP",
@@ -75,6 +75,71 @@ SYMBOLS = [
     "BNBUSDT", "INJUSDT", "LINKUSDT", "RENDERUSDT", "NEARUSDT",
     "SUIUSDT",  "ARBUSDT", "SANDUSDT", "XRPUSDT",   "FETUSDT", "OPUSDT",
 ]
+
+# ── BASKETS DE ATIVOS ────────────────────────────────────────
+BASKETS = {
+    "default":   SYMBOLS,
+    "top12":     ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+                  "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT", "SUIUSDT"],
+    "defi":      ["LINKUSDT", "AAVEUSDT", "UNIUSDT", "MKRUSDT", "SNXUSDT", "COMPUSDT",
+                  "CRVUSDT", "SUSHIUSDT", "INJUSDT", "JUPUSDT"],
+    "layer1":    ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "NEARUSDT", "SUIUSDT",
+                  "APTUSDT", "ATOMUSDT", "DOTUSDT", "ALGOUSDT"],
+    "layer2":    ["ARBUSDT", "OPUSDT", "MATICUSDT", "STRKUSDT", "MANTAUSDT", "IMXUSDT"],
+    "ai":        ["FETUSDT", "RENDERUSDT", "TAOUSDT", "NEARUSDT", "WLDUSDT", "ARKMUSDT"],
+    "meme":      ["DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "BONKUSDT", "FLOKIUSDT", "WIFUSDT"],
+    "majors":    ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"],
+    "bluechip":  ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
+                  "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT", "ATOMUSDT", "NEARUSDT",
+                  "INJUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "RENDERUSDT", "FETUSDT",
+                  "SANDUSDT", "AAVEUSDT"],
+    "custom":    [],  # preenchido interativamente
+}
+
+def select_symbols(current: list | None = None) -> list:
+    """
+    Interactive basket selector. Returns selected symbols list.
+    Called at engine startup to let user choose asset basket.
+    """
+    if current is None:
+        current = SYMBOLS
+    print(f"\n  BASKETS DE ATIVOS:")
+    _keys = [k for k in BASKETS if k != "custom"]
+    for i, k in enumerate(_keys):
+        syms = BASKETS[k]
+        n = len(syms)
+        preview = ", ".join(s.replace("USDT", "") for s in syms[:5])
+        if n > 5:
+            preview += f", ... (+{n-5})"
+        label = f"    [{i+1}] {k:<12} {n:>2} ativos  —  {preview}"
+        if k == "default":
+            label += "  (atual)"
+        print(label)
+    print(f"    [{len(_keys)+1}] custom      digitar simbolos manualmente")
+    print(f"    [enter]              manter atual ({len(current)} ativos)")
+
+    choice = input("\n  basket > ").strip()
+    if not choice:
+        return current
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(_keys):
+            selected = BASKETS[_keys[idx]]
+            print(f"  → {_keys[idx]}: {len(selected)} ativos")
+            return selected
+        elif idx == len(_keys):
+            # custom
+            raw = input("  simbolos (separados por virgula, ex: BTC,ETH,SOL) > ").strip()
+            if raw:
+                syms = []
+                for s in raw.split(","):
+                    s = s.strip().upper()
+                    if not s.endswith("USDT"):
+                        s += "USDT"
+                    syms.append(s)
+                print(f"  → custom: {len(syms)} ativos — {', '.join(s.replace('USDT','') for s in syms)}")
+                return syms
+    return current
 
 # ── TIMEFRAMES ────────────────────────────────────────────────
 ENTRY_TF   = "15m"

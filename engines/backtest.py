@@ -469,7 +469,9 @@ if __name__ == "__main__":
     PIVOT_N      = _TFP["pivot_n"]
     MAX_HOLD     = _TFP["max_hold"]
 
-    _plot_ans = input("  Gerar gráficos? [s/N] > ").strip().lower()
+    SYMBOLS = select_symbols(SYMBOLS)
+
+    _plot_ans = input("  Gerar graficos? [s/N] > ").strip().lower()
     GENERATE_PLOTS = _plot_ans in ("s", "sim", "y", "yes", "1")
 
     _lev_in = input(f"  Leverage [{LEVERAGE}x] > ").strip()

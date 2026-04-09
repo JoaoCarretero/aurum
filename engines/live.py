@@ -1432,7 +1432,8 @@ async def _run_diagnostic():
 
 def _launch(mode: str, leverage: float = 1.0, no_telegram: bool = False):
     """Lança o engine com o modo especificado."""
-    global LIVE_MODE, TESTNET_MODE, DEMO_MODE
+    global LIVE_MODE, TESTNET_MODE, DEMO_MODE, SYMBOLS
+    SYMBOLS = select_symbols(SYMBOLS)
 
     if mode == "live":
         print(f"\n  ⚠  LIVE MODE — capital real será utilizado")

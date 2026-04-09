@@ -609,6 +609,8 @@ if __name__ == "__main__":
     _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2, "1h": 1, "2h": 0.5, "4h": 0.25}
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_mult.get(INTERVAL, 4))
 
+    SYMBOLS = select_symbols(SYMBOLS)
+
     _lev_in = input(f"  leverage [{LEVERAGE}x] > ").strip()
     if _lev_in:
         try:
