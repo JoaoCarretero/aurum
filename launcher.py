@@ -640,7 +640,7 @@ class App(tk.Tk):
         # State
         self._cfg_period = "90"
         self._cfg_basket = ""  # empty = default
-        self._cfg_plots = "n"
+        self._cfg_plots = "s"
         self._cfg_leverage = ""
 
         f = tk.Frame(self.main, bg=BG)
@@ -715,8 +715,8 @@ class App(tk.Tk):
         opt_f.pack(fill="x", pady=(0, 14))
 
         # Charts toggle
-        self._plot_btn = tk.Label(opt_f, text=" CHARTS OFF ", font=(FONT, 8, "bold"),
-                                   fg=DIM, bg=BG3, cursor="hand2", padx=8, pady=3)
+        self._plot_btn = tk.Label(opt_f, text=" CHARTS ON ", font=(FONT, 8, "bold"),
+                                   fg=BG, bg=GREEN, cursor="hand2", padx=8, pady=3)
         self._plot_btn.pack(side="left", padx=2)
         def toggle_plots(event):
             self._cfg_plots = "s" if self._cfg_plots == "n" else "n"
@@ -847,6 +847,13 @@ class App(tk.Tk):
         back_btn.pack(side="left", padx=4)
         back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
         self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
+
+    def _try_results(self, parent):
+        try:
+            self._show_results(parent)
+        except Exception as e:
+            self._p(f"\n  Results dashboard error: {e}\n", "r")
+            self._p("  Use DATA menu to browse reports manually.\n", "d")
 
     # ─── RESULTS DASHBOARD ─────────────────────────────
     def _show_results(self, parent_menu):
@@ -1196,16 +1203,19 @@ class App(tk.Tk):
                     # Show results dashboard for backtests
                     parent = getattr(self, '_exec_parent', 'main')
                     if parent == "backtest" and rc == 0:
-                        self._p("  Loading results...\n", "a")
-                        self.after(1500, lambda: self._show_results(parent))
+                        self._p("\n  >> BACKTEST COMPLETE — loading results dashboard...\n", "a")
+                        self.after(2000, lambda: self._try_results(parent))
                     return
                 self._p(line)
         except queue.Empty: pass
         self.after(30 if self.proc and self.proc.poll() is None else 100, self._poll)
 
     def _p(self, text, tag="w"):
+        import re
+        # Strip ANSI escape codes for clean output
+        clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
         self.con.configure(state="normal")
-        self.con.insert("end", text, tag)
+        self.con.insert("end", clean, tag)
         self.con.see("end")
         self.con.configure(state="disabled")
 
