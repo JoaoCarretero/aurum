@@ -96,6 +96,7 @@ MENU_TREE = {
         {"key": "tools",    "label": "TOOLS",          "desc": "Darwin / API / Chronos",          "color": PURPLE, "fkey": "F3"},
         {"key": "data",     "label": "DATA",           "desc": "Reports & logs browser",          "color": CYAN,   "fkey": "F4"},
         {"key": "procs",    "label": "PROCS",          "desc": "Running engine manager",          "color": GREEN,  "fkey": "F5"},
+        {"key": "config",   "label": "CONFIG",         "desc": "Keys, VPS, VPN, Telegram",        "color": YELLOW, "fkey": "F6"},
     ],
     "backtest": [
         {"key": "azoth",      "label": "AZOTH",      "desc": "Systematic momentum / Graviton fractal",  "color": AMBER,  "script": "engines/backtest.py"},
@@ -328,8 +329,9 @@ class AurumTerminal(tk.Tk):
 
     # ─── GENERIC MENU ────────────────────────────────────
     def _show_menu(self, menu_key):
-        if menu_key == "data":  self._show_data(); return
-        if menu_key == "procs": self._show_procs(); return
+        if menu_key == "data":   self._show_data(); return
+        if menu_key == "procs":  self._show_procs(); return
+        if menu_key == "config": self._show_config(); return
 
         self._clear(); self._unbind()
         items = MENU_TREE.get(menu_key, [])
@@ -674,6 +676,274 @@ class AurumTerminal(tk.Tk):
                 tk.Button(row, text=" STOP ", font=(FONT, 7, "bold"), fg=RED, bg=BG3,
                           activeforeground=WHITE, activebackground=RED_D, border=0, cursor="hand2",
                           command=lambda pid=pid: (stop_proc(pid), self._show_procs())).pack(side="right", padx=4, pady=2)
+
+    # ─── CONFIG ──────────────────────────────────────────
+    def _show_config(self):
+        self._clear(); self._unbind()
+        self.hdr_path.configure(text="> CONFIG")
+        self.hdr_status.configure(text="SETTINGS", fg=YELLOW)
+        self._set_fkeys([("ESC BACK", AMBER_D)])
+        self.bind("<Escape>", lambda e: self._show_menu("main"))
+        self.bind("<BackSpace>", lambda e: self._show_menu("main"))
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(expand=True)
+
+        tk.Label(f, text="< CONFIG >", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 6))
+        tk.Label(f, text="Manage API keys, VPS, VPN, Telegram", font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 16))
+
+        config_items = [
+            {"num": 1, "label": "API KEYS",     "desc": "Binance Demo / Testnet / Live keys",    "color": AMBER,  "cmd": self._cfg_keys},
+            {"num": 2, "label": "TELEGRAM",      "desc": "Bot token & chat ID",                   "color": CYAN,   "cmd": self._cfg_telegram},
+            {"num": 3, "label": "VPS",           "desc": "Remote server SSH connection",           "color": GREEN,  "cmd": self._cfg_vps},
+            {"num": 4, "label": "VPN",           "desc": "WireGuard / OpenVPN tunnel",             "color": PURPLE, "cmd": self._cfg_vpn},
+            {"num": 5, "label": "DEPLOY",        "desc": "Deploy AURUM to VPS via SSH",            "color": RED,    "cmd": self._cfg_deploy},
+        ]
+
+        for item in config_items:
+            btn_f = tk.Frame(f, bg=BG, cursor="hand2")
+            btn_f.pack(fill="x", padx=50, pady=1)
+            tk.Label(btn_f, text=f" {item['num']} ", font=(FONT, 9, "bold"), fg=BG, bg=item["color"], width=3).pack(side="left")
+            nl = tk.Label(btn_f, text=f"  {item['label']}", font=(FONT, 10, "bold"), fg=WHITE, bg=BG3, anchor="w", padx=8, pady=5)
+            nl.pack(side="left")
+            dl = tk.Label(btn_f, text=item["desc"], font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=8, pady=5)
+            dl.pack(side="left", fill="x", expand=True)
+            for w in [btn_f, nl, dl]:
+                w.bind("<Enter>", lambda e, ws=[btn_f, nl, dl], c=item["color"]: ws[1].configure(fg=c))
+                w.bind("<Leave>", lambda e, ws=[btn_f, nl, dl]: ws[1].configure(fg=WHITE))
+                w.bind("<Button-1>", lambda e, c=item["cmd"]: c())
+            self.bind(f"<Key-{item['num']}>", lambda e, c=item["cmd"]: c())
+
+        tk.Frame(f, bg="transparent", height=12).pack()
+        back_f = tk.Frame(f, bg=BG, cursor="hand2")
+        back_f.pack(fill="x", padx=50, pady=1)
+        tk.Label(back_f, text=" 0 ", font=(FONT, 9, "bold"), fg=WHITE, bg=DIM2, width=3).pack(side="left")
+        bl = tk.Label(back_f, text="  BACK", font=(FONT, 10), fg=DIM, bg=BG3, anchor="w", padx=8, pady=5)
+        bl.pack(side="left", fill="x", expand=True)
+        for w in [back_f, bl]:
+            w.bind("<Button-1>", lambda e: self._show_menu("main"))
+        self.bind("<Key-0>", lambda e: self._show_menu("main"))
+
+    def _cfg_editor(self, title, fields, save_callback):
+        """Generic config editor with labeled input fields."""
+        self._clear(); self._unbind()
+        self.hdr_path.configure(text=f"> CONFIG > {title}")
+        self._set_fkeys([("ESC BACK", AMBER_D), ("CTRL+S SAVE", GREEN)])
+        self.bind("<Escape>", lambda e: self._show_config())
+        self.bind("<BackSpace>", lambda e: self._show_config())
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(expand=True)
+
+        tk.Label(f, text=f"< {title} >", font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 16))
+
+        entries = {}
+        for field in fields:
+            row = tk.Frame(f, bg=BG)
+            row.pack(fill="x", padx=60, pady=3)
+            tk.Label(row, text=f"  {field['label']}", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, width=18, anchor="w").pack(side="left")
+            e = tk.Entry(row, bg=BG3, fg=GREEN, font=(FONT, 9), insertbackground=AMBER,
+                         border=0, highlightthickness=1, highlightcolor=AMBER_D, highlightbackground=BORDER,
+                         width=50)
+            e.pack(side="left", fill="x", expand=True, padx=(4, 0), ipady=4)
+            if field.get("value"):
+                e.insert(0, field["value"])
+            if field.get("show") == "*":
+                e.configure(show="*")
+            entries[field["key"]] = e
+            if field.get("hint"):
+                tk.Label(row, text=field["hint"], font=(FONT, 7), fg=DIM2, bg=BG).pack(side="right", padx=4)
+
+        tk.Frame(f, bg="transparent", height=16).pack()
+
+        btn_row = tk.Frame(f, bg=BG)
+        btn_row.pack()
+
+        def save():
+            values = {k: e.get().strip() for k, e in entries.items()}
+            save_callback(values)
+            self.hdr_status.configure(text="SAVED", fg=GREEN)
+            self.after(1500, lambda: self.hdr_status.configure(text="", fg=DIM))
+
+        save_btn = tk.Label(btn_row, text="  SAVE  ", font=(FONT, 10, "bold"), fg=BG, bg=GREEN,
+                            cursor="hand2", padx=16, pady=4)
+        save_btn.pack(side="left", padx=4)
+        save_btn.bind("<Button-1>", lambda e: save())
+
+        cancel_btn = tk.Label(btn_row, text="  CANCEL  ", font=(FONT, 10), fg=DIM, bg=BG3,
+                              cursor="hand2", padx=16, pady=4)
+        cancel_btn.pack(side="left", padx=4)
+        cancel_btn.bind("<Button-1>", lambda e: self._show_config())
+
+        self.bind("<Control-s>", lambda e: save())
+
+    def _load_keys(self):
+        """Load keys.json."""
+        kp = ROOT / "config" / "keys.json"
+        if kp.exists():
+            try:
+                with open(kp, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except: pass
+        return {"demo": {"api_key": "", "api_secret": ""}, "testnet": {"api_key": "", "api_secret": ""},
+                "live": {"api_key": "", "api_secret": ""}, "telegram": {"bot_token": "", "chat_id": ""}}
+
+    def _save_keys(self, data):
+        """Save keys.json."""
+        kp = ROOT / "config" / "keys.json"
+        kp.parent.mkdir(parents=True, exist_ok=True)
+        with open(kp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+    def _cfg_keys(self):
+        keys = self._load_keys()
+        fields = [
+            {"key": "demo_key",     "label": "DEMO API KEY",     "value": keys.get("demo", {}).get("api_key", ""),     "show": "*"},
+            {"key": "demo_secret",  "label": "DEMO SECRET",      "value": keys.get("demo", {}).get("api_secret", ""),  "show": "*"},
+            {"key": "test_key",     "label": "TESTNET KEY",      "value": keys.get("testnet", {}).get("api_key", ""),  "show": "*"},
+            {"key": "test_secret",  "label": "TESTNET SECRET",   "value": keys.get("testnet", {}).get("api_secret", ""), "show": "*"},
+            {"key": "live_key",     "label": "LIVE KEY",         "value": keys.get("live", {}).get("api_key", ""),     "show": "*", "hint": "REAL CAPITAL"},
+            {"key": "live_secret",  "label": "LIVE SECRET",      "value": keys.get("live", {}).get("api_secret", ""),  "show": "*", "hint": "REAL CAPITAL"},
+        ]
+        def save(vals):
+            keys["demo"]["api_key"] = vals["demo_key"]
+            keys["demo"]["api_secret"] = vals["demo_secret"]
+            keys["testnet"]["api_key"] = vals["test_key"]
+            keys["testnet"]["api_secret"] = vals["test_secret"]
+            keys["live"]["api_key"] = vals["live_key"]
+            keys["live"]["api_secret"] = vals["live_secret"]
+            self._save_keys(keys)
+        self._cfg_editor("API KEYS — BINANCE", fields, save)
+
+    def _cfg_telegram(self):
+        keys = self._load_keys()
+        tg = keys.get("telegram", {})
+        fields = [
+            {"key": "bot_token", "label": "BOT TOKEN",   "value": tg.get("bot_token", ""), "show": "*", "hint": "@BotFather"},
+            {"key": "chat_id",   "label": "CHAT ID",     "value": tg.get("chat_id", ""),   "hint": "@userinfobot"},
+        ]
+        def save(vals):
+            keys.setdefault("telegram", {})
+            keys["telegram"]["bot_token"] = vals["bot_token"]
+            keys["telegram"]["chat_id"] = vals["chat_id"]
+            self._save_keys(keys)
+        self._cfg_editor("TELEGRAM", fields, save)
+
+    def _cfg_vps(self):
+        # Load VPS config from a separate file
+        vps_path = ROOT / "config" / "vps.json"
+        vps = {}
+        if vps_path.exists():
+            try:
+                with open(vps_path, "r", encoding="utf-8") as f:
+                    vps = json.load(f)
+            except: pass
+        fields = [
+            {"key": "host",     "label": "HOST / IP",      "value": vps.get("host", ""),     "hint": "ex: 185.199.10.1"},
+            {"key": "port",     "label": "SSH PORT",        "value": vps.get("port", "22"),   "hint": "default 22"},
+            {"key": "user",     "label": "USERNAME",        "value": vps.get("user", "root")},
+            {"key": "key_path", "label": "SSH KEY PATH",    "value": vps.get("key_path", ""), "hint": "C:\\Users\\...\\id_rsa"},
+            {"key": "password", "label": "PASSWORD",        "value": "",                       "show": "*", "hint": "or use SSH key"},
+            {"key": "remote_dir", "label": "REMOTE DIR",    "value": vps.get("remote_dir", "/opt/aurum")},
+        ]
+        def save(vals):
+            vps_data = {k: v for k, v in vals.items() if k != "password"}
+            # Don't save password to disk — it's for one-time use
+            vps_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(vps_path, "w", encoding="utf-8") as f:
+                json.dump(vps_data, f, indent=4)
+        self._cfg_editor("VPS — SSH CONNECTION", fields, save)
+
+    def _cfg_vpn(self):
+        vpn_path = ROOT / "config" / "vpn.json"
+        vpn = {}
+        if vpn_path.exists():
+            try:
+                with open(vpn_path, "r", encoding="utf-8") as f:
+                    vpn = json.load(f)
+            except: pass
+        fields = [
+            {"key": "type",        "label": "VPN TYPE",       "value": vpn.get("type", "wireguard"), "hint": "wireguard / openvpn"},
+            {"key": "config_path", "label": "CONFIG FILE",    "value": vpn.get("config_path", ""),   "hint": "path to .conf or .ovpn"},
+            {"key": "server",      "label": "SERVER IP",      "value": vpn.get("server", ""),        "hint": "VPN endpoint"},
+            {"key": "private_key", "label": "PRIVATE KEY",    "value": vpn.get("private_key", ""),   "show": "*"},
+            {"key": "dns",         "label": "DNS",            "value": vpn.get("dns", "1.1.1.1"),    "hint": "Cloudflare default"},
+        ]
+        def save(vals):
+            vpn_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(vpn_path, "w", encoding="utf-8") as f:
+                json.dump(vals, f, indent=4)
+        self._cfg_editor("VPN — TUNNEL CONFIG", fields, save)
+
+    def _cfg_deploy(self):
+        """Deploy to VPS — runs rsync/scp over SSH."""
+        self._clear(); self._unbind()
+        self.hdr_path.configure(text="> CONFIG > DEPLOY")
+        self._set_fkeys([("ESC BACK", AMBER_D)])
+        self.bind("<Escape>", lambda e: self._show_config())
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(expand=True)
+
+        tk.Label(f, text="< DEPLOY TO VPS >", font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 12))
+
+        # Load VPS config
+        vps_path = ROOT / "config" / "vps.json"
+        if not vps_path.exists():
+            tk.Label(f, text="  VPS not configured. Go to CONFIG > VPS first.", font=(FONT, 10), fg=RED, bg=BG).pack(pady=8)
+            self._make_btn(f, "  [0]  BACK", DIM, self._show_config).pack(fill="x", padx=60)
+            return
+
+        with open(vps_path, "r") as fv:
+            vps = json.load(fv)
+
+        host = vps.get("host", "?")
+        user = vps.get("user", "root")
+        remote = vps.get("remote_dir", "/opt/aurum")
+        port = vps.get("port", "22")
+        key_path = vps.get("key_path", "")
+
+        tk.Label(f, text=f"  Target: {user}@{host}:{remote}", font=(FONT, 9), fg=GREEN, bg=BG).pack(anchor="w", padx=60, pady=2)
+        tk.Label(f, text=f"  Port: {port}  Key: {key_path or 'password'}", font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", padx=60, pady=2)
+
+        tk.Frame(f, bg="transparent", height=16).pack()
+
+        info_lines = [
+            "This will sync the project to your VPS via SSH.",
+            "Files excluded: data/, node_modules/, .git/, config/keys.json",
+            "",
+            "On the VPS, run:  python launcher.py  or  python -m aurum_finance",
+        ]
+        for line in info_lines:
+            tk.Label(f, text=f"  {line}", font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(anchor="w", padx=60)
+
+        tk.Frame(f, bg="transparent", height=16).pack()
+
+        def do_deploy():
+            # Build rsync/scp command
+            key_arg = f'-i "{key_path}"' if key_path else ""
+            ssh_opts = f'-e "ssh -p {port} {key_arg}"' if key_arg else f'-e "ssh -p {port}"'
+            excludes = '--exclude=data --exclude=node_modules --exclude=.git --exclude=config/keys.json --exclude=__pycache__ --exclude=*.pyc --exclude=dist --exclude=build'
+            cmd = f'rsync -avz {excludes} {ssh_opts} "{ROOT}/" {user}@{host}:{remote}/'
+
+            # Run as engine
+            self._run_engine({
+                "key": "deploy", "label": "DEPLOY", "desc": f"Syncing to {host}",
+                "color": RED, "script": "__deploy__",
+            })
+            # Override — run the command directly
+            # Actually, let's show the command and let user confirm
+            self._clear()
+            self._show_config()
+            messagebox.showinfo("Deploy Command",
+                f"Run this in your terminal:\n\n{cmd}\n\nOr install rsync via: winget install rsync")
+
+        deploy_btn = tk.Label(f, text="  DEPLOY NOW  ", font=(FONT, 10, "bold"), fg=BG, bg=RED,
+                              cursor="hand2", padx=16, pady=6)
+        deploy_btn.pack(pady=4)
+        deploy_btn.bind("<Button-1>", lambda e: do_deploy())
+
+        self._make_btn(f, "  [0]  BACK", DIM, self._show_config).pack(fill="x", padx=60, pady=(12, 0))
 
     # ─── CLOSE ───────────────────────────────────────────
     def _on_close(self):

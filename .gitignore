@@ -18,8 +18,10 @@ data/
 .DS_Store
 Thumbs.db
 
-# Keys — NUNCA versionar
+# Keys & credentials — NUNCA versionar
 config/keys.json
+config/vps.json
+config/vpn.json
 
 # Egg / editable install
 *.egg-info/
