@@ -133,8 +133,13 @@ def _load_keys(mode: str) -> tuple[str, str]:
         print(f"  Cria a pasta config/ e o ficheiro keys.json com a estrutura:")
         print(f'  {{"demo": {{"api_key": "...", "api_secret": "..."}}}}')
         sys.exit(1)
+    import stat as _stat
+    if sys.platform != "win32":
+        _st = os.stat(config_path)
+        if _st.st_mode & 0o077:
+            print(f"  ⚠  keys.json has insecure permissions {oct(_st.st_mode)} — recommend chmod 600")
     try:
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         block = cfg.get(mode, {})
         key    = block.get("api_key", "")

@@ -111,8 +111,8 @@ def build_target(df: pd.DataFrame, lookahead: int = 10) -> pd.Series:
     Returns categorical target: index into ENGINE_KEYS.
     """
     targets = []
-    for i in range(len(df)):
-        window = df.iloc[i:i + lookahead]
+    for i in range(len(df) - 1):
+        window = df.iloc[i + 1:i + lookahead + 1]
         if len(window) < 3:
             targets.append(-1)  # insufficient data
             continue

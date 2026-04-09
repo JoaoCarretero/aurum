@@ -76,6 +76,11 @@ def _connect() -> sqlite3.Connection:
 
 def save_run(engine: str, json_path: str) -> str | None:
     """Read a JSON report and persist run + trades to the DB. Returns run_id."""
+    # validate path is within data/ directory
+    _base = Path("data").resolve()
+    if not Path(json_path).resolve().is_relative_to(_base):
+        print(f"  DB: path {json_path} is outside data directory")
+        return None
     try:
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -208,7 +213,8 @@ def delete_run(run_id: str, delete_files: bool = False) -> bool:
         if delete_files and row["json_path"]:
             import shutil
             folder = Path(row["json_path"]).parent.parent
-            if folder.exists():
+            _base = Path("data").resolve()
+            if folder.resolve().is_relative_to(_base) and folder.exists():
                 shutil.rmtree(folder, ignore_errors=True)
         return True
     finally:

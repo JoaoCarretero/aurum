@@ -6,7 +6,7 @@ Architecture: Method × Strategy matrix
   Methods:    Backtest | Simulator | Live
   Strategies: QUASAR | FERMION | MUON | ENSEMBLE
 """
-import os, sys, time, argparse
+import os, sys, time, argparse, subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent
@@ -756,8 +756,8 @@ def _trade_charts(files):
 
 def _openf(path):
     if sys.platform=="win32":   os.startfile(str(path))
-    elif sys.platform=="darwin": os.system(f"open '{path}'")
-    else:                        os.system(f"xdg-open '{path}'")
+    elif sys.platform=="darwin": subprocess.run(["open", str(path)])
+    else:                        subprocess.run(["xdg-open", str(path)])
 
 def _open_folder(run):
     jp = run.get("json_path")

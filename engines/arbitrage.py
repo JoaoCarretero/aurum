@@ -141,7 +141,8 @@ class Binance(Venue):
             if isinstance(d,list):
                 for b in d:
                     if b.get("asset")=="USDT":return float(b.get("availableBalance",0))
-        except:pass
+        except Exception as e:
+            log.warning("balance fetch failed: %s", e)
         return 0
     async def place_order(s,sym,side,qty):
         if not s.key:return{"status":"PAPER"}
@@ -157,7 +158,7 @@ class Binance(Venue):
         return await _http(f"{s.sapi}/api/v3/order",params=p,method="POST",headers={"X-MBX-APIKEY":s.key})
     async def spot_price(s,sym):
         try:return float((await _http(f"{s.sapi}/api/v3/ticker/price",{"symbol":sym})).get("price",0))
-        except:return 0
+        except Exception as e:log.warning("spot_price failed: %s", e);return 0
 
 class Bybit(Venue):
     def __init__(s):
@@ -165,7 +166,7 @@ class Bybit(Venue):
         s.base="https://api.bybit.com"
         s.key,s.sec="",""
         try:s.key,s.sec=_keys("bybit")
-        except:pass
+        except Exception as e:log.warning("bybit keys load failed: %s", e)
     async def fetch(s):
         d=await _http(f"{s.base}/v5/market/tickers",{"category":"linear"})
         for t in d.get("result",{}).get("list",[]):
@@ -1222,7 +1223,7 @@ class Engine:
         try:
             from bot.telegram import _load_telegram_config
             s.tg_tk,s.tg_ch=_load_telegram_config()
-        except:pass
+        except Exception as e:log.warning("telegram config load failed: %s", e)
         # ── v5.0 modules ──
         s.depth=DepthFetcher()
         s.latency=LatencyProfiler(window=200)
@@ -1270,7 +1271,7 @@ class Engine:
         if not(s.tg_tk and s.tg_ch):return
         import requests as r
         try:await asyncio.get_event_loop().run_in_executor(None,lambda:r.post(f"https://api.telegram.org/bot{s.tg_tk}/sendMessage",json={"chat_id":s.tg_ch,"text":txt,"parse_mode":"HTML"},timeout=10))
-        except:pass
+        except Exception as e:log.warning("telegram send failed: %s", e)
 
     def _avail(s):return max(0,s.account-sum(p.size_usd for p in s.positions))
 
@@ -1541,7 +1542,7 @@ class Engine:
                         if real_bal>0 and abs(real_bal-s.account)/max(s.account,1)>0.20:
                             log.warning(f"  ⚠️ BALANCE DRIFT {v.name}: real=${real_bal:.2f} vs internal=${s.account:.2f}")
                             await s._tg(f"⚠️ Balance drift {v.name}: ${real_bal:.2f} vs ${s.account:.2f}")
-                    except:pass
+                    except Exception as e:log.warning("balance check failed: %s", e)
 
         for p in list(s.positions):
             h=p.hours_open()

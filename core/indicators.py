@@ -113,6 +113,9 @@ def cvd(df: pd.DataFrame) -> pd.DataFrame:
     taker_sell = df["vol"] - df["tbb"]
     df["vdelta"] = taker_buy - taker_sell
     df["cvd"] = df["vdelta"].cumsum()
+    _cvd_mean = df["cvd"].rolling(200, min_periods=50).mean()
+    _cvd_std  = df["cvd"].rolling(200, min_periods=50).std().replace(0, 1)
+    df["cvd_z"] = (df["cvd"] - _cvd_mean) / _cvd_std
     return df
 
 
@@ -123,28 +126,24 @@ def cvd_divergence(df: pd.DataFrame, lookback: int = 10) -> pd.DataFrame:
     Bearish div: price makes new high but CVD doesn't.
     """
     df = df.copy()
-    if "cvd" not in df.columns:
+    if "cvd_z" not in df.columns:
         df = cvd(df)
 
     price_high = df["high"].rolling(lookback, min_periods=3).max()
-    price_low = df["low"].rolling(lookback, min_periods=3).min()
-    cvd_high = df["cvd"].rolling(lookback, min_periods=3).max()
-    cvd_low = df["cvd"].rolling(lookback, min_periods=3).min()
+    price_low  = df["low"].rolling(lookback, min_periods=3).min()
+    cvd_z_high = df["cvd_z"].rolling(lookback, min_periods=3).max()
+    cvd_z_low  = df["cvd_z"].rolling(lookback, min_periods=3).min()
 
-    # bearish: price at rolling high but CVD below its rolling high
-    cvd_at_price_high = df["cvd"].where(df["high"] >= price_high * 0.999)
-    cvd_at_price_high = cvd_at_price_high.ffill()
+    # bearish: price at rolling high but CVD_z below its rolling high
     df["cvd_div_bear"] = (
         (df["high"] >= price_high * 0.999) &
-        (df["cvd"] < cvd_high * 0.95)
+        (df["cvd_z"] < cvd_z_high * 0.95)
     ).astype(float)
 
-    # bullish: price at rolling low but CVD above its rolling low
-    cvd_at_price_low = df["cvd"].where(df["low"] <= price_low * 1.001)
-    cvd_at_price_low = cvd_at_price_low.ffill()
+    # bullish: price at rolling low but CVD_z above its rolling low
     df["cvd_div_bull"] = (
         (df["low"] <= price_low * 1.001) &
-        (df["cvd"] > cvd_low * 1.05)
+        (df["cvd_z"] > cvd_z_low * 1.05)
     ).astype(float)
 
     return df

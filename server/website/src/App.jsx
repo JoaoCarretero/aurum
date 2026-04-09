@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 // ═══════════════════════════════════════
@@ -12,11 +12,13 @@ const ADMIN_EMAIL="admin@aurum.finance";
 // LOGO
 // ═══════════════════════════════════════
 function IngotLogo({size=24}){
+  const uid=useId();
+  const igaId=`iga${uid}`,igbId=`igb${uid}`;
   return <svg width={size} height={size} viewBox="0 0 160 160" fill="none" style={{display:"block"}}>
-    <defs><linearGradient id="iga" x1="0" y1="0" x2=".7" y2="1"><stop offset="0%" stopColor="#E8CC5A"/><stop offset="100%" stopColor="#8A6E1F"/></linearGradient>
-    <linearGradient id="igb" x1="1" y1="0" x2=".2" y2="1"><stop offset="0%" stopColor="#BF9B30" stopOpacity=".85"/><stop offset="100%" stopColor="#5C4A15" stopOpacity=".6"/></linearGradient></defs>
-    <path d="M80 14 L42 142 L62 142 L72 104 L88 104 L98 142 L118 142 Z" fill="url(#iga)"/>
-    <path d="M80 14 L118 142 L98 142 L88 104 L80 58 Z" fill="url(#igb)"/>
+    <defs><linearGradient id={igaId} x1="0" y1="0" x2=".7" y2="1"><stop offset="0%" stopColor="#E8CC5A"/><stop offset="100%" stopColor="#8A6E1F"/></linearGradient>
+    <linearGradient id={igbId} x1="1" y1="0" x2=".2" y2="1"><stop offset="0%" stopColor="#BF9B30" stopOpacity=".85"/><stop offset="100%" stopColor="#5C4A15" stopOpacity=".6"/></linearGradient></defs>
+    <path d="M80 14 L42 142 L62 142 L72 104 L88 104 L98 142 L118 142 Z" fill={`url(#${igaId})`}/>
+    <path d="M80 14 L118 142 L98 142 L88 104 L80 58 Z" fill={`url(#${igbId})`}/>
     <path d="M80 58 L68 104 L92 104 Z" fill={C.bg}/>
   </svg>;
 }
@@ -26,15 +28,15 @@ function IngotLogo({size=24}){
 // ═══════════════════════════════════════
 const DB={
   async load(){
-    try{const r=await window.storage.get("aurum-fund",true);return r?JSON.parse(r.value):DB.init();}
+    try{const raw=localStorage.getItem("aurum-fund");return raw?JSON.parse(raw):DB.init();}
     catch{return DB.init();}
   },
   init(){return{users:{},trades:DB.genTrades(),fund:{totalDeposited:0,totalWithdrawn:0,startDate:"2026-03-01"},eq:DB.genEq()};},
-  async save(data){try{await window.storage.set("aurum-fund",JSON.stringify(data),true);}catch(e){console.error("Save failed",e);}},
-  async reset(){try{await window.storage.delete("aurum-fund",true);}catch{}},
+  async save(data){try{localStorage.setItem("aurum-fund",JSON.stringify(data));}catch(e){console.error("Save failed",e);}},
+  async reset(){localStorage.removeItem("aurum-fund");},
   genEq(){const e=[{d:0,v:5000}];let b=5000,p=5000;for(let d=1;d<=45;d++){b+=(Math.random()<.63?1:-1)*(Math.random()*35+5)*(Math.random()*2.5+1);p=Math.max(p,b);e.push({d,v:Math.round(b*100)/100,dd:Math.round((p-b)/p*10000)/100});}return e;},
   genTrades(){const sy=["BTC","ETH","SOL","NATGAS","RED","CL","BEAT"],sn=["SM-1","SV-5D","FRC-13"];
-    return Array.from({length:30},(_,i)=>{const w=Math.random()<.63;return{sym:sy[i%sy.length],s:sn[i%3],pnl:Math.round((w?Math.random()*40+5:-(Math.random()*25+3))*100)/100,date:`2026-03-${String(Math.max(1,45-i)).padStart(2,"0")}`,ts:Date.now()-i*3600000};});},
+    return Array.from({length:30},(_,i)=>{const w=Math.random()<.63;const d=new Date("2026-03-28");d.setDate(d.getDate()-i);const date=d.toISOString().slice(0,10);return{sym:sy[i%sy.length],s:sn[i%3],pnl:Math.round((w?Math.random()*40+5:-(Math.random()*25+3))*100)/100,date,ts:Date.now()-i*3600000};});},
 };
 
 // ═══════════════════════════════════════
@@ -380,7 +382,7 @@ function AdminDash({db,setDb,onLogout,lang}){
       {tab==="cfg"&&<div>
         <div className="card" style={{padding:20}}>
           <div style={{fontSize:12,fontWeight:600,marginBottom:12}}>{t?"Configurações":"Settings"}</div>
-          <button onClick={resetAll} style={{background:C.r,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,fontSize:11,fontWeight:600,cursor:"pointer"}}>{t?"RESETAR BANCO DE DADOS":"RESET DATABASE"}</button>
+          <button onClick={()=>{if(window.confirm(t?"Tem certeza? Isto apaga todos os dados.":"Are you sure? This will delete all data."))resetAll();}} style={{background:C.r,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,fontSize:11,fontWeight:600,cursor:"pointer"}}>{t?"RESETAR BANCO DE DADOS":"RESET DATABASE"}</button>
           <p style={{fontSize:10,color:C.td,marginTop:8}}>{t?"Remove todos os usuários e dados. Irreversível.":"Removes all users and data. Irreversible."}</p>
         </div>
       </div>}
@@ -403,24 +405,11 @@ export default function App(){
     <div style={{width:24,height:24,border:`2px solid ${C.brd}`,borderTop:`2px solid ${C.gold}`,borderRadius:"50%",animation:"sp .8s linear infinite"}}/>
     <style>{`@keyframes sp{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style></div>;
 
+  // dynamic lang & title
+  useEffect(()=>{document.documentElement.lang=lang==="pt"?"pt-BR":"en";},[lang]);
+  useEffect(()=>{const t={land:"AURUM Finance",auth:lang==="pt"?"Entrar — AURUM":"Sign In — AURUM",member:"Dashboard — AURUM",admin:"Admin — AURUM"};document.title=t[page]||"AURUM Finance";},[page,lang]);
+
   return <div style={{background:C.bg,color:C.t,minHeight:"100vh"}}>
-    <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
-      :root{--s:'DM Sans',system-ui,sans-serif}*{box-sizing:border-box;margin:0;padding:0}body{background:${C.bg};font-family:var(--s);-webkit-font-smoothing:antialiased}html{scroll-behavior:smooth}
-      ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:${C.goldD};border-radius:3px}
-      .wrap{max-width:940px;margin:0 auto;padding:0 24px}@media(max-width:600px){.wrap{padding:0 16px}}
-      .sec{padding:72px 0;border-top:1px solid ${C.brd}}
-      .card{background:${C.c1};border:1px solid ${C.brd};border-radius:8px}.glow-card{box-shadow:0 0 40px ${C.gold}06}
-      .tag{font-size:10px;font-weight:600;letter-spacing:2.5px;color:${C.goldD};text-transform:uppercase;margin-bottom:8px}
-      .h2{font-size:20px;font-weight:400;margin-top:4px}.h2 span{color:${C.gold}}
-      .inp{width:100%;padding:11px 14px;background:${C.c2};border:1px solid ${C.brd};border-radius:6px;color:${C.t};font-size:13px;font-family:var(--s);outline:none;margin-bottom:10px}.inp:focus{border-color:${C.gold}50}
-      .bp{background:linear-gradient(135deg,${C.gold},${C.goldD});color:${C.bg};border:none;padding:12px 28px;border-radius:6px;font-size:11px;font-weight:600;letter-spacing:2px;cursor:pointer;font-family:var(--s);box-shadow:0 4px 16px ${C.gold}25;transition:all .3s}.bp:hover{box-shadow:0 6px 24px ${C.gold}35;transform:translateY(-1px)}
-      .bo{background:transparent;color:${C.gold};border:1px solid ${C.goldD};padding:12px 28px;border-radius:6px;font-size:11px;font-weight:600;letter-spacing:2px;cursor:pointer;font-family:var(--s);transition:all .3s}.bo:hover{background:${C.goldBg}}
-      .hov-card{transition:all .3s}.hov-card:hover{border-color:${C.gold}30;box-shadow:0 0 20px ${C.gold}08;transform:translateY(-1px)}
-      .hov-row{transition:background .2s}.hov-row:hover{background:${C.c2}}
-      @media(max-width:768px){.hf{flex-direction:column!important;text-align:center!important}.hf>div:first-child{align-items:center!important}.hs{grid-template-columns:repeat(2,1fr)!important}}
-      @keyframes sp{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-    `}</style>
 
     {/* NAV */}
     <nav style={{position:"sticky",top:0,zIndex:100,background:`${C.bg}DD`,backdropFilter:"blur(16px)",borderBottom:`1px solid ${C.brd}`,height:50,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 20px"}}>

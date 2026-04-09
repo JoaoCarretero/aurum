@@ -282,6 +282,8 @@ class TelegramNotifier:
         "/help":   "_cmd_help",
         "/start":  "_cmd_help",
     }
+    _last_cmd_time = 0.0
+    _CMD_COOLDOWN  = 3.0  # seconds between commands
 
     # ── POLLING LOOP ──────────────────────────────────────────
     async def _poll_updates(self):
@@ -303,6 +305,18 @@ class TelegramNotifier:
                     # só responde ao chat configurado
                     if chat_id != self.chat_id:
                         continue
+
+                    # user auth: verify sender id matches chat_id
+                    from_id = str(msg.get("from", {}).get("id", ""))
+                    if from_id != self.chat_id:
+                        continue
+
+                    # rate limiting
+                    import time as _time
+                    now = _time.time()
+                    if now - self._last_cmd_time < self._CMD_COOLDOWN:
+                        continue
+                    self._last_cmd_time = now
 
                     cmd = text.split()[0].lower() if text else ""
                     # remove @botname se presente

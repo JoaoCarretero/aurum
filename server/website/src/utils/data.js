@@ -19,7 +19,7 @@ export function genTrades() {
       sym: syms[i % syms.length],
       s: strats[i % 3],
       pnl: Math.round((win ? Math.random() * 40 + 5 : -(Math.random() * 25 + 3)) * 100) / 100,
-      date: `2026-03-${String(45 - i).padStart(2, "0")}`,
+      date: (() => { const d = new Date("2026-03-28"); d.setDate(d.getDate() - i); return d.toISOString().slice(0, 10); })(),
       hours: Math.round(Math.random() * 40 + 1),
     };
   });

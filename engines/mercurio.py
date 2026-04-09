@@ -424,9 +424,6 @@ if __name__ == "__main__":
         except ValueError:
             pass
 
-    _plot_ans = input("  graficos? [s/N] > ").strip().lower()
-    GENERATE_PLOTS = _plot_ans in ("s", "sim", "y", "yes")
-
     print(f"\n{SEP}")
     print(f"  MERCURIO  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")

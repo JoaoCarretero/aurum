@@ -25,6 +25,10 @@ def fetch(symbol: str, interval: str | None = None,
         try:
             r = requests.get(url, params=params, timeout=20)
             if r.status_code == 429:
+                _retries = getattr(fetch_klines, '_429_count', 0) + 1
+                if _retries > 5:
+                    log.warning(f"[{symbol}] max retries on HTTP 429"); break
+                fetch_klines._429_count = _retries
                 time.sleep(2.0); continue
             if r.status_code != 200: break
             data = r.json()

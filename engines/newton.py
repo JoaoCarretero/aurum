@@ -210,6 +210,7 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     trade_entry_idx = None
     trade_entry_price = None
     trade_stop_z = None
+    size_held = 0.0
 
     consecutive_losses = 0
     cooldown_until = -1
@@ -605,7 +606,8 @@ if __name__ == "__main__":
     _days_in = input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
     if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
         SCAN_DAYS = int(_days_in)
-    N_CANDLES = SCAN_DAYS * 24 * 4
+    _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2, "1h": 1, "2h": 0.5, "4h": 0.25}
+    N_CANDLES = int(SCAN_DAYS * 24 * _tf_mult.get(INTERVAL, 4))
 
     _lev_in = input(f"  leverage [{LEVERAGE}x] > ").strip()
     if _lev_in:
@@ -615,9 +617,6 @@ if __name__ == "__main__":
                 LEVERAGE = _lev_val
         except ValueError:
             pass
-
-    _plot_ans = input("  graficos? [s/N] > ").strip().lower()
-    GENERATE_PLOTS = _plot_ans in ("s", "sim", "y", "yes")
 
     print(f"\n{SEP}")
     print(f"  NEWTON  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
@@ -664,7 +663,7 @@ if __name__ == "__main__":
             continue
 
         trades, vetos = scan_pair(
-            df_a.copy(), df_b, pair["sym_a"], pair["sym_b"], pair,
+            df_a.copy(), df_b.copy(), pair["sym_a"], pair["sym_b"], pair,
             macro_bias, corr)
         all_trades.extend(trades)
         for k, v in vetos.items():

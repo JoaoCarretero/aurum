@@ -192,10 +192,14 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         # Get latest sentiment values (match by time or use latest available)
         candle_time = df["time"].iloc[idx]
 
-        # Funding z-score
+        # Funding z-score (aligned to current bar to avoid look-ahead bias)
         f_z = 0.0
         if funding_z_series is not None and len(funding_z_series) > 0:
-            f_z = float(funding_z_series.iloc[-1])  # use latest available
+            if hasattr(funding_z_series.index, 'dtype') and pd.api.types.is_datetime64_any_dtype(funding_z_series.index):
+                mask = funding_z_series.index <= candle_time
+                f_z = float(funding_z_series.loc[mask].iloc[-1]) if mask.any() else float(funding_z_series.iloc[0])
+            else:
+                f_z = float(funding_z_series.iloc[min(idx, len(funding_z_series) - 1)])
 
         # OI signal
         oi_sig = 0.0
@@ -203,12 +207,16 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             # find closest time
             time_diffs = (oi_signal_df["time"] - candle_time).abs()
             closest_idx = time_diffs.idxmin()
-            oi_sig = float(oi_signal_df["oi_signal"].iloc[closest_idx])
+            oi_sig = float(oi_signal_df["oi_signal"].loc[closest_idx])
 
-        # LS signal
+        # LS signal (aligned to current bar to avoid look-ahead bias)
         ls_sig = 0.0
         if ls_signal_series is not None and len(ls_signal_series) > 0:
-            ls_sig = float(ls_signal_series.iloc[-1])
+            if hasattr(ls_signal_series.index, 'dtype') and pd.api.types.is_datetime64_any_dtype(ls_signal_series.index):
+                mask = ls_signal_series.index <= candle_time
+                ls_sig = float(ls_signal_series.loc[mask].iloc[-1]) if mask.any() else float(ls_signal_series.iloc[0])
+            else:
+                ls_sig = float(ls_signal_series.iloc[min(idx, len(ls_signal_series) - 1)])
 
         # Composite sentiment
         sent_score = composite_sentiment(
