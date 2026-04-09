@@ -332,31 +332,6 @@ class AurumApp(tk.Tk):
                 startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW, env=env,
             )
 
-            # Auto-send pre-configured inputs
-            inputs = eng.get("inputs", [])
-            if inputs:
-                def auto_input():
-                    time.sleep(0.5)
-                    for val in inputs:
-                        if self.process and self.process.poll() is None and self.process.stdin:
-                            try:
-                                # Replace "days" and "basket" with defaults, "leverage" with empty
-                                send_val = val
-                                if val == "days":
-                                    send_val = "90"
-                                elif val == "basket":
-                                    send_val = ""  # keep default
-                                elif val == "plots":
-                                    send_val = "n"
-                                elif val == "leverage":
-                                    send_val = ""  # keep default
-                                self.process.stdin.write(send_val + "\n")
-                                self.process.stdin.flush()
-                                time.sleep(0.3)
-                            except Exception:
-                                break
-                threading.Thread(target=auto_input, daemon=True).start()
-
             threading.Thread(target=self._read_output, daemon=True).start()
             self._poll_output()
 
