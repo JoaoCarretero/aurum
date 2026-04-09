@@ -158,11 +158,23 @@ class App(tk.Tk):
         for w in self.main.winfo_children(): w.destroy()
 
     def _unbind(self):
-        for k in ["<Return>","<space>","<Escape>","<BackSpace>",*[f"<Key-{i}>" for i in range(10)],*[f"<F{i}>" for i in range(1,13)]]:
+        for k in ["<Return>","<space>","<Escape>","<BackSpace>",
+                   *[f"<Key-{i}>" for i in range(10)],
+                   *[f"<F{i}>" for i in range(1, 13)]]:
             try: self.unbind(k)
             except: pass
         try: self.main.unbind("<Button-1>")
         except: pass
+        self._in_engine = False
+
+    def _kb(self, key, callback):
+        """Safe key bind — skips if an Entry widget has focus."""
+        def wrapper(event):
+            focused = self.focus_get()
+            if focused and isinstance(focused, tk.Entry):
+                return  # let Entry handle the keystroke
+            callback()
+        self.bind(key, wrapper)
 
     def _tick(self):
         self.t_clk.configure(text=datetime.now().strftime("%H:%M:%S"))
@@ -204,9 +216,9 @@ class App(tk.Tk):
 
         for ev in ["<Button-1>","<Return>","<space>"]:
             if ev == "<Button-1>": self.main.bind(ev, lambda e: self._menu("main"))
-            else: self.bind(ev, lambda e: self._menu("main"))
+            else: self._kb(ev, lambda: self._menu("main"))
         for i, (_, key, _) in enumerate(MAIN_MENU):
-            self.bind(f"<F{i+1}>", lambda e, k=key: self._menu(k) if k not in ("data","procs","config") else self._special(k))
+            self._kb(f"<F{i+1}>", (lambda k=key: lambda: self._menu(k) if k not in ("data","procs","config") else self._special(k))(key))
 
     # ─── MENU ────────────────────────────────────────────
     def _menu(self, key):
@@ -222,16 +234,16 @@ class App(tk.Tk):
             title = "MAIN"
             self.h_path.configure(text="")
             self.f_lbl.configure(text="ESC quit  |  number to select")
-            self.bind("<Escape>", lambda e: self._quit())
+            self._kb("<Escape>", self._quit)
         else:
             self.history = ["main"]
             items = [(n, s, d) for n, s, d in SUB_MENUS.get(key, [])]
             title = key.upper()
             self.h_path.configure(text=f"> {title}")
             self.f_lbl.configure(text="ESC back  |  number to select  |  0 back")
-            self.bind("<Escape>", lambda e: self._menu("main"))
-            self.bind("<BackSpace>", lambda e: self._menu("main"))
-            self.bind("<Key-0>", lambda e: self._menu("main"))
+            self._kb("<Escape>", lambda: self._menu("main"))
+            self._kb("<BackSpace>", lambda: self._menu("main"))
+            self._kb("<Key-0>", lambda: self._menu("main"))
 
         f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
         tk.Label(f, text=title, font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 16))
@@ -268,7 +280,7 @@ class App(tk.Tk):
                 w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
                 w.bind("<Button-1>", lambda e, c=cmd: c())
 
-            self.bind(f"<Key-{num}>", lambda e, c=cmd: c())
+            self._kb(f"<Key-{num}>", cmd)
 
         # Back/Quit row
         tk.Frame(f, bg=BG, height=10).pack()
@@ -427,7 +439,7 @@ class App(tk.Tk):
         self._clr(); self._unbind()
         self.h_path.configure(text="> DATA"); self.h_stat.configure(text="BROWSE", fg=AMBER_D)
         self.f_lbl.configure(text="ESC back  |  click to open file")
-        self.bind("<Escape>", lambda e: self._menu("main"))
+        self._kb("<Escape>", lambda: self._menu("main"))
 
         f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True, padx=16, pady=12)
         tk.Label(f, text="DATA & REPORTS", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0,8))
@@ -464,8 +476,8 @@ class App(tk.Tk):
         self._clr(); self._unbind()
         self.h_path.configure(text="> PROCS"); self.h_stat.configure(text="MANAGE", fg=GREEN)
         self.f_lbl.configure(text="ESC back  |  R refresh")
-        self.bind("<Escape>", lambda e: self._menu("main"))
-        self.bind("<Key-r>", lambda e: self._procs())
+        self._kb("<Escape>", lambda: self._menu("main"))
+        self._kb("<Key-r>", self._procs)
 
         f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
         tk.Label(f, text="PROCESSES", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(pady=(0,12))
@@ -486,7 +498,7 @@ class App(tk.Tk):
         self._clr(); self._unbind()
         self.h_path.configure(text="> CONFIG"); self.h_stat.configure(text="SETTINGS", fg=AMBER_D)
         self.f_lbl.configure(text="ESC back  |  number to select")
-        self.bind("<Escape>", lambda e: self._menu("main"))
+        self._kb("<Escape>", lambda: self._menu("main"))
 
         f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
         tk.Label(f, text="CONFIG", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0,16))
@@ -508,7 +520,7 @@ class App(tk.Tk):
                 w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
                 w.bind("<Leave>", lambda e, n=nl: n.configure(fg=WHITE))
                 w.bind("<Button-1>", lambda e, c=cmd: c())
-            self.bind(f"<Key-{i+1}>", lambda e, c=cmd: c())
+            self._kb(f"<Key-{i+1}>", cmd)
 
         tk.Frame(f, bg=BG, height=10).pack()
         brow = tk.Frame(f, bg=BG, cursor="hand2"); brow.pack(fill="x", padx=60, pady=1)
@@ -516,14 +528,14 @@ class App(tk.Tk):
         bl = tk.Label(brow, text="  BACK", font=(FONT, 10), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
         bl.pack(side="left", fill="x", expand=True)
         for w in [brow, bl]: w.bind("<Button-1>", lambda e: self._menu("main"))
-        self.bind("<Key-0>", lambda e: self._menu("main"))
+        self._kb("<Key-0>", lambda: self._menu("main"))
 
     # ─── CONFIG EDITORS ──────────────────────────────────
     def _cfg_edit(self, title, fields, load_fn, save_fn):
         self._clr(); self._unbind()
         self.h_path.configure(text=f"> CONFIG > {title}")
         self.f_lbl.configure(text="ESC back  |  CTRL+S save")
-        self.bind("<Escape>", lambda e: self._config())
+        self._kb("<Escape>", self._config)
 
         f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
         tk.Label(f, text=title, font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(pady=(0,16))
@@ -555,7 +567,7 @@ class App(tk.Tk):
         sv.pack(side="left", padx=4); sv.bind("<Button-1>", lambda e: save())
         cn = tk.Label(br, text="  CANCEL  ", font=(FONT, 10), fg=DIM, bg=BG3, cursor="hand2", padx=12, pady=3)
         cn.pack(side="left", padx=4); cn.bind("<Button-1>", lambda e: self._config())
-        self.bind("<Control-s>", lambda e: save())
+        self._kb("<Control-s>", save)
 
     def _load_json(self, name):
         p = ROOT / "config" / name
