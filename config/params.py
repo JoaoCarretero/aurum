@@ -45,6 +45,14 @@ __all__ = [
     # TF Scaling (underscore-prefixed — precisa de __all__ para exportar)
     "_TF_MINUTES", "_tf_params", "_TFP",
     "MIN_STOP_PCT", "SLOPE_N", "CHOP_S21", "CHOP_S200",
+    # Darwin
+    "DARWIN_EVAL_WINDOW", "DARWIN_MUTATION_CYCLE", "DARWIN_MUTATION_RANGE",
+    "DARWIN_MUTATION_MIN_IMPR", "DARWIN_KILL_WINDOWS",
+    "DARWIN_ALLOC_TOP", "DARWIN_ALLOC_ABOVE", "DARWIN_ALLOC_BELOW", "DARWIN_ALLOC_KILLED",
+    # Chronos
+    "CHRONOS_HMM_REGIMES", "CHRONOS_HMM_LOOKBACK",
+    "CHRONOS_GARCH_HORIZON", "CHRONOS_GARCH_LOOKBACK",
+    "CHRONOS_HURST_WINDOW", "CHRONOS_HURST_MIN", "CHRONOS_SEASON_MIN_SAMPLES",
 ]
 
 # ── UNIVERSO ──────────────────────────────────────────────────
@@ -244,6 +252,26 @@ THOTH_WEIGHT_OI         = 0.30     # peso OI no composite score
 THOTH_WEIGHT_LS         = 0.30     # peso LS ratio no composite score
 THOTH_MIN_SCORE         = 0.55     # score mínimo para entrada
 THOTH_SIZE_MULT         = 0.50     # position size multiplier
+
+# ── DARWIN — Adaptive Strategy Evolution ─────────────────────
+DARWIN_EVAL_WINDOW      = 30      # trades por janela de avaliação
+DARWIN_MUTATION_CYCLE    = 100     # trades entre tentativas de mutação
+DARWIN_MUTATION_RANGE    = 0.10    # ±10% perturbação de parâmetros
+DARWIN_MUTATION_MIN_IMPR = 0.05    # 5% melhoria mínima para adoptar
+DARWIN_KILL_WINDOWS      = 3       # janelas negativas consecutivas → pause
+DARWIN_ALLOC_TOP         = 0.35    # capital para top performer
+DARWIN_ALLOC_ABOVE       = 0.25    # capital para acima da mediana
+DARWIN_ALLOC_BELOW       = 0.10    # capital para abaixo da mediana
+DARWIN_ALLOC_KILLED      = 0.05    # capital mínimo (engine pausado)
+
+# ── CHRONOS — Time-Series Intelligence ──────────────────────
+CHRONOS_HMM_REGIMES     = 3       # número de regimes no HMM
+CHRONOS_HMM_LOOKBACK    = 500     # candles para fit do HMM
+CHRONOS_GARCH_HORIZON   = 8       # candles de forecast GARCH
+CHRONOS_GARCH_LOOKBACK  = 500     # candles para fit GARCH
+CHRONOS_HURST_WINDOW    = 100     # janela rolling Hurst
+CHRONOS_HURST_MIN       = 50      # min períodos para Hurst
+CHRONOS_SEASON_MIN_SAMPLES = 30   # min samples por slot de seasonality
 
 # Derived params para o ENTRY_TF default
 _TFP            = _tf_params(ENTRY_TF)
