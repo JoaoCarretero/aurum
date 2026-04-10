@@ -34,3 +34,6 @@ node_modules/
 build/
 dist/
 *.spec
+
+# Git worktrees (isolated Claude Code sessions)
+.worktrees/
