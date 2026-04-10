@@ -290,6 +290,7 @@ def render_cockpit(app):
     _init_panel_venue_health(app)
     _init_panel_funding(app)
     _init_panel_risk(app)
+    _init_panel_basis(app)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -557,5 +558,75 @@ def _init_panel_risk(app):
 
         trades = snap.get("trades_count", 0) or 0
         set_bar(*gauges["trades"], min(1, trades / 40), str(trades))
+
+    app._alch_tick.register(update)
+
+
+def _init_panel_basis(app):
+    frame = app._alch_p3
+    canvas = tk.Canvas(frame, bg=HEV_PANEL, highlightthickness=0)
+    canvas.pack(fill="both", expand=True, padx=2, pady=2)
+
+    legend = tk.Frame(frame, bg=HEV_PANEL)
+    legend.pack(fill="x", padx=2)
+    tk.Label(legend, text="BTC", font=font("mono", 8),
+             fg=HEV_AMBER, bg=HEV_PANEL).pack(side="right", padx=3)
+    tk.Label(legend, text="ETH", font=font("mono", 8),
+             fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="right", padx=3)
+    tk.Label(legend, text="SOL", font=font("mono", 8),
+             fg=HEV_GREEN, bg=HEV_PANEL).pack(side="right", padx=3)
+    stats = tk.Label(legend, text="σ=— μ=—", font=font("mono", 8),
+                     fg=HEV_AMBER_D, bg=HEV_PANEL)
+    stats.pack(side="left", padx=3)
+
+    def update(snap):
+        canvas.delete("all")
+        W = canvas.winfo_width() or 400
+        H = canvas.winfo_height() or 140
+        if W < 10 or H < 10:
+            return
+
+        history = snap.get("basis_history", {}) or {}
+        symbols = [("BTCUSDT", HEV_AMBER), ("ETHUSDT", HEV_HAZARD), ("SOLUSDT", HEV_GREEN)]
+
+        # Zero line
+        canvas.create_line(0, H/2, W, H/2, fill=HEV_AMBER_DD, dash=(3, 4))
+
+        # Collect all values to find global range
+        all_vals = []
+        for sym, _ in symbols:
+            for _, v in history.get(sym, []) or []:
+                try:
+                    all_vals.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+        if not all_vals:
+            canvas.create_text(W/2, H/2, text="no basis data yet",
+                               fill=HEV_AMBER_D, font=font("mono", 9))
+            stats.configure(text="σ=— μ=—")
+            return
+
+        lo, hi = min(all_vals), max(all_vals)
+        span = max(hi - lo, 0.0001)
+        for sym, color in symbols:
+            pts = history.get(sym, []) or []
+            if len(pts) < 2:
+                continue
+            coords = []
+            for i, (_, v) in enumerate(pts):
+                try:
+                    vf = float(v)
+                except (TypeError, ValueError):
+                    continue
+                x = (i / (len(pts) - 1)) * W if len(pts) > 1 else W/2
+                y = H - ((vf - lo) / span * H)
+                coords += [x, y]
+            if len(coords) >= 4:
+                canvas.create_line(*coords, fill=color, width=1, smooth=False)
+
+        import statistics as _st
+        mu = _st.mean(all_vals)
+        sigma = _st.pstdev(all_vals) if len(all_vals) > 1 else 0
+        stats.configure(text=f"σ={sigma:.4f} μ={mu:+.4f}")
 
     app._alch_tick.register(update)
