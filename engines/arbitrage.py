@@ -14,17 +14,32 @@ from dataclasses import dataclass,field
 from typing import Dict,List,Optional,Tuple
 from collections import deque
 
+import argparse
+
+def _parse_mode():
+    p=argparse.ArgumentParser(add_help=False)
+    p.add_argument("--mode",choices=["paper","demo","testnet","live"],default=None)
+    p.add_argument("--run-id",default=None,help="override auto-generated run id")
+    args,_=p.parse_known_args()
+    return args
+
+_ARGS=_parse_mode()
+ARB_LIVE=_ARGS.mode=="live"
+ARB_DEMO=_ARGS.mode in("demo","testnet")
+ARB_TESTNET=_ARGS.mode=="testnet"
+ARB_PAPER=_ARGS.mode=="paper" or _ARGS.mode is None
+ARB_MODE=_ARGS.mode or "paper"
+
 sys.path.insert(0,str(Path(__file__).parent.parent))
 from config.params import safe_input
 from bot.telegram import TelegramNotifier
 
-ARB_LIVE,ARB_DEMO=False,False
 ACCT=5000.0;MAX_POS=5;CROSS_MAX=3;LEV=2;POS_PCT=0.20;MAX_EXPO=3000.0
 SPLIT_N=5;SPLIT_DLY=0.5;SCAN_S=30;STATUS_N=3;WS_ON=True
 MIN_SPREAD=0.0015;MIN_APR=40.0;MIN_VOL=3_000_000;MAX_PX_SPREAD=0.02
 EXIT_H=8;EXIT_DECAY=0.30;MAX_HOLD_H=72;MAX_DD_PCT=0.05;KILL_LOSSES=3
 _D=datetime.now().strftime("%Y-%m-%d");_T=datetime.now().strftime("%H%M")
-RUN_ID=f"{_D}_{_T}";DIR=Path(f"data/arbitrage/{RUN_ID}")
+RUN_ID=_ARGS.run_id or f"{_D}_{_T}";DIR=Path(f"data/arbitrage/{RUN_ID}")
 for d in("logs","state","reports"):(DIR/d).mkdir(parents=True,exist_ok=True)
 
 fmt=logging.Formatter("%(asctime)s %(levelname)-6s %(message)s",datefmt="%Y-%m-%d %H:%M:%S")
@@ -1631,20 +1646,19 @@ def _menu():
     return{"1":"scan","2":"paper","3":"demo","4":"live","0":"exit"}.get(safe_input("\n  > ").strip(),"exit")
 
 if __name__=="__main__":
-    import argparse
-    ap=argparse.ArgumentParser(description="AURUM Arbitrage Engine v5.0")
-    ap.add_argument("mode",nargs="?",choices=["scan","paper","demo","live"])
-    args=ap.parse_args()
-    if args.mode is None:args.mode=_menu()
-    if args.mode=="exit":sys.exit(0)
-    venues=build_venues()
-    if args.mode=="scan":
+    _run_mode=ARB_MODE
+    if _ARGS.mode is None:
+        _run_mode=_menu()
+        if _run_mode=="exit":sys.exit(0)
+    else:
+        log.info(f"Mode fixed via CLI: {ARB_MODE}")
+    if _run_mode=="scan":
+        venues=build_venues()
         async def _s():
             o,a=await scan_all(venues);print_dashboard(o,a)
         asyncio.run(_s())
-    elif args.mode in("paper","demo","live"):
-        if args.mode=="live":
+    elif _run_mode in("paper","demo","testnet","live"):
+        if _run_mode=="live":
             if safe_input("  LIVE. Type YES > ").strip()!="YES":sys.exit(0)
-            ARB_LIVE=True
-        elif args.mode=="demo":ARB_DEMO=True
+        venues=build_venues()
         asyncio.run(Engine(venues).run())
