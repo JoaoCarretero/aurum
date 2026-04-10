@@ -50,8 +50,18 @@ tlog=logging.getLogger("a.t");tlog.handlers.clear();tlog.setLevel(logging.INFO);
 th=logging.FileHandler(DIR/"logs"/"trades.log",encoding="utf-8");th.setFormatter(fmt);tlog.addHandler(th)
 
 def _keys(v):
-    with open(Path(__file__).parent.parent/"config"/"keys.json") as f:c=json.load(f)
-    b=c.get(v,{});return b.get("api_key",""),b.get("api_secret","")
+    """Load API key/secret for a venue. Returns ('','') on any failure —
+    the caller can then fall back to paper mode instead of crashing the
+    whole engine subprocess (the dashboard spawns this as a child and
+    can't diagnose a silent crash at load time)."""
+    try:
+        with open(Path(__file__).parent.parent/"config"/"keys.json", encoding="utf-8") as f:
+            c = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
+        log.error(f"_keys({v}): could not load config/keys.json — {e}")
+        return "", ""
+    b = c.get(v, {})
+    return b.get("api_key", ""), b.get("api_secret", "")
 
 async def _http(url,params=None,method="GET",json_body=None,headers=None,retries=3):
     import requests as r
@@ -1255,6 +1265,7 @@ class Engine:
         s._state_file=DIR/"state"/"positions.json"
         s._snapshot_file=DIR/"state"/"snapshot.json"
         s._latest_opportunities=[];s._latest_funding={};s._latest_basis_history={};s._latest_venue_health={};s._sortino_rolling=0.0
+        s._basis_buffers={};s._BASIS_MAX=60
         s._load_state()
 
     def _save_state(s):
@@ -1308,6 +1319,35 @@ class Engine:
             with os.fdopen(fd,"w") as f:json.dump(data,f,default=str)
             os.replace(tmp,snapshot_file)
         except Exception as e:log.debug(f"snapshot write failed: {e}")
+
+    def _check_reload_params(s):
+        """Called at top of each scan cycle. If reload flag file exists, re-read params and delete flag."""
+        global MIN_SPREAD,MIN_APR,MAX_POS,POS_PCT,LEV,SCAN_S,EXIT_H,MAX_DD_PCT,KILL_LOSSES
+        flag=Path("config/alchemy_params.json.reload")
+        if not flag.exists():return
+        try:
+            params=json.loads(Path("config/alchemy_params.json").read_text())
+            MIN_SPREAD =float(params.get("MIN_SPREAD", MIN_SPREAD))
+            MIN_APR    =float(params.get("MIN_APR",    MIN_APR))
+            MAX_POS    =int(params.get("MAX_POS",      MAX_POS))
+            POS_PCT    =float(params.get("POS_PCT",    POS_PCT))
+            LEV        =int(params.get("LEV",          LEV))
+            SCAN_S     =int(params.get("SCAN_S",       SCAN_S))
+            EXIT_H     =int(params.get("EXIT_H",       EXIT_H))
+            MAX_DD_PCT =float(params.get("MAX_DD_PCT", MAX_DD_PCT))
+            KILL_LOSSES=int(params.get("KILL_LOSSES",  KILL_LOSSES))
+            log.info(f"params reloaded: MIN_APR={MIN_APR} MAX_POS={MAX_POS} POS_PCT={POS_PCT}")
+        except Exception as e:log.warning(f"param reload failed: {e}")
+        finally:
+            try:flag.unlink()
+            except:pass
+
+    def _record_basis(s,symbol,perp_px,spot_px):
+        if spot_px<=0:return
+        basis=(perp_px-spot_px)/spot_px
+        buf=s._basis_buffers.setdefault(symbol,deque(maxlen=s._BASIS_MAX))
+        buf.append((int(time.time()),round(basis,6)))
+        s._latest_basis_history={k:list(v) for k,v in s._basis_buffers.items()}
 
     def _load_state(s):
         if not s._state_file.exists():return
@@ -1562,6 +1602,7 @@ class Engine:
             p.funding_collected+=pay;p.funding_payments+=max(per_a,per_b);p.last_funding_ts=now
 
     async def _cycle(s):
+        s._check_reload_params()
         s._sc+=1;await s._collect()
 
         # ══════ v5.0: MODULE CYCLE ══════
@@ -1618,6 +1659,15 @@ class Engine:
         if s.killed:log.info(f"  Kill switch active — no new entries");return
         if len(s.positions)>=MAX_POS:return
         opps,_=await scan_all(list(s.venues.values()))
+        # Capture for ALCHEMY snapshot — sort and take top 20
+        try:
+            s._latest_opportunities=[
+                {"sym":o.get("sym",""),"long":o.get("v_a",""),"short":o.get("v_b",""),
+                 "spread":round(float(o.get("spread",0)),6),"apr":round(float(o.get("apr",0)),1),
+                 "omega":round(float(o.get("omega",0)),2),"fill_prob":round(float(o.get("fill_prob",1.0)),2)}
+                for o in sorted(opps,key=lambda x:-float(x.get("omega",0)))[:20]
+            ]
+        except Exception as e:log.debug(f"snapshot opps capture: {e}")
         open_syms={p.symbol for p in s.positions}
         for o in opps:
             if o["sym"] in open_syms:continue
@@ -1627,6 +1677,19 @@ class Engine:
             await s._open(o)
         log.info(f"  Cycle #{s._sc}: opps={len(opps)} open={len(s.positions)}/{MAX_POS} regime={s.regime._global} kelly={s.sizer._kelly():.3f}")
         s._save_state()
+        # Snapshot capture for ALCHEMY dashboard
+        try:
+            active_venues=[v for v in s.venues.values() if not v._disabled]
+            all_syms=set()
+            for v in active_venues:all_syms.update(v.funding.keys())
+            s._latest_funding={sym:{v.name:v.funding.get(sym,0) for v in active_venues} for sym in all_syms}
+            s._latest_venue_health={
+                v.name:{"ping_ms":getattr(v,"last_ping_ms",None),"err":v._fail_count,
+                        "rate_limit_pct":getattr(v,"rate_limit_pct",None),"disabled":v._disabled}
+                for v in s.venues.values()
+            }
+            s._write_snapshot()
+        except Exception as e:log.debug(f"alchemy snapshot step: {e}")
 
     async def run(s):
         s.running=True
