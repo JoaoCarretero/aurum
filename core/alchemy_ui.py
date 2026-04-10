@@ -1,7 +1,8 @@
-"""ALCHEMY — Half-Life HEV Terminal cockpit for arbitrage.
+"""ARBITRAGE — Half-Life HEV Terminal cockpit for cross-venue arbitrage.
 
-9 panels, fullscreen, dense amber-on-black. Reads live state via AlchemyState
-and controls engines/arbitrage.py via parameter hot-reload and subprocess.
+9 dense panels, amber-on-black, rendered in-terminal inside the launcher main
+frame (no fullscreen). Reads live state via AlchemyState and controls
+engines/arbitrage.py via parameter hot-reload and subprocess.
 """
 import tkinter as tk
 import tkinter.font as tkfont
@@ -103,24 +104,22 @@ def make_panel(parent, panel_id: int, title: str, **grid_kwargs) -> tk.Frame:
     wrap.grid(**grid_kwargs)
     wrap.grid_propagate(False)
 
-    # Corner brackets (top-left, bottom-right)
-    tk.Frame(wrap, bg=HEV_AMBER, width=10, height=2).place(x=0, y=0)
-    tk.Frame(wrap, bg=HEV_AMBER, width=2, height=10).place(x=0, y=0)
-    tk.Frame(wrap, bg=HEV_AMBER, width=10, height=2).place(relx=1, rely=1, x=-10, y=-2)
-    tk.Frame(wrap, bg=HEV_AMBER, width=2, height=10).place(relx=1, rely=1, x=-2, y=-10)
+    # Corner brackets (top-left, bottom-right) — tight 6px
+    tk.Frame(wrap, bg=HEV_AMBER, width=6, height=2).place(x=0, y=0)
+    tk.Frame(wrap, bg=HEV_AMBER, width=2, height=6).place(x=0, y=0)
+    tk.Frame(wrap, bg=HEV_AMBER, width=6, height=2).place(relx=1, rely=1, x=-6, y=-2)
+    tk.Frame(wrap, bg=HEV_AMBER, width=2, height=6).place(relx=1, rely=1, x=-2, y=-6)
 
-    # Title bar
-    title_bar = tk.Frame(wrap, bg=HEV_PANEL, height=22)
+    # Title bar — compact 16px
+    title_bar = tk.Frame(wrap, bg=HEV_PANEL, height=16)
     title_bar.pack(fill="x", padx=1, pady=(1, 0))
     title_bar.pack_propagate(False)
 
     tk.Label(title_bar, text=f"[{panel_id:02d}] {title}",
-             font=font("mono_px", 15), fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="left", padx=6)
-    tk.Label(title_bar, text=PANEL_LATIN.get(panel_id, ""),
-             font=font("mono", 11, "italic"), fg=HEV_AMBER_D, bg=HEV_PANEL).pack(side="right", padx=6)
+             font=font("mono_px", 10), fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="left", padx=4)
 
-    # Dashed divider (simulate with thin frame)
-    tk.Frame(wrap, bg=HEV_AMBER_DD, height=1).pack(fill="x", padx=6)
+    # Thin amber divider
+    tk.Frame(wrap, bg=HEV_AMBER_DD, height=1).pack(fill="x", padx=4)
 
     body = tk.Frame(wrap, bg=HEV_PANEL)
     body.pack(fill="both", expand=True, padx=1, pady=1)
@@ -206,113 +205,84 @@ class TickDriver:
 # ═══════════════════════════════════════════════════════════
 
 def render_cockpit(app):
-    """Paint the 9-panel HEV cockpit. Root frame is app.main."""
+    """Paint the 9-panel HEV cockpit inside app.main (no fullscreen)."""
     import datetime as _dt
     root = app.main
     root.configure(bg=HEV_BG)
 
-    # λ watermark (placed first so it's behind everything)
-    try:
-        tk.Label(root, text="λ", font=(_FONT_CACHE.get("serif", "Georgia"), 520),
-                 fg="#0a0500", bg=HEV_BG).place(relx=0.78, rely=0.55, anchor="center")
-    except Exception:
-        pass
-
-    # Top hazard stripe
-    top_haz = hazard_strip(root, height=10)
-    top_haz.pack(fill="x")
-
-    # Vitals top bar
-    topbar = tk.Frame(root, bg=HEV_BG, height=56)
+    # Compact top bar — 22px
+    topbar = tk.Frame(root, bg=HEV_BG, height=22)
     topbar.pack(fill="x")
     topbar.pack_propagate(False)
 
-    tk.Label(topbar, text="λ ALCHEMY", font=font("serif", 20, "bold"),
-             fg=HEV_AMBER_B, bg=HEV_BG).pack(side="left", padx=18)
+    tk.Label(topbar, text="ARBITRAGE", font=font("mono_px", 13, "bold"),
+             fg=HEV_AMBER_B, bg=HEV_BG).pack(side="left", padx=(8, 0))
 
-    app._alch_clock = tk.Label(topbar, text="", font=font("mono", 12),
-                               fg=HEV_AMBER_D, bg=HEV_BG)
-    app._alch_clock.pack(side="left", padx=12)
+    # Hidden hermetic detail — single tiny λ suffix (the only one in the whole UI).
+    tk.Label(topbar, text="λ", font=("Georgia", 8),
+             fg=HEV_AMBER_DD, bg=HEV_BG).pack(side="left", padx=(2, 6))
 
-    vitals_frame = tk.Frame(topbar, bg=HEV_BG)
-    vitals_frame.pack(side="right", padx=18)
-
-    app._alch_vitals = {}
-    for key, label in [
-        ("account",   "ACCOUNT"),
-        ("drawdown",  "DRAWDOWN"),
-        ("positions", "POSITIONS"),
-        ("exposure",  "EXPOSURE"),
-        ("mode",      "MODE"),
-        ("engine",    "ENGINE"),
-    ]:
-        cell = tk.Frame(vitals_frame, bg=HEV_BG)
-        cell.pack(side="left", padx=14)
-        tk.Label(cell, text=label, font=font("serif", 9),
-                 fg=HEV_AMBER_D, bg=HEV_BG).pack(anchor="e")
-        v = tk.Label(cell, text="—", font=font("mono_px", 22),
-                     fg=HEV_AMBER, bg=HEV_BG)
-        v.pack(anchor="e")
-        app._alch_vitals[key] = v
+    # Inline vitals (single StringVar-driven label)
+    app._alch_vitals_var = tk.StringVar(value="—")
+    app._alch_vitals_lbl = tk.Label(
+        topbar, textvariable=app._alch_vitals_var,
+        font=font("mono_px", 11), fg=HEV_AMBER, bg=HEV_BG, anchor="w")
+    app._alch_vitals_lbl.pack(side="left", fill="x", expand=True, padx=(4, 8))
 
     # Thin amber separator below topbar
     tk.Frame(root, bg=HEV_AMBER_D, height=1).pack(fill="x")
 
     # ── Cockpit body (grid of 9 panels) ──
     body = tk.Frame(root, bg=HEV_BG)
-    body.pack(fill="both", expand=True, padx=4, pady=4)
+    body.pack(fill="both", expand=True, padx=2, pady=2)
     body.grid_columnconfigure(0, weight=26, uniform="col")
     body.grid_columnconfigure(1, weight=48, uniform="col")
     body.grid_columnconfigure(2, weight=26, uniform="col")
     body.grid_rowconfigure(0, weight=5, uniform="row")
     body.grid_rowconfigure(1, weight=5, uniform="row")
     body.grid_rowconfigure(2, weight=3, uniform="row")
-    body.grid_rowconfigure(3, minsize=70)
+    body.grid_rowconfigure(3, minsize=44)
     app._alch_body = body
 
-    # Vitals updater
+    # Vitals updater — single inline line
     def update_vitals(snap):
-        app._alch_clock.configure(
-            text=_dt.datetime.utcnow().strftime("%Y.%m.%d · %H:%M:%S UTC"))
-        app._alch_vitals["account"].configure(text=f"${snap.get('account',0):,.0f}")
+        clock = _dt.datetime.utcnow().strftime("%H:%M:%S")
+        acct = snap.get("account", 0) or 0
         dd = snap.get("drawdown_pct", 0) or 0
-        app._alch_vitals["drawdown"].configure(
-            text=f"{dd:+.2f}%",
-            fg=HEV_GREEN if dd > -1 else (HEV_HAZARD if dd > -3 else HEV_RED))
         n = len(snap.get("positions", []) or [])
-        app._alch_vitals["positions"].configure(text=f"{n} / 5")
-        app._alch_vitals["exposure"].configure(text=f"${snap.get('exposure_usd',0) or 0:,.0f}")
+        expo = snap.get("exposure_usd", 0) or 0
         mode = (snap.get("mode", "—") or "—").upper()
-        app._alch_vitals["mode"].configure(
-            text=mode,
-            fg=HEV_HAZARD if mode == "PAPER" else (HEV_RED if mode == "LIVE" else HEV_AMBER_B))
         running = bool(snap.get("engine_pid", 0)) and not snap.get("_stale", True)
-        app._alch_vitals["engine"].configure(
-            text="▶ RUN" if running else "■ IDLE",
-            fg=HEV_GREEN if running else HEV_DIM)
+        eng = "RUN" if running else "IDLE"
+        app._alch_vitals_var.set(
+            f"{clock}  \u2502  ACCT ${acct:,.0f}   DD {dd:+.2f}%   "
+            f"POS {n}/5   EXPO ${expo:,.0f}   MODE {mode}   ENGINE {eng}"
+        )
+        # Color shift on drawdown severity
+        try:
+            color = HEV_AMBER if dd > -1 else (HEV_HAZARD if dd > -3 else HEV_RED)
+            app._alch_vitals_lbl.configure(fg=color)
+        except Exception:
+            pass
     app._alch_tick.register(update_vitals)
 
-    # Bottom hazard stripe
-    bot_haz = hazard_strip(root, height=10)
-    bot_haz.pack(side="bottom", fill="x")
-
-    # Create the 9 panel frames with make_panel
+    # Create the 9 panel frames with make_panel — plain English titles
     for pid, row, col, rowspan, title in [
-        (1, 0, 0, 2, "OPPORTVNITATES"),
-        (2, 0, 1, 1, "FVNDING · RATES"),
-        (3, 1, 1, 1, "BASIS · PERP / SPOT"),
-        (4, 0, 2, 1, "POSITIONES"),
-        (5, 1, 2, 1, "VENVE · HEALTH"),
-        (8, 2, 0, 1, "RISK · CONSOLE"),
-        (9, 2, 1, 1, "LOG · STREAM"),
-        (6, 2, 2, 1, "CONNECTIONES"),
-        (7, 3, 0, 1, "MACHINA · ENGINE CONTROL"),
+        (1, 0, 0, 2, "OPPORTUNITIES"),
+        (2, 0, 1, 1, "FUNDING"),
+        (3, 1, 1, 1, "BASIS"),
+        (4, 0, 2, 1, "POSITIONS"),
+        (5, 1, 2, 1, "VENUES"),
+        (8, 2, 0, 1, "RISK"),
+        (9, 2, 1, 1, "LOGS"),
+        (6, 2, 2, 1, "CONNECTIONS"),
+        (7, 3, 0, 1, "ENGINE"),
     ]:
         colspan = 3 if pid == 7 else 1
         body_frame = make_panel(body, pid, title,
                                 row=row, column=col,
                                 rowspan=rowspan, columnspan=colspan,
-                                sticky="nsew", padx=2, pady=2)
+                                sticky="nsew", padx=1, pady=1)
         setattr(app, f"_alch_p{pid}", body_frame)
 
     _init_panel_opportunities(app)
@@ -335,13 +305,13 @@ def _render_table(parent, header: list, widths: list):
     """
     # Header
     hdr = tk.Frame(parent, bg=HEV_PANEL)
-    hdr.pack(fill="x", padx=4, pady=(2, 0))
+    hdr.pack(fill="x", padx=2, pady=(1, 0))
     for txt, w in zip(header, widths):
         tk.Label(hdr, text=txt, width=w, anchor="w",
-                 font=font("mono", 11), fg=HEV_AMBER_D, bg=HEV_PANEL).pack(side="left")
+                 font=font("mono", 8), fg=HEV_AMBER_D, bg=HEV_PANEL).pack(side="left")
 
     body = tk.Frame(parent, bg=HEV_PANEL)
-    body.pack(fill="both", expand=True, padx=4)
+    body.pack(fill="both", expand=True, padx=2)
 
     def update(rows, colors=None):
         for child in body.winfo_children():
@@ -352,7 +322,7 @@ def _render_table(parent, header: list, widths: list):
             row_frame.pack(fill="x")
             for txt, w, c in zip(row, widths, row_colors):
                 tk.Label(row_frame, text=str(txt), width=w, anchor="w",
-                         font=font("mono_px", 14),
+                         font=font("mono_px", 10),
                          fg=c or HEV_AMBER, bg=HEV_PANEL).pack(side="left")
     return body, update
 
@@ -362,22 +332,20 @@ def _init_panel_opportunities(app):
     _, update_rows = _render_table(
         frame,
         header=["#", "SYM", "LONG", "SHORT", "SPRD", "APR", "Ω"],
-        widths=[3, 10, 6, 6, 8, 8, 5],
+        widths=[3, 8, 5, 5, 7, 6, 4],
     )
     def update(snap):
         opps = snap.get("opportunities", []) or []
-        opps = opps[:12]
+        opps = opps[:10]
         rows, colors = [], []
         for i, o in enumerate(opps, 1):
-            long_v = o.get("long", "") or ""
-            short_v = o.get("short", "") or ""
-            long_g = VENUE_GLYPH.get(long_v, "·") + long_v[:3].upper()
-            short_g = VENUE_GLYPH.get(short_v, "·") + short_v[:3].upper()
+            long_v = (o.get("long", "") or "")[:3].upper()
+            short_v = (o.get("short", "") or "")[:3].upper()
             rows.append([
                 f"{i:02d}",
-                (o.get("sym", "—") or "—")[:9],
-                long_g,
-                short_g,
+                (o.get("sym", "—") or "—")[:7],
+                long_v,
+                short_v,
                 f"{(o.get('spread') or 0)*100:+.4f}",
                 f"{o.get('apr') or 0:.1f}%",
                 f"{o.get('omega') or 0:.1f}",
@@ -386,7 +354,7 @@ def _init_panel_opportunities(app):
             c = HEV_AMBER if omega_val < 7 else HEV_HAZARD
             colors.append([HEV_AMBER_D, HEV_HAZARD, HEV_AMBER, HEV_AMBER, HEV_GREEN, HEV_GREEN, c])
         if not rows:
-            rows = [["—", "no opportunities", "", "", "", "", ""]]
+            rows = [["—", "no opps", "", "", "", "", ""]]
             colors = [[HEV_DIM] * 7]
         update_rows(rows, colors)
     app._alch_tick.register(update)
@@ -396,22 +364,22 @@ def _init_panel_positions(app):
     frame = app._alch_p4
     _, update_rows = _render_table(
         frame,
-        header=["SYM", "VENUES", "PNL", "ΔEDGE", "EXIT"],
-        widths=[8, 8, 10, 8, 8],
+        header=["SYM", "VEN", "PNL", "EDGE", "EXIT"],
+        widths=[6, 8, 7, 6, 6],
     )
     def update(snap):
         poss = snap.get("positions", []) or []
         rows, colors = [], []
         for p in poss:
-            long_g = VENUE_GLYPH.get(p.get("long", "") or "", "·")
-            short_g = VENUE_GLYPH.get(p.get("short", "") or "", "·")
+            long_v = (p.get("long", "") or "")[:3].upper()
+            short_v = (p.get("short", "") or "")[:3].upper()
             pnl = p.get("pnl", 0) or 0
             exit_s = p.get("exit_in_s", 0) or 0
             h, rem = divmod(int(exit_s), 3600)
             m = rem // 60
             rows.append([
-                (p.get("sym", "—") or "—")[:7],
-                f"{long_g}/{short_g}",
+                (p.get("sym", "—") or "—")[:5],
+                f"{long_v}/{short_v}",
                 f"{pnl:+.2f}",
                 f"-{p.get('edge_decay_pct', 0) or 0:.0f}%",
                 f"{h}h{m:02d}m" if exit_s > 0 else "—",
@@ -424,7 +392,7 @@ def _init_panel_positions(app):
                 HEV_HAZARD if exit_s < 7200 else HEV_AMBER,
             ])
         if not rows:
-            rows = [["—", "no positions", "", "", ""]]
+            rows = [["—", "no pos", "", "", ""]]
             colors = [[HEV_DIM] * 5]
         update_rows(rows, colors)
     app._alch_tick.register(update)
@@ -435,7 +403,7 @@ def _init_panel_venue_health(app):
     _, update_rows = _render_table(
         frame,
         header=["VEN", "PING", "ERR", "RL", "KS"],
-        widths=[10, 7, 5, 7, 6],
+        widths=[5, 6, 4, 5, 5],
     )
     def update(snap):
         health = snap.get("venue_health", {}) or {}
@@ -449,7 +417,7 @@ def _init_panel_venue_health(app):
             rl = h.get("rate_limit_pct")
             status = "DOWN" if disabled else ("WARN" if (rl or 0) > 75 else "OK")
             rows.append([
-                f"{VENUE_GLYPH.get(v, '·')} {v[:6].upper()}",
+                v[:3].upper(),
                 "—" if ping is None else f"{ping}ms",
                 str(err),
                 "—" if rl is None else f"{rl}%",
@@ -469,35 +437,35 @@ def _init_panel_venue_health(app):
 def _init_panel_funding(app):
     frame = app._alch_p2
     inner = tk.Frame(frame, bg=HEV_PANEL)
-    inner.pack(fill="both", expand=True, padx=4, pady=4)
+    inner.pack(fill="both", expand=True, padx=2, pady=2)
 
     venues = ["binance", "bybit", "okx", "hyperliquid", "gate"]
     symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT", "DOGEUSDT", "LINKUSDT"]
 
     cells = {}
-    # Header row
+    # Header row — plain 3-letter venue codes
     hdr = tk.Frame(inner, bg=HEV_PANEL); hdr.pack(fill="x")
-    tk.Label(hdr, text="·", width=6, font=font("mono_px", 12),
+    tk.Label(hdr, text="", width=5, font=font("mono_px", 9),
              fg=HEV_AMBER_D, bg=HEV_PANEL).pack(side="left")
     for v in venues:
-        tk.Label(hdr, text=f"{VENUE_GLYPH.get(v, '·')} {v[:3].upper()}",
-                 width=9, font=font("serif", 10, "bold"),
+        tk.Label(hdr, text=v[:3].upper(),
+                 width=7, font=font("mono", 8, "bold"),
                  fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="left")
 
     for sym in symbols:
         row = tk.Frame(inner, bg=HEV_PANEL); row.pack(fill="x")
-        tk.Label(row, text=sym.replace("USDT", ""), width=6,
-                 font=font("mono_px", 13), fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="left")
+        tk.Label(row, text=sym.replace("USDT", ""), width=5,
+                 font=font("mono_px", 10), fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="left")
         cells[sym] = {}
         for v in venues:
-            lbl = tk.Label(row, text="—", width=9,
-                           font=font("mono_px", 13), fg=HEV_AMBER_D, bg="#0a0500")
+            lbl = tk.Label(row, text="—", width=7,
+                           font=font("mono_px", 10), fg=HEV_AMBER_D, bg="#0a0500")
             lbl.pack(side="left", padx=1)
             cells[sym][v] = lbl
 
-    footer = tk.Label(inner, text="", font=font("mono", 10),
+    footer = tk.Label(inner, text="", font=font("mono", 8),
                       fg=HEV_AMBER_D, bg=HEV_PANEL, anchor="e")
-    footer.pack(fill="x", pady=(4, 0))
+    footer.pack(fill="x", pady=(2, 0))
 
     def update(snap):
         funding = snap.get("funding", {}) or {}
@@ -536,7 +504,7 @@ def _init_panel_funding(app):
 def _init_panel_risk(app):
     frame = app._alch_p8
     inner = tk.Frame(frame, bg=HEV_PANEL)
-    inner.pack(fill="both", expand=True, padx=6, pady=4)
+    inner.pack(fill="both", expand=True, padx=3, pady=2)
 
     gauges = {}
     for key, label in [
@@ -544,19 +512,19 @@ def _init_panel_risk(app):
         ("dd_day",  "DD DAY"),
         ("dd_max",  "DD MAX"),
         ("losses",  "LOSSES"),
-        ("sortino", "SORTINO"),
+        ("sortino", "SORT"),
         ("trades",  "TRADES"),
     ]:
-        row = tk.Frame(inner, bg=HEV_PANEL); row.pack(fill="x", pady=1)
-        tk.Label(row, text=label, width=9, font=font("serif", 9),
+        row = tk.Frame(inner, bg=HEV_PANEL); row.pack(fill="x", pady=0)
+        tk.Label(row, text=label, width=7, font=font("mono", 8),
                  fg=HEV_AMBER_D, bg=HEV_PANEL, anchor="w").pack(side="left")
-        bar_wrap = tk.Frame(row, bg="#1a0f00", height=8, highlightthickness=1,
+        bar_wrap = tk.Frame(row, bg="#1a0f00", height=6, highlightthickness=1,
                             highlightbackground=HEV_AMBER_DD)
-        bar_wrap.pack(side="left", fill="x", expand=True, padx=4)
+        bar_wrap.pack(side="left", fill="x", expand=True, padx=2)
         bar_wrap.pack_propagate(False)
         fill = tk.Frame(bar_wrap, bg=HEV_AMBER)
         fill.place(x=0, y=0, relheight=1, relwidth=0)
-        val = tk.Label(row, text="—", width=8, font=font("mono_px", 12),
+        val = tk.Label(row, text="—", width=6, font=font("mono_px", 9),
                        fg=HEV_AMBER, bg=HEV_PANEL, anchor="e")
         val.pack(side="left")
         gauges[key] = (fill, val)

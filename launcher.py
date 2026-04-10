@@ -98,7 +98,7 @@ MAIN_MENU = [
     ("CONNECTIONS",    "connections", "Contas & exchanges"),
     ("TERMINAL",       "terminal",    "Data, charts, research"),
     ("STRATEGIES",     "strategies",  "Backtest & live engines"),
-    ("ALCHEMY",        "alchemy",     "Cross-venue arbitrage cockpit"),
+    ("ARBITRAGE",      "alchemy",     "Cross-venue arbitrage cockpit"),
     ("RISK",           "risk",        "Portfolio & risk console"),
     ("COMMAND CENTER", "command",     "Site, servers, admin panel"),
     ("SETTINGS",       "settings",    "Config, keys, Telegram"),
@@ -2144,24 +2144,9 @@ class App(tk.Tk):
             w.bind("<Enter>", lambda e, l=bl: l.configure(fg=AMBER))
             w.bind("<Leave>", lambda e, l=bl: l.configure(fg=DIM))
 
-    # ─── ALCHEMY (Layer 2) ────────────────────────────────
+    # ─── ARBITRAGE (Layer 2) ──────────────────────────────
     def _alchemy_enter(self):
-        """Enter fullscreen HEV Terminal cockpit for arbitrage."""
-        # Save previous window state
-        self._alch_prev_geometry = self.geometry()
-        try:
-            self._alch_prev_minsize = self.minsize()
-        except Exception:
-            self._alch_prev_minsize = (860, 560)
-
-        self.minsize(1, 1)
-        try:
-            self.attributes("-fullscreen", True)
-        except Exception:
-            try: self.state("zoomed")  # Windows fallback
-            except Exception: pass
-        self.configure(bg=alchemy_ui.HEV_BG)
-
+        """Render the ARBITRAGE cockpit inside the launcher main frame."""
         self._clr()
         self._clear_kb()
         self.history.append("main")
@@ -2175,12 +2160,12 @@ class App(tk.Tk):
         # Load fonts
         alchemy_ui.load_fonts(self)
 
-        # Paint cockpit (stub for now; real panels in T9-T13)
+        # Paint cockpit in-terminal (inside self.main)
         alchemy_ui.render_cockpit(self)
 
         self.bind("<Escape>", self._alchemy_exit)
         try:
-            self.h_path.configure(text="ALCHEMY")
+            self.h_path.configure(text="ARBITRAGE")
             self.h_stat.configure(text="HEV ONLINE", fg=alchemy_ui.HEV_AMBER_B)
         except Exception:
             pass
@@ -2193,7 +2178,7 @@ class App(tk.Tk):
         if self.proc and self.proc.poll() is None:
             from tkinter import messagebox
             if not messagebox.askyesno(
-                "ALCHEMY",
+                "ARBITRAGE",
                 "Engine is still running. Stop it before exiting?",
                 parent=self):
                 return
@@ -2208,23 +2193,6 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        try:
-            self.attributes("-fullscreen", False)
-        except Exception:
-            pass
-        try:
-            self.state("normal")
-        except Exception:
-            pass
-        try:
-            self.geometry(self._alch_prev_geometry)
-        except Exception:
-            pass
-        try:
-            self.minsize(*self._alch_prev_minsize)
-        except Exception:
-            self.minsize(860, 560)
-        self.configure(bg=BG)
         self._menu("main")
 
     # ─── TERMINAL (Layer 2) ───────────────────────────────
