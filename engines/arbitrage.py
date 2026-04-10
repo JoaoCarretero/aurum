@@ -6,6 +6,12 @@
 # v5.0: +Fill Probability +Adversarial Detector +OmegaV2 +Dynamic Sizing +Order Flow
 
 import os,sys,json,time,asyncio,logging,signal,math,hmac,hashlib,statistics
+# Force UTF-8 on stdout/stderr so box-drawing glyphs don't crash on Windows cp1252
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 import numpy as np
 from pathlib import Path
 from datetime import datetime,timezone
