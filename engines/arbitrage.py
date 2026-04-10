@@ -1253,6 +1253,8 @@ class Engine:
         s.flow=OrderFlowAnalyzer(window=500)
         log.info(f"Engine 5.0 | {'LIVE' if ARB_LIVE else 'DEMO' if ARB_DEMO else 'PAPER'} | {len(venues)} venues | {RUN_ID}")
         s._state_file=DIR/"state"/"positions.json"
+        s._snapshot_file=DIR/"state"/"snapshot.json"
+        s._latest_opportunities=[];s._latest_funding={};s._latest_basis_history={};s._latest_venue_health={};s._sortino_rolling=0.0
         s._load_state()
 
     def _save_state(s):
@@ -1265,6 +1267,47 @@ class Engine:
                 "closed":s.closed,"ts":datetime.now(timezone.utc).isoformat()}
             with open(s._state_file,"w") as f:json.dump(data,f,indent=2,default=str)
         except Exception as e:log.debug(f"Save state: {e}")
+
+    def _write_snapshot(s):
+        """Atomic snapshot for the ALCHEMY dashboard. Called at end of each scan cycle."""
+        import os, tempfile
+        try:
+            exposure=sum(p.size_usd for p in s.positions)
+            drawdown=((s.account-s.peak)/s.peak*100) if s.peak>0 else 0.0
+            realized=sum(t.get("pnl",0) for t in s.closed) if s.closed else 0.0
+            unrealized=sum(getattr(p,"unrealized_pnl",0) for p in s.positions)
+            data={
+                "ts":datetime.now(timezone.utc).isoformat(),
+                "run_id":RUN_ID,
+                "mode":ARB_MODE,
+                "engine_pid":os.getpid(),
+                "account":round(s.account,2),
+                "peak":round(s.peak,2),
+                "exposure_usd":round(exposure,2),
+                "drawdown_pct":round(drawdown,3),
+                "realized_pnl":round(realized,2),
+                "unrealized_pnl":round(unrealized,2),
+                "losses_streak":s.consecutive_losses,
+                "killed":s.killed,
+                "sortino":getattr(s,"_sortino_rolling",0.0),
+                "trades_count":len(s.closed),
+                "opportunities":getattr(s,"_latest_opportunities",[]),
+                "funding":getattr(s,"_latest_funding",{}),
+                "next_funding":{v.name:(v.next_funding_ts(list(v.funding.keys())[0]) if v.funding else 0)
+                    for v in s.venues.values()},
+                "positions":[
+                    {"sym":p.symbol,"long":p.v_a,"short":p.v_b,"pnl":round(getattr(p,"unrealized_pnl",0),2),
+                        "edge_decay_pct":round(((p.edge-getattr(p,"current_edge",p.edge))/p.edge*100) if p.edge else 0,1),
+                        "exit_in_s":int(getattr(p,"exit_in_s",0))}
+                    for p in s.positions],
+                "venue_health":getattr(s,"_latest_venue_health",{}),
+                "basis_history":getattr(s,"_latest_basis_history",{}),
+            }
+            snapshot_file=getattr(s,"_snapshot_file",DIR/"state"/"snapshot.json")
+            fd,tmp=tempfile.mkstemp(dir=str(snapshot_file.parent),prefix=".snap_",suffix=".json")
+            with os.fdopen(fd,"w") as f:json.dump(data,f,default=str)
+            os.replace(tmp,snapshot_file)
+        except Exception as e:log.debug(f"snapshot write failed: {e}")
 
     def _load_state(s):
         if not s._state_file.exists():return

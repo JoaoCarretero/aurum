@@ -30,6 +30,9 @@ ml = [
     "arch>=6.0,<8",
 ]
 all = ["aurum-finance[api,ml]"]
+dev = [
+    "pytest>=7.0,<9",
+]
 
 [project.scripts]
 aurum = "aurum_cli:main"
