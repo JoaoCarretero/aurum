@@ -78,3 +78,36 @@ class AlchemyState:
         data["_stale"] = age > self.stale_seconds
         self._last_good = data
         return data
+
+    DEFAULT_PARAMS = {
+        "MIN_SPREAD": 0.0015,
+        "MIN_APR":    40.0,
+        "MAX_POS":    5,
+        "POS_PCT":    0.20,
+        "LEV":        2,
+        "SCAN_S":     30,
+        "EXIT_H":     8,
+        "MAX_DD_PCT": 0.05,
+        "KILL_LOSSES": 3,
+    }
+
+    def read_params(self) -> dict:
+        p = Path("config/alchemy_params.json")
+        if not p.exists():
+            return dict(self.DEFAULT_PARAMS)
+        try:
+            data = json.loads(p.read_text())
+            merged = dict(self.DEFAULT_PARAMS)
+            merged.update(data)
+            return merged
+        except Exception:
+            return dict(self.DEFAULT_PARAMS)
+
+    def write_params(self, updates: dict):
+        """Merge updates into alchemy_params.json and touch the reload flag."""
+        current = self.read_params()
+        current.update(updates)
+        p = Path("config/alchemy_params.json")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(current, indent=2))
+        (p.parent / "alchemy_params.json.reload").touch()

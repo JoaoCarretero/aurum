@@ -58,3 +58,28 @@ def test_discovers_latest_run(tmp_path, monkeypatch):
     st = AlchemyState()
     snap = st.read()
     assert snap["account"] == 200.0
+
+def test_write_params_creates_file_and_flag(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir()
+    st = AlchemyState()
+    st.write_params({"MIN_APR": 50.0, "MAX_POS": 4})
+    params_file = tmp_path / "config" / "alchemy_params.json"
+    flag_file   = tmp_path / "config" / "alchemy_params.json.reload"
+    assert params_file.exists()
+    assert flag_file.exists()
+    data = json.loads(params_file.read_text())
+    assert data["MIN_APR"] == 50.0
+    assert data["MAX_POS"] == 4
+
+def test_write_params_merges_with_existing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "alchemy_params.json").write_text(
+        json.dumps({"MIN_APR": 40.0, "MAX_POS": 5, "LEV": 2}))
+    st = AlchemyState()
+    st.write_params({"MIN_APR": 60.0})
+    data = json.loads((tmp_path / "config" / "alchemy_params.json").read_text())
+    assert data["MIN_APR"] == 60.0
+    assert data["MAX_POS"] == 5
+    assert data["LEV"] == 2
