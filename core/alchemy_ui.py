@@ -202,17 +202,115 @@ class TickDriver:
 
 
 # ═══════════════════════════════════════════════════════════
-# COCKPIT RENDER (stub — replaced in Task 9)
+# COCKPIT RENDER
 # ═══════════════════════════════════════════════════════════
 
 def render_cockpit(app):
-    """Paint the 9-panel HEV cockpit. Called by launcher _alchemy_enter.
-
-    STUB: replaced in Task 9 with the real grid. Used here to verify menu wiring.
-    """
+    """Paint the 9-panel HEV cockpit. Root frame is app.main."""
+    import datetime as _dt
     root = app.main
     root.configure(bg=HEV_BG)
-    tk.Label(root, text="λ ALCHEMY · HEV TERMINAL ONLINE",
-             font=font("mono_px", 40), fg=HEV_AMBER, bg=HEV_BG).pack(expand=True)
-    tk.Label(root, text="[ESC] to exit · panels coming next task",
-             font=font("mono", 14), fg=HEV_AMBER_D, bg=HEV_BG).pack()
+
+    # λ watermark (placed first so it's behind everything)
+    try:
+        tk.Label(root, text="λ", font=(_FONT_CACHE.get("serif", "Georgia"), 520),
+                 fg="#0a0500", bg=HEV_BG).place(relx=0.78, rely=0.55, anchor="center")
+    except Exception:
+        pass
+
+    # Top hazard stripe
+    top_haz = hazard_strip(root, height=10)
+    top_haz.pack(fill="x")
+
+    # Vitals top bar
+    topbar = tk.Frame(root, bg=HEV_BG, height=56)
+    topbar.pack(fill="x")
+    topbar.pack_propagate(False)
+
+    tk.Label(topbar, text="λ ALCHEMY", font=font("serif", 20, "bold"),
+             fg=HEV_AMBER_B, bg=HEV_BG).pack(side="left", padx=18)
+
+    app._alch_clock = tk.Label(topbar, text="", font=font("mono", 12),
+                               fg=HEV_AMBER_D, bg=HEV_BG)
+    app._alch_clock.pack(side="left", padx=12)
+
+    vitals_frame = tk.Frame(topbar, bg=HEV_BG)
+    vitals_frame.pack(side="right", padx=18)
+
+    app._alch_vitals = {}
+    for key, label in [
+        ("account",   "ACCOUNT"),
+        ("drawdown",  "DRAWDOWN"),
+        ("positions", "POSITIONS"),
+        ("exposure",  "EXPOSURE"),
+        ("mode",      "MODE"),
+        ("engine",    "ENGINE"),
+    ]:
+        cell = tk.Frame(vitals_frame, bg=HEV_BG)
+        cell.pack(side="left", padx=14)
+        tk.Label(cell, text=label, font=font("serif", 9),
+                 fg=HEV_AMBER_D, bg=HEV_BG).pack(anchor="e")
+        v = tk.Label(cell, text="—", font=font("mono_px", 22),
+                     fg=HEV_AMBER, bg=HEV_BG)
+        v.pack(anchor="e")
+        app._alch_vitals[key] = v
+
+    # Thin amber separator below topbar
+    tk.Frame(root, bg=HEV_AMBER_D, height=1).pack(fill="x")
+
+    # ── Cockpit body (grid of 9 panels) ──
+    body = tk.Frame(root, bg=HEV_BG)
+    body.pack(fill="both", expand=True, padx=4, pady=4)
+    body.grid_columnconfigure(0, weight=26, uniform="col")
+    body.grid_columnconfigure(1, weight=48, uniform="col")
+    body.grid_columnconfigure(2, weight=26, uniform="col")
+    body.grid_rowconfigure(0, weight=5, uniform="row")
+    body.grid_rowconfigure(1, weight=5, uniform="row")
+    body.grid_rowconfigure(2, weight=3, uniform="row")
+    body.grid_rowconfigure(3, minsize=70)
+    app._alch_body = body
+
+    # Vitals updater
+    def update_vitals(snap):
+        app._alch_clock.configure(
+            text=_dt.datetime.utcnow().strftime("%Y.%m.%d · %H:%M:%S UTC"))
+        app._alch_vitals["account"].configure(text=f"${snap.get('account',0):,.0f}")
+        dd = snap.get("drawdown_pct", 0) or 0
+        app._alch_vitals["drawdown"].configure(
+            text=f"{dd:+.2f}%",
+            fg=HEV_GREEN if dd > -1 else (HEV_HAZARD if dd > -3 else HEV_RED))
+        n = len(snap.get("positions", []) or [])
+        app._alch_vitals["positions"].configure(text=f"{n} / 5")
+        app._alch_vitals["exposure"].configure(text=f"${snap.get('exposure_usd',0) or 0:,.0f}")
+        mode = (snap.get("mode", "—") or "—").upper()
+        app._alch_vitals["mode"].configure(
+            text=mode,
+            fg=HEV_HAZARD if mode == "PAPER" else (HEV_RED if mode == "LIVE" else HEV_AMBER_B))
+        running = bool(snap.get("engine_pid", 0)) and not snap.get("_stale", True)
+        app._alch_vitals["engine"].configure(
+            text="▶ RUN" if running else "■ IDLE",
+            fg=HEV_GREEN if running else HEV_DIM)
+    app._alch_tick.register(update_vitals)
+
+    # Bottom hazard stripe
+    bot_haz = hazard_strip(root, height=10)
+    bot_haz.pack(side="bottom", fill="x")
+
+    # Create the 9 panel frames with make_panel
+    for pid, row, col, rowspan, title in [
+        (1, 0, 0, 2, "OPPORTVNITATES"),
+        (2, 0, 1, 1, "FVNDING · RATES"),
+        (3, 1, 1, 1, "BASIS · PERP / SPOT"),
+        (4, 0, 2, 1, "POSITIONES"),
+        (5, 1, 2, 1, "VENVE · HEALTH"),
+        (8, 2, 0, 1, "RISK · CONSOLE"),
+        (9, 2, 1, 1, "LOG · STREAM"),
+        (6, 2, 2, 1, "CONNECTIONES"),
+        (7, 3, 0, 1, "MACHINA · ENGINE CONTROL"),
+    ]:
+        colspan = 3 if pid == 7 else 1
+        body_frame = make_panel(body, pid, title,
+                                row=row, column=col,
+                                rowspan=rowspan, columnspan=colspan,
+                                sticky="nsew", padx=2, pady=2)
+        setattr(app, f"_alch_p{pid}", body_frame)
