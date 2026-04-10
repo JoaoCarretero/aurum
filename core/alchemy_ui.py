@@ -314,3 +314,151 @@ def render_cockpit(app):
                                 rowspan=rowspan, columnspan=colspan,
                                 sticky="nsew", padx=2, pady=2)
         setattr(app, f"_alch_p{pid}", body_frame)
+
+    _init_panel_opportunities(app)
+    _init_panel_positions(app)
+    _init_panel_venue_health(app)
+
+
+# ═══════════════════════════════════════════════════════════
+# TABLE HELPER + PANEL INITIALIZERS
+# ═══════════════════════════════════════════════════════════
+
+def _render_table(parent, header: list, widths: list):
+    """Build a header row and return (body_frame, update_fn).
+
+    update_fn(rows, colors=None) replaces body contents with rows.
+    - rows: list[list[str]]
+    - colors: optional list[list[str|None]] same shape as rows
+    """
+    # Header
+    hdr = tk.Frame(parent, bg=HEV_PANEL)
+    hdr.pack(fill="x", padx=4, pady=(2, 0))
+    for txt, w in zip(header, widths):
+        tk.Label(hdr, text=txt, width=w, anchor="w",
+                 font=font("mono", 11), fg=HEV_AMBER_D, bg=HEV_PANEL).pack(side="left")
+
+    body = tk.Frame(parent, bg=HEV_PANEL)
+    body.pack(fill="both", expand=True, padx=4)
+
+    def update(rows, colors=None):
+        for child in body.winfo_children():
+            child.destroy()
+        for i, row in enumerate(rows):
+            row_colors = colors[i] if colors and i < len(colors) else [None] * len(row)
+            row_frame = tk.Frame(body, bg=HEV_PANEL)
+            row_frame.pack(fill="x")
+            for txt, w, c in zip(row, widths, row_colors):
+                tk.Label(row_frame, text=str(txt), width=w, anchor="w",
+                         font=font("mono_px", 14),
+                         fg=c or HEV_AMBER, bg=HEV_PANEL).pack(side="left")
+    return body, update
+
+
+def _init_panel_opportunities(app):
+    frame = app._alch_p1
+    _, update_rows = _render_table(
+        frame,
+        header=["#", "SYM", "LONG", "SHORT", "SPRD", "APR", "Ω"],
+        widths=[3, 10, 6, 6, 8, 8, 5],
+    )
+    def update(snap):
+        opps = snap.get("opportunities", []) or []
+        opps = opps[:12]
+        rows, colors = [], []
+        for i, o in enumerate(opps, 1):
+            long_v = o.get("long", "") or ""
+            short_v = o.get("short", "") or ""
+            long_g = VENUE_GLYPH.get(long_v, "·") + long_v[:3].upper()
+            short_g = VENUE_GLYPH.get(short_v, "·") + short_v[:3].upper()
+            rows.append([
+                f"{i:02d}",
+                (o.get("sym", "—") or "—")[:9],
+                long_g,
+                short_g,
+                f"{(o.get('spread') or 0)*100:+.4f}",
+                f"{o.get('apr') or 0:.1f}%",
+                f"{o.get('omega') or 0:.1f}",
+            ])
+            omega_val = o.get('omega') or 0
+            c = HEV_AMBER if omega_val < 7 else HEV_HAZARD
+            colors.append([HEV_AMBER_D, HEV_HAZARD, HEV_AMBER, HEV_AMBER, HEV_GREEN, HEV_GREEN, c])
+        if not rows:
+            rows = [["—", "no opportunities", "", "", "", "", ""]]
+            colors = [[HEV_DIM] * 7]
+        update_rows(rows, colors)
+    app._alch_tick.register(update)
+
+
+def _init_panel_positions(app):
+    frame = app._alch_p4
+    _, update_rows = _render_table(
+        frame,
+        header=["SYM", "VENUES", "PNL", "ΔEDGE", "EXIT"],
+        widths=[8, 8, 10, 8, 8],
+    )
+    def update(snap):
+        poss = snap.get("positions", []) or []
+        rows, colors = [], []
+        for p in poss:
+            long_g = VENUE_GLYPH.get(p.get("long", "") or "", "·")
+            short_g = VENUE_GLYPH.get(p.get("short", "") or "", "·")
+            pnl = p.get("pnl", 0) or 0
+            exit_s = p.get("exit_in_s", 0) or 0
+            h, rem = divmod(int(exit_s), 3600)
+            m = rem // 60
+            rows.append([
+                (p.get("sym", "—") or "—")[:7],
+                f"{long_g}/{short_g}",
+                f"{pnl:+.2f}",
+                f"-{p.get('edge_decay_pct', 0) or 0:.0f}%",
+                f"{h}h{m:02d}m" if exit_s > 0 else "—",
+            ])
+            colors.append([
+                HEV_HAZARD,
+                HEV_AMBER,
+                HEV_GREEN if pnl >= 0 else HEV_RED,
+                HEV_AMBER,
+                HEV_HAZARD if exit_s < 7200 else HEV_AMBER,
+            ])
+        if not rows:
+            rows = [["—", "no positions", "", "", ""]]
+            colors = [[HEV_DIM] * 5]
+        update_rows(rows, colors)
+    app._alch_tick.register(update)
+
+
+def _init_panel_venue_health(app):
+    frame = app._alch_p5
+    _, update_rows = _render_table(
+        frame,
+        header=["VEN", "PING", "ERR", "RL", "KS"],
+        widths=[10, 7, 5, 7, 6],
+    )
+    def update(snap):
+        health = snap.get("venue_health", {}) or {}
+        rows, colors = [], []
+        venues = ["binance", "bybit", "okx", "hyperliquid", "gate"]
+        for v in venues:
+            h = health.get(v, {}) or {}
+            disabled = h.get("disabled", False)
+            ping = h.get("ping_ms")
+            err = h.get("err", 0) or 0
+            rl = h.get("rate_limit_pct")
+            status = "DOWN" if disabled else ("WARN" if (rl or 0) > 75 else "OK")
+            rows.append([
+                f"{VENUE_GLYPH.get(v, '·')} {v[:6].upper()}",
+                "—" if ping is None else f"{ping}ms",
+                str(err),
+                "—" if rl is None else f"{rl}%",
+                status,
+            ])
+            colors.append([
+                HEV_DIM if disabled else HEV_AMBER,
+                HEV_RED if disabled else HEV_AMBER,
+                HEV_RED if err > 0 else HEV_AMBER_D,
+                HEV_HAZARD if (rl or 0) > 75 else HEV_AMBER,
+                HEV_RED if status == "DOWN" else (HEV_HAZARD if status == "WARN" else HEV_GREEN),
+            ])
+        update_rows(rows, colors)
+    app._alch_tick.register(update)
