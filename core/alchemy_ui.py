@@ -199,3 +199,20 @@ class TickDriver:
         except Exception as e:
             print(f"[alchemy] tick error: {e}")
         self._after_id = self.root.after(self.interval_ms, self._tick)
+
+
+# ═══════════════════════════════════════════════════════════
+# COCKPIT RENDER (stub — replaced in Task 9)
+# ═══════════════════════════════════════════════════════════
+
+def render_cockpit(app):
+    """Paint the 9-panel HEV cockpit. Called by launcher _alchemy_enter.
+
+    STUB: replaced in Task 9 with the real grid. Used here to verify menu wiring.
+    """
+    root = app.main
+    root.configure(bg=HEV_BG)
+    tk.Label(root, text="λ ALCHEMY · HEV TERMINAL ONLINE",
+             font=font("mono_px", 40), fg=HEV_AMBER, bg=HEV_BG).pack(expand=True)
+    tk.Label(root, text="[ESC] to exit · panels coming next task",
+             font=font("mono", 14), fg=HEV_AMBER_D, bg=HEV_BG).pack()

@@ -35,6 +35,34 @@ RED     = "#e03030"
 FONT    = "Consolas"
 
 # ═══════════════════════════════════════════════════════════
+# VPS — remote control over SSH (passwordless key auth)
+# ═══════════════════════════════════════════════════════════
+VPS_HOST    = "root@37.60.254.151"
+VPS_PROJECT = "~/aurum.finance"
+
+# Windows: suppress the console window that pops up on every subprocess call,
+# otherwise polling every 5s makes a CMD window flash open/closed constantly.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+def _vps_cmd(cmd: str, timeout: int = 10) -> str | None:
+    """Run a command on the VPS over SSH, return stdout or None on failure.
+    Intended to be called from a worker thread — subprocess.run blocks."""
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no",
+             "-o", "ConnectTimeout=5",
+             "-o", "BatchMode=yes",
+             VPS_HOST, cmd],
+            capture_output=True, text=True, timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+        if r.returncode == 0:
+            return r.stdout
+        return None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+# ═══════════════════════════════════════════════════════════
 # TICKER (live prices)
 # ═══════════════════════════════════════════════════════════
 _TD = {}
@@ -61,6 +89,8 @@ def _ticker_str():
 # MENUS
 # ═══════════════════════════════════════════════════════════
 from core.connections import ConnectionManager, MARKETS
+from core.alchemy_state import AlchemyState
+from core import alchemy_ui
 _conn = ConnectionManager()
 
 MAIN_MENU = [
@@ -68,6 +98,7 @@ MAIN_MENU = [
     ("CONNECTIONS",    "connections", "Contas & exchanges"),
     ("TERMINAL",       "terminal",    "Data, charts, research"),
     ("STRATEGIES",     "strategies",  "Backtest & live engines"),
+    ("ALCHEMY",        "alchemy",     "Cross-venue arbitrage cockpit"),
     ("RISK",           "risk",        "Portfolio & risk console"),
     ("COMMAND CENTER", "command",     "Site, servers, admin panel"),
     ("SETTINGS",       "settings",    "Config, keys, Telegram"),
@@ -374,7 +405,11 @@ class App(tk.Tk):
         self._site_screen_alive = False
         for w in self.main.winfo_children(): w.destroy()
 
-    def _unbind(self):
+    def _clear_kb(self):
+        """Clear our custom global keybindings before a screen switch.
+        Renamed from `_unbind` because that name collides with tkinter's
+        internal Misc._unbind method — overriding it breaks unbind_all()
+        and other builtin binding APIs."""
         for k in ["<Return>","<space>","<Escape>","<BackSpace>",
                    *[f"<Key-{i}>" for i in range(10)],
                    *[f"<F{i}>" for i in range(1, 13)]]:
@@ -410,7 +445,7 @@ class App(tk.Tk):
 
     # ─── SPLASH (Layer 0) ───────────────────────────────
     def _splash(self):
-        self._clr(); self._unbind(); self.history.clear()
+        self._clr(); self._clear_kb(); self.history.clear()
         self.h_path.configure(text=""); self.h_stat.configure(text="PRONTO", fg=GREEN)
         self.f_lbl.configure(text="ENTER continuar  |  H hub  |  S strategies  |  Q quit")
 
@@ -522,13 +557,14 @@ class App(tk.Tk):
     # ─── MENU ────────────────────────────────────────────
     def _menu(self, key):
         # Route to specialized screens
-        if key in ("markets", "connections", "terminal", "risk", "settings"):
+        if key in ("markets", "connections", "terminal", "risk", "settings", "alchemy"):
             {
                 "markets": self._markets,
                 "connections": self._connections,
                 "terminal": self._terminal,
                 "risk": self._risk_menu,
                 "settings": self._config,
+                "alchemy": self._alchemy_enter,
             }[key]()
             return
         if key == "strategies":
@@ -536,7 +572,7 @@ class App(tk.Tk):
         if key == "command":
             self._command_center(); return
 
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
 
         if key == "main":
@@ -720,7 +756,7 @@ class App(tk.Tk):
     # ─── STRATEGY BRIEFING ──────────────────────────────
     def _brief(self, name, script, desc, parent_menu):
         """Show strategy philosophy and logic before running."""
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
         self.h_stat.configure(text="BRIEFING", fg=AMBER_D)
         self.f_lbl.configure(text="ENTER executar  |  ESC voltar")
@@ -803,7 +839,7 @@ class App(tk.Tk):
 
     # ─── BACKTEST CONFIG (clickable inputs) ──────────────
     def _config_backtest(self, name, script, desc, parent_menu):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name} > CONFIG")
         self.h_stat.configure(text="CONFIGURAR", fg=AMBER_D)
         self.f_lbl.configure(text="Clique nas opções  |  ENTER rodar com seleções")
@@ -944,7 +980,7 @@ class App(tk.Tk):
     # ─── LIVE CONFIG (clickable mode select) ───────────
     def _config_live(self, name, script, desc, parent_menu):
         """Config screen for live engines — select mode then run."""
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name} > CONFIG")
         self.h_stat.configure(text="CONFIGURAR", fg=AMBER_D)
         self.f_lbl.configure(text="Selecionar modo e RODAR  |  ESC voltar ao briefing")
@@ -1031,7 +1067,7 @@ class App(tk.Tk):
         """Parse latest backtest JSON and show a tabbed dashboard.
         Tab 1 = Overview (metrics / equity / MC / regime).
         Tab 2 = Trade Inspector (list + matplotlib chart + data panel)."""
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self._results_parent_menu = parent_menu
         self.h_stat.configure(text="RESULTADOS", fg=GREEN)
         self.f_lbl.configure(
@@ -1790,7 +1826,7 @@ class App(tk.Tk):
 
     # ─── EXECUTE ENGINE ──────────────────────────────────
     def _exec(self, name, script, desc, parent_menu, auto_inputs):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self._exec_parent = parent_menu  # save for results screen
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
         self.h_stat.configure(text="RODANDO", fg=GREEN)
@@ -1951,7 +1987,7 @@ class App(tk.Tk):
 
     # ─── MARKETS (Layer 2) ───────────────────────────────
     def _markets(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> MARKETS"); self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
         self.f_lbl.configure(text="ESC voltar  |  ENTER manter actual  |  H hub")
         self._kb("<Escape>", lambda: self._menu("main"))
@@ -2010,7 +2046,7 @@ class App(tk.Tk):
 
     # ─── CONNECTIONS (Layer 2) ────────────────────────────
     def _connections(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> CONNECTIONS"); self.h_stat.configure(text="MANAGE", fg=GREEN)
         self.f_lbl.configure(text="ESC voltar  |  número para selecionar  |  H hub")
         self._kb("<Escape>", lambda: self._menu("main"))
@@ -2108,9 +2144,92 @@ class App(tk.Tk):
             w.bind("<Enter>", lambda e, l=bl: l.configure(fg=AMBER))
             w.bind("<Leave>", lambda e, l=bl: l.configure(fg=DIM))
 
+    # ─── ALCHEMY (Layer 2) ────────────────────────────────
+    def _alchemy_enter(self):
+        """Enter fullscreen HEV Terminal cockpit for arbitrage."""
+        # Save previous window state
+        self._alch_prev_geometry = self.geometry()
+        try:
+            self._alch_prev_minsize = self.minsize()
+        except Exception:
+            self._alch_prev_minsize = (860, 560)
+
+        self.minsize(1, 1)
+        try:
+            self.attributes("-fullscreen", True)
+        except Exception:
+            try: self.state("zoomed")  # Windows fallback
+            except Exception: pass
+        self.configure(bg=alchemy_ui.HEV_BG)
+
+        self._clr()
+        self._clear_kb()
+        self.history.append("main")
+
+        # Initialize state reader + tick driver
+        self._alch_state = AlchemyState(stale_seconds=10)
+        self._alch_tick = alchemy_ui.TickDriver(self, interval_ms=2000)
+        self._alch_log_buf = []
+        self._alch_engine_mode = None
+
+        # Load fonts
+        alchemy_ui.load_fonts(self)
+
+        # Paint cockpit (stub for now; real panels in T9-T13)
+        alchemy_ui.render_cockpit(self)
+
+        self.bind("<Escape>", self._alchemy_exit)
+        try:
+            self.h_path.configure(text="ALCHEMY")
+            self.h_stat.configure(text="HEV ONLINE", fg=alchemy_ui.HEV_AMBER_B)
+        except Exception:
+            pass
+
+        # Start the tick
+        self._alch_tick.start(lambda: self._alch_state.read())
+
+    def _alchemy_exit(self, event=None):
+        """Exit the cockpit. Confirm if engine is running."""
+        if self.proc and self.proc.poll() is None:
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                "ALCHEMY",
+                "Engine is still running. Stop it before exiting?",
+                parent=self):
+                return
+            self._stop()
+
+        try:
+            self._alch_tick.stop()
+        except Exception:
+            pass
+        try:
+            self.unbind("<Escape>")
+        except Exception:
+            pass
+
+        try:
+            self.attributes("-fullscreen", False)
+        except Exception:
+            pass
+        try:
+            self.state("normal")
+        except Exception:
+            pass
+        try:
+            self.geometry(self._alch_prev_geometry)
+        except Exception:
+            pass
+        try:
+            self.minsize(*self._alch_prev_minsize)
+        except Exception:
+            self.minsize(860, 560)
+        self.configure(bg=BG)
+        self._menu("main")
+
     # ─── TERMINAL (Layer 2) ───────────────────────────────
     def _terminal(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> TERMINAL"); self.h_stat.configure(text="DATA", fg=AMBER_D)
         self.f_lbl.configure(text="ESC voltar  |  H hub  |  S strategies")
         self._kb("<Escape>", lambda: self._menu("main"))
@@ -2179,7 +2298,7 @@ class App(tk.Tk):
 
     # ─── STRATEGIES (Layer 2) ─────────────────────────────
     def _strategies(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
         self.h_path.configure(text=f"> STRATEGIES"); self.h_stat.configure(text=market_label, fg=AMBER_D)
         self.f_lbl.configure(text="ESC voltar  |  H hub  |  M markets  |  Q quit")
@@ -2205,8 +2324,21 @@ class App(tk.Tk):
             tk.Frame(f, bg=DIM2, height=1).pack(fill="x", padx=60, pady=(0, 3))
 
             for name, script, desc in items:
+                # Label: 1-9, then a-z for items 10+. Mirror that in the keybind.
+                if num <= 9:
+                    key_label = str(num)
+                    key_bind  = f"<Key-{num}>"
+                else:
+                    letter_idx = num - 10
+                    if letter_idx < 26:
+                        key_label = chr(ord("a") + letter_idx)
+                        key_bind  = f"<Key-{key_label}>"
+                    else:
+                        key_label = " "  # out of keys — mouse only
+                        key_bind  = None
+
                 row = tk.Frame(f, bg=BG, cursor="hand2"); row.pack(fill="x", padx=60, pady=1)
-                tk.Label(row, text=f" {num} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER, width=3).pack(side="left")
+                tk.Label(row, text=f" {key_label} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER, width=3).pack(side="left")
                 nl = tk.Label(row, text=f"  {name}", font=(FONT, 10, "bold"), fg=WHITE, bg=BG3,
                               anchor="w", padx=6, pady=4, width=14)
                 nl.pack(side="left")
@@ -2219,8 +2351,8 @@ class App(tk.Tk):
                     w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
                     w.bind("<Button-1>", lambda e, c=cmd: c())
 
-                if num <= 9:
-                    self._kb(f"<Key-{num}>", cmd)
+                if key_bind:
+                    self._kb(key_bind, cmd)
                 num += 1
 
         # Back row
@@ -2234,7 +2366,7 @@ class App(tk.Tk):
 
     # ─── RISK (Layer 2) ──────────────────────────────────
     def _risk_menu(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> RISK"); self.h_stat.configure(text="CONSOLE", fg=AMBER_D)
         self.f_lbl.configure(text="ESC voltar  |  H hub")
         self._kb("<Escape>", lambda: self._menu("main"))
@@ -2287,7 +2419,7 @@ class App(tk.Tk):
         elif key == "config": self._config()
 
     def _data(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> DATA"); self.h_stat.configure(text="BROWSE", fg=AMBER_D)
         self.f_lbl.configure(text="ESC back  |  click to open file")
         self._kb("<Escape>", lambda: self._menu("main"))
@@ -2295,11 +2427,19 @@ class App(tk.Tk):
         f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True, padx=16, pady=12)
         tk.Label(f, text="DATA & REPORTS", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0,8))
 
-        reports = []
+        # Build (path, stat) tuples in one pass — stat once per file, skip
+        # files that vanish between rglob and stat (race with concurrent
+        # backtest runs writing to data/).
+        reports: list[tuple[Path, object]] = []
         dd = ROOT / "data"
         if dd.exists():
-            for r in sorted(dd.rglob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-                if "reports" in str(r) or "darwin" in str(r): reports.append(r)
+            for r in dd.rglob("*.json"):
+                try:
+                    if "reports" in str(r) or "darwin" in str(r):
+                        reports.append((r, r.stat()))
+                except (OSError, FileNotFoundError):
+                    continue
+            reports.sort(key=lambda rs: rs[1].st_mtime, reverse=True)
 
         canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
         sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
@@ -2314,9 +2454,13 @@ class App(tk.Tk):
 
         if not reports:
             tk.Label(sf, text="  No reports found.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w", pady=8)
-        for r in reports[:50]:
-            rel = str(r.relative_to(ROOT)); mt = datetime.fromtimestamp(r.stat().st_mtime).strftime("%m-%d %H:%M")
-            sz = f"{r.stat().st_size/1024:.0f}K"
+        for r, st in reports[:50]:
+            try:
+                rel = str(r.relative_to(ROOT))
+            except ValueError:
+                rel = str(r)
+            mt = datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
+            sz = f"{st.st_size/1024:.0f}K"
             lbl = tk.Label(sf, text=f"  {rel:<55} {mt:<18} {sz:>8}", font=(FONT, 7), fg=DIM, bg=BG, anchor="w", cursor="hand2")
             lbl.pack(fill="x")
             lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=BG3, fg=WHITE))
@@ -2324,7 +2468,7 @@ class App(tk.Tk):
             lbl.bind("<Button-1>", lambda e, p=r: self._open_file(p))
 
     def _procs(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> PROCS"); self.h_stat.configure(text="MANAGE", fg=GREEN)
         self.f_lbl.configure(text="ESC back  |  R refresh")
         self._kb("<Escape>", lambda: self._menu("main"))
@@ -2335,18 +2479,32 @@ class App(tk.Tk):
         try:
             from core.proc import list_procs, stop_proc
             ps = [p for p in list_procs() if p.get("alive")]
-        except: ps = []
+        except Exception:
+            ps = []
+            stop_proc = None  # type: ignore
         if not ps:
             tk.Label(f, text="No engines running.", font=(FONT, 9), fg=DIM, bg=BG).pack(pady=8)
+
+        def _safe_stop(pid):
+            """stop_proc can raise on dead PIDs or permission errors — catch
+            everything and re-render so the list stays in sync."""
+            if pid is None or stop_proc is None:
+                return
+            try:
+                stop_proc(int(pid))
+            except Exception as e:
+                self.h_stat.configure(text=f"STOP FAILED: {str(e)[:30]}", fg=RED)
+            self.after(200, self._procs)
+
         for p in ps:
             row = tk.Frame(f, bg=BG3); row.pack(fill="x", padx=60, pady=2)
             tk.Label(row, text=f" {p.get('engine','?').upper()} ", font=(FONT, 8, "bold"), fg=BG, bg=GREEN).pack(side="left")
             tk.Label(row, text=f"  PID {p.get('pid','?')}", font=(FONT, 9), fg=WHITE, bg=BG3, padx=6, pady=3).pack(side="left")
             tk.Button(row, text="STOP", font=(FONT, 7, "bold"), fg=RED, bg=BG3, border=0, cursor="hand2",
-                      command=lambda pid=p.get("pid"): (stop_proc(pid), self._procs())).pack(side="right", padx=4, pady=2)
+                      command=lambda pid=p.get("pid"): _safe_stop(pid)).pack(side="right", padx=4, pady=2)
 
     def _config(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> SETTINGS"); self.h_stat.configure(text="CONFIG", fg=AMBER_D)
         self.f_lbl.configure(text="ESC voltar  |  H hub")
         self._kb("<Escape>", lambda: self._menu("main"))
@@ -2392,12 +2550,12 @@ class App(tk.Tk):
         bl = tk.Label(brow, text="  VOLTAR", font=(FONT, 10), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
         bl.pack(side="left", fill="x", expand=True)
         for w in [brow, bl]: w.bind("<Button-1>", lambda e: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
+        # <Key-0> is already bound at the top of _config; no rebind here.
 
     # ─── CONFIG EDITORS ──────────────────────────────────
     def _cfg_edit(self, title, fields, load_fn, save_fn, back_fn=None):
         back = back_fn or self._config
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text=f"> CONFIG > {title}")
         self.f_lbl.configure(text="ESC back  |  CTRL+S save")
         self._kb("<Escape>", back)
@@ -2427,6 +2585,12 @@ class App(tk.Tk):
             save_fn(vals)
             self.h_stat.configure(text="SAVED", fg=GREEN)
             self.after(1500, lambda: self.h_stat.configure(text="", fg=DIM))
+            # Clear Entry widgets so masked values (API keys, tokens) don't
+            # linger in the form. User can re-navigate to this screen to see
+            # what was stored (load_fn() will re-read from disk).
+            for entry_w in entries.values():
+                try: entry_w.delete(0, "end")
+                except tk.TclError: pass
 
         sv = tk.Label(br, text="  SAVE  ", font=(FONT, 10, "bold"), fg=BG, bg=GREEN, cursor="hand2", padx=12, pady=3)
         sv.pack(side="left", padx=4); sv.bind("<Button-1>", lambda e: save())
@@ -2495,7 +2659,7 @@ class App(tk.Tk):
         """Bloomberg-style dashboard for the crypto futures market.
         Runs all HTTP fetches in a worker thread, refreshes every 30s,
         and is cleaned up automatically by _clr() on any screen change."""
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text="> MARKETS > CRYPTO FUTURES")
         self.h_stat.configure(text="CONECTANDO...", fg=AMBER_D)
         self.f_lbl.configure(text="ESC voltar  |  H hub  |  R refresh")
@@ -2523,22 +2687,30 @@ class App(tk.Tk):
         self._dash_alive   = True
         self._dash_after_id = None
         # Tab state
-        self._dash_tab = "market"
+        self._dash_tab = "home"
         self._dash_tab_btns: dict = {}
         self._dash_inner = None
         self._dash_portfolio_account = "paper"  # safe default — always loads
         self._dash_trades_filter = {"result": "all", "symbol": "all"}
         self._dash_trades_page = 0
+        # HOME tab aggregated snapshot (populated by _dash_home_fetch_async)
+        self._dash_home_snap: dict = {}
+        # COCKPIT tab state (VPS remote control)
+        self._dash_cockpit_snap: dict = {}
+        self._dash_cockpit_stream = None      # subprocess.Popen handle while streaming
+        self._dash_cockpit_streaming = False  # bool
 
         # Navigation
         self._kb("<Escape>", self._dash_exit_to_markets)
         self._bind_global_nav()
         self._kb("<Key-r>", self._dash_force_refresh)  # override global R
-        # Keys 1-4 switch tabs
-        self._kb("<Key-1>", lambda: self._dash_render_tab("market"))
-        self._kb("<Key-2>", lambda: self._dash_render_tab("portfolio"))
-        self._kb("<Key-3>", lambda: self._dash_render_tab("trades"))
-        self._kb("<Key-4>", lambda: self._dash_render_tab("engines"))
+        # Keys 1-6 switch tabs
+        self._kb("<Key-1>", lambda: self._dash_render_tab("home"))
+        self._kb("<Key-2>", lambda: self._dash_render_tab("market"))
+        self._kb("<Key-3>", lambda: self._dash_render_tab("portfolio"))
+        self._kb("<Key-4>", lambda: self._dash_render_tab("trades"))
+        self._kb("<Key-5>", lambda: self._dash_render_tab("backtest"))
+        self._kb("<Key-6>", lambda: self._dash_render_tab("cockpit"))
 
         # Layout: sidebar + separator + main column (tab strip + body inner)
         root = tk.Frame(self.main, bg=BG); root.pack(fill="both", expand=True)
@@ -2558,41 +2730,51 @@ class App(tk.Tk):
         except Exception: pass
 
         # First tab render kicks off its own fetch loop
-        self._dash_render_tab("market")
+        self._dash_render_tab("home")
 
     # ── DASHBOARD: SIDEBAR ────────────────────────────────
     def _dash_build_sidebar(self, parent):
-        # === CONEXÕES ===
-        tk.Label(parent, text="CONEXÕES", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(10, 2))
-        tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
+        """CS 1.6 style sidebar — connection status only, no balance placeholders.
+        Two sections: DATA FEEDS (exchanges) and ACCOUNTS (paper/testnet/demo/live)."""
+
+        def section(title):
+            tk.Frame(parent, bg=PANEL, height=8).pack(fill="x")
+            tk.Label(parent, text=f"[ {title} ]",
+                     font=(FONT, 7, "bold"), fg=AMBER, bg=PANEL,
+                     anchor="w").pack(fill="x", padx=10)
+            tk.Frame(parent, bg=AMBER_D, height=1).pack(fill="x", padx=10, pady=(1, 3))
+
+        # === DATA FEEDS ===
+        section("DATA FEEDS")
 
         exchanges = MARKETS.get("crypto_futures", {}).get("exchanges", [])
         for ex_key in exchanges:
             info = _conn.get(ex_key) or {}
-            label = info.get("label", ex_key).upper()
+            label = info.get("label", ex_key).upper().replace("BINANCE ", "BINANCE\n")
             is_conn = info.get("connected", False)
 
             row = tk.Frame(parent, bg=PANEL, cursor="hand2")
-            row.pack(fill="x", padx=10, pady=(4, 0))
+            row.pack(fill="x", padx=10, pady=1)
 
-            name_l = tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                              fg=WHITE if is_conn else DIM, bg=PANEL, anchor="w")
-            name_l.pack(fill="x")
+            status_l = tk.Label(row, text="●" if is_conn else "○",
+                                font=(FONT, 9, "bold"),
+                                fg=GREEN if is_conn else DIM2, bg=PANEL, width=2)
+            status_l.pack(side="left")
+            name_l = tk.Label(row, text=info.get("label", ex_key).upper(),
+                              font=(FONT, 7, "bold"),
+                              fg=WHITE if is_conn else DIM, bg=PANEL,
+                              anchor="w")
+            name_l.pack(side="left", fill="x", expand=True)
+            lat_l = tk.Label(row, text="—",
+                             font=(FONT, 7), fg=DIM2, bg=PANEL,
+                             anchor="e", width=6)
+            lat_l.pack(side="right")
 
-            icon_text = "● LIVE" if is_conn else "○ N/C"
-            status_l = tk.Label(row, text=icon_text, font=(FONT, 7),
-                                fg=GREEN if is_conn else DIM, bg=PANEL, anchor="w")
-            status_l.pack(fill="x")
+            self._dash_widgets[("ex_status",  ex_key)] = status_l
+            self._dash_widgets[("ex_name",    ex_key)] = name_l
+            self._dash_widgets[("ex_latency", ex_key)] = lat_l
 
             if ex_key == "binance_futures":
-                lat_l = tk.Label(row, text="— ms", font=(FONT, 7),
-                                 fg=DIM, bg=PANEL, anchor="w")
-                lat_l.pack(fill="x")
-                self._dash_widgets[("ex_status", ex_key)]  = status_l
-                self._dash_widgets[("ex_latency", ex_key)] = lat_l
-                self._dash_widgets[("ex_name", ex_key)]    = name_l
-
                 def _goto_conn(_e=None):
                     self._dash_alive = False
                     self._connections()
@@ -2602,38 +2784,106 @@ class App(tk.Tk):
                     w.bind("<Leave>", lambda e, n=name_l, c=is_conn:
                            n.configure(fg=WHITE if c else DIM))
 
-        # === BALANCE ===
-        tk.Label(parent, text="BALANCE", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(12, 2))
-        tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
+        # === ACCOUNTS ===
+        section("ACCOUNTS")
 
-        bal_l = tk.Label(parent, text="$0.00", font=(FONT, 12, "bold"),
-                         fg=AMBER, bg=PANEL, anchor="w")
-        bal_l.pack(fill="x", padx=10, pady=(4, 0))
-        bal_h = tk.Label(parent, text="(sem API key)", font=(FONT, 7),
-                         fg=DIM, bg=PANEL, anchor="w")
-        bal_h.pack(fill="x", padx=10)
-        self._dash_widgets[("balance",)]      = bal_l
-        self._dash_widgets[("balance_hint",)] = bal_h
+        pm = self._get_portfolio_monitor()
+        acc_colors = {"paper": AMBER_D, "testnet": GREEN,
+                      "demo": AMBER, "live": RED}
+        for acc in ("paper", "testnet", "demo", "live"):
+            status = pm.status(acc)
+            has_keys = status != "no_keys"
+            icon = "●" if (has_keys or acc == "paper") else "○"
+            icon_col = acc_colors[acc] if (has_keys or acc == "paper") else DIM2
 
-        # === WALLETS ===
-        tk.Label(parent, text="WALLETS", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(12, 2))
-        tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
+            row = tk.Frame(parent, bg=PANEL, cursor="hand2")
+            row.pack(fill="x", padx=10, pady=1)
 
-        fut_l = tk.Label(parent, text="Futures: $0.00", font=(FONT, 8),
-                         fg=DIM, bg=PANEL, anchor="w")
-        fut_l.pack(fill="x", padx=10, pady=(4, 0))
-        spot_l = tk.Label(parent, text="Spot:    $0.00", font=(FONT, 8),
-                          fg=DIM, bg=PANEL, anchor="w")
-        spot_l.pack(fill="x", padx=10)
-        self._dash_widgets[("wallet_futures",)] = fut_l
-        self._dash_widgets[("wallet_spot",)]    = spot_l
+            status_l = tk.Label(row, text=icon, font=(FONT, 9, "bold"),
+                                fg=icon_col, bg=PANEL, width=2)
+            status_l.pack(side="left")
+            name_l = tk.Label(row, text=acc.upper(), font=(FONT, 7, "bold"),
+                              fg=WHITE if (has_keys or acc == "paper") else DIM,
+                              bg=PANEL, anchor="w")
+            name_l.pack(side="left", fill="x", expand=True)
+            hint = "active" if acc == "paper" else ("keys" if has_keys else "—")
+            hint_l = tk.Label(row, text=hint, font=(FONT, 7),
+                              fg=DIM2, bg=PANEL, anchor="e", width=6)
+            hint_l.pack(side="right")
+            self._dash_widgets[("acc_status", acc)] = status_l
+            self._dash_widgets[("acc_name",   acc)] = name_l
+            self._dash_widgets[("acc_hint",   acc)] = hint_l
 
-        # Helper / hint at the bottom
+            def _pick(_e=None, a=acc):
+                self._dash_portfolio_account = a
+                self._dash_render_tab("portfolio")
+            for w in (row, status_l, name_l, hint_l):
+                w.bind("<Button-1>", _pick)
+                w.bind("<Enter>", lambda e, n=name_l: n.configure(fg=AMBER))
+                w.bind("<Leave>", lambda e, n=name_l, h=(has_keys or acc == "paper"):
+                       n.configure(fg=WHITE if h else DIM))
+
+        # === MARKET footer ===
         tk.Frame(parent, bg=PANEL).pack(fill="both", expand=True)
-        tk.Label(parent, text="R refresh   ESC voltar", font=(FONT, 7),
-                 fg=DIM2, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(0, 8))
+        tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
+        st = _conn.status_summary()
+        tk.Label(parent, text=f"market: {st['market']}",
+                 font=(FONT, 7), fg=AMBER_D, bg=PANEL,
+                 anchor="w").pack(fill="x", padx=10, pady=(4, 0))
+        tk.Label(parent, text="R refresh   ESC back",
+                 font=(FONT, 7), fg=DIM2, bg=PANEL,
+                 anchor="w").pack(fill="x", padx=10, pady=(0, 8))
+
+        # Start a background sidebar pinger that updates latencies every 15s
+        self._dash_sidebar_ping_start()
+
+    def _dash_sidebar_ping_start(self):
+        """Background thread that pings binance_futures every 15s and updates
+        the sidebar widgets on the main thread. Stops when dashboard dies."""
+        def _alive_widget(key):
+            """Return widget only if it's still packed and usable."""
+            w = self._dash_widgets.get(key) if self._dash_widgets is not None else None
+            if w is None:
+                return None
+            try:
+                if w.winfo_exists():
+                    return w
+            except Exception:
+                pass
+            return None
+
+        def loop():
+            while getattr(self, "_dash_alive", False):
+                try:
+                    lat = _conn.ping("binance_futures")
+                except Exception:
+                    lat = None
+                def apply(lat=lat):
+                    if not getattr(self, "_dash_alive", False):
+                        return
+                    status_l = _alive_widget(("ex_status", "binance_futures"))
+                    lat_l    = _alive_widget(("ex_latency", "binance_futures"))
+                    name_l   = _alive_widget(("ex_name", "binance_futures"))
+                    try:
+                        if lat is not None:
+                            if status_l: status_l.configure(text="●", fg=GREEN)
+                            if lat_l:    lat_l.configure(text=f"{int(lat)}ms", fg=DIM)
+                            if name_l:   name_l.configure(fg=WHITE)
+                        else:
+                            if status_l: status_l.configure(text="○", fg=RED)
+                            if lat_l:    lat_l.configure(text="—", fg=DIM2)
+                    except tk.TclError:
+                        # Widget was destroyed between winfo_exists and configure
+                        pass
+                try: self.after(0, apply)
+                except Exception: pass
+                # Sleep 15s in small chunks so we exit quickly when _dash_alive flips
+                for _ in range(30):
+                    if not getattr(self, "_dash_alive", False):
+                        return
+                    time.sleep(0.5)
+
+        threading.Thread(target=loop, daemon=True).start()
 
     # ── DASHBOARD: MAIN COLUMN ────────────────────────────
     def _dash_section_header(self, parent, text):
@@ -2798,23 +3048,14 @@ class App(tk.Tk):
         bf_name   = self._dash_widgets.get(("ex_name", "binance_futures"))
         if bf_status and bf_lat:
             if self._dash_latency is not None:
-                bf_status.configure(text="● LIVE", fg=GREEN)
+                bf_status.configure(text="●", fg=GREEN)
                 bf_lat.configure(text=f"{int(self._dash_latency)}ms", fg=DIM)
                 if bf_name: bf_name.configure(fg=WHITE)
             else:
-                bf_status.configure(text="○ N/C", fg=DIM)
-                bf_lat.configure(text="— ms", fg=DIM)
+                bf_status.configure(text="○", fg=RED)
+                bf_lat.configure(text="—", fg=DIM2)
 
-        # ── sidebar: balance ──
-        bal_l = self._dash_widgets.get(("balance",))
-        bal_h = self._dash_widgets.get(("balance_hint",))
-        if bal_l and bal_h:
-            if self._dash_balance is not None:
-                bal_l.configure(text=f"${self._dash_balance:,.2f}", fg=GREEN)
-                bal_h.configure(text="(live balance)", fg=DIM)
-            else:
-                bal_l.configure(text="$0.00", fg=AMBER)
-                bal_h.configure(text="(sem API key)", fg=DIM)
+        # Balance/wallets widgets were removed from the sidebar — nothing to update.
 
         # ── market overview rows ──
         for sym in self._dash_symbols:
@@ -2921,17 +3162,18 @@ class App(tk.Tk):
         if not getattr(self, "_dash_alive", False):
             return
         self._dash_after_id = None
-        tab = getattr(self, "_dash_tab", "market")
-        if tab == "market":
+        tab = getattr(self, "_dash_tab", "home")
+        if tab == "home":
+            self._dash_home_fetch_async()
+        elif tab == "market":
             self._dash_fetch_async()
         elif tab == "portfolio":
             self._dash_portfolio_fetch_async()
         elif tab == "trades":
             self._dash_trades_render()
             self._dash_after_id = self.after(30000, self._dash_tick_refresh)
-        elif tab == "engines":
-            self._dash_engines_render()
-            self._dash_after_id = self.after(5000, self._dash_tick_refresh)
+        elif tab == "cockpit":
+            self._dash_cockpit_fetch_async()
 
     def _dash_force_refresh(self):
         if not getattr(self, "_dash_alive", False):
@@ -2942,15 +3184,19 @@ class App(tk.Tk):
             try: self.after_cancel(aid)
             except Exception: pass
         self._dash_after_id = None
-        tab = getattr(self, "_dash_tab", "market")
-        if tab == "market":
+        tab = getattr(self, "_dash_tab", "home")
+        if tab == "home":
+            self._dash_home_fetch_async()
+        elif tab == "market":
             self._dash_fetch_async()
         elif tab == "portfolio":
             self._dash_portfolio_fetch_async()
         elif tab == "trades":
             self._dash_trades_render()
-        elif tab == "engines":
-            self._dash_engines_render()
+        elif tab == "backtest":
+            self._dash_backtest_render()
+        elif tab == "cockpit":
+            self._dash_cockpit_fetch_async()
 
     # ── DASHBOARD: TABS (MARKET / PORTFOLIO / TRADES / ENGINES) ──
     def _get_portfolio_monitor(self):
@@ -2967,10 +3213,12 @@ class App(tk.Tk):
         strip.pack_propagate(False)
 
         tabs = [
-            ("market",    "MARKET",    "1"),
-            ("portfolio", "PORTFOLIO", "2"),
-            ("trades",    "TRADES",    "3"),
-            ("engines",   "ENGINES",   "4"),
+            ("home",      "HOME",      "1"),
+            ("market",    "MARKET",    "2"),
+            ("portfolio", "PORTFOLIO", "3"),
+            ("trades",    "TRADES",    "4"),
+            ("backtest",  "BACKTEST",  "5"),
+            ("cockpit",   "COCKPIT",   "6"),
         ]
         self._dash_tab_btns = {}
         for tab_id, label, key in tabs:
@@ -3018,7 +3266,16 @@ class App(tk.Tk):
             try: w.destroy()
             except Exception: pass
 
-        if tab == "market":
+        # Kill any in-flight log stream if user leaves cockpit
+        if tab != "cockpit":
+            self._dash_cockpit_kill_stream()
+        # Note: backtest mousewheel is scoped via Enter/Leave on its canvas,
+        # so no global unbind is needed on tab switch.
+
+        if tab == "home":
+            self._dash_build_home_tab(self._dash_inner)
+            self._dash_home_fetch_async()
+        elif tab == "market":
             self._dash_build_market_tab(self._dash_inner)
             # Kick off background fetch — apply() schedules the next refresh.
             self._dash_fetch_async()
@@ -3028,9 +3285,12 @@ class App(tk.Tk):
         elif tab == "trades":
             self._dash_build_trades_tab(self._dash_inner)
             self._dash_after_id = self.after(30000, self._dash_tick_refresh)
-        elif tab == "engines":
-            self._dash_build_engines_tab(self._dash_inner)
-            self._dash_after_id = self.after(5000, self._dash_tick_refresh)
+        elif tab == "backtest":
+            self._dash_build_backtest_tab(self._dash_inner)
+            # On-demand refresh only — no periodic loop.
+        elif tab == "cockpit":
+            self._dash_build_cockpit_tab(self._dash_inner)
+            self._dash_cockpit_fetch_async()
 
     # ── PORTFOLIO TAB ─────────────────────────────────────
     def _dash_build_portfolio_tab(self, parent):
@@ -3090,9 +3350,16 @@ class App(tk.Tk):
         details.pack(side="left", fill="both", expand=True, padx=12, pady=10)
         self._dash_widgets[("portfolio_details",)] = details
 
-        # Initial placeholder until first fetch arrives
-        tk.Label(details, text="Loading account…",
-                 font=(FONT, 9), fg=DIM, bg=BG).pack(pady=20)
+        # Cached-first: if we have a snapshot for the active account, render it
+        # immediately instead of showing a "Loading..." placeholder. The async
+        # refresh will replace it as soon as fresh data arrives.
+        mode = getattr(self, "_dash_portfolio_account", "paper")
+        if pm.get_cached(mode) is not None:
+            # Defer render so the details frame is fully packed first
+            self.after(0, self._dash_portfolio_render)
+        else:
+            tk.Label(details, text="Loading account…",
+                     font=(FONT, 9), fg=DIM, bg=BG).pack(pady=20)
 
     def _dash_portfolio_repaint_account_btns(self):
         btns = self._dash_widgets.get(("portfolio_account_btns",)) or {}
@@ -3186,8 +3453,28 @@ class App(tk.Tk):
         head = tk.Frame(details, bg=PANEL,
                         highlightbackground=BORDER, highlightthickness=1)
         head.pack(fill="x", pady=(0, 8))
-        tk.Label(head, text=f" {mode.upper()} · Binance Futures ",
+        head_title = " PAPER · simulated " if mode == "paper" else f" {mode.upper()} · Binance Futures "
+        tk.Label(head, text=head_title,
                  font=(FONT, 8, "bold"), fg=BG, bg=AMBER).pack(side="left", padx=8, pady=4)
+
+        # Paper-only: EDIT button opens editable-state dialog
+        if mode == "paper":
+            edit_btn = tk.Label(head, text=" EDIT ",
+                                font=(FONT, 7, "bold"),
+                                fg=BG, bg=AMBER_D, cursor="hand2",
+                                padx=6, pady=2)
+            edit_btn.pack(side="right", padx=(0, 8), pady=4)
+            edit_btn.bind("<Button-1>", lambda e: self._dash_paper_edit_dialog())
+            edit_btn.bind("<Enter>", lambda e, b=edit_btn: b.configure(bg=AMBER))
+            edit_btn.bind("<Leave>", lambda e, b=edit_btn: b.configure(bg=AMBER_D))
+            # Show last-modified timestamp
+            lm = data.get("last_modified", "")
+            if lm:
+                try: lm = lm.split("T")[0] + "  " + lm.split("T")[1][:8]
+                except Exception: pass
+                tk.Label(head, text=f"modified: {lm}",
+                         font=(FONT, 7), fg=DIM2, bg=PANEL,
+                         anchor="e").pack(side="right", padx=(0, 8))
 
         balance = float(data.get("balance", 0) or 0)
         equity  = float(data.get("equity", 0) or 0)
@@ -3339,6 +3626,89 @@ class App(tk.Tk):
                 tk.Label(cell, text=val, font=(FONT, 9, "bold"),
                          fg=WHITE, bg=PANEL, anchor="w").pack(anchor="w")
 
+        # === RUNNING ENGINES (controls) ===
+        try:
+            from core.proc import list_procs, stop_proc
+            procs = list_procs()
+        except Exception:
+            procs = []
+
+        eb = tk.Frame(details, bg=PANEL,
+                      highlightbackground=BORDER, highlightthickness=1)
+        eb.pack(fill="x", pady=(0, 8))
+
+        eb_head = tk.Frame(eb, bg=PANEL); eb_head.pack(fill="x", padx=8, pady=(6, 2))
+        tk.Label(eb_head, text=f" RUNNING ENGINES ({sum(1 for p in procs if p.get('alive'))}) ",
+                 font=(FONT, 8, "bold"), fg=AMBER, bg=PANEL,
+                 anchor="w").pack(side="left")
+        start_btn = tk.Label(eb_head, text=" + START NEW ",
+                             font=(FONT, 7, "bold"),
+                             fg=BG, bg=AMBER, cursor="hand2",
+                             padx=6, pady=2)
+        start_btn.pack(side="right")
+        def _goto_strategies(_e=None):
+            self._dash_alive = False
+            self._menu("strategies")
+        for w in (start_btn,):
+            w.bind("<Button-1>", _goto_strategies)
+            w.bind("<Enter>", lambda e, b=start_btn: b.configure(bg=AMBER_B))
+            w.bind("<Leave>", lambda e, b=start_btn: b.configure(bg=AMBER))
+        tk.Frame(eb, bg=DIM2, height=1).pack(fill="x", padx=8)
+
+        engines_known = [
+            "backtest", "live", "arb", "newton", "mercurio",
+            "thoth", "prometeu", "darwin", "chronos", "multi",
+        ]
+        seen: dict[str, dict] = {}
+        for p in procs:
+            seen[p.get("engine", "?")] = p
+
+        any_running = False
+        for eng in engines_known:
+            info = seen.get(eng)
+            is_alive = bool(info and info.get("alive"))
+            if not is_alive:
+                continue  # skip stopped engines — keep UI clean
+            any_running = True
+
+            row = tk.Frame(eb, bg=PANEL); row.pack(fill="x", padx=8, pady=2)
+            tk.Label(row, text="●", font=(FONT, 9, "bold"),
+                     fg=GREEN, bg=PANEL, width=2).pack(side="left")
+            tk.Label(row, text=eng.upper(), font=(FONT, 9, "bold"),
+                     fg=AMBER, bg=PANEL, width=12,
+                     anchor="w").pack(side="left")
+            pid = info.get("pid", 0)
+            started = str(info.get("started", ""))[:19].replace("T", " ")
+            tk.Label(row, text=f"PID {pid}", font=(FONT, 7),
+                     fg=DIM, bg=PANEL, width=10,
+                     anchor="w").pack(side="left")
+            tk.Label(row, text=started, font=(FONT, 7),
+                     fg=DIM2, bg=PANEL, anchor="w").pack(side="left", padx=(4, 0))
+
+            stop_l = tk.Label(row, text=" STOP ",
+                              font=(FONT, 7, "bold"),
+                              fg=BG, bg=RED, cursor="hand2", padx=6)
+            stop_l.pack(side="right")
+
+            def _stop(_e=None, p=pid, eng_name=eng):
+                try:
+                    ok = stop_proc(int(p))
+                except Exception:
+                    ok = False
+                self.h_stat.configure(
+                    text=f"{'STOPPED' if ok else 'STOP FAILED'} {eng_name.upper()}",
+                    fg=GREEN if ok else RED)
+                # Re-render portfolio to reflect new proc state
+                self.after(600, self._dash_portfolio_render)
+            stop_l.bind("<Button-1>", _stop)
+            stop_l.bind("<Enter>", lambda e, b=stop_l: b.configure(bg="#ff5050"))
+            stop_l.bind("<Leave>", lambda e, b=stop_l: b.configure(bg=RED))
+
+        if not any_running:
+            tk.Label(eb, text="  ○ no engines running  ·  click START NEW to launch",
+                     font=(FONT, 8), fg=DIM, bg=PANEL,
+                     anchor="w").pack(fill="x", padx=8, pady=4)
+
         # Footer summary
         upd = data.get("ts", "")
         if upd:
@@ -3347,7 +3717,8 @@ class App(tk.Tk):
             except Exception:
                 pass
         self.f_lbl.configure(
-            text=f"PORTFOLIO · {mode.upper()} · upd {upd} · 1=Market 2=Portfolio 3=Trades 4=Engines"
+            text=f"PORTFOLIO · {mode.upper()} · upd {upd} · "
+                 f"1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit"
         )
 
         # Schedule next refresh
@@ -3591,8 +3962,20 @@ class App(tk.Tk):
                          padx=4, pady=2).pack(side="left")
 
         if not slice_:
-            tk.Label(tbl, text="(no trades for this filter)",
-                     font=(FONT, 9), fg=DIM, bg=PANEL).pack(pady=10)
+            # Context-aware empty state so the user knows WHY the table is empty.
+            if total == 0:
+                if mode == "paper":
+                    empty_msg = ("paper account has no trades yet\n"
+                                 "trades placed in paper mode will appear here")
+                elif cached.get("status") == "no_keys":
+                    empty_msg = (f"{mode.upper()} account has no API keys\n"
+                                 "configure in SETTINGS > API KEYS")
+                else:
+                    empty_msg = f"no trades on {mode.upper()} account (last 50)"
+            else:
+                empty_msg = f"no trades match filter '{f.upper()}'\n(total: {total})"
+            tk.Label(tbl, text=empty_msg, font=(FONT, 8),
+                     fg=DIM, bg=PANEL, justify="center").pack(pady=14)
 
         if page_lbl:
             page_lbl.configure(text=f"Página {page + 1}/{pages}")
@@ -3605,7 +3988,7 @@ class App(tk.Tk):
 
         self.f_lbl.configure(
             text=f"TRADES · {mode.upper()} · {total} trades · "
-                 f"1=Market 2=Portfolio 3=Trades 4=Engines")
+                 f"1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit")
 
         if getattr(self, "_dash_alive", False) and self._dash_tab == "trades":
             aid = getattr(self, "_dash_after_id", None)
@@ -3614,96 +3997,1261 @@ class App(tk.Tk):
                 except Exception: pass
             self._dash_after_id = self.after(30000, self._dash_tick_refresh)
 
-    # ── ENGINES TAB ────────────────────────────────────────
-    def _dash_build_engines_tab(self, parent):
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=12, pady=10)
-        tk.Label(wrap, text="RUNNING ENGINES", font=(FONT, 9, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 4))
-        tk.Frame(wrap, bg=DIM2, height=1).pack(fill="x", pady=(0, 6))
+    # ── HOME TAB (personal snapshot) ───────────────────────
+    def _dash_build_home_tab(self, parent):
+        """CS 1.6 style HOME: connection status + account management + engines.
+        No heavy aggregations — only what's immediately actionable.
+        Renders instantly with cached state; background refresh is lightweight."""
+        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=8)
 
-        list_box = tk.Frame(wrap, bg=PANEL,
-                            highlightbackground=BORDER, highlightthickness=1)
-        list_box.pack(fill="x", pady=(0, 8))
-        self._dash_widgets[("engines_list",)] = list_box
+        # ── HUD header ──
+        hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x")
+        tk.Label(hdr, text="[ HOME ]", font=(FONT, 9, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(hdr, text="personal control panel",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=(8, 0))
+        clock_l = tk.Label(hdr, text="", font=(FONT, 7), fg=DIM2, bg=BG)
+        clock_l.pack(side="right")
+        self._dash_widgets[("home_clock",)] = clock_l
+        tk.Frame(wrap, bg=AMBER_D, height=1).pack(fill="x", pady=(2, 8))
 
-        # Buttons row (read-only placeholders for now)
-        btns = tk.Frame(wrap, bg=BG); btns.pack(fill="x", pady=(8, 0))
-        for label in (" START CITADEL ", " START ARBITRAGE ", " STOP ALL "):
-            tk.Label(btns, text=label, font=(FONT, 8, "bold"),
-                     fg=DIM, bg=BG3, padx=8, pady=3
-                     ).pack(side="left", padx=2)
-        tk.Label(wrap, text="(controls coming soon — read-only view)",
-                 font=(FONT, 7), fg=DIM2, bg=BG, anchor="w"
-                 ).pack(anchor="w", pady=(4, 0))
+        # ── CONNECTIONS box ──
+        def box(title, parent_):
+            f = tk.Frame(parent_, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1)
+            tk.Label(f, text=f" [ {title} ] ",
+                     font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
+                     padx=6, pady=2).pack(side="top", anchor="nw", padx=6, pady=(6, 2))
+            return f
 
-        self._dash_engines_render()
+        conn_box = box("CONNECTIONS", wrap)
+        conn_box.pack(fill="x", pady=(0, 6))
+        conn_inner = tk.Frame(conn_box, bg=PANEL)
+        conn_inner.pack(fill="x", padx=10, pady=(0, 8))
+        self._dash_widgets[("home_conn",)] = conn_inner
 
-    def _dash_engines_render(self):
+        # ── ACCOUNTS box ──
+        acc_box = box("ACCOUNTS", wrap)
+        acc_box.pack(fill="x", pady=(0, 6))
+        acc_inner = tk.Frame(acc_box, bg=PANEL)
+        acc_inner.pack(fill="x", padx=10, pady=(0, 8))
+        self._dash_widgets[("home_accs",)] = acc_inner
+
+        # ── ENGINES box ──
+        eng_box = box("RUNNING ENGINES", wrap)
+        eng_box.pack(fill="x", pady=(0, 6))
+        eng_inner = tk.Frame(eng_box, bg=PANEL)
+        eng_inner.pack(fill="x", padx=10, pady=(0, 8))
+        self._dash_widgets[("home_engines",)] = eng_inner
+
+        self.f_lbl.configure(
+            text="HOME · connections + accounts + engines · "
+                 "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit · R refresh"
+        )
+
+        # Show a brief "connecting..." placeholder inside each panel until the
+        # first fetch completes and populates real data. Avoids a blank flash
+        # on tab switch.
+        for key in ("home_conn", "home_accs", "home_engines"):
+            inner = self._dash_widgets.get((key,))
+            if inner is not None:
+                tk.Label(inner, text="  connecting...",
+                         font=(FONT, 8), fg=DIM2, bg=PANEL,
+                         anchor="w").pack(fill="x", pady=2)
+        # First real render comes from _dash_home_fetch_async which is
+        # invoked by _dash_render_tab right after this build method returns.
+
+    def _dash_home_fetch_async(self):
+        """Lightweight background refresh: only ping exchange + list_procs.
+        Does NOT call PortfolioMonitor.refresh for live accounts (too slow) —
+        only loads the paper state locally, which is instant."""
         if not getattr(self, "_dash_alive", False):
             return
-        if getattr(self, "_dash_tab", "market") != "engines":
+
+        def worker():
+            snap: dict = {}
+            # Paper state: local file read — instant
+            try:
+                from core.portfolio_monitor import PortfolioMonitor
+                snap["paper"] = PortfolioMonitor.paper_state_load()
+            except Exception:
+                snap["paper"] = None
+            # Exchange latency
+            try:
+                snap["latency"] = _conn.ping("binance_futures")
+            except Exception:
+                snap["latency"] = None
+            # Running engines
+            try:
+                from core.proc import list_procs
+                snap["procs"] = list_procs()
+            except Exception:
+                snap["procs"] = []
+            # Check which accounts have keys (instant — reads keys.json)
+            try:
+                pm = self._get_portfolio_monitor()
+                snap["has_keys"] = {m: pm.has_keys(m)
+                                    for m in ("testnet", "demo", "live")}
+            except Exception:
+                snap["has_keys"] = {}
+
+            self._dash_home_snap = snap
+            if getattr(self, "_dash_alive", False):
+                try: self.after(0, self._dash_home_render)
+                except Exception: pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _dash_home_render(self):
+        if not getattr(self, "_dash_alive", False):
             return
-        list_box = self._dash_widgets.get(("engines_list",))
-        if list_box is None:
+        if getattr(self, "_dash_tab", "home") != "home":
+            return
+
+        snap    = getattr(self, "_dash_home_snap", {}) or {}
+        latency = snap.get("latency")
+        procs   = snap.get("procs") or []
+        has_keys = snap.get("has_keys") or {}
+        paper_state = snap.get("paper") or {}
+
+        # ── clock ──
+        clock_l = self._dash_widgets.get(("home_clock",))
+        if clock_l:
+            clock_l.configure(text=datetime.now().strftime("%Y-%m-%d  %H:%M:%S"))
+
+        # ── CONNECTIONS panel ──
+        conn = self._dash_widgets.get(("home_conn",))
+        if conn:
+            for w in conn.winfo_children():
+                try: w.destroy()
+                except Exception: pass
+
+            # Binance Futures (the one we actively ping)
+            rows = [
+                ("BINANCE FUTURES", latency is not None,
+                 f"{int(latency)}ms" if latency is not None else "offline"),
+                ("FEAR & GREED API", True,  "public"),
+                ("BINANCE PUBLIC",   True,  "public"),
+            ]
+            for name, ok, detail in rows:
+                r = tk.Frame(conn, bg=PANEL); r.pack(fill="x", pady=1)
+                tk.Label(r, text="●" if ok else "○",
+                         font=(FONT, 10, "bold"),
+                         fg=GREEN if ok else RED, bg=PANEL,
+                         width=3).pack(side="left")
+                tk.Label(r, text=name, font=(FONT, 8, "bold"),
+                         fg=WHITE if ok else DIM, bg=PANEL,
+                         width=20, anchor="w").pack(side="left")
+                tk.Label(r, text=detail, font=(FONT, 8),
+                         fg=DIM if ok else DIM2, bg=PANEL,
+                         anchor="w").pack(side="left", padx=(4, 0))
+
+        # ── ACCOUNTS panel (clickable rows + action buttons) ──
+        accs = self._dash_widgets.get(("home_accs",))
+        if accs:
+            for w in accs.winfo_children():
+                try: w.destroy()
+                except Exception: pass
+
+            pm = self._get_portfolio_monitor()
+            account_defs = [
+                ("paper",   "PAPER",   AMBER_D),
+                ("testnet", "TESTNET", GREEN),
+                ("demo",    "DEMO",    AMBER),
+                ("live",    "LIVE",    RED),
+            ]
+            for acc_id, label, color in account_defs:
+                if acc_id == "paper":
+                    is_on = True
+                    detail = f"${paper_state.get('current_balance', 0):,.2f}"
+                    sub    = f"trades {len(paper_state.get('trades') or [])}"
+                    action = "EDIT"
+                else:
+                    is_on = has_keys.get(acc_id, False)
+                    if is_on:
+                        cached = pm.get_cached(acc_id) or {}
+                        eq = cached.get("equity")
+                        detail = f"${eq:,.2f}" if eq is not None else "— syncing"
+                        sub = "keys ok"
+                    else:
+                        detail = "no keys"
+                        sub    = ""
+                    action = "OPEN" if is_on else "CONFIG"
+
+                r = tk.Frame(accs, bg=PANEL); r.pack(fill="x", pady=2)
+                tk.Label(r, text="●" if is_on else "○",
+                         font=(FONT, 10, "bold"),
+                         fg=color if is_on else DIM2, bg=PANEL,
+                         width=3).pack(side="left")
+                tk.Label(r, text=label, font=(FONT, 9, "bold"),
+                         fg=WHITE if is_on else DIM, bg=PANEL,
+                         width=10, anchor="w").pack(side="left")
+                tk.Label(r, text=detail, font=(FONT, 9, "bold"),
+                         fg=color if is_on else DIM, bg=PANEL,
+                         width=16, anchor="w").pack(side="left")
+                tk.Label(r, text=sub, font=(FONT, 7),
+                         fg=DIM2, bg=PANEL, anchor="w").pack(side="left")
+
+                # Action button (right)
+                btn = tk.Label(r, text=f" {action} ",
+                               font=(FONT, 7, "bold"),
+                               fg=BG, bg=color if is_on else DIM2,
+                               cursor="hand2", padx=6, pady=2)
+                btn.pack(side="right", padx=(0, 4))
+
+                def _act(_e=None, a=acc_id, on=is_on):
+                    if a == "paper":
+                        self._dash_paper_edit_dialog()
+                    elif on:
+                        self._dash_portfolio_account = a
+                        self._dash_render_tab("portfolio")
+                    else:
+                        # No keys — jump to settings
+                        self._dash_alive = False
+                        self._config()
+
+                for w in (r, btn):
+                    w.bind("<Button-1>", _act)
+                    w.bind("<Enter>", lambda e, b=btn: b.configure(bg=AMBER_B))
+                    w.bind("<Leave>", lambda e, b=btn, c=color, on=is_on:
+                           b.configure(bg=c if on else DIM2))
+
+        # ── ENGINES panel ──
+        eng = self._dash_widgets.get(("home_engines",))
+        if eng:
+            for w in eng.winfo_children():
+                try: w.destroy()
+                except Exception: pass
+
+            alive = [p for p in procs if p.get("alive")]
+            summary = tk.Frame(eng, bg=PANEL); summary.pack(fill="x", pady=(0, 2))
+            tk.Label(summary,
+                     text=f"{len(alive)} running  ·  {len(procs) - len(alive)} finished",
+                     font=(FONT, 7), fg=DIM, bg=PANEL,
+                     anchor="w").pack(side="left")
+
+            if not alive:
+                tk.Label(eng, text="○ no engines running",
+                         font=(FONT, 8), fg=DIM, bg=PANEL,
+                         anchor="w").pack(fill="x", pady=2)
+                tk.Label(eng, text="go to PORTFOLIO (3) or COCKPIT (6) to start",
+                         font=(FONT, 7), fg=DIM2, bg=PANEL,
+                         anchor="w").pack(fill="x")
+            else:
+                for p in alive[:6]:
+                    eng_name = str(p.get("engine", "?")).upper()
+                    pid  = p.get("pid", "?")
+                    started = str(p.get("started", ""))[:19].replace("T", " ")
+                    r = tk.Frame(eng, bg=PANEL); r.pack(fill="x", pady=1)
+                    tk.Label(r, text="●", font=(FONT, 10, "bold"),
+                             fg=GREEN, bg=PANEL, width=3).pack(side="left")
+                    tk.Label(r, text=eng_name, font=(FONT, 8, "bold"),
+                             fg=AMBER, bg=PANEL, width=14,
+                             anchor="w").pack(side="left")
+                    tk.Label(r, text=f"PID {pid}", font=(FONT, 7),
+                             fg=DIM, bg=PANEL, width=10,
+                             anchor="w").pack(side="left")
+                    tk.Label(r, text=started, font=(FONT, 7),
+                             fg=DIM2, bg=PANEL,
+                             anchor="w").pack(side="left")
+
+        # Header status
+        if latency is not None:
+            self.h_stat.configure(text="ONLINE", fg=GREEN)
+        else:
+            self.h_stat.configure(text="OFFLINE", fg=RED)
+
+        # Reschedule — HOME refresh is lightweight, 10s is fine
+        if getattr(self, "_dash_alive", False) and self._dash_tab == "home":
+            aid = getattr(self, "_dash_after_id", None)
+            if aid:
+                try: self.after_cancel(aid)
+                except Exception: pass
+            self._dash_after_id = self.after(10000, self._dash_tick_refresh)
+
+    # ── BACKTEST TAB (browse data/runs/) ───────────────────
+    def _dash_build_backtest_tab(self, parent):
+        """Two-column browser: list of runs (left) + detail panel (right).
+        Click a row to show its real metrics from summary.json inline.
+        Detail panel has a secondary button to open report.html in a browser."""
+        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=8)
+
+        hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x")
+        tk.Label(hdr, text="[ BACKTEST ]", font=(FONT, 9, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left")
+        count_l = tk.Label(hdr, text="", font=(FONT, 7), fg=DIM, bg=BG)
+        count_l.pack(side="right")
+        self._dash_widgets[("bt_count",)] = count_l
+        tk.Frame(wrap, bg=AMBER_D, height=1).pack(fill="x", pady=(2, 8))
+
+        # Main split: list (left, 60%) + detail (right, 40%)
+        split = tk.Frame(wrap, bg=BG); split.pack(fill="both", expand=True)
+
+        # ── LEFT: run list ──
+        left = tk.Frame(split, bg=BG)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        # Column headers — compact
+        hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
+        cols = [
+            ("DATE / TIME",  17),
+            ("RUN",          15),
+            ("TRADES",        7),
+            ("WIN%",          7),
+            ("PNL",          11),
+            ("SHARPE",        8),
+            ("DD",            7),
+        ]
+        for label, width in cols:
+            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=BG, width=width,
+                     anchor="w").pack(side="left")
+        tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+
+        # Scrollable list (Canvas + inner frame)
+        canvas_wrap = tk.Frame(left, bg=BG)
+        canvas_wrap.pack(fill="both", expand=True)
+        canvas = tk.Canvas(canvas_wrap, bg=BG, bd=0, highlightthickness=0)
+        scroll = tk.Scrollbar(canvas_wrap, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        inner = tk.Frame(canvas, bg=BG)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        def _on_configure(event, c=canvas): c.configure(scrollregion=c.bbox("all"))
+        inner.bind("<Configure>", _on_configure)
+
+        # Mouse wheel — scoped: only active while the mouse is over the list.
+        # Using bind_all would leak the handler to every other tab.
+        def _on_wheel(event, c=canvas):
+            try: c.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError: pass
+        def _enter(_e=None, c=canvas):
+            c.bind_all("<MouseWheel>", _on_wheel)
+        def _leave(_e=None, c=canvas):
+            try: c.unbind_all("<MouseWheel>")
+            except tk.TclError: pass
+        canvas.bind("<Enter>", _enter)
+        canvas.bind("<Leave>", _leave)
+        inner.bind("<Enter>", _enter)
+        inner.bind("<Leave>", _leave)
+
+        self._dash_widgets[("bt_list",)] = inner
+        self._dash_widgets[("bt_canvas",)] = canvas
+
+        # ── RIGHT: detail panel ──
+        right = tk.Frame(split, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1,
+                         width=300)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
+
+        tk.Label(right, text=" [ DETAILS ] ",
+                 font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
+                 padx=6, pady=2).pack(anchor="nw", padx=6, pady=(6, 2))
+
+        detail_body = tk.Frame(right, bg=PANEL)
+        detail_body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+        self._dash_widgets[("bt_detail",)] = detail_body
+
+        # Initial placeholder
+        tk.Label(detail_body,
+                 text="\n← click a run to load its metrics",
+                 font=(FONT, 8), fg=DIM, bg=PANEL,
+                 justify="left").pack(anchor="w")
+
+        self.f_lbl.configure(
+            text="BACKTEST · click row for details · "
+                 "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit · R refresh"
+        )
+
+        self._dash_backtest_render()
+
+    @staticmethod
+    def _bt_fmt_timestamp(ts_raw) -> str:
+        """Format a run timestamp as 'YYYY-MM-DD  HH:MM'. Accepts:
+        - ISO string: '2026-04-10T11:50:23.123'
+        - Unix seconds: 1712745023 (int or float)
+        - Unix milliseconds: 1712745023000 (int or float)
+        - None / empty / unparseable → '—'"""
+        if ts_raw is None or ts_raw == "":
+            return "—"
+        # Numeric (unix timestamp)
+        if isinstance(ts_raw, (int, float)):
+            try:
+                # Treat values > 1e12 as milliseconds, otherwise seconds
+                t = float(ts_raw)
+                if t > 1e12:
+                    t /= 1000.0
+                return datetime.fromtimestamp(t).strftime("%Y-%m-%d  %H:%M")
+            except (ValueError, OSError, OverflowError):
+                return "—"
+        # String
+        try:
+            dt = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            return dt.strftime("%Y-%m-%d  %H:%M")
+        except (ValueError, TypeError):
+            return str(ts_raw)[:16].replace("T", " ")
+
+    def _dash_backtest_render(self):
+        list_wrap = self._dash_widgets.get(("bt_list",))
+        count_l   = self._dash_widgets.get(("bt_count",))
+        if list_wrap is None:
             return
         try:
-            if not list_box.winfo_exists():
+            if not list_wrap.winfo_exists():
                 return
         except Exception:
             return
 
-        for w in list_box.winfo_children():
+        for w in list_wrap.winfo_children():
             try: w.destroy()
             except Exception: pass
 
+        idx_path = ROOT / "data" / "index.json"
+        runs: list[dict] = []
+        if idx_path.exists():
+            try:
+                runs = json.loads(idx_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                runs = []
+        runs.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+
+        if count_l:
+            count_l.configure(text=f"{len(runs)} runs")
+
+        if not runs:
+            tk.Label(list_wrap, text="  — no runs found in data/runs/ —",
+                     font=(FONT, 8), fg=DIM, bg=BG,
+                     anchor="w").pack(fill="x", pady=10)
+            return
+
+        def _fmt_n(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "—"
+        def _fmt_m(v): return f"${v:+,.0f}" if v is not None else "—"
+
+        for run in runs[:50]:
+            run_id = run.get("run_id", "?")
+            ts     = self._bt_fmt_timestamp(run.get("timestamp", ""))
+            n_tr   = run.get("n_trades") or 0
+            wr     = run.get("win_rate")
+            pnl    = run.get("pnl")
+            sh     = run.get("sharpe")
+            dd     = run.get("max_dd_pct")
+
+            row = tk.Frame(list_wrap, bg=BG, cursor="hand2")
+            row.pack(fill="x", pady=0)
+
+            pnl_col = GREEN if (pnl or 0) > 0 else (RED if (pnl or 0) < 0 else DIM)
+            # Strip 'citadel_' prefix from run_id for compactness
+            short_id = run_id.replace("citadel_", "")[:15]
+
+            cells = [
+                (ts,                  17, WHITE, "normal"),
+                (short_id,            15, AMBER, "bold"),
+                (f"{n_tr}",            7, WHITE, "normal"),
+                (_fmt_n(wr),           7, WHITE, "normal"),
+                (_fmt_m(pnl),         11, pnl_col, "bold"),
+                (_fmt_n(sh),           8, WHITE, "normal"),
+                (_fmt_n(dd, "%"),      7, RED if (dd or 0) > 5 else DIM, "normal"),
+            ]
+            row_labels = []
+            for text, width, color, weight in cells:
+                lbl = tk.Label(row, text=text,
+                               font=(FONT, 8, weight),
+                               fg=color, bg=BG, width=width, anchor="w")
+                lbl.pack(side="left")
+                row_labels.append(lbl)
+
+            def _select(_e=None, rid=run_id):
+                self._dash_backtest_select(rid)
+            def _enter(_e=None, labels=row_labels):
+                for l in labels:
+                    try: l.configure(bg=BG3)
+                    except Exception: pass
+            def _leave(_e=None, labels=row_labels):
+                for l in labels:
+                    try: l.configure(bg=BG)
+                    except Exception: pass
+
+            for w in (row, *row_labels):
+                w.bind("<Button-1>", _select)
+                w.bind("<Enter>", _enter)
+                w.bind("<Leave>", _leave)
+
+    def _dash_backtest_select(self, run_id: str):
+        """Load the full summary.json for a run and populate the detail panel."""
+        body = self._dash_widgets.get(("bt_detail",))
+        if body is None:
+            return
         try:
-            from core.proc import list_procs
-            procs = list_procs()
+            if not body.winfo_exists():
+                return
         except Exception:
-            procs = []
+            return
 
-        engines_known = [
-            "backtest", "live", "arb", "newton", "mercurio",
-            "thoth", "prometeu", "darwin", "chronos",
+        for w in body.winfo_children():
+            try: w.destroy()
+            except Exception: pass
+
+        run_dir = ROOT / "data" / "runs" / run_id
+        summary_path = run_dir / "summary.json"
+        config_path  = run_dir / "config.json"
+
+        # Index entry for timestamp + period_days fallback
+        idx_entry = {}
+        try:
+            idx = json.loads((ROOT / "data" / "index.json").read_text(encoding="utf-8"))
+            idx_entry = next((r for r in idx if r.get("run_id") == run_id), {})
+        except Exception:
+            pass
+
+        summary: dict = {}
+        if summary_path.exists():
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        config: dict = {}
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Header: run_id + timestamp
+        tk.Label(body, text=run_id, font=(FONT, 9, "bold"),
+                 fg=AMBER, bg=PANEL, anchor="w",
+                 wraplength=270, justify="left").pack(fill="x")
+        ts_raw = idx_entry.get("timestamp") or summary.get("timestamp") or ""
+        tk.Label(body, text=self._bt_fmt_timestamp(ts_raw),
+                 font=(FONT, 8), fg=DIM, bg=PANEL,
+                 anchor="w").pack(fill="x", pady=(0, 4))
+        tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(0, 6))
+
+        if not summary and not idx_entry:
+            tk.Label(body, text="\n✗ summary.json missing",
+                     font=(FONT, 8), fg=RED, bg=PANEL).pack(anchor="w")
+            return
+
+        # Metric rows — use summary first, fall back to index entry
+        def g(key, default=None):
+            return summary.get(key, idx_entry.get(key, default))
+
+        pnl   = g("pnl", g("total_pnl"))
+        roi   = g("roi_pct", g("roi"))
+        dd    = g("max_dd_pct", g("max_dd"))
+        wr    = g("win_rate")
+        sh    = g("sharpe")
+        so    = g("sortino")
+        ca    = g("calmar")
+        ntr   = g("n_trades")
+        ns    = g("n_symbols")
+        nc    = g("n_candles")
+        pd    = g("period_days")
+        interval = g("interval")
+        fe    = g("final_equity")
+        acct  = g("account_size")
+        lev   = g("leverage")
+
+        def row(label, value, color=WHITE, bold=False):
+            r = tk.Frame(body, bg=PANEL); r.pack(fill="x", pady=1)
+            tk.Label(r, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=PANEL, width=12,
+                     anchor="w").pack(side="left")
+            tk.Label(r, text=value,
+                     font=(FONT, 8, "bold" if bold else "normal"),
+                     fg=color, bg=PANEL, anchor="w").pack(side="left")
+
+        def _fn(v, suf="", digits=2):
+            if v is None: return "—"
+            try: return f"{float(v):.{digits}f}{suf}"
+            except (TypeError, ValueError): return "—"
+        def _fm(v):
+            if v is None: return "—"
+            try: return f"${float(v):+,.2f}"
+            except (TypeError, ValueError): return "—"
+
+        pnl_col = GREEN if (pnl or 0) > 0 else (RED if (pnl or 0) < 0 else DIM)
+
+        # === PERFORMANCE block ===
+        tk.Label(body, text="PERFORMANCE", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=PANEL, anchor="w").pack(fill="x", pady=(4, 2))
+        row("PnL",       _fm(pnl),            pnl_col, bold=True)
+        row("ROI",       _fn(roi, "%"),       pnl_col, bold=True)
+        row("Sharpe",    _fn(sh),             WHITE)
+        row("Sortino",   _fn(so),             WHITE)
+        row("Calmar",    _fn(ca),             WHITE)
+        row("Max DD",    _fn(dd, "%"),
+            RED if (dd or 0) > 5 else AMBER_D)
+
+        # === TRADES block ===
+        tk.Label(body, text="TRADES", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=PANEL, anchor="w").pack(fill="x", pady=(8, 2))
+        row("Total",      str(ntr) if ntr is not None else "—")
+        row("Win rate",   _fn(wr, "%"))
+        row("Symbols",    str(ns) if ns is not None else "—")
+        row("Candles",    f"{nc:,}" if isinstance(nc, (int, float)) else "—")
+
+        # === CONFIG block ===
+        tk.Label(body, text="CONFIG", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=PANEL, anchor="w").pack(fill="x", pady=(8, 2))
+        row("Interval",   str(interval or "—"))
+        row("Period",     f"{pd} days" if pd else "—")
+        row("Account",    _fm(acct) if acct else "—")
+        row("Leverage",   f"{lev}x" if lev else "—")
+        row("Final eq",   _fm(fe))
+
+        # Config hash (small)
+        ch = g("config_hash")
+        if ch:
+            tk.Label(body, text=f"hash  {str(ch)[:16]}...",
+                     font=(FONT, 6), fg=DIM2, bg=PANEL,
+                     anchor="w").pack(fill="x", pady=(8, 0))
+
+        # === Secondary action: open HTML report ===
+        tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(10, 6))
+        report = run_dir / "report.html"
+        if report.exists():
+            btn = tk.Label(body, text="  OPEN HTML REPORT  ",
+                           font=(FONT, 7, "bold"),
+                           fg=BG, bg=AMBER_D, cursor="hand2",
+                           padx=6, pady=4)
+            btn.pack(anchor="w", pady=(0, 2))
+            btn.bind("<Button-1>", lambda e: self._dash_backtest_open(run_id))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=AMBER))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=AMBER_D))
+        else:
+            tk.Label(body, text="(no report.html)",
+                     font=(FONT, 7), fg=DIM2, bg=PANEL,
+                     anchor="w").pack(anchor="w")
+
+    def _dash_backtest_open(self, run_id: str):
+        """Open the HTML report for a given run in the default browser."""
+        report = ROOT / "data" / "runs" / run_id / "report.html"
+        if not report.exists():
+            self.h_stat.configure(text="NO REPORT", fg=RED)
+            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            return
+        try:
+            import webbrowser
+            webbrowser.open(report.as_uri())
+            self.h_stat.configure(text="OPENED", fg=GREEN)
+            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+        except Exception:
+            self.h_stat.configure(text="OPEN FAILED", fg=RED)
+            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+
+    # ── COCKPIT TAB (VPS remote control over SSH) ─────────
+    def _dash_build_cockpit_tab(self, parent):
+        """VPS remote cockpit: screen session status, positions, controls, logs."""
+        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=10)
+
+        # ── Header ──
+        hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x", pady=(0, 6))
+        tk.Label(hdr, text="VPS REMOTE COCKPIT", font=(FONT, 9, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left")
+        reach_l = tk.Label(hdr, text="○ checking VPS...",
+                           font=(FONT, 8), fg=DIM, bg=BG)
+        reach_l.pack(side="right")
+        self._dash_widgets[("cp_reach",)] = reach_l
+        tk.Frame(wrap, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
+
+        # ── STATUS row: VPS info + engine status, side-by-side ──
+        row1 = tk.Frame(wrap, bg=BG); row1.pack(fill="x", pady=(0, 8))
+
+        vps_box = tk.Frame(row1, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1)
+        vps_box.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        tk.Label(vps_box, text=" VPS ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER).pack(side="top", anchor="nw", padx=8, pady=4)
+        vps_inner = tk.Frame(vps_box, bg=PANEL); vps_inner.pack(fill="x", padx=12, pady=(0, 10))
+        tk.Label(vps_inner, text=f"host:     {VPS_HOST}",
+                 font=(FONT, 8), fg=WHITE, bg=PANEL,
+                 anchor="w").pack(fill="x")
+        tk.Label(vps_inner, text=f"project:  {VPS_PROJECT}",
+                 font=(FONT, 8), fg=WHITE, bg=PANEL,
+                 anchor="w").pack(fill="x")
+        vps_check_l = tk.Label(vps_inner, text="last check: —",
+                               font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w")
+        vps_check_l.pack(fill="x", pady=(4, 0))
+        self._dash_widgets[("cp_check",)] = vps_check_l
+
+        eng_box = tk.Frame(row1, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1)
+        eng_box.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        tk.Label(eng_box, text=" ENGINE ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER).pack(side="top", anchor="nw", padx=8, pady=4)
+        eng_inner = tk.Frame(eng_box, bg=PANEL); eng_inner.pack(fill="x", padx=12, pady=(0, 10))
+        eng_state_l = tk.Label(eng_inner, text="○ checking...",
+                               font=(FONT, 13, "bold"), fg=DIM, bg=PANEL,
+                               anchor="w")
+        eng_state_l.pack(anchor="w")
+        eng_sub_l = tk.Label(eng_inner, text="screen session: —",
+                             font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w")
+        eng_sub_l.pack(anchor="w", pady=(2, 0))
+        self._dash_widgets[("cp_engine_state",)] = eng_state_l
+        self._dash_widgets[("cp_engine_sub",)]   = eng_sub_l
+
+        # ── POSITIONS card ──
+        pos_box = tk.Frame(wrap, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1)
+        pos_box.pack(fill="x", pady=(0, 8))
+        pos_head = tk.Label(pos_box, text=" OPEN POSITIONS (0) ",
+                            font=(FONT, 7, "bold"), fg=BG, bg=AMBER)
+        pos_head.pack(side="top", anchor="nw", padx=8, pady=4)
+        pos_inner = tk.Frame(pos_box, bg=PANEL); pos_inner.pack(fill="x", padx=12, pady=(0, 8))
+        self._dash_widgets[("cp_pos_head",)]  = pos_head
+        self._dash_widgets[("cp_pos_inner",)] = pos_inner
+
+        # ── CONTROLS row ──
+        ctrl_box = tk.Frame(wrap, bg=PANEL,
+                            highlightbackground=BORDER, highlightthickness=1)
+        ctrl_box.pack(fill="x", pady=(0, 8))
+        tk.Label(ctrl_box, text=" CONTROLS ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER).pack(side="top", anchor="nw", padx=8, pady=4)
+        ctrl_inner = tk.Frame(ctrl_box, bg=PANEL); ctrl_inner.pack(fill="x", padx=12, pady=(0, 10))
+
+        buttons = [
+            ("START DEMO", GREEN, self._dash_cockpit_start_demo),
+            ("STOP",       RED,   self._dash_cockpit_stop),
+            ("DEPLOY",     AMBER, self._dash_cockpit_deploy),
+            ("STREAM LOGS", AMBER_B, self._dash_cockpit_toggle_stream),
         ]
-        seen: dict[str, dict] = {}
-        for p in procs:
-            seen[p.get("engine", "?")] = p
+        for label, color, cmd in buttons:
+            btn = tk.Label(ctrl_inner, text=f"  {label}  ",
+                           font=(FONT, 8, "bold"),
+                           fg=BG, bg=color, cursor="hand2",
+                           padx=8, pady=4)
+            btn.pack(side="left", padx=(0, 8))
+            btn.bind("<Button-1>", lambda e, c=cmd: c())
+            btn.bind("<Enter>", lambda e, b=btn, c=color:
+                     b.configure(bg=AMBER_B if c != AMBER_B else "#ffd166"))
+            btn.bind("<Leave>", lambda e, b=btn, c=color: b.configure(bg=c))
+            if label == "STREAM LOGS":
+                self._dash_widgets[("cp_stream_btn",)] = btn
 
-        for eng in engines_known:
-            info = seen.get(eng)
-            row = tk.Frame(list_box, bg=PANEL); row.pack(fill="x", padx=8, pady=2)
-            if info and info.get("alive"):
-                icon = "●"; col = GREEN
-                started = info.get("started", "?")
-                pid = info.get("pid", "?")
-                status_text = f"PID {pid}   started {started[:19]}"
-            else:
-                icon = "○"; col = DIM
-                status_text = "stopped"
+        result_l = tk.Label(ctrl_inner, text="", font=(FONT, 7),
+                            fg=DIM, bg=PANEL, anchor="w")
+        result_l.pack(side="left", padx=(10, 0))
+        self._dash_widgets[("cp_action",)] = result_l
 
-            tk.Label(row, text=icon, font=(FONT, 9, "bold"),
-                     fg=col, bg=PANEL, width=2).pack(side="left")
-            tk.Label(row, text=eng.upper(), font=(FONT, 9, "bold"),
-                     fg=AMBER if col == GREEN else DIM, bg=PANEL,
-                     width=14, anchor="w").pack(side="left")
-            tk.Label(row, text=status_text, font=(FONT, 8),
-                     fg=DIM, bg=PANEL, anchor="w").pack(side="left", padx=4)
+        # ── LIVE LOG card (Text widget + scrollbar) ──
+        log_box = tk.Frame(wrap, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1)
+        log_box.pack(fill="both", expand=True, pady=(0, 0))
+        log_head = tk.Label(log_box, text=" LIVE LOG (polled every 5s) ",
+                            font=(FONT, 7, "bold"), fg=BG, bg=AMBER)
+        log_head.pack(side="top", anchor="nw", padx=8, pady=4)
+        self._dash_widgets[("cp_log_head",)] = log_head
+
+        log_frame = tk.Frame(log_box, bg=PANEL)
+        log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        scroll = tk.Scrollbar(log_frame, bg=PANEL)
+        scroll.pack(side="right", fill="y")
+        log_text = tk.Text(log_frame, bg=BG, fg=WHITE,
+                           font=(FONT, 8), bd=0, highlightthickness=0,
+                           insertbackground=AMBER, wrap="none",
+                           yscrollcommand=scroll.set)
+        log_text.pack(side="left", fill="both", expand=True)
+        scroll.configure(command=log_text.yview)
+        log_text.insert("1.0", "— waiting for first log fetch —\n")
+        log_text.configure(state="disabled")
+        self._dash_widgets[("cp_log_text",)] = log_text
 
         self.f_lbl.configure(
-            text=f"ENGINES · {sum(1 for p in procs if p.get('alive'))} running · "
-                 f"1=Market 2=Portfolio 3=Trades 4=Engines"
+            text="COCKPIT · VPS remote · "
+                 "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit"
+        )
+        self.h_path.configure(text="> MARKETS > CRYPTO FUTURES > COCKPIT")
+
+    def _dash_cockpit_fetch_async(self):
+        """Single SSH round-trip for full status: screen, logs, positions."""
+        if not getattr(self, "_dash_alive", False):
+            return
+        if getattr(self, "_dash_tab", "") != "cockpit":
+            return
+
+        # Combine multiple checks into one SSH invocation — reduces latency
+        # from ~3 round-trips to 1. Markers let us split stdout into sections.
+        combined = (
+            "echo '---SCREEN---'; screen -ls 2>&1 || true; "
+            "echo '---LOG---'; tail -5 ~/aurum.finance/data/live/*/logs/live.log 2>/dev/null || true; "
+            "echo '---POS---'; cat ~/aurum.finance/data/live/*/state/positions.json 2>/dev/null || true; "
+            "echo '---END---'"
         )
 
-        if getattr(self, "_dash_alive", False) and self._dash_tab == "engines":
+        def worker():
+            import time as _time
+            t0 = _time.time()
+            out = _vps_cmd(combined, timeout=8)
+            lat_ms = int((_time.time() - t0) * 1000)
+
+            snap = {"reachable": out is not None, "latency_ms": lat_ms,
+                    "screen_running": False, "screen_raw": "",
+                    "log_lines": [], "positions": [], "positions_raw": "",
+                    "ts": datetime.now().strftime("%H:%M:%S")}
+
+            if out:
+                parts = {"SCREEN": "", "LOG": "", "POS": ""}
+                current = None
+                for line in out.splitlines():
+                    m = line.strip()
+                    if m == "---SCREEN---": current = "SCREEN"; continue
+                    if m == "---LOG---":    current = "LOG";    continue
+                    if m == "---POS---":    current = "POS";    continue
+                    if m == "---END---":    current = None;     continue
+                    if current:
+                        parts[current] += line + "\n"
+
+                snap["screen_raw"] = parts["SCREEN"].strip()
+                snap["screen_running"] = "aurum" in parts["SCREEN"]
+                snap["log_lines"] = [l for l in parts["LOG"].splitlines() if l.strip()]
+                snap["positions_raw"] = parts["POS"].strip()
+                try:
+                    if parts["POS"].strip():
+                        pos_data = json.loads(parts["POS"])
+                        if isinstance(pos_data, list):
+                            snap["positions"] = pos_data
+                        elif isinstance(pos_data, dict):
+                            # Common shape: {"BTCUSDT": {...}, "ETHUSDT": {...}}
+                            snap["positions"] = [
+                                {"symbol": k, **(v if isinstance(v, dict) else {"value": v})}
+                                for k, v in pos_data.items()
+                            ]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            self._dash_cockpit_snap = snap
+            if getattr(self, "_dash_alive", False):
+                try: self.after(0, self._dash_cockpit_render)
+                except Exception: pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _dash_cockpit_render(self):
+        if not getattr(self, "_dash_alive", False):
+            return
+        if getattr(self, "_dash_tab", "") != "cockpit":
+            return
+
+        snap = getattr(self, "_dash_cockpit_snap", {}) or {}
+
+        # ── reachability ──
+        reach_l = self._dash_widgets.get(("cp_reach",))
+        if reach_l:
+            if snap.get("reachable"):
+                reach_l.configure(
+                    text=f"● reachable  ·  {snap.get('latency_ms', '?')}ms",
+                    fg=GREEN)
+                self.h_stat.configure(text="VPS OK", fg=GREEN)
+            else:
+                reach_l.configure(text="○ unreachable", fg=RED)
+                self.h_stat.configure(text="VPS DOWN", fg=RED)
+
+        check_l = self._dash_widgets.get(("cp_check",))
+        if check_l:
+            check_l.configure(text=f"last check: {snap.get('ts', '—')}")
+
+        # ── engine state ──
+        state_l = self._dash_widgets.get(("cp_engine_state",))
+        sub_l   = self._dash_widgets.get(("cp_engine_sub",))
+        if state_l and sub_l:
+            if not snap.get("reachable"):
+                state_l.configure(text="○ UNKNOWN", fg=DIM)
+                sub_l.configure(text="VPS not reachable", fg=DIM2)
+            elif snap.get("screen_running"):
+                state_l.configure(text="● RUNNING", fg=GREEN)
+                # Extract PID/name from screen -ls output if possible
+                first_line = next(
+                    (l for l in snap.get("screen_raw", "").splitlines()
+                     if "aurum" in l), "")
+                sub_l.configure(
+                    text=f"screen: {first_line.strip() or 'aurum'}",
+                    fg=DIM)
+            else:
+                state_l.configure(text="○ STOPPED", fg=AMBER_D)
+                sub_l.configure(text="no aurum screen session", fg=DIM)
+
+        # ── positions ──
+        pos_head  = self._dash_widgets.get(("cp_pos_head",))
+        pos_inner = self._dash_widgets.get(("cp_pos_inner",))
+        if pos_inner:
+            for w in pos_inner.winfo_children():
+                try: w.destroy()
+                except Exception: pass
+            positions = snap.get("positions") or []
+            if pos_head:
+                pos_head.configure(text=f" OPEN POSITIONS ({len(positions)}) ")
+
+            if not positions:
+                if snap.get("positions_raw") and snap.get("reachable"):
+                    tk.Label(pos_inner,
+                             text="  — state/positions.json parse failed —",
+                             font=(FONT, 8), fg=DIM, bg=PANEL,
+                             anchor="w").pack(fill="x", pady=2)
+                else:
+                    tk.Label(pos_inner, text="  — no open positions —",
+                             font=(FONT, 8), fg=DIM, bg=PANEL,
+                             anchor="w").pack(fill="x", pady=2)
+            else:
+                for p in positions[:10]:
+                    sym  = str(p.get("symbol", "?"))
+                    side = str(p.get("side", p.get("direction", "")))
+                    try:
+                        size  = float(p.get("size", p.get("qty", 0)) or 0)
+                        entry = float(p.get("entry", p.get("entry_price", 0)) or 0)
+                        pnl   = float(p.get("pnl", p.get("unrealized_pnl", 0)) or 0)
+                    except (TypeError, ValueError):
+                        size = entry = pnl = 0
+                    pnl_col = GREEN if pnl >= 0 else RED
+
+                    r = tk.Frame(pos_inner, bg=PANEL); r.pack(fill="x", pady=1)
+                    tk.Label(r, text=sym, font=(FONT, 9, "bold"),
+                             fg=AMBER, bg=PANEL, width=12,
+                             anchor="w").pack(side="left")
+                    tk.Label(r, text=side.upper()[:5], font=(FONT, 8),
+                             fg=WHITE, bg=PANEL, width=6,
+                             anchor="w").pack(side="left")
+                    tk.Label(r, text=f"{size:g}", font=(FONT, 8),
+                             fg=DIM, bg=PANEL, width=10,
+                             anchor="w").pack(side="left")
+                    tk.Label(r, text=f"@ {entry:,.4f}".rstrip("0").rstrip("."),
+                             font=(FONT, 8), fg=DIM, bg=PANEL, width=14,
+                             anchor="w").pack(side="left")
+                    tk.Label(r,
+                             text=f"PnL {'+' if pnl >= 0 else ''}${pnl:,.2f}",
+                             font=(FONT, 9, "bold"), fg=pnl_col, bg=PANEL,
+                             anchor="w").pack(side="left")
+
+        # ── live log (only update when not streaming) ──
+        if not self._dash_cockpit_streaming:
+            log_text = self._dash_widgets.get(("cp_log_text",))
+            if log_text:
+                lines = snap.get("log_lines") or []
+                log_text.configure(state="normal")
+                log_text.delete("1.0", "end")
+                if lines:
+                    log_text.insert("1.0", "\n".join(lines) + "\n")
+                elif snap.get("reachable"):
+                    log_text.insert("1.0", "— log file not found or empty —\n")
+                else:
+                    log_text.insert("1.0", "— VPS unreachable —\n")
+                log_text.configure(state="disabled")
+
+        # ── schedule next tick ──
+        if getattr(self, "_dash_alive", False) and self._dash_tab == "cockpit":
             aid = getattr(self, "_dash_after_id", None)
             if aid:
                 try: self.after_cancel(aid)
                 except Exception: pass
             self._dash_after_id = self.after(5000, self._dash_tick_refresh)
 
+    def _dash_cockpit_action(self, label: str, cmd: str,
+                             success_msg: str = "ok", timeout: int = 15):
+        """Run an SSH command in a worker thread, flash a status message."""
+        action_l = self._dash_widgets.get(("cp_action",))
+        if action_l:
+            action_l.configure(text=f"→ {label}...", fg=AMBER_D)
+
+        def worker():
+            out = _vps_cmd(cmd, timeout=timeout)
+            def apply():
+                if not getattr(self, "_dash_alive", False):
+                    return
+                if action_l:
+                    if out is not None:
+                        action_l.configure(text=f"✓ {label}: {success_msg}", fg=GREEN)
+                    else:
+                        action_l.configure(text=f"✗ {label}: failed", fg=RED)
+                # Trigger an immediate status refresh to reflect the action
+                self._dash_cockpit_fetch_async()
+            try: self.after(0, apply)
+            except Exception: pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _dash_cockpit_start_demo(self):
+        cmd = ("screen -dmS aurum bash -c "
+               "'cd ~/aurum.finance && python3 -m engines.live demo "
+               "2>&1 | tee /tmp/aurum.log'")
+        self._dash_cockpit_action("START DEMO", cmd, "engine spawned")
+
+    def _dash_cockpit_stop(self):
+        # $'\003' is bash ANSI-C quoting for Ctrl+C — graceful shutdown
+        cmd = r"screen -S aurum -X stuff $'\003'"
+        self._dash_cockpit_action("STOP", cmd, "Ctrl+C sent")
+
+    def _dash_cockpit_deploy(self):
+        cmd = "cd ~/aurum.finance && git pull"
+        self._dash_cockpit_action("DEPLOY", cmd, "git pull done", timeout=30)
+
+    def _dash_cockpit_toggle_stream(self):
+        """Toggle live streaming of the log file via `ssh ... tail -f`."""
+        if self._dash_cockpit_streaming:
+            self._dash_cockpit_kill_stream()
+            btn = self._dash_widgets.get(("cp_stream_btn",))
+            if btn: btn.configure(text="  STREAM LOGS  ", bg=AMBER_B)
+            head = self._dash_widgets.get(("cp_log_head",))
+            if head: head.configure(text=" LIVE LOG (polled every 5s) ")
+            return
+
+        # Start stream
+        log_text = self._dash_widgets.get(("cp_log_text",))
+        if log_text:
+            log_text.configure(state="normal")
+            log_text.delete("1.0", "end")
+            log_text.insert("1.0", "— starting live stream... —\n")
+            log_text.configure(state="disabled")
+
+        try:
+            self._dash_cockpit_stream = subprocess.Popen(
+                ["ssh", "-o", "StrictHostKeyChecking=no",
+                 "-o", "ConnectTimeout=5",
+                 "-o", "BatchMode=yes",
+                 VPS_HOST,
+                 "tail -f ~/aurum.finance/data/live/*/logs/live.log 2>/dev/null"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+                creationflags=_NO_WINDOW,
+            )
+        except (FileNotFoundError, OSError) as e:
+            if log_text:
+                log_text.configure(state="normal")
+                log_text.insert("end", f"— stream failed: {e} —\n")
+                log_text.configure(state="disabled")
+            return
+
+        self._dash_cockpit_streaming = True
+        btn = self._dash_widgets.get(("cp_stream_btn",))
+        if btn: btn.configure(text="  STOP STREAM  ", bg=RED)
+        head = self._dash_widgets.get(("cp_log_head",))
+        if head: head.configure(text=" LIVE LOG (streaming) ")
+
+        def reader():
+            proc = self._dash_cockpit_stream
+            if proc is None or proc.stdout is None:
+                return
+            try:
+                # readline() instead of `for line in proc.stdout:` because the
+                # iterator buffers aggressively and can hang even after the
+                # process is terminated. readline returns '' on EOF.
+                while self._dash_cockpit_streaming:
+                    try:
+                        line = proc.stdout.readline()
+                    except (ValueError, OSError):
+                        # pipe closed underneath us
+                        break
+                    if not line:  # EOF
+                        break
+                    if not self._dash_cockpit_streaming:
+                        break
+                    def append(l=line):
+                        if not getattr(self, "_dash_alive", False):
+                            return
+                        lt = self._dash_widgets.get(("cp_log_text",))
+                        if lt is None: return
+                        try:
+                            if not lt.winfo_exists(): return
+                            lt.configure(state="normal")
+                            lt.insert("end", l)
+                            # Trim to last 500 lines to prevent memory growth
+                            total = int(lt.index("end-1c").split(".")[0])
+                            if total > 500:
+                                lt.delete("1.0", f"{total - 500}.0")
+                            lt.see("end")
+                            lt.configure(state="disabled")
+                        except tk.TclError:
+                            pass
+                    try: self.after(0, append)
+                    except Exception: return
+            except Exception:
+                pass
+
+        threading.Thread(target=reader, daemon=True).start()
+
+    def _dash_cockpit_kill_stream(self):
+        """Idempotent — safe to call multiple times even if no stream exists.
+        Explicitly closes stdout to unblock the reader thread."""
+        self._dash_cockpit_streaming = False
+        proc = self._dash_cockpit_stream
+        self._dash_cockpit_stream = None  # clear handle first so kill is idempotent
+        if proc is None:
+            return
+        # Close stdout before terminating — this unblocks any reader
+        # thread that's sitting in readline() waiting for input.
+        if proc.stdout is not None:
+            try: proc.stdout.close()
+            except (OSError, ValueError): pass
+        try:
+            proc.terminate()
+            try: proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try: proc.wait(timeout=1)
+                except subprocess.TimeoutExpired: pass
+        except (OSError, ValueError):
+            pass
+
+    # ── PAPER: edit dialog ────────────────────────────────
+    def _dash_paper_edit_dialog(self):
+        """Modal-ish dialog to edit the persistent paper account state.
+        Lets the user set balance, deposit, withdraw, or reset."""
+        from core.portfolio_monitor import PortfolioMonitor
+        state = PortfolioMonitor.paper_state_load()
+        current = float(state.get("current_balance", 0) or 0)
+        initial = float(state.get("initial_balance", 0) or 0)
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Edit Paper Account")
+        dlg.configure(bg=BG)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        # Center over parent
+        try:
+            self.update_idletasks()
+            x = self.winfo_rootx() + (self.winfo_width()  // 2) - 220
+            y = self.winfo_rooty() + (self.winfo_height() // 2) - 180
+            dlg.geometry(f"440x360+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            dlg.geometry("440x360")
+        try:
+            ico = ROOT / "server" / "logo" / "aurum.ico"
+            if ico.exists(): dlg.iconbitmap(str(ico))
+        except Exception: pass
+
+        # Header
+        tk.Label(dlg, text=" EDIT PAPER ACCOUNT ",
+                 font=(FONT, 9, "bold"), fg=BG, bg=AMBER,
+                 padx=10, pady=6).pack(fill="x", padx=16, pady=(16, 0))
+        tk.Frame(dlg, bg=AMBER_D, height=1).pack(fill="x", padx=16)
+
+        info = tk.Frame(dlg, bg=BG); info.pack(fill="x", padx=16, pady=(10, 6))
+        tk.Label(info, text=f"Current balance:  ${current:,.2f}",
+                 font=(FONT, 9), fg=WHITE, bg=BG,
+                 anchor="w").pack(fill="x")
+        tk.Label(info, text=f"Initial balance:  ${initial:,.2f}",
+                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(fill="x")
+        tk.Label(info,
+                 text=f"Deposits: ${state.get('total_deposits', 0):,.2f}  ·  "
+                      f"Withdraws: ${state.get('total_withdraws', 0):,.2f}",
+                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(fill="x")
+        tk.Label(info,
+                 text=f"Realized PnL: ${state.get('realized_pnl', 0):,.2f}  ·  "
+                      f"Trades: {len(state.get('trades') or [])}",
+                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(fill="x")
+
+        tk.Frame(dlg, bg=DIM2, height=1).pack(fill="x", padx=16, pady=(8, 6))
+
+        # Input row
+        form = tk.Frame(dlg, bg=BG); form.pack(fill="x", padx=16, pady=(2, 4))
+        tk.Label(form, text="New balance  $", font=(FONT, 9),
+                 fg=AMBER, bg=BG).pack(side="left")
+        entry = tk.Entry(form, font=(FONT, 10, "bold"),
+                         fg=WHITE, bg=BG3, insertbackground=AMBER,
+                         bd=0, relief="flat", width=14)
+        entry.pack(side="left", padx=(4, 0), ipady=4)
+        entry.insert(0, f"{current:.2f}")
+        entry.select_range(0, "end")
+        entry.focus_set()
+
+        note_f = tk.Frame(dlg, bg=BG); note_f.pack(fill="x", padx=16, pady=(2, 8))
+        tk.Label(note_f, text="Note         ", font=(FONT, 8),
+                 fg=DIM, bg=BG).pack(side="left")
+        note_entry = tk.Entry(note_f, font=(FONT, 8),
+                              fg=WHITE, bg=BG3, insertbackground=AMBER,
+                              bd=0, relief="flat")
+        note_entry.pack(side="left", fill="x", expand=True, ipady=3)
+        note_entry.insert(0, "manual adjust")
+
+        # Status line
+        status_l = tk.Label(dlg, text="", font=(FONT, 7),
+                            fg=DIM, bg=BG, anchor="w")
+        status_l.pack(fill="x", padx=16, pady=(0, 6))
+
+        def _invalidate_paper_cache():
+            """Clear stale cached paper snapshot so the next portfolio render
+            re-reads from the (just-updated) paper_state.json file. Avoids a
+            race where a concurrent refresh() would overwrite the edit."""
+            pm = self._get_portfolio_monitor()
+            try:
+                with pm._lock:
+                    pm._cache.pop("paper", None)
+            except Exception:
+                pass
+
+        def _apply():
+            raw = entry.get().strip().replace(",", "").replace("$", "")
+            try:
+                val = float(raw)
+            except ValueError:
+                status_l.configure(text="✗ invalid amount", fg=RED)
+                return
+            if val < 0:
+                status_l.configure(text="✗ balance cannot be negative", fg=RED)
+                return
+            note = note_entry.get().strip() or "manual adjust"
+            PortfolioMonitor.paper_set_balance(val, note=note)
+            _invalidate_paper_cache()
+            delta = val - current
+            status_l.configure(
+                text=f"✓ saved  ·  {'+'  if delta >= 0 else ''}${delta:,.2f}  →  ${val:,.2f}",
+                fg=GREEN)
+            self.after(500, dlg.destroy)
+            # Re-render current tab (portfolio or home) to show fresh data
+            self.after(550, self._dash_force_refresh)
+
+        def _reset():
+            PortfolioMonitor.paper_reset()
+            _invalidate_paper_cache()
+            status_l.configure(text="✓ reset to default $10,000", fg=GREEN)
+            self.after(500, dlg.destroy)
+            self.after(550, self._dash_force_refresh)
+
+        # Buttons
+        btns = tk.Frame(dlg, bg=BG); btns.pack(fill="x", padx=16, pady=(6, 14))
+
+        def _mkbtn(parent, label, color, cmd):
+            b = tk.Label(parent, text=f"  {label}  ",
+                         font=(FONT, 8, "bold"),
+                         fg=BG, bg=color, cursor="hand2",
+                         padx=8, pady=5)
+            b.bind("<Button-1>", lambda e: cmd())
+            b.bind("<Enter>", lambda e: b.configure(bg=AMBER_B))
+            b.bind("<Leave>", lambda e: b.configure(bg=color))
+            return b
+
+        _mkbtn(btns, "APPLY",  GREEN, _apply).pack(side="left", padx=(0, 6))
+        _mkbtn(btns, "RESET",  RED,   _reset).pack(side="left", padx=6)
+        _mkbtn(btns, "CANCEL", DIM2,  dlg.destroy).pack(side="right")
+
+        # Quick-action buttons (deposit/withdraw shortcuts)
+        quick = tk.Frame(dlg, bg=BG); quick.pack(fill="x", padx=16, pady=(0, 10))
+        tk.Label(quick, text="Quick:", font=(FONT, 7),
+                 fg=DIM, bg=BG).pack(side="left", padx=(0, 6))
+        for label, amt in [("+$1K", 1000), ("+$5K", 5000),
+                           ("-$1K", -1000), ("-$5K", -5000)]:
+            def _q(_e=None, a=amt):
+                new = max(0, current + a)
+                entry.delete(0, "end")
+                entry.insert(0, f"{new:.2f}")
+                note_entry.delete(0, "end")
+                note_entry.insert(0, f"quick {'+' if a >= 0 else ''}${a}")
+            qb = tk.Label(quick, text=f" {label} ",
+                          font=(FONT, 7, "bold"),
+                          fg=AMBER, bg=BG3, cursor="hand2",
+                          padx=5, pady=2)
+            qb.pack(side="left", padx=2)
+            qb.bind("<Button-1>", _q)
+
+        dlg.bind("<Return>", lambda e: _apply())
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+
     def _dash_exit_to_markets(self):
         self._dash_alive = False
+        self._dash_cockpit_kill_stream()
         aid = getattr(self, "_dash_after_id", None)
         if aid:
             try: self.after_cancel(aid)
@@ -3722,8 +5270,11 @@ class App(tk.Tk):
         return sr
 
     def _command_center(self):
-        self._clr(); self._unbind()
-        self.history = ["main"]
+        self._clr(); self._clear_kb()
+        # Don't clobber the existing nav stack — other screens may have
+        # pushed entries. Only seed it if truly empty.
+        if not self.history:
+            self.history = ["main"]
         self.h_path.configure(text="> COMMAND CENTER")
         self.h_stat.configure(text="MANAGE", fg=AMBER_D)
         self.f_lbl.configure(text="ESC voltar  |  número para selecionar  |  H hub")
@@ -3805,7 +5356,7 @@ class App(tk.Tk):
             w.bind("<Button-1>", lambda e: self._menu("main"))
 
     def _command_coming_soon(self, name):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.h_path.configure(text=f"> COMMAND CENTER > {name}")
         self.h_stat.configure(text="ROADMAP", fg=DIM)
         self.f_lbl.configure(text="ESC voltar  |  H hub")
@@ -3838,7 +5389,7 @@ class App(tk.Tk):
 
     # ── COMMAND CENTER · SITE LOCAL ──────────────────────
     def _site_local(self):
-        self._clr(); self._unbind()
+        self._clr(); self._clear_kb()
         self.history = ["main", "command"]
         self.h_path.configure(text="> COMMAND CENTER > SITE LOCAL")
         self.f_lbl.configure(text="ESC voltar  |  H hub")
