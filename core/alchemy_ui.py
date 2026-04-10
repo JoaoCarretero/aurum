@@ -318,6 +318,8 @@ def render_cockpit(app):
     _init_panel_opportunities(app)
     _init_panel_positions(app)
     _init_panel_venue_health(app)
+    _init_panel_funding(app)
+    _init_panel_risk(app)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -461,4 +463,131 @@ def _init_panel_venue_health(app):
                 HEV_RED if status == "DOWN" else (HEV_HAZARD if status == "WARN" else HEV_GREEN),
             ])
         update_rows(rows, colors)
+    app._alch_tick.register(update)
+
+
+def _init_panel_funding(app):
+    frame = app._alch_p2
+    inner = tk.Frame(frame, bg=HEV_PANEL)
+    inner.pack(fill="both", expand=True, padx=4, pady=4)
+
+    venues = ["binance", "bybit", "okx", "hyperliquid", "gate"]
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT", "DOGEUSDT", "LINKUSDT"]
+
+    cells = {}
+    # Header row
+    hdr = tk.Frame(inner, bg=HEV_PANEL); hdr.pack(fill="x")
+    tk.Label(hdr, text="·", width=6, font=font("mono_px", 12),
+             fg=HEV_AMBER_D, bg=HEV_PANEL).pack(side="left")
+    for v in venues:
+        tk.Label(hdr, text=f"{VENUE_GLYPH.get(v, '·')} {v[:3].upper()}",
+                 width=9, font=font("serif", 10, "bold"),
+                 fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="left")
+
+    for sym in symbols:
+        row = tk.Frame(inner, bg=HEV_PANEL); row.pack(fill="x")
+        tk.Label(row, text=sym.replace("USDT", ""), width=6,
+                 font=font("mono_px", 13), fg=HEV_HAZARD, bg=HEV_PANEL).pack(side="left")
+        cells[sym] = {}
+        for v in venues:
+            lbl = tk.Label(row, text="—", width=9,
+                           font=font("mono_px", 13), fg=HEV_AMBER_D, bg="#0a0500")
+            lbl.pack(side="left", padx=1)
+            cells[sym][v] = lbl
+
+    footer = tk.Label(inner, text="", font=font("mono", 10),
+                      fg=HEV_AMBER_D, bg=HEV_PANEL, anchor="e")
+    footer.pack(fill="x", pady=(4, 0))
+
+    def update(snap):
+        funding = snap.get("funding", {}) or {}
+        for sym in symbols:
+            for v in venues:
+                rate = (funding.get(sym, {}) or {}).get(v)
+                if rate is None:
+                    cells[sym][v].configure(text="—", fg=HEV_AMBER_D, bg="#0a0500")
+                    continue
+                pct = rate * 100
+                txt = f"{pct:+.4f}"
+                if pct > 0.02:
+                    bg, fg = "#3a0a00", "#ff5030"
+                elif pct < 0:
+                    bg, fg = "#001a00", "#30ff80"
+                else:
+                    bg, fg = "#0a0500", HEV_AMBER
+                cells[sym][v].configure(text=txt, fg=fg, bg=bg)
+
+        # Next funding countdowns
+        import time as _t
+        nf = snap.get("next_funding", {}) or {}
+        now = _t.time()
+        parts = []
+        for v in venues:
+            ts = nf.get(v, 0) or 0
+            if ts and ts > now:
+                rem = int(ts - now)
+                h, m = divmod(rem // 60, 60)
+                parts.append(f"{v[:3].upper()} {h}h{m:02d}m")
+        footer.configure(text=("next: " + " · ".join(parts)) if parts else "")
+
+    app._alch_tick.register(update)
+
+
+def _init_panel_risk(app):
+    frame = app._alch_p8
+    inner = tk.Frame(frame, bg=HEV_PANEL)
+    inner.pack(fill="both", expand=True, padx=6, pady=4)
+
+    gauges = {}
+    for key, label in [
+        ("expo",    "EXPO"),
+        ("dd_day",  "DD DAY"),
+        ("dd_max",  "DD MAX"),
+        ("losses",  "LOSSES"),
+        ("sortino", "SORTINO"),
+        ("trades",  "TRADES"),
+    ]:
+        row = tk.Frame(inner, bg=HEV_PANEL); row.pack(fill="x", pady=1)
+        tk.Label(row, text=label, width=9, font=font("serif", 9),
+                 fg=HEV_AMBER_D, bg=HEV_PANEL, anchor="w").pack(side="left")
+        bar_wrap = tk.Frame(row, bg="#1a0f00", height=8, highlightthickness=1,
+                            highlightbackground=HEV_AMBER_DD)
+        bar_wrap.pack(side="left", fill="x", expand=True, padx=4)
+        bar_wrap.pack_propagate(False)
+        fill = tk.Frame(bar_wrap, bg=HEV_AMBER)
+        fill.place(x=0, y=0, relheight=1, relwidth=0)
+        val = tk.Label(row, text="—", width=8, font=font("mono_px", 12),
+                       fg=HEV_AMBER, bg=HEV_PANEL, anchor="e")
+        val.pack(side="left")
+        gauges[key] = (fill, val)
+
+    def set_bar(fill, val_lbl, pct, text, color=HEV_AMBER):
+        pct = max(0, min(1.0, pct))
+        fill.configure(bg=color)
+        fill.place_configure(relwidth=pct)
+        val_lbl.configure(text=text, fg=color)
+
+    def update(snap):
+        expo = snap.get("exposure_usd", 0) or 0
+        max_expo = 3000
+        set_bar(*gauges["expo"], expo / max_expo if max_expo else 0, f"{expo/max_expo*100:.0f}%" if max_expo else "—")
+
+        dd = abs(snap.get("drawdown_pct", 0) or 0)
+        set_bar(*gauges["dd_day"], dd / 5.0,
+                f"{-dd:+.1f}%",
+                color=HEV_GREEN if dd < 1 else (HEV_HAZARD if dd < 3 else HEV_RED))
+
+        set_bar(*gauges["dd_max"], dd / 5.0, f"{-dd:+.1f}%", color=HEV_GREEN)
+
+        loss = snap.get("losses_streak", 0) or 0
+        set_bar(*gauges["losses"], loss / 3.0, f"{loss}/3",
+                color=HEV_HAZARD if loss >= 2 else HEV_AMBER)
+
+        sort = snap.get("sortino", 0) or 0
+        set_bar(*gauges["sortino"], max(0, min(1, sort / 3)), f"{sort:.2f}",
+                color=HEV_GREEN if sort > 1 else HEV_AMBER)
+
+        trades = snap.get("trades_count", 0) or 0
+        set_bar(*gauges["trades"], min(1, trades / 40), str(trades))
+
     app._alch_tick.register(update)
