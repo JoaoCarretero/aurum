@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-☿ AURUM Finance — Terminal UI v2
+AURUM Finance — Terminal UI v2
 
 Architecture: Method × Strategy matrix
   Methods:    Backtest | Simulator | Live
-  Strategies: QUASAR | FERMION | MUON | ENSEMBLE
+  Strategies: CITADEL | RENAISSANCE | JANE STREET | MILLENNIUM
 """
 import os, sys, time, argparse, subprocess
 from pathlib import Path
@@ -104,10 +104,10 @@ def _wait(msg: str = ""):
 # ══════════════════════════════════════════════════════════════
 
 STRATEGIES = {
-    "quasar": {
-        "name": "GRAVITON",
-        "tag": "GRV",
-        "desc": "Trend-following fractal",
+    "citadel": {
+        "name": "CITADEL",
+        "tag": "CTD",
+        "desc": "Systematic momentum — trend-following fractal",
         "methods": ["backtest","simulator","live"],
         "info": [
             "Detecta tendencias macro via slope EMA200 + estrutura",
@@ -120,25 +120,25 @@ STRATEGIES = {
             "CHOP mode        Mean-reversion BB+RSI quando regime lateral",
         ],
     },
-    "fermion": {
-        "name": "PHOTON",
-        "tag": "PHT",
-        "desc": "Harmonicos Fibonacci XABCD",
+    "renaissance": {
+        "name": "RENAISSANCE",
+        "tag": "REN",
+        "desc": "Pattern recognition — harmonic geometry + Bayesian",
         "methods": ["backtest"],
         "info": [
             "Identifica padroes harmonicos classicos (Gartley, Bat,",
-            "Butterfly, Crab) com tolerancia adaptiva.",
+            "Butterfly, Crab) com scoring Bayesiano adaptivo.",
             "",
             "Patterns        Gartley · Bat · Butterfly · Crab",
             "Filtros         Shannon entropy + Hurst exponent",
-            "Scoring         Pattern quality × macro alignment",
-            "Confluencia     Fibonacci levels + estrutura de mercado",
+            "Scoring         Bayesian win rate × regime risk",
+            "Confluencia     Fibonacci levels + fractal alignment",
         ],
     },
-    "muon": {
-        "name": "NEUTRINO",
-        "tag": "NTR",
-        "desc": "Arbitrage delta-neutral",
+    "janestreet": {
+        "name": "JANE STREET",
+        "tag": "JST",
+        "desc": "Cross-venue arb — funding/basis multi-exchange",
         "methods": ["simulator","live"],
         "info": [
             "Captura spread de funding rate entre 13 exchanges",
@@ -150,10 +150,10 @@ STRATEGIES = {
             "Risk            Regime detection · hedge monitor · kill-switch",
         ],
     },
-    "newton": {
-        "name": "NEWTON",
-        "tag": "NWT",
-        "desc": "Mean reversion pairs trading",
+    "deshaw": {
+        "name": "DE SHAW",
+        "tag": "DSH",
+        "desc": "Statistical arb — pairs cointegration + mean reversion",
         "methods": ["backtest"],
         "info": [
             "Cointegration Engle-Granger entre pares do universo.",
@@ -164,10 +164,10 @@ STRATEGIES = {
             "Sizing          Proporcional a confianca (p-value)",
         ],
     },
-    "mercurio": {
-        "name": "MERCURIO",
-        "tag": "MRC",
-        "desc": "Order flow microstructure",
+    "jump": {
+        "name": "JUMP",
+        "tag": "JMP",
+        "desc": "Order flow — CVD divergence + volume imbalance",
         "methods": ["backtest"],
         "info": [
             "Edge do fluxo de ordens — taker buy/sell delta.",
@@ -178,10 +178,10 @@ STRATEGIES = {
             "Confluencia     CVD div + imbalance + structure",
         ],
     },
-    "thoth": {
-        "name": "THOTH",
-        "tag": "THT",
-        "desc": "Sentiment quantificado",
+    "bridgewater": {
+        "name": "BRIDGEWATER",
+        "tag": "BDW",
+        "desc": "Macro sentiment — funding + OI + LS ratio contrarian",
         "methods": ["backtest"],
         "info": [
             "Extremos de sentiment precedem reversoes.",
@@ -192,20 +192,20 @@ STRATEGIES = {
             "Composite       0.4 funding + 0.3 OI + 0.3 LS",
         ],
     },
-    "ensemble": {
-        "name": "HADRON",
-        "tag": "HDR",
-        "desc": "Integra todas as estrategias",
+    "millennium": {
+        "name": "MILLENNIUM",
+        "tag": "MLN",
+        "desc": "Multi-strategy pod — ensemble orchestrator",
         "methods": ["backtest"],
         "composite": True,
-        "components": ["quasar","fermion","newton","mercurio","thoth"],
+        "components": ["citadel","renaissance","deshaw","jump","bridgewater"],
         "info": [
             "Orquestra todos os engines num unico portfolio.",
             "",
             "Aggregator      Signal-level merge",
             "Weighting       Sortino rolling + regime boost",
             "Kill-switch     Pausa se Sortino(20) < -0.5",
-            "PROMETEU        ML meta-ensemble (opcao 8)",
+            "TWO SIGMA       ML meta-ensemble (opcao 8)",
         ],
     },
 }
@@ -216,22 +216,21 @@ def _resolve(strategy, method, config):
     lev   = config.get("leverage","")
     mode  = config.get("mode","1")
     if method == "backtest":
-        if strategy == "quasar":    return "backtest","engines/backtest.py",[days,plots,lev,""]
-        if strategy == "fermion":   return "multi","engines/multistrategy.py",["3",days,"","","","","",plots,""]
-        if strategy == "newton":    return "newton","engines/newton.py",[days,lev,"n",""]
-        if strategy == "mercurio":  return "mercurio","engines/mercurio.py",[days,lev,"n",""]
-        if strategy == "thoth":     return "thoth","engines/thoth.py",[days,lev,""]
-        if strategy == "ensemble":  return "multi","engines/multistrategy.py",["1",days,"","","","","",plots,""]
+        if strategy == "citadel":     return "backtest","engines/backtest.py",[days,plots,lev,""]
+        if strategy == "renaissance": return "multi","engines/multistrategy.py",["3",days,"","","","","",plots,""]
+        if strategy == "deshaw":      return "newton","engines/newton.py",[days,lev,"n",""]
+        if strategy == "jump":        return "mercurio","engines/mercurio.py",[days,lev,"n",""]
+        if strategy == "bridgewater": return "thoth","engines/thoth.py",[days,lev,""]
+        if strategy == "millennium":  return "multi","engines/multistrategy.py",["1",days,"","","","","",plots,""]
     if method == "simulator":
-        if strategy == "quasar": return "live","engines/live.py",[mode]
-        if strategy == "muon":   return "arb","engines/arbitrage.py",[mode]
+        if strategy == "citadel":    return "live","engines/live.py",[mode]
+        if strategy == "janestreet": return "arb","engines/arbitrage.py",[mode]
     if method == "live":
-        if strategy == "quasar": return "live","engines/live.py",[mode]
-        if strategy == "muon":   return "arb","engines/arbitrage.py",[mode]
+        if strategy == "citadel":    return "live","engines/live.py",[mode]
+        if strategy == "janestreet": return "arb","engines/arbitrage.py",[mode]
     return "","",[]
 
-ENGINE_NAMES = {"backtest":"GRAVITON","multi":"HADRON","live":"GRAVITON","arb":"NEUTRINO",
-                "newton":"NEWTON","mercurio":"MERCURIO","thoth":"THOTH"}
+from config.engines import PROC_NAMES as ENGINE_NAMES
 def _en(e): return ENGINE_NAMES.get(e, e.upper())
 
 

@@ -32,7 +32,7 @@ try:
 except ImportError:
     HAS_LGBM = False
 
-log = logging.getLogger("PROMETEU")
+log = logging.getLogger("TWO_SIGMA")  # TWO SIGMA (formerly PROMETEU) — ML meta-ensemble engine
 log.setLevel(logging.INFO)
 if not log.handlers:
     _h = logging.StreamHandler(sys.stdout)

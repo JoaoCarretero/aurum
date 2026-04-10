@@ -200,36 +200,39 @@ def calc_levels(df, idx, direction):
 def label_trade(df, entry_idx, direction, entry, stop, target):
     """
     Trailing stop inteligente:
-      Fase 1: preço move 1.0× risco → stop para breakeven
-      Fase 2: preço move 1.5× risco → trailing a 0.5× risco
+      Fase 1: preço move TRAIL_BE_MULT× risco → stop para breakeven
+      Fase 2: preço move TRAIL_ACTIVATE_MULT× risco → trailing a TRAIL_DISTANCE_MULT× risco
     """
     end       = min(entry_idx + MAX_HOLD, len(df))
     cur_stop  = stop
     risk      = abs(entry - stop)
     be_done   = False
     trail_done = False
+    _be  = TRAIL_BE_MULT
+    _act = TRAIL_ACTIVATE_MULT
+    _dst = TRAIL_DISTANCE_MULT
 
     for j in range(entry_idx, end):
         h, l = df["high"].iloc[j], df["low"].iloc[j]
         if direction == "BULLISH":
-            if not be_done and h >= entry + risk:
+            if not be_done and h >= entry + _be * risk:
                 cur_stop = entry; be_done = True
-            if be_done and not trail_done and h >= entry + 1.5*risk:
-                cur_stop = max(cur_stop, h - 0.5*risk); trail_done = True
+            if be_done and not trail_done and h >= entry + _act * risk:
+                cur_stop = max(cur_stop, h - _dst * risk); trail_done = True
             elif trail_done:
-                cur_stop = max(cur_stop, h - 0.5*risk)
+                cur_stop = max(cur_stop, h - _dst * risk)
             if l <= cur_stop:
                 result = "WIN" if cur_stop >= entry else "LOSS"
                 return result, j-entry_idx, cur_stop
             if h >= target:
                 return "WIN", j-entry_idx, target
         else:
-            if not be_done and l <= entry - risk:
+            if not be_done and l <= entry - _be * risk:
                 cur_stop = entry; be_done = True
-            if be_done and not trail_done and l <= entry - 1.5*risk:
-                cur_stop = min(cur_stop, l + 0.5*risk); trail_done = True
+            if be_done and not trail_done and l <= entry - _act * risk:
+                cur_stop = min(cur_stop, l + _dst * risk); trail_done = True
             elif trail_done:
-                cur_stop = min(cur_stop, l + 0.5*risk)
+                cur_stop = min(cur_stop, l + _dst * risk)
             if h >= cur_stop:
                 result = "WIN" if cur_stop <= entry else "LOSS"
                 return result, j-entry_idx, cur_stop

@@ -28,7 +28,7 @@ RUN_ID=f"{_D}_{_T}";DIR=Path(f"data/arbitrage/{RUN_ID}")
 for d in("logs","state","reports"):(DIR/d).mkdir(parents=True,exist_ok=True)
 
 fmt=logging.Formatter("%(asctime)s %(levelname)-6s %(message)s",datefmt="%Y-%m-%d %H:%M:%S")
-log=logging.getLogger("a.arb");log.handlers.clear();log.setLevel(logging.DEBUG);log.propagate=False
+log=logging.getLogger("JANE_STREET")  # JANE STREET (formerly ARBITRAGE/NEUTRINO);log.handlers.clear();log.setLevel(logging.DEBUG);log.propagate=False
 sh=logging.StreamHandler();sh.setFormatter(fmt);sh.setLevel(logging.INFO);log.addHandler(sh)
 fh=logging.FileHandler(DIR/"logs"/"arb.log",encoding="utf-8");fh.setFormatter(fmt);fh.setLevel(logging.DEBUG);log.addHandler(fh)
 tlog=logging.getLogger("a.t");tlog.handlers.clear();tlog.setLevel(logging.INFO);tlog.propagate=False

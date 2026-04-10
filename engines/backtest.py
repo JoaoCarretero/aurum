@@ -1,9 +1,12 @@
 """
-☿ AZOTH v3.6 — AURUM Finance Backtest Engine
-==============================================
+CITADEL v3.6 — AURUM Finance Systematic Momentum Engine
+========================================================
+# CITADEL (formerly AZOTH) — Trend-following + fractal alignment
 Main scan loop, reporting, and execution entry point.
 """
 import os, sys, time, math, json, random, logging
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -38,35 +41,46 @@ from analysis.benchmark import (
     print_year_by_year, print_bear_market_enhanced, print_benchmark,
 )
 
-# ── Runtime setup ─────────────────────────────────────────────
-from analysis.plots import plot_dashboard, plot_montecarlo, plot_trades
-RUN_DATE = datetime.now().strftime("%Y-%m-%d")
-RUN_TIME = datetime.now().strftime("%H%M")
-RUN_ID   = f"{RUN_DATE}_{RUN_TIME}"
-RUN_DIR  = _Path(f"data/{RUN_DATE}")
-(RUN_DIR / "charts").mkdir(parents=True, exist_ok=True)
-(RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)
-(RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
+# ── Runtime setup (lazy — only runs when setup_run() is called) ──
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-    handlers=[
-        logging.FileHandler(RUN_DIR / "logs" / "run.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-log = logging.getLogger("AZOTH")
+RUN_DATE: str = ""
+RUN_TIME: str = ""
+RUN_ID: str   = ""
+RUN_DIR: _Path = _Path(".")
+log = logging.getLogger("CITADEL")
+_tl = logging.getLogger("CITADEL.trades")
+_vl = logging.getLogger("CITADEL.val")
 
-_tl = logging.getLogger("AZOTH.trades")
-_th = logging.FileHandler(RUN_DIR / "logs" / "trades.log", encoding="utf-8")
-_th.setFormatter(logging.Formatter("%(message)s"))
-_tl.addHandler(_th); _tl.setLevel(logging.DEBUG); _tl.propagate = False
 
-_vl = logging.getLogger("AZOTH.val")
-_vh = logging.FileHandler(RUN_DIR / "logs" / "validation.log", encoding="utf-8")
-_vh.setFormatter(logging.Formatter("%(message)s"))
-_vl.addHandler(_vh); _vl.setLevel(logging.DEBUG); _vl.propagate = False
+def setup_run(engine_name: str = "citadel") -> tuple[str, _Path]:
+    """Initialise RUN_DIR, logging, and file handlers. Call once at startup."""
+    global RUN_DATE, RUN_TIME, RUN_ID, RUN_DIR
+
+    from core.run_manager import create_run_dir
+
+    RUN_ID, RUN_DIR = create_run_dir(engine_name)
+    RUN_DATE = datetime.now().strftime("%Y-%m-%d")
+    RUN_TIME = datetime.now().strftime("%H%M")
+
+    # Logging: DEBUG to file, WARNING+ to terminal
+    _fmt = logging.Formatter("%(asctime)s  %(levelname)s  %(message)s")
+    _fh = logging.FileHandler(RUN_DIR / "log.txt", encoding="utf-8")
+    _fh.setLevel(logging.DEBUG)
+    _fh.setFormatter(_fmt)
+    _sh = logging.StreamHandler(sys.stdout)
+    _sh.setLevel(logging.WARNING)
+    _sh.setFormatter(_fmt)
+    logging.basicConfig(level=logging.DEBUG, handlers=[_fh, _sh])
+
+    _th = logging.FileHandler(RUN_DIR / "trades.log", encoding="utf-8")
+    _th.setFormatter(logging.Formatter("%(message)s"))
+    _tl.addHandler(_th); _tl.setLevel(logging.DEBUG); _tl.propagate = False
+
+    _vh = logging.FileHandler(RUN_DIR / "log.txt", mode="a", encoding="utf-8")
+    _vh.setFormatter(logging.Formatter("%(message)s"))
+    _vl.addHandler(_vh); _vl.setLevel(logging.DEBUG); _vl.propagate = False
+
+    return RUN_ID, RUN_DIR
 
 SEP = "─" * 80
 
@@ -105,6 +119,11 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
     _bbu   = df["bb_upper"].values;     _bbl   = df["bb_lower"].values
     _bbm   = df["bb_mid"].values;       _bbw   = df["bb_width"].values
     _cls   = df["close"].values
+    # Live/backtest parity: speed filter precomputado (mesma fórmula do live check_signal)
+    _speed = (
+        ((df["high"] - df["low"]) / df["close"])
+        .rolling(SPEED_WINDOW).mean().values
+    )
     _htfm  = df[f"htf{len(HTF_STACK)}_macro"].values if MTF_ENABLED and f"htf{len(HTF_STACK)}_macro" in df.columns else None
     _htfs  = {i: {k: df[f"htf{i}_{k}"].values for k in ["struct","strength","score","macro"] if f"htf{i}_{k}" in df.columns}
               for i in range(1, len(HTF_STACK)+1)} if MTF_ENABLED else {}
@@ -136,6 +155,23 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
         open_pos    = [(ei, s) for ei, s in open_pos if ei > idx]
         active_syms = [s for _, s in open_pos]
+
+        # EMPIRICAL — validate OOS: 20-24h UTC tem WR=47.5%
+        if VETO_HOURS_UTC:
+            _hour = df["time"].iloc[idx].hour
+            if _hour in VETO_HOURS_UTC:
+                vetos["hour_filter"] += 1; continue
+
+        # Paridade com live: session block (UTC) — off por default
+        if SESSION_BLOCK_ACTIVE:
+            _hour = df["time"].iloc[idx].hour
+            if _hour in SESSION_BLOCK_HOURS:
+                vetos["sessao_baixa_liquidez"] += 1; continue
+
+        # Paridade com live: speed filter (mercado lento → sem edge direcional)
+        _sp = _speed[idx]
+        if not np.isnan(_sp) and _sp < SPEED_MIN:
+            vetos["mercado_lento"] += 1; continue
 
         macro_b = "CHOP"
         if MTF_ENABLED:
@@ -241,18 +277,22 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
         ep = float(exit_p)
         slip_exit = SLIPPAGE + SPREAD          # C2: slippage na saída (market order)
+        _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
         if direction == "BULLISH":
             entry_cost = entry * (1 + COMMISSION)              # C1: comissão entrada
             ep_net     = ep * (1 - COMMISSION - slip_exit)     # C2: comissão + slip saída
-            funding    = -(size * entry * FUNDING_PER_8H * duration / 32)
+            funding    = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl        = size * (ep_net - entry_cost) + funding
         else:
             entry_cost = entry * (1 - COMMISSION)              # C1: comissão entrada
             ep_net     = ep * (1 + COMMISSION + slip_exit)     # C2: comissão + slip saída
-            funding    = +(size * entry * FUNDING_PER_8H * duration / 32)
+            funding    = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl        = size * (entry_cost - ep_net) + funding
         pnl     = round(pnl * LEVERAGE, 2)          # alavancagem escala PnL linearmente
-        account = max(account + pnl, account * 0.5)
+        # Liquidation check: if leveraged loss exceeds 90% of account, force liquidation
+        if LEVERAGE > 1.0 and abs(pnl) > account * 0.9 and pnl < 0:
+            pnl = -round(account * 0.95, 2)  # liquidated — lose 95%
+        account = max(account + pnl, 0.0)    # account can go to zero (liquidation)
 
         if result == "LOSS":
             consecutive_losses += 1
@@ -315,7 +355,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 def print_header():
     print(f"\n{SEP}")
     tf_label = f"{INTERVAL}+{HTF_INTERVAL}(MTF)" if MTF_ENABLED else INTERVAL
-    print(f"  GRAVITON v3.6  ·  {RUN_ID}")
+    print(f"  CITADEL v3.6  ·  {RUN_ID}")
     print(f"  {len(SYMBOLS)} ativos  ·  {tf_label}  ·  {N_CANDLES:,} candles  ·  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  Risk {BASE_RISK*100:.1f}–{MAX_RISK*100:.1f}%  ·  RR {TARGET_RR}x  ·  MaxPos {MAX_OPEN_POSITIONS}")
     print(f"  {RUN_DIR}/")
@@ -395,12 +435,12 @@ def print_veredito(all_trades, eq, mdd_pct, mc, wf, cond, ratios, wf_regime=None
         log.warning(f"Benchmark falhou: {e}")
 
 
-def export_json(all_trades, eq, mc, cond, ratios):
+def export_json(all_trades, eq, mc, cond, ratios, price_data=None):
     closed = [t for t in all_trades if t["result"] in ("WIN","LOSS")]
     wr     = sum(1 for t in closed if t["result"]=="WIN")/max(len(closed),1)*100
     chop_n = sum(1 for t in closed if t.get("chop_trade"))
     payload = {
-        "version": "azoth-3.6", "run_id": RUN_ID,
+        "version": "citadel-3.6", "run_id": RUN_ID,
         "timestamp": datetime.now().isoformat(),
         "config": {
             "interval": INTERVAL, "n_candles": N_CANDLES, "symbols": SYMBOLS,
@@ -433,26 +473,28 @@ def export_json(all_trades, eq, mc, cond, ratios):
                    for t in all_trades],
         "equity": eq,
     }
-    fname = str(RUN_DIR / "reports" / f"azoth_{INTERVAL}_v36.json")
+    if price_data:
+        payload["price_data"] = price_data
+    fname = str(RUN_DIR / f"citadel_{INTERVAL}_v36.json")
+    _Path(fname).parent.mkdir(parents=True, exist_ok=True)
     with open(fname,"w",encoding="utf-8") as f:
         json.dump(payload,f,ensure_ascii=False,indent=2,default=str)
     print(f"  JSON → {fname}")
 
 
 if __name__ == "__main__":
+    import argparse
+    _ap = argparse.ArgumentParser(description="CITADEL v3.6 — AURUM Finance Backtest")
+    _ap.add_argument("--days",     type=int,   default=SCAN_DAYS,  help="Scan period in days")
+    _ap.add_argument("--basket",   type=str,   default="default",  help="Asset basket name")
+    _ap.add_argument("--leverage", type=float, default=LEVERAGE,   help="Leverage multiplier")
+    _ap.add_argument("--no-menu",  action="store_true",            help="Skip post-run interactive menu")
+    _args = _ap.parse_args()
 
-    print("\n" + "═"*52)
-    print("  ☿  AZOTH v3.6   AURUM Finance")
-    print("  ── ALL-SCALE FRACTAL ENGINE ──────────────")
-    print("  15m entrada × 1h × 4h × 1d  estrutura")
-    print("  [U1]Ω-risk [U2]SoftCorr [U3]CHOP-MR")
-    print("═"*52)
-
-    print(f"\n  Exemplos: 30=1m  90=3m  180=6m  365=1ano  730=2anos")
-    print(f"  (365 dias = ~35k candles 15m + 8.5k 1h + 2.4k 4h + 465 1d × 28 símbolos)")
-    _days_in = safe_input(f"  Período em dias [{SCAN_DAYS}] > ").strip()
-    if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
-        SCAN_DAYS = int(_days_in)
+    SCAN_DAYS = _args.days
+    LEVERAGE = _args.leverage
+    if _args.basket in BASKETS:
+        SYMBOLS = BASKETS[_args.basket]
 
     N_CANDLES = SCAN_DAYS * 24 * 4
     HTF_N_CANDLES_MAP = {
@@ -460,7 +502,6 @@ if __name__ == "__main__":
         "4h": SCAN_DAYS *  6       + 100,
         "1d": SCAN_DAYS            + 100,
     }
-
     _TFP         = _tf_params(ENTRY_TF)
     MIN_STOP_PCT = _TFP["min_stop_pct"]
     SLOPE_N      = _TFP["slope_n"]
@@ -469,272 +510,392 @@ if __name__ == "__main__":
     PIVOT_N      = _TFP["pivot_n"]
     MAX_HOLD     = _TFP["max_hold"]
 
-    SYMBOLS = select_symbols(SYMBOLS)
+    setup_run()
 
-    _plot_ans = safe_input("  Gerar graficos? [s/N] > ", "n").strip().lower()
-    GENERATE_PLOTS = _plot_ans in ("s", "sim", "y", "yes", "1")
+    # ── Helpers para inline progress ──
+    def _progress_bar(done, total, width=20):
+        filled = int(done / max(total, 1) * width)
+        return "█" * filled + "░" * (width - filled)
 
-    _lev_in = safe_input(f"  Leverage [{LEVERAGE}x] > ").strip()
-    if _lev_in:
-        try:
-            _lev_val = float(_lev_in.replace("x",""))
-            if 0.1 <= _lev_val <= 125:
-                LEVERAGE = _lev_val
-        except ValueError:
-            pass
+    def _write(txt):
+        sys.stdout.write(f"\r  {txt}")
+        sys.stdout.flush()
 
-    _total_req = (
-        len(SYMBOLS) * (
-            math.ceil(N_CANDLES / 1000) +
-            math.ceil(HTF_N_CANDLES_MAP["1h"] / 1000) +
-            math.ceil(HTF_N_CANDLES_MAP["4h"] / 1000) +
-            math.ceil(HTF_N_CANDLES_MAP["1d"] / 1000)
-        )
-    )
-    _est_mins = round(_total_req * 0.08 / 60, 1)
+    def _writeln(txt):
+        sys.stdout.write(f"\r  {txt}\n")
+        sys.stdout.flush()
 
-    print(f"\n{SEP}")
-    print(f"  GRAVITON  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
-    print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x  ·  risk {BASE_RISK*100:.1f}–{MAX_RISK*100:.1f}%  ·  RR {TARGET_RR}x")
-    print(f"  {N_CANDLES:,} candles  ·  ~{_total_req} requests  ·  ~{_est_mins} min")
-    if GENERATE_PLOTS: print(f"  charts on")
-    print(f"  {RUN_DIR}/")
-    print(SEP)
-    safe_input("  enter para iniciar... ")
+    # ══════════════════════════════════════════════════════════════
+    #  BANNER INSTITUCIONAL
+    # ══════════════════════════════════════════════════════════════
+    _BW = 62
+    def _bl(txt): return f"  ║  {txt:{_BW-4}s}║"
+    def _bh():    return f"  ╠{'═'*_BW}╣"
 
-    print_header()
-    log.info(f"AZOTH v3.6 iniciado — {RUN_ID}  tf={INTERVAL}  nc={N_CANDLES}  plots={'on' if GENERATE_PLOTS else 'off'}")
+    _basket_name = _args.basket
+    _sym_list = ", ".join(s.replace("USDT","") for s in SYMBOLS[:5])
+    if len(SYMBOLS) > 5: _sym_list += f", ... (+{len(SYMBOLS)-5})"
 
-    S = "─" * 80
+    print(f"\n  ╔{'═'*_BW}╗")
+    print(_bl("CITADEL v3.6 · AZOTH Engine · AURUM Finance"))
+    print(_bh())
+    print(_bl(f"UNIVERSO       {len(SYMBOLS)} ativos (basket: {_basket_name})"))
+    print(_bl(f"PERÍODO        {SCAN_DAYS} dias · {N_CANDLES:,} candles/ativo"))
+    print(_bl(f"TIMEFRAME      {INTERVAL}"))
+    print(_bl(f"LEVERAGE       {LEVERAGE}x"))
+    print(_bl(f"CAPITAL        ${ACCOUNT_SIZE:,.0f}"))
+    print(_bh())
+    print(_bl("ESTRATÉGIA"))
+    print(_bl(""))
+    print(_bl("1. SIGNAL  Score Omega fractal 5D"))
+    print(_bl(f"   Componentes: struct({OMEGA_WEIGHTS['struct']:.0%})  "
+              f"flow({OMEGA_WEIGHTS['flow']:.0%})"))
+    print(_bl(f"   cascade({OMEGA_WEIGHTS['cascade']:.0%})  "
+              f"momentum({OMEGA_WEIGHTS['momentum']:.0%})  "
+              f"pullback({OMEGA_WEIGHTS['pullback']:.0%})"))
+    print(_bl(f"   Entry threshold: {SCORE_THRESHOLD} (BEAR)  "
+              f"{SCORE_BY_REGIME.get('BULL', SCORE_THRESHOLD)} (BULL)"))
+    print(_bl(""))
+    print(_bl("2. FILTER  Regime + Veto"))
+    print(_bl(f"   Regime: macro slope ({MACRO_SYMBOL})"))
+    print(_bl(f"   Veto hours UTC: {list(VETO_HOURS_UTC) if VETO_HOURS_UTC else 'off'}"))
+    print(_bl(""))
+    print(_bl("3. SIZING  Convex Kelly fraccional"))
+    print(_bl(f"   Risk {BASE_RISK*100:.1f}-{MAX_RISK*100:.1f}%  "
+              f"Kelly {KELLY_FRAC}  MaxPos {MAX_OPEN_POSITIONS}"))
+    print(_bl(""))
+    print(_bl("4. EXIT    Estrutural + trailing"))
+    print(_bl(f"   Stop {STOP_ATR_M}x ATR  Target {TARGET_RR}x RR  "
+              f"MaxHold {MAX_HOLD}"))
+    print(_bl(""))
+    print(_bl("5. RISK    3-layer kill switch"))
+    _dd_levels = "  ".join(f"DD>{k*100:.0f}%={v*100:.0f}%sz" for k,v in
+                           sorted(DD_RISK_SCALE.items(), reverse=True)[:3])
+    print(_bl(f"   {_dd_levels}"))
+    print(_bh())
+    print(_bl("CUSTOS MODELADOS"))
+    print(_bl(f"C1 comissao    {COMMISSION*100:.2f}%   "
+              f"C2 slippage    {SLIPPAGE*100:.2f}%"))
+    print(_bl(f"Spread         {SPREAD*100:.2f}%   "
+              f"Funding/8h     {FUNDING_PER_8H*100:.2f}%"))
+    print(_bh())
+    print(_bl("PIPELINE: download > indicators > signals > backtest >"))
+    print(_bl("          integrity > overfit(6) > report"))
+    print(f"  ╚{'═'*_BW}╝")
 
-    print(f"\n{S}\n  DADOS   {ENTRY_TF}   {N_CANDLES:,} candles   ({SCAN_DAYS} dias)\n{S}")
+    log.info(f"CITADEL v3.6 — {RUN_ID}  tf={INTERVAL}  nc={N_CANDLES}  "
+             f"days={SCAN_DAYS}  basket={_basket_name}  lev={LEVERAGE}")
+
+    # ══════════════════════════════════════════════════════════════
+    #  FASE 2 — FETCH (inline progress)
+    # ══════════════════════════════════════════════════════════════
     _fetch_syms = list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms:
         _fetch_syms.insert(0, MACRO_SYMBOL)
-    all_dfs = fetch_all(_fetch_syms)
+
+    _fetch_ok: list[str] = []
+    _fetch_fail: list[str] = []
+    def _fetch_progress(sym, done, total, ok):
+        if ok: _fetch_ok.append(sym)
+        else:  _fetch_fail.append(sym)
+        bar = _progress_bar(done, total)
+        names = "  ".join(s.replace("USDT","") + " ✓" for s in _fetch_ok[-6:])
+        _write(f"FETCHING  [{bar}] {done}/{total}   {names}   ")
+
+    print()
+    all_dfs = fetch_all(_fetch_syms, n_candles=N_CANDLES, futures=True,
+                        on_progress=_fetch_progress)
     for sym, df in all_dfs.items():
         validate(df, sym)
-    if not all_dfs: print("Sem dados."); sys.exit(1)
+    if not all_dfs:
+        print("\n  Sem dados."); sys.exit(1)
+
+    # Fetch summary
+    _first = None; _last = None
+    for df in all_dfs.values():
+        t0 = df['time'].iloc[0]; t1 = df['time'].iloc[-1]
+        if _first is None or t0 < _first: _first = t0
+        if _last is None or t1 > _last: _last = t1
+    _nc_actual = max(len(df) for df in all_dfs.values())
+    _span_str = f"{_first.strftime('%b %d')} → {_last.strftime('%b %d')}" if _first else ""
+    _writeln(f"✓ {len(all_dfs)}/{len(_fetch_syms)} símbolos · {_nc_actual:,} candles · {_span_str}")
 
     htf_stack_by_sym: dict[str, dict] = {}
     if MTF_ENABLED:
         for tf in HTF_STACK:
             nc = HTF_N_CANDLES_MAP.get(tf, 300)
-            print(f"\n{S}\n  HTF   {tf}   {nc:,} candles\n{S}")
             tf_dfs = fetch_all(list(all_dfs.keys()), interval=tf, n_candles=nc)
             for sym, df_h in tf_dfs.items():
                 df_h = prepare_htf(df_h, htf_interval=tf)
                 htf_stack_by_sym.setdefault(sym, {})[tf] = df_h
 
-    print(f"\n{S}\n  PRÉ-PROCESSAMENTO\n{S}")
+    # ── Pre-processing (silent) ──
     macro_series = detect_macro(all_dfs)
-    if macro_series is not None:
-        bull_n = (macro_series=="BULL").sum()
-        bear_n = (macro_series=="BEAR").sum()
-        chop_n = (macro_series=="CHOP").sum()
-        total  = bull_n + bear_n + chop_n
-        print(f"  Macro ({MACRO_SYMBOL})    "
-              f"↑ BULL {bull_n}c ({bull_n/total*100:.0f}%)   "
-              f"↓ BEAR {bear_n}c ({bear_n/total*100:.0f}%)   "
-              f"↔ CHOP {chop_n}c ({chop_n/total*100:.0f}%)")
-    else:
-        print("  Macro: N/A — usando CHOP")
-
     corr = build_corr_matrix(all_dfs)
-    top_pairs = sorted([(k,v) for k,v in corr.items() if k[0]<k[1]], key=lambda x:-x[1])[:5]
-    corr_str  = "   ".join(
-        f"{a[0].replace('USDT','')}/{a[1].replace('USDT','')}: {v:.2f}"
-        for a, v in top_pairs)
-    print(f"  Correlação      {corr_str}")
 
-    vol_summary = {}
-    for sym, df in all_dfs.items():
-        df_i = indicators(df)
-        vc   = df_i["vol_regime"].value_counts().to_dict()
-        vol_summary[sym.replace("USDT","")] = vc
-    total_vc: dict = {}
-    for vc in vol_summary.values():
-        for k, v in vc.items(): total_vc[k] = total_vc.get(k,0) + v
-    tot = sum(total_vc.values())
-    vol_dist = "   ".join(f"{k} {v/tot*100:.0f}%" for k, v in
-                          sorted(total_vc.items(), key=lambda x: ["LOW","NORMAL","HIGH","EXTREME"].index(x[0]) if x[0] in ["LOW","NORMAL","HIGH","EXTREME"] else 99))
-    print(f"  Vol Regime      {vol_dist}")
-
-    print(f"\n{S}")
-    print(f"  SCAN   {'ATIVO':12s}  {'N':>5s}  {'W/L':>7s}  {'WR':>6s}  {'L/S':>6s}  {'Ω̄':>5s}  {'PnL':>10s}")
-    print(S)
+    # ══════════════════════════════════════════════════════════════
+    #  FASE 3 — SCAN (inline progress)
+    # ══════════════════════════════════════════════════════════════
     all_trades: list = []
     all_vetos = defaultdict(int)
-    for sym, df in all_dfs.items():
-        if sym not in SYMBOLS:
-            continue
+    _scan_syms = [s for s in all_dfs if s in SYMBOLS]
+    _scan_done = 0
+    for sym in _scan_syms:
+        df = all_dfs[sym]
+        _scan_done += 1
+        _nt = len(all_trades)
+        bar = _progress_bar(_scan_done, len(_scan_syms))
+        _write(f"SCANNING  [{bar}] {_scan_done}/{len(_scan_syms)}  {sym:12s}  trades: {_nt}   ")
+
         trades, vetos = scan_symbol(df, sym, macro_series, corr,
                                     htf_stack_by_sym.get(sym) if MTF_ENABLED else None)
         all_trades.extend(trades)
         for k, v in vetos.items(): all_vetos[k] += v
-        closed = [t for t in trades if t["result"] in ("WIN","LOSS")]
-        w    = sum(1 for t in closed if t["result"]=="WIN")
-        l2   = len(closed) - w
-        pnl  = sum(t["pnl"] for t in closed)
-        bull = sum(1 for t in trades if t["direction"]=="BULLISH")
-        bear = sum(1 for t in trades if t["direction"]=="BEARISH")
-        avg  = sum(t["score"] for t in trades)/max(len(trades),1) if trades else 0.0
-        wr2  = w/len(closed)*100 if closed else 0.0
-        chop_mr = sum(1 for t in trades if t.get("chop_trade"))
-        flag = "  ⚠ WR<25%" if wr2<25 and closed else ""
-        chop_flag = f"  [MR:{chop_mr}]" if chop_mr > 0 else ""
-        print(f"  ✓  {sym:12s}  {len(trades):>5d}  {w:>3d}/{l2:<3d}  {wr2:>5.1f}%  "
-              f"L{bull}/S{bear}  {avg:.3f}  ${pnl:>+9,.0f}{flag}{chop_flag}")
 
-    print(f"\n{S}\n  FILTROS DE VETO\n{S}")
-    total_v = sum(all_vetos.values())
-    for k, n in sorted(all_vetos.items(), key=lambda x: -x[1]):
-        bar = "▓" * min(int(n/total_v*35), 35) if total_v else ""
-        print(f"  {k:42s}  {n:>6d}  {n/total_v*100:>4.1f}%  {bar}")
-
-    if not all_trades: print("\n  Sem trades."); sys.exit(1)
+    if not all_trades:
+        print("\n  Sem trades."); sys.exit(1)
     all_trades.sort(key=lambda x: x["timestamp"])
     closed = [t for t in all_trades if t["result"] in ("WIN","LOSS")]
-    if not closed: print("\n  Sem trades fechados."); sys.exit(1)
+    if not closed:
+        print("\n  Sem trades fechados."); sys.exit(1)
 
+    w_total = sum(1 for t in closed if t["result"]=="WIN")
+    l_total = len(closed) - w_total
+    wr_total = w_total/len(closed)*100
+    _writeln(f"✓ {len(closed)} trades · {w_total}W / {l_total}L · WR {wr_total:.1f}%")
+
+    # ══════════════════════════════════════════════════════════════
+    #  FASE 4 — RESULTADO COMPACTO
+    # ══════════════════════════════════════════════════════════════
     pnl_s = [t["pnl"] for t in closed]
     eq, mdd, mdd_pct, ms = equity_stats(pnl_s)
     ratios = calc_ratios(pnl_s)
 
-    print(f"\n{S}")
-    print(f"  RESULTADOS   {'ATIVO':12s}  {'N':>3s}  {'W/L':>7s}  {'WR':>6s}  {'L/S':>6s}  {'Ω̄':>5s}  {'PnL':>12s}  OK")
-    print(S)
+    total_pnl = sum(pnl_s)
+    roi = ratios['ret']
+    sh = ratios['sharpe'] or 0.0
+    has_edge = wr_total >= 50 and total_pnl > 0 and sh >= 1.0
+    edge_lbl = "EDGE DETECTADO" if has_edge else "SEM EDGE"
+    edge_ico = "✓" if has_edge else "✗"
+    _RW = 58
+    def _rb(txt): return f"  ║  {txt:{_RW-4}s}║"
+    print(f"\n  ╔{'═'*_RW}╗")
+    print(_rb(f"${ACCOUNT_SIZE:,.0f} → ${eq[-1]:,.0f}  ({'+' if total_pnl>=0 else ''}${total_pnl:,.0f})  ROI {roi:+.2f}%"))
+    print(_rb(f"{len(closed)} trades · WR {wr_total:.1f}% · Sharpe {sh:.3f} · MaxDD {mdd_pct:.2f}%"))
+    print(_rb(f"{edge_ico} {edge_lbl}"))
+    print(f"  ╚{'═'*_RW}╝")
+
+    # ── Tabela de símbolos (2 colunas) ──
     by_sym = defaultdict(list)
     for t in all_trades: by_sym[t["symbol"]].append(t)
-    for sym in sorted(by_sym):
-        ts  = by_sym[sym]
-        c   = [t for t in ts if t["result"] in ("WIN","LOSS")]
+    sym_rows = []
+    for sym in sorted(by_sym, key=lambda s: sum(t["pnl"] for t in by_sym[s] if t["result"] in ("WIN","LOSS")), reverse=True):
+        ts = by_sym[sym]
+        c  = [t for t in ts if t["result"] in ("WIN","LOSS")]
         if not c: continue
-        w2  = sum(1 for t in c if t["result"]=="WIN")
+        w2 = sum(1 for t in c if t["result"]=="WIN")
         wr2 = w2/len(c)*100
-        ag  = sum(t["score"] for t in ts)/len(ts)
-        p2  = sum(t["pnl"] for t in c)
-        b2  = sum(1 for t in ts if t["direction"]=="BULLISH")
-        s2  = sum(1 for t in ts if t["direction"]=="BEARISH")
-        ico = "✓" if wr2>=50 and p2>0 else "~" if p2>0 else "✗"
-        print(f"  {sym:12s}  {len(ts):>3d}  {w2:>3d}/{len(c)-w2:<3d}  {wr2:>5.1f}%  "
-              f"L{b2}/S{s2}  {ag:.3f}  ${p2:>+10,.0f}  {ico}")
+        p2 = sum(t["pnl"] for t in c)
+        ico = "✓" if wr2>=50 and p2>0 else "✗"
+        sym_rows.append(f"{sym.replace('USDT',''):6s} {len(c):>3d}t  {wr2:>4.1f}%  ${p2:>+7,.0f}  {ico}")
 
-    print(f"\n{S}\n  MÉTRICAS DE PORTFÓLIO\n{S}")
-    print(f"  Sharpe   {str(ratios['sharpe'] or '—'):>7s}     "
-          f"Sortino  {str(ratios['sortino'] or '—'):>7s}     "
-          f"Calmar  {str(ratios['calmar'] or '—'):>7s}")
-    print(f"  Sharpe diário {str(ratios.get('sharpe_daily') or '—'):>5s}  "
-          f"(benchmark-comparable, ann. 252d)")
-    print(f"  ROI      {ratios['ret']:>6.2f}%     "
-          f"MaxDD    {mdd_pct:>6.2f}%     "
-          f"Streak  {ms:>5d} perdas")
-    print(f"  Capital  ${ACCOUNT_SIZE:>8,.0f}  →  ${eq[-1]:>10,.0f}   (+${eq[-1]-ACCOUNT_SIZE:,.0f})")
-    for lado, ts2 in [("LONG ", [t for t in closed if t["direction"]=="BULLISH"]),
-                      ("SHORT", [t for t in closed if t["direction"]=="BEARISH"]),
-                      ("MR   ", [t for t in closed if t.get("chop_trade")])]:
-        if not ts2: continue
-        w3  = sum(1 for t in ts2 if t["result"]=="WIN")
-        wr3 = w3/len(ts2)*100
-        p3  = sum(t["pnl"] for t in ts2)
-        ico = "✓" if wr3>=50 and p3>0 else "~" if p3>0 else "✗"
-        print(f"  {ico} {lado}   {w3:>3d}W / {len(ts2)-w3:<3d}L   "
-              f"WR {wr3:>5.1f}%   PnL ${p3:>+10,.0f}   n={len(ts2)}")
+    print(f"\n  POR SÍMBOLO")
+    for i in range(0, len(sym_rows), 2):
+        left = sym_rows[i]
+        right = sym_rows[i+1] if i+1 < len(sym_rows) else ""
+        print(f"  {left:38s}  {right}")
 
-    print(f"\n{S}\n  EDGE POR FAIXA Ω\n{S}")
-    print(f"  {'Faixa':>10s}  {'N':>4s}  {'WR':>6s}  {'RR':>5s}  {'E/trade':>9s}  {'Total':>12s}  STATUS")
+    # ══════════════════════════════════════════════════════════════
+    #  ANÁLISE
+    # ══════════════════════════════════════════════════════════════
+    from analysis.stats import extended_metrics
     cond = conditional_backtest(all_trades)
-    for label, d in cond.items():
-        if not d: print(f"  {label:>10s}  —  sem dados"); continue
-        st = ("✓ EDGE" if d["wr"]>=55 and d["exp"]>0
-              else "~ NEUTRO" if d["exp"]>0 else "✗ SEM EDGE")
-        print(f"  {label:>10s}  {d['n']:>4d}  {d['wr']:>5.1f}%  {d['avg_rr']:>4.2f}×  "
-              f"${d['exp']:>+8.2f}  ${d['total']:>+10,.0f}  {st}")
-
     mc = monte_carlo(pnl_s)
-    print(f"\n{S}\n  MONTE CARLO   {MC_N}× simulações   bloco={MC_BLOCK}\n{S}")
-    if mc:
-        rlb = "✓ SEGURO" if mc["ror"]<1 else "⚠ ATENÇÃO" if mc["ror"]<5 else "✗ ALTO RISCO"
-        print(f"  Positivos  {mc['pct_pos']:>5.1f}%   "
-              f"p5 ${mc['p5']:>9,.0f}   Mediana ${mc['median']:>9,.0f}   p95 ${mc['p95']:>9,.0f}")
-        print(f"  RoR        {mc['ror']:>5.1f}%   [{rlb}]   "
-              f"DD médio {mc['avg_dd']:.1f}%   pior {mc['worst_dd']:.1f}%")
-    else:
-        print("  Amostra insuficiente")
-
     wf = walk_forward(all_trades)
-    print(f"\n{S}\n  WALK-FORWARD GLOBAL   {len(wf)} janelas   treino={WF_TRAIN}  teste={WF_TEST}\n{S}")
-    if wf:
-        ok  = sum(1 for w in wf if abs(w["test"]["wr"]-w["train"]["wr"])<=15)
-        pct = ok/len(wf)*100
-        lbl = "✓ ESTÁVEL" if pct>=60 else "✗ INSTÁVEL"
-        print(f"  {ok}/{len(wf)} estáveis ({pct:.0f}%)   {lbl}")
-        print(f"\n  {'W':>3s}  {'TREINO':>6s}  {'FORA':>6s}  {'Δ':>6s}  OK?")
-        for w in wf[-12:]:
-            d  = w["test"]["wr"] - w["train"]["wr"]
-            st = "✓" if abs(d)<=15 else "✗"
-            print(f"  {w['w']:>3d}  {w['train']['wr']:>5.1f}%  "
-                  f"{w['test']['wr']:>5.1f}%  {d:>+5.1f}%  {st}")
-        if len(wf) > 12:
-            print(f"  ... (+{len(wf)-12} janelas anteriores)")
-    else:
-        print("  Amostra insuficiente")
-
     wf_regime = walk_forward_by_regime(all_trades)
-    print(f"\n{S}\n  WALK-FORWARD POR REGIME   (tolerância ±25%)\n{S}")
-    print(f"  Isola o efeito de troca de regime — cada período avaliado no próprio contexto")
-    print()
-    print_wf_by_regime(wf_regime)
-    regime_stabs = [d["stable_pct"] for d in wf_regime.values() if d["stable_pct"] is not None]
-    if regime_stabs:
-        bear_stab = wf_regime.get("BEAR", {}).get("stable_pct")
-        if bear_stab is not None:
-            print(f"\n  BEAR regime (principal): {bear_stab:.0f}% estável  "
-                  f"{'✓' if bear_stab >= 60 else '~' if bear_stab >= 40 else '✗'}")
+    ext = extended_metrics(pnl_s)
 
-    print(f"\n{S}\n  RELATÓRIOS\n{S}")
-    if GENERATE_PLOTS:
-        plot_dashboard(all_trades, eq, cond, wf, ratios, mdd_pct, run_dir=RUN_DIR)
-        plot_montecarlo(mc, eq, run_dir=RUN_DIR)
-        top_syms = sorted(by_sym,
-                          key=lambda s: len([t for t in by_sym[s]
-                                             if t["result"] in ("WIN","LOSS")]),
-                          reverse=True)[:6]
-        for sym in top_syms:
-            df = all_dfs.get(sym)
-            if df is not None:
-                plot_trades(omega(swing_structure(indicators(df))), by_sym[sym], sym, run_dir=RUN_DIR)
-    else:
-        print("  Plots desativados — exportando só JSON e métricas")
-    export_json(all_trades, eq, mc, cond, ratios)
+    # ── Overfit audit ──
+    from analysis.overfit_audit import run_audit, print_audit_box
+    audit_results = run_audit(all_trades)
+    print_audit_box(audit_results)
 
-    print(f"\n{S}\n  ROBUSTEZ POR SÍMBOLO\n{S}")
-    print_symbol_robustness(symbol_robustness(all_trades))
+    # ══════════════════════════════════════════════════════════════
+    #  MÉTRICAS COMPLETAS NO TERMINAL
+    # ══════════════════════════════════════════════════════════════
+    def _m(label, val, label2, val2):
+        return f"  │ {label:<14s} {val:>10s}     {label2:<16s} {val2:>10s}  │"
 
-    print_chop_analysis(all_trades)
+    _sep = "  ├" + "─" * 52 + "┤"
+    print(f"\n  ┌─ PERFORMANCE {'─'*37}┐")
+    print(_m("ROI",         f"{roi:+.2f}%",      "Final Equity",  f"${eq[-1]:,.0f}"))
+    print(_m("Sharpe",      f"{sh:.3f}",          "Sortino",       f"{ratios.get('sortino') or 0:.3f}"))
+    print(_m("Calmar",      f"{ratios.get('calmar') or 0:.3f}",
+                                                  "Profit Factor", f"{ext.get('profit_factor', 0):.2f}"))
+    print(_m("Expectancy",  f"${ext.get('expectancy', 0):.2f}/t",
+                                                  "Max Consec L",  f"{ext.get('max_consec_loss', 0)}"))
+    print(_m("Avg Win",     f"${ext.get('avg_win', 0):.2f}",
+                                                  "Avg Loss",      f"${ext.get('avg_loss', 0):.2f}"))
+    print(_m("Best Trade",  f"${ext.get('best_trade', 0):.2f}",
+                                                  "Worst Trade",   f"${ext.get('worst_trade', 0):.2f}"))
+    print(_m("Win Rate",    f"{wr_total:.1f}%",   "Payoff Ratio",  f"{ext.get('payoff_ratio', 0):.2f}"))
+    print(_m("Max DD",      f"{mdd_pct:.2f}%",    "Max DD $",      f"${ext.get('max_dd_dollars', 0):,.0f}"))
+    print(_m("Recovery",    f"{ext.get('recovery_trades', 0)}t",
+                                                  "Ulcer Index",   f"{ext.get('ulcer_index', 0):.2f}"))
 
-    yy = year_by_year_analysis(all_trades)
-    if len([yr for yr, d in yy.items() if d]) >= 2:
-        print(f"\n{S}\n  PERFORMANCE ANO A ANO\n{S}")
-        print_year_by_year(yy)
+    # Walk-Forward summary
+    print(_sep.replace("─", "─").replace("├", "├").replace("┤", "┤"))
+    _wf_ok = sum(1 for w in wf if abs(w["test"]["wr"]-w["train"]["wr"])<=15) if wf else 0
+    _wf_pct = round(_wf_ok/len(wf)*100) if wf else 0
+    _oos_wr = round(sum(w["test"]["wr"] for w in wf)/len(wf), 1) if wf else 0
+    _is_wr = round(sum(w["train"]["wr"] for w in wf)/len(wf), 1) if wf else 0
+    print(f"  │ WALK-FORWARD {'─'*37}│")
+    print(_m("Windows",     f"{_wf_ok}/{len(wf)}", "Stable%",      f"{_wf_pct}%"))
+    print(_m("OOS WR",      f"{_oos_wr}%",         "OOS vs IS",     f"{_oos_wr - _is_wr:+.1f}pp"))
+    for _r in ("BEAR", "BULL"):
+        _rd = wf_regime.get(_r, {})
+        _rs = _rd.get("stable_pct")
+        if _rs is not None:
+            print(f"  │ {_r} regime   {_rs:.0f}% stable{'':>{36-len(_r)}}│")
 
-    print(f"\n{S}\n  ANÁLISE DE REGIME   (Pitch Institucional)\n{S}")
-    print_bear_market_enhanced(bear_market_analysis(all_trades), yy)
+    # Monte Carlo summary
+    if mc:
+        print(f"  │ MONTE CARLO (1000x) {'─'*31}│")
+        print(_m("Median Final", f"${mc['median']:,.0f}",
+                                                  "P5 (worst 5%)", f"${mc['p5']:,.0f}"))
+        print(_m("P95 (best)",   f"${mc['p95']:,.0f}",
+                                                  "% Positivo",    f"{mc['pct_pos']:.0f}%"))
+        print(_m("Median MaxDD", f"{mc['avg_dd']:.1f}%",
+                                                  "P95 MaxDD",     f"{mc['worst_dd']:.1f}%"))
 
-    print_veredito(all_trades, eq, mdd_pct, mc, wf, cond, ratios, wf_regime)
+    # Regime breakdown
+    print(f"  │ REGIME BREAKDOWN {'─'*33}│")
+    for _regime in ("BEAR", "BULL", "CHOP"):
+        _rts = [t for t in closed if t.get("macro_bias") == _regime]
+        if _rts:
+            _rw = sum(1 for t in _rts if t["result"]=="WIN")
+            _rwr = _rw/len(_rts)*100
+            _rpnl = sum(t["pnl"] for t in _rts)
+            _rexp = _rpnl/len(_rts)
+            print(f"  │ {_regime:5s} {len(_rts):>3d}t  WR {_rwr:>4.0f}%  "
+                  f"${_rpnl:>+7,.0f}   avg ${_rexp:>+.0f}/trade{'':>5s}│")
 
-    print(f"{S}")
-    print(f"  OUTPUT: {RUN_DIR}/")
-    print(f"  ├── charts/    dashboard_{INTERVAL}.png   montecarlo_{INTERVAL}.png   trades_*")
-    print(f"  ├── reports/   azoth_{INTERVAL}_v36.json")
-    print(f"  └── logs/      run.log   trades.log   validation.log")
-    print(f"{S}\n")
+    # Conditional omega
+    print(f"  │ CONDITIONAL Omega SCORE {'─'*27}│")
+    for _cl, _cd in cond.items():
+        if _cd:
+            print(f"  │ {_cl:11s}  WR {_cd['wr']:>4.0f}%  n={_cd['n']:<3d}  "
+                  f"exp ${_cd['exp']:>+.2f}{'':>14s}│")
 
-    # Auto-persist to DB
+    # Top 5 veto filters
+    _veto_total = sum(all_vetos.values()) if all_vetos else 0
+    if _veto_total:
+        print(f"  │ TOP VETO FILTERS {'─'*34}│")
+        _sorted_vetos = sorted(all_vetos.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        for _name, _count in _sorted_vetos:
+            _pct = _count / _veto_total * 100
+            _bar_w = max(1, int(_pct / 5))   # 20-slot bar (5% per slot)
+            _bar = "▓" * min(_bar_w, 20) + "·" * max(0, 20 - _bar_w)
+            _label = str(_name)[:18]
+            print(f"  │ {_label:<18s} {_count:>6d}  {_pct:>4.1f}%  {_bar}  │")
+
+    print(f"  └{'─'*52}┘")
+
+    # ── OHLC persistence for the launcher Trade Inspector ──
+    # Saved to <run_dir>/price_data.json so the launcher can render candles
+    # for any historical run without re-fetching from Binance.
+    _price_data = {}
+    for sym, df in all_dfs.items():
+        if sym in by_sym:
+            _price_data[sym] = {
+                "open":  [round(float(v), 6) for v in df["open"].values],
+                "high":  [round(float(v), 6) for v in df["high"].values],
+                "low":   [round(float(v), 6) for v in df["low"].values],
+                "close": [round(float(v), 6) for v in df["close"].values],
+            }
     try:
-        from core.db import save_run
-        _json = str(RUN_DIR / "reports" / f"azoth_{INTERVAL}_v36.json")
-        save_run("backtest", _json)
-        print(f"  DB: run persistido")
+        with open(RUN_DIR / "price_data.json", "w", encoding="utf-8") as _pf:
+            json.dump(_price_data, _pf, separators=(",", ":"))
     except Exception as _e:
-        print(f"  DB: {_e}")
+        log.warning(f"Failed to persist price_data.json: {_e}")
+
+    # ══════════════════════════════════════════════════════════════
+    #  PERSISTÊNCIA — tudo numa pasta por run
+    # ══════════════════════════════════════════════════════════════
+    from core.run_manager import (
+        snapshot_config, save_run_artifacts, append_to_index, TeeLogger,
+    )
+
+    _config = snapshot_config()
+    _summary = {
+        "n_trades": len(closed),
+        "win_rate": round(wr_total, 2),
+        "pnl": round(total_pnl, 2),
+        "total_pnl": round(total_pnl, 2),
+        "roi_pct": round(roi, 2),
+        "roi": round(roi, 2),
+        "sharpe": ratios.get("sharpe"),
+        "sortino": ratios.get("sortino"),
+        "calmar": ratios.get("calmar"),
+        "max_dd_pct": round(mdd_pct, 2),
+        "max_dd": round(mdd_pct, 2),
+        "final_equity": round(eq[-1], 2),
+        "n_symbols": len(SYMBOLS),
+        "n_candles": N_CANDLES,
+        "account_size": ACCOUNT_SIZE,
+        "leverage": LEVERAGE,
+        "interval": INTERVAL,
+        "period_days": SCAN_DAYS,
+    }
+
+    # Salvar artefactos no run dir
+    save_run_artifacts(
+        RUN_DIR, _config, all_trades, eq, _summary,
+        overfit_results=audit_results,
+    )
+
+    # ── Append ao index global ──
+    append_to_index(RUN_DIR, _summary, _config, audit_results)
+
+    # ── Auto-persist to DB (backwards compat) ──
+    try:
+        from core.db import save_run as _db_save
+        export_json(all_trades, eq, mc, cond, ratios)
+        _json = str(RUN_DIR / f"citadel_{INTERVAL}_v36.json")
+        if _Path(_json).exists():
+            _db_save("backtest", _json)
+    except Exception:
+        pass
+
+    # ── Output link ──
+    print(f"\n  run → {RUN_DIR}/")
+
+    # ══════════════════════════════════════════════════════════════
+    #  DASHBOARD GUI — explorar resultados visualmente
+    # ══════════════════════════════════════════════════════════════
+    if not _args.no_menu:
+        safe_input("\n  enter para abrir dashboard visual... ")
+        _gui_ok = False
+        try:
+            from analysis.results_gui import ResultsDashboard
+            app = ResultsDashboard(
+                all_trades, eq, mc, cond, ratios, wf, wf_regime,
+                mdd_pct, by_sym, all_vetos, str(RUN_DIR))
+            app.mainloop()
+            _gui_ok = True
+        except Exception as e:
+            print(f"  (GUI indisponível: {e})")
+
+        # Fallback text menu
+        while True:
+            choice = safe_input("  [0] sair  [r] reabrir dashboard  > ").strip().lower()
+            if choice == "0" or not choice:
+                break
+            if choice == "r" and _gui_ok:
+                try:
+                    app = ResultsDashboard(
+                        all_trades, eq, mc, cond, ratios, wf, wf_regime,
+                        mdd_pct, by_sym, all_vetos, str(RUN_DIR))
+                    app.mainloop()
+                except Exception:
+                    pass

@@ -39,7 +39,7 @@ try:
 except ImportError:
     HAS_STATSMODELS = False
 
-log = logging.getLogger("NEWTON")
+log = logging.getLogger("DE_SHAW")  # DE SHAW (formerly NEWTON) — Statistical arb engine
 log.setLevel(logging.INFO)
 if not log.handlers:
     _h = logging.StreamHandler(sys.stdout)

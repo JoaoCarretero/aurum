@@ -172,7 +172,7 @@ def plot_dashboard(trades, eq, cond, wf, ratios, mdd_pct, run_dir=None):
 
     from pathlib import Path
     fname = str(Path(run_dir) / "charts" / f"dashboard_{INTERVAL}.png")
-    plt.savefig(fname, dpi=130, bbox_inches="tight", facecolor=BG)
+    plt.savefig(fname, dpi=100, bbox_inches="tight", facecolor=BG)
     plt.close(); print(f"  Dashboard → {fname}")
 
 def plot_montecarlo(mc, real_eq, run_dir=None):
@@ -219,7 +219,7 @@ def plot_montecarlo(mc, real_eq, run_dir=None):
     plt.tight_layout(rect=[0,0,1,0.93])
     from pathlib import Path
     fname = str(Path(run_dir) / "charts" / f"montecarlo_{INTERVAL}.png")
-    plt.savefig(fname, dpi=130, bbox_inches="tight", facecolor=BG)
+    plt.savefig(fname, dpi=100, bbox_inches="tight", facecolor=BG)
     plt.close(); print(f"  Monte Carlo → {fname}")
 
 def plot_trades(df, trades, symbol, run_dir=None):

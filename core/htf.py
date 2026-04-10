@@ -6,7 +6,7 @@ from config.params import _tf_params, _TF_MINUTES
 from core.indicators import indicators, swing_structure, omega
 from core.signals import score_omega
 
-log = logging.getLogger("AZOTH")
+log = logging.getLogger("CITADEL")
 
 _HTF_STACK_MAP: dict[str, list[str]] = {
     "1m":  ["5m",  "15m", "1h"],

@@ -15,7 +15,11 @@ from analysis.benchmark import (
     print_year_by_year, print_bear_market_enhanced, print_benchmark,
 )
 from analysis.plots import plot_dashboard, plot_montecarlo, plot_trades
+import engines.backtest as _bt
 from engines.backtest import (
-    scan_symbol, print_header, print_veredito, print_chop_analysis,
-    export_json, RUN_DIR, RUN_ID, log,
+    scan_symbol, setup_run, print_header, print_veredito, print_chop_analysis,
+    export_json, log,
 )
+# RUN_DIR and RUN_ID are lazy — access via engines.backtest module after setup_run()
+RUN_DIR = _bt.RUN_DIR
+RUN_ID  = _bt.RUN_ID

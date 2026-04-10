@@ -6,8 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-sys.path.insert(0, str(Path(__file__).parent))
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
@@ -24,7 +22,7 @@ from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
 from analysis.benchmark import bear_market_analysis, year_by_year_analysis
 from analysis.plots import plot_montecarlo, plot_dashboard
-from engines.backtest import scan_symbol as azoth_scan, RUN_DIR, RUN_ID, log
+from engines.backtest import scan_symbol as azoth_scan, setup_run, log
 
 # ── FORÇAR GLOBALS PARA O TF CORRECTO ─────────────────────────
 import config.params as _params
@@ -38,22 +36,28 @@ _params.CHOP_S200    = _tf_correct["chop_s200"]
 SLOPE_N = _params.SLOPE_N
 PIVOT_N = _params.PIVOT_N
 
-# ── MULTISTRATEGY DIRS ────────────────────────────────────────
+# ── MULTISTRATEGY DIRS (lazy — set up in setup_multistrategy()) ──
 from pathlib import Path as _Path
-MS_RUN_DIR = _Path(f"data/multistrategy/{RUN_ID}")
-(MS_RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
-(MS_RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)
-(MS_RUN_DIR / "charts").mkdir(parents=True, exist_ok=True)
+MS_RUN_DIR: _Path = _Path(".")
+RUN_ID: str = ""
 
-# log file exclusivo do multistrategy
-_ms_fh = logging.FileHandler(MS_RUN_DIR / "logs" / "multistrategy.log", encoding="utf-8")
-_ms_fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s"))
-log.addHandler(_ms_fh)
+
+def setup_multistrategy():
+    """Initialise backtest runtime + multistrategy-specific dirs and logging."""
+    global MS_RUN_DIR, RUN_ID
+    RUN_ID, _run_dir = setup_run("multistrategy")
+    MS_RUN_DIR = _Path(f"data/multistrategy/{RUN_ID}")
+    (MS_RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
+    (MS_RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)
+    (MS_RUN_DIR / "charts").mkdir(parents=True, exist_ok=True)
+    _ms_fh = logging.FileHandler(MS_RUN_DIR / "logs" / "multistrategy.log", encoding="utf-8")
+    _ms_fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s"))
+    log.addHandler(_ms_fh)
 
 # ── MULTISTRATEGY CONFIG ──────────────────────────────────────
 MAX_OPEN_POSITIONS_MS = 5
-AZOTH_CAPITAL_WEIGHT  = 0.65
-HERMES_CAPITAL_WEIGHT = 0.35
+CITADEL_CAPITAL_WEIGHT  = 0.65
+RENAISSANCE_CAPITAL_WEIGHT = 0.35
 CONFIRM_WINDOW        = 6
 CONFIRM_SIZE_MULT     = 1.25
 CONFLICT_ACTION       = "skip"
@@ -69,11 +73,11 @@ CONFIDENCE_N_MIN   = 50    # trades para confiança plena: score × sqrt(n/50)
 REGIME_LAG         = 5     # lag artificial: usa regime de 5 trades atrás → quebra feedback loop
 
 # Regime-aware: amplifica pesos baseado no macro actual
-# TREND (BULL/BEAR) → AZOTH lidera | RANGE (CHOP) → HERMES lidera
+# TREND (BULL/BEAR) → CITADEL lidera | RANGE (CHOP) → RENAISSANCE lidera
 REGIME_BOOST = {
-    "BULL": {"AZOTH": 1.25, "HERMES": 0.75},
-    "BEAR": {"AZOTH": 1.20, "HERMES": 0.80},
-    "CHOP": {"AZOTH": 0.75, "HERMES": 1.25},
+    "BULL": {"CITADEL": 1.25, "RENAISSANCE": 0.75},
+    "BEAR": {"CITADEL": 1.20, "RENAISSANCE": 0.80},
+    "CHOP": {"CITADEL": 0.75, "RENAISSANCE": 1.25},
 }
 REGIME_BOOST_WINDOW = 20   # trades para detectar regime actual (probabilístico)
 R_CAP_MAX    =  5.0        # R-multiple máximo (evita outlier distorcer score)
@@ -90,268 +94,10 @@ STRESS_SLIP_MIN  = 0.001 # slippage adicional mínimo por trade
 STRESS_SLIP_MAX  = 0.004 # slippage adicional máximo por trade
 STRESS_MISS_RATE = 0.15  # % trades que não executam (latência)
 
-# ── HERMES CONFIG ─────────────────────────────────────────────
-H_TOL             = 0.10
-H_PIVOT_N         = 4
-H_FORWARD         = 48
-H_STOP_BUFFER     = 0.01
-H_TARGET_FIB      = 0.618
-H_MIN_SCORE       = 0.05
-H_ENTROPY_WINDOW  = 50
-H_ENTROPY_BINS    = 10
-H_HURST_WINDOW    = 80
-H_MIN_RR          = 1.0
-
-H_RULES = {
-    "Gartley":   {"ab":(0.618,0.618),"bc":(0.382,0.886),"cd":(1.272,1.618),"ad":(0.786,0.786)},
-    "Bat":       {"ab":(0.382,0.500),"bc":(0.382,0.886),"cd":(1.618,2.618),"ad":(0.886,0.886)},
-    "Butterfly": {"ab":(0.786,0.786),"bc":(0.382,0.886),"cd":(1.618,2.618),"ad":(1.272,1.272)},
-    "Crab":      {"ab":(0.382,0.618),"bc":(0.382,0.886),"cd":(2.618,3.618),"ad":(1.618,1.618)},
-}
-H_BAYESIAN_PRIOR = {"Gartley":0.65,"Bat":0.55,"Butterfly":0.50,"Crab":0.50}
-H_REGIME_RISK    = {"TREND":1.0,"RANGE":0.5,"VOLATILE":0.25}
+# ── RENAISSANCE (extracted to core/harmonics.py) ──────────────────
+from core.harmonics import scan_hermes
 
 SEP = "─"*80
-
-def _h_pivots(df):
-    n=H_PIVOT_N; h=df["high"].values; l=df["low"].values
-    ph={}; pl={}
-    for i in range(n, len(df)):
-        if h[i]==max(h[max(0,i-n):i+1]): ph[i]=h[i]
-        if l[i]==min(l[max(0,i-n):i+1]): pl[i]=l[i]
-    return ph, pl
-
-def _h_alt_pivots(ph, pl):
-    pts=([{"i":i,"p":p,"type":"H"} for i,p in ph.items()]+
-         [{"i":i,"p":p,"type":"L"} for i,p in pl.items()])
-    pts.sort(key=lambda x: x["i"])
-    alt=[]
-    for pt in pts:
-        if not alt or alt[-1]["type"]!=pt["type"]: alt.append(pt)
-        elif pt["type"]=="H" and pt["p"]>alt[-1]["p"]: alt[-1]=pt
-        elif pt["type"]=="L" and pt["p"]<alt[-1]["p"]: alt[-1]=pt
-    return alt
-
-def _h_check(X, A, B, C, D):
-    XA=abs(A["p"]-X["p"]); AB=abs(B["p"]-A["p"])
-    BC=abs(C["p"]-B["p"]); CD=abs(D["p"]-C["p"]); AD=abs(D["p"]-A["p"])
-    if XA==0 or AB==0 or BC==0: return None,{}
-    r={"AB/XA":round(AB/XA,4),"BC/AB":round(BC/AB,4),
-       "CD/BC":round(CD/BC,4),"AD/XA":round(AD/XA,4),"XA":round(XA,4),"AD":round(AD,4)}
-    def ok(v,lo,hi): return lo*(1-H_TOL)<=v<=hi*(1+H_TOL)
-    for name,rule in H_RULES.items():
-        if (ok(r["AB/XA"],rule["ab"][0],rule["ab"][1]) and
-            ok(r["BC/AB"],rule["bc"][0],rule["bc"][1]) and
-            ok(r["CD/BC"],rule["cd"][0],rule["cd"][1]) and
-            ok(r["AD/XA"],rule["ad"][0],rule["ad"][1])):
-            return name, r
-    return None, r
-
-def _h_levels(X, D, direction, XA, AD):
-    d=D["p"]; x=X["p"]; buf=XA*H_STOP_BUFFER
-    if direction=="BULLISH":
-        stop=x-buf; target=d+H_TARGET_FIB*AD
-        if target<=d or stop>=d: return None,None
-    else:
-        stop=x+buf; target=d-H_TARGET_FIB*AD
-        if target>=d or stop<=d: return None,None
-    return round(target,8), round(stop,4)
-
-def _h_entropy(df, idx):
-    if idx<H_ENTROPY_WINDOW: return "STRUCTURED"
-    prices=df["close"].iloc[idx-H_ENTROPY_WINDOW:idx].values
-    rets=[prices[i]/prices[i-1]-1 for i in range(1,len(prices)) if prices[i-1]>0]
-    if len(rets)<H_ENTROPY_BINS: return "STRUCTURED"
-    mn,mx=min(rets),max(rets)
-    if mx==mn: return "STRUCTURED"
-    bw=(mx-mn)/H_ENTROPY_BINS; counts=[0]*H_ENTROPY_BINS
-    for r in rets: counts[min(int((r-mn)/bw),H_ENTROPY_BINS-1)]+=1
-    n=len(rets); probs=[c/n for c in counts if c>0]
-    H=-sum(p*math.log(p) for p in probs)
-    norm=H/math.log(H_ENTROPY_BINS)
-    if norm>0.92: return "RANDOM"
-    if norm<0.50: return "STRUCTURED"
-    return "TRANSITION"
-
-def _h_hurst(df, idx):
-    if idx<H_HURST_WINDOW+1: return "UNKNOWN"
-    prices=list(df["close"].iloc[idx-H_HURST_WINDOW:idx].values)
-    n=len(prices)
-    lags=[max(4,n//k) for k in range(2,min(8,n//4))]; lags=sorted(set(lags))
-    rs_vals=[]
-    for lag in lags:
-        rs_sub=[]
-        for start in range(0,n-lag,lag):
-            sub=prices[start:start+lag]; m=sum(sub)/lag
-            dev=[s-m for s in sub]; cum=[sum(dev[:i+1]) for i in range(lag)]
-            R=max(cum)-min(cum); S=(sum((s-m)**2 for s in sub)/lag)**0.5
-            if S>0: rs_sub.append(R/S)
-        if rs_sub: rs_vals.append(sum(rs_sub)/len(rs_sub))
-    if len(rs_vals)<2: return "UNKNOWN"
-    log_lags=[math.log(l) for l in lags[:len(rs_vals)]]
-    log_rs=[math.log(r) for r in rs_vals if r>0]
-    n2=min(len(log_lags),len(log_rs))
-    if n2<2: return "UNKNOWN"
-    lx=log_lags[:n2]; ly=log_rs[:n2]
-    mx=sum(lx)/n2; my=sum(ly)/n2
-    num=sum((lx[i]-mx)*(ly[i]-my) for i in range(n2))
-    den=sum((lx[i]-mx)**2 for i in range(n2))
-    if den==0: return "UNKNOWN"
-    H=num/den
-    if H<0.45: return "MEAN_REVERTING"
-    if H>0.55: return "TRENDING"
-    return "RANDOM_WALK"
-
-class _BayesWR:
-    def __init__(self):
-        self.d={pat:{"a":p*10,"b":(1-p)*10} for pat,p in H_BAYESIAN_PRIOR.items()}
-    def update(self, pat, result, rr=1.0):
-        if pat not in self.d: self.d[pat]={"a":5.0,"b":5.0}
-        w=min(rr,3.0)
-        if result=="WIN": self.d[pat]["a"]+=w
-        else: self.d[pat]["b"]+=w
-    def p_win(self, pat):
-        d=self.d.get(pat,{"a":5.0,"b":5.0})
-        return d["a"]/(d["a"]+d["b"])
-    def score(self, rr, pat, regime):
-        pw=self.p_win(pat); rw=H_REGIME_RISK.get(regime,1.0)
-        edge=pw*rr-(1-pw)
-        return round(max(0,edge)*rw,4)
-
-def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None):
-    df=indicators(df); df=swing_structure(df)
-    if MTF_ENABLED and htf_stack_dfs: df=merge_all_htf_to_ltf(df,htf_stack_dfs)
-    close_a=df["close"].values; high_a=df["high"].values; low_a=df["low"].values
-    open_a=df["open"].values; atr_a=df["atr"].values
-    vol_r_a=df["vol_regime"].values; trans_a=df["regime_transition"].values
-    slope200_a=df["slope200"].values; slope21_a=df["slope21"].values
-    _htfm=df[f"htf{len(HTF_STACK)}_macro"].values if MTF_ENABLED and f"htf{len(HTF_STACK)}_macro" in df.columns else None
-    ph, pl=_h_pivots(df); alt=_h_alt_pivots(ph, pl)
-    bayes=_BayesWR(); trades=[]; vetos=defaultdict(int)
-    account=ACCOUNT_SIZE*HERMES_CAPITAL_WEIGHT
-    min_idx=max(200,W_NORM,H_PIVOT_N*3,H_HURST_WINDOW)+5
-    open_pos=[]; peak_equity=account; consecutive_losses=0
-    cooldown_until=-1; sym_cooldown_until={}
-    patterns_at=defaultdict(list)
-    for k in range(len(alt)-4):
-        X,A,B,C,D=alt[k],alt[k+1],alt[k+2],alt[k+3],alt[k+4]
-        if D["i"]<min_idx or D["i"]>=len(df)-H_FORWARD-2: continue
-        pat,ratios=_h_check(X,A,B,C,D)
-        if not pat: continue
-        direction="BEARISH" if D["type"]=="H" else "BULLISH"
-        target,stop=_h_levels(X,D,direction,ratios["XA"],ratios["AD"])
-        if target is None: continue
-        rr=abs(target-D["p"])/abs(stop-D["p"]) if abs(stop-D["p"])>0 else 0
-        if rr<H_MIN_RR: continue
-        patterns_at[D["i"]].append({"pattern":pat,"direction":direction,
-            "X":X,"A":A,"D":D,"target":target,"stop":stop,"rr":round(rr,2),"ratios":ratios})
-    for idx in range(min_idx, len(df)-H_FORWARD-2):
-        if idx not in patterns_at: continue
-        open_pos=[(ei,s) for ei,s in open_pos if ei>idx]
-        active_syms=[s for _,s in open_pos]
-        macro_b="CHOP"
-        if MTF_ENABLED and _htfm is not None: macro_b=str(_htfm[idx])
-        elif macro_bias_series is not None: macro_b=macro_bias_series.iloc[min(idx,len(macro_bias_series)-1)]
-        peak_equity=max(peak_equity,account)
-        current_dd=(peak_equity-account)/peak_equity if peak_equity>0 else 0.0
-        dd_scale=1.0
-        for th in sorted(DD_RISK_SCALE.keys(),reverse=True):
-            if current_dd>=th: dd_scale=DD_RISK_SCALE[th]; break
-        if dd_scale==0.0: vetos["dd_pause"]+=1; continue
-        in_transition=bool(trans_a[idx]); trans_mult=REGIME_TRANS_SIZE_MULT if in_transition else 1.0
-        if idx<=cooldown_until: vetos["streak_cooldown"]+=1; continue
-        if idx<=sym_cooldown_until.get(symbol,-1): vetos["sym_cooldown"]+=1; continue
-        vol_r=vol_r_a[idx]
-        if VOL_RISK_SCALE.get(vol_r,1.0)==0.0: vetos["vol_extreme"]+=1; continue
-        ok,motivo_p,corr_size_mult=portfolio_allows(symbol,active_syms,corr)
-        if not ok: vetos[motivo_p]+=1; continue
-        for sig in patterns_at[idx]:
-            direction=sig["direction"]; pat=sig["pattern"]
-            target=sig["target"]; stop=sig["stop"]; rr=sig["rr"]
-            if macro_b=="BEAR" and direction=="BULLISH": vetos["macro_bear_veto_long"]+=1; continue
-            if macro_b=="BULL" and direction=="BEARISH": vetos["macro_bull_veto_short"]+=1; continue
-            fractal_score=1.0
-            if MTF_ENABLED and "htf1_struct" in df.columns:
-                n_htf=len(HTF_STACK); aligned=0
-                struct_map={"BULLISH":"UP","BEARISH":"DOWN"}
-                tgt_struct=struct_map.get(direction,"UP")
-                for i in range(1,n_htf+1):
-                    htf_s=str(df[f"htf{i}_struct"].iloc[idx])
-                    htf_str=float(df[f"htf{i}_strength"].iloc[idx] or 0)
-                    if htf_str>=0.35 and htf_s==tgt_struct: aligned+=1
-                fractal_score=round(aligned/n_htf,2) if n_htf>0 else 1.0
-                if aligned==0: vetos["hermes_fractal_misalign"]+=1; continue
-            ent=_h_entropy(df,idx)
-            if ent=="RANDOM": vetos["hermes_entropy_random"]+=1; continue
-            hurst=_h_hurst(df,idx)
-            ent_w=1.2 if ent=="STRUCTURED" else 0.8
-            hurst_w=1.15 if hurst=="MEAN_REVERTING" else (0.85 if hurst=="TRENDING" else 1.0)
-            atr_now=float(atr_a[idx]) if not np.isnan(atr_a[idx]) else 0
-            past_atr=[float(atr_a[j]) for j in range(max(0,idx-14),idx) if not np.isnan(atr_a[j])]
-            atr_avg=sum(past_atr)/len(past_atr) if past_atr else atr_now
-            atr_std=(sum((a-atr_avg)**2 for a in past_atr)/len(past_atr))**0.5 if len(past_atr)>1 else 0
-            atr_z=(atr_now-atr_avg)/atr_std if atr_std>0 else 0
-            s21=float(slope21_a[idx])
-            if atr_z>2.0: h_regime="VOLATILE"
-            elif abs(s21)>0.3: h_regime="TREND"
-            else: h_regime="RANGE"
-            score_raw=bayes.score(rr,pat,h_regime)
-            score=round(score_raw*ent_w*hurst_w,4)
-            if score<H_MIN_SCORE: vetos["hermes_score_baixo"]+=1; continue
-            if idx+1>=len(df): continue
-            slip=SLIPPAGE+SPREAD
-            raw=float(open_a[idx+1])
-            entry=raw*(1+slip) if direction=="BULLISH" else raw*(1-slip)
-            entry=round(entry,8)
-            if direction=="BULLISH" and (stop>=entry or target<=entry): vetos["hermes_niveis"]+=1; continue
-            if direction=="BEARISH" and (stop<=entry or target>=entry): vetos["hermes_niveis"]+=1; continue
-            result,duration,exit_p=label_trade(df,idx+1,direction,entry,stop,target)
-            if result=="OPEN": continue
-            size=position_size(account,entry,stop,max(score,SCORE_THRESHOLD),macro_b,direction,vol_r,dd_scale,False,peak_equity=peak_equity)
-            size=round(size*corr_size_mult*trans_mult*fractal_score,4)
-            ep=float(exit_p)
-            slip_exit=SLIPPAGE+SPREAD
-            if direction=="BULLISH":
-                entry_cost=entry*(1+COMMISSION)
-                ep_net=ep*(1-COMMISSION-slip_exit)
-                pnl=size*(ep_net-entry_cost)-(size*entry*FUNDING_PER_8H*duration/32)
-            else:
-                entry_cost=entry*(1-COMMISSION)
-                ep_net=ep*(1+COMMISSION+slip_exit)
-                pnl=size*(entry_cost-ep_net)+(size*entry*FUNDING_PER_8H*duration/32)
-            pnl=round(pnl*LEVERAGE, 2)
-            account=max(account+pnl,account*0.5)
-            bayes.update(pat,result,rr)
-            if result=="LOSS":
-                consecutive_losses+=1
-                for n_l in sorted(STREAK_COOLDOWN.keys(),reverse=True):
-                    if consecutive_losses>=n_l: cooldown_until=idx+STREAK_COOLDOWN[n_l]; break
-                sym_cooldown_until[symbol]=idx+SYM_LOSS_COOLDOWN
-            else: consecutive_losses=0
-            open_pos.append((idx+1+duration,symbol))
-            ts=df["time"].iloc[idx].strftime("%d/%m %Hh")
-            trades.append({
-                "symbol":symbol,"time":ts,"timestamp":df["time"].iloc[idx],
-                "strategy":"HERMES","pattern":pat,"idx":idx,"entry_idx":idx+1,
-                "direction":direction,"macro_bias":macro_b,"vol_regime":vol_r,
-                "h_regime":h_regime,"entropy":ent,"hurst":hurst,
-                "entry":entry,"stop":stop,"target":target,"exit_p":round(ep,6),
-                "rr":rr,"duration":duration,"result":result,"pnl":pnl,
-                "size":round(size,4),
-                "score":score,"fractal_align":fractal_score,
-                "dd_scale":round(dd_scale,2),"corr_mult":round(corr_size_mult,2),
-                "in_transition":in_transition,"trans_mult":round(trans_mult,2),
-                "ent_w":round(ent_w,2),"hurst_w":round(hurst_w,2),
-                "chop_trade":False,"trade_type":"HERMES",
-                "struct":"DOWN" if direction=="BEARISH" else "UP",
-                "struct_str":0.5,"cascade_n":0,"taker_ma":0.5,"rsi":50.0,
-                "dist_ema21":0.5,"omega_struct":0.0,"omega_flow":0.0,
-                "omega_cascade":0.0,"omega_momentum":score,"omega_pullback":score,"bb_mid":0.0,
-            })
-    closed=[t for t in trades if t["result"] in ("WIN","LOSS")]
-    w=sum(1 for t in closed if t["result"]=="WIN")
-    log.info(f"  HERMES {symbol}: {len(trades)} trades  W={w}  L={len(closed)-w}  PnL=${sum(t['pnl'] for t in closed):+,.0f}")
-    return trades, dict(vetos)
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 def _std(lst):
@@ -401,16 +147,16 @@ def _regime_confidence_boost(recent_trades):
     """
     biases = [t.get("macro_bias","CHOP") for t in recent_trades[-REGIME_BOOST_WINDOW:]
               if t.get("macro_bias")]
-    if not biases: return {"AZOTH": 1.0, "HERMES": 1.0}, "CHOP"
+    if not biases: return {"CITADEL": 1.0, "RENAISSANCE": 1.0}, "CHOP"
 
     from collections import Counter
     counts = Counter(biases); total = len(biases)
     p = {r: counts.get(r, 0)/total for r in ("BULL","BEAR","CHOP")}
     dominant = max(p, key=p.get)
 
-    az_b = sum(p[r] * REGIME_BOOST[r]["AZOTH"] for r in ("BULL","BEAR","CHOP"))
-    he_b = sum(p[r] * REGIME_BOOST[r]["HERMES"] for r in ("BULL","BEAR","CHOP"))
-    return {"AZOTH": round(az_b,3), "HERMES": round(he_b,3)}, dominant
+    az_b = sum(p[r] * REGIME_BOOST[r]["CITADEL"] for r in ("BULL","BEAR","CHOP"))
+    he_b = sum(p[r] * REGIME_BOOST[r]["RENAISSANCE"] for r in ("BULL","BEAR","CHOP"))
+    return {"CITADEL": round(az_b,3), "RENAISSANCE": round(he_b,3)}, dominant
 
 def _decay_score(r_hist):
     """
@@ -495,7 +241,7 @@ def _ensemble_score(r_hist):
 
 def ensemble_reweight(all_trades):
     """
-    Ajusta dinamicamente os pesos AZOTH/HERMES.
+    Ajusta dinamicamente os pesos CITADEL/RENAISSANCE.
     Sem lookahead: cada trade usa apenas performance ANTERIOR.
 
     Pipeline:
@@ -506,23 +252,23 @@ def ensemble_reweight(all_trades):
       5. Escala PnL: pnl_adj = pnl × (dynamic_w / static_w)
     """
     sorted_t  = sorted(all_trades, key=lambda t: t["timestamp"])
-    history   = {"AZOTH": [], "HERMES": []}   # R-multiples, não PnL raw
-    kill_log  = {"AZOTH": [], "HERMES": []}
+    history   = {"CITADEL": [], "RENAISSANCE": []}   # R-multiples, não PnL raw
+    kill_log  = {"CITADEL": [], "RENAISSANCE": []}
     out       = []
 
     for idx, t in enumerate(sorted_t):
-        strat = t.get("strategy", "AZOTH")
+        strat = t.get("strategy", "CITADEL")
 
-        az_sc, az_killed = _ensemble_score(history["AZOTH"])
-        he_sc, he_killed = _ensemble_score(history["HERMES"])
+        az_sc, az_killed = _ensemble_score(history["CITADEL"])
+        he_sc, he_killed = _ensemble_score(history["RENAISSANCE"])
 
         if az_killed: az_sc = 0.0
         if he_killed: he_sc = 0.0
         total = az_sc + he_sc
 
         if total < 0.001:
-            az_w = AZOTH_CAPITAL_WEIGHT
-            he_w = HERMES_CAPITAL_WEIGHT
+            az_w = CITADEL_CAPITAL_WEIGHT
+            he_w = RENAISSANCE_CAPITAL_WEIGHT
         else:
             az_w = max(ENSEMBLE_MIN_W, min(ENSEMBLE_MAX_W, az_sc / total))
             he_w = 1.0 - az_w
@@ -532,8 +278,8 @@ def ensemble_reweight(all_trades):
 
         # penalidade de DD simultâneo — ambas em drawdown ao mesmo tempo
         # indica falha sistémica, não individual → reduz exposição global
-        az_dd = max(0.0, 1.0 - (az_sc / max(_ensemble_score(history["AZOTH"][:max(0,len(history["AZOTH"])-ENSEMBLE_WINDOW)])[0], 0.001))) if len(history["AZOTH"]) > ENSEMBLE_WINDOW else 0.0
-        he_dd = max(0.0, 1.0 - (he_sc / max(_ensemble_score(history["HERMES"][:max(0,len(history["HERMES"])-ENSEMBLE_WINDOW)])[0], 0.001))) if len(history["HERMES"]) > ENSEMBLE_WINDOW else 0.0
+        az_dd = max(0.0, 1.0 - (az_sc / max(_ensemble_score(history["CITADEL"][:max(0,len(history["CITADEL"])-ENSEMBLE_WINDOW)])[0], 0.001))) if len(history["CITADEL"]) > ENSEMBLE_WINDOW else 0.0
+        he_dd = max(0.0, 1.0 - (he_sc / max(_ensemble_score(history["RENAISSANCE"][:max(0,len(history["RENAISSANCE"])-ENSEMBLE_WINDOW)])[0], 0.001))) if len(history["RENAISSANCE"]) > ENSEMBLE_WINDOW else 0.0
         if az_dd > 0.3 and he_dd > 0.3:   # ambas a degradar simultaneamente
             sim_dd_mult = max(0.70, 1.0 - (az_dd + he_dd) * 0.15)
             az_w *= sim_dd_mult
@@ -545,19 +291,19 @@ def ensemble_reweight(all_trades):
         # regime-aware boost probabilístico com LAG adaptativo
         # lag maior em vol alta (mercado errático) → menos acoplamento
         # lag menor em vol baixa (mercado estável) → mais responsivo
-        az_win    = _adaptive_window(history["AZOTH"]) if history["AZOTH"] else ENSEMBLE_WINDOW
+        az_win    = _adaptive_window(history["CITADEL"]) if history["CITADEL"] else ENSEMBLE_WINDOW
         dyn_lag   = int(max(3, min(10, az_win / 10)))
         lag_idx   = max(0, idx - dyn_lag)
         boost, dominant = _regime_confidence_boost(sorted_t[:lag_idx+1])
-        az_w_r = az_w * boost["AZOTH"]
-        he_w_r = he_w * boost["HERMES"]
+        az_w_r = az_w * boost["CITADEL"]
+        he_w_r = he_w * boost["RENAISSANCE"]
         # re-normaliza após boost + clamp
         total_r = az_w_r + he_w_r
         az_w_f  = max(ENSEMBLE_MIN_W, min(ENSEMBLE_MAX_W, az_w_r / total_r))
         he_w_f  = 1.0 - az_w_f
 
-        static_w  = AZOTH_CAPITAL_WEIGHT if strat == "AZOTH" else HERMES_CAPITAL_WEIGHT
-        dynamic_w = az_w_f if strat == "AZOTH" else he_w_f
+        static_w  = CITADEL_CAPITAL_WEIGHT if strat == "CITADEL" else RENAISSANCE_CAPITAL_WEIGHT
+        dynamic_w = az_w_f if strat == "CITADEL" else he_w_f
         scale     = dynamic_w / static_w if static_w > 0 else 1.0
 
         out.append({**t,
@@ -569,12 +315,12 @@ def ensemble_reweight(all_trades):
             "az_killed":         az_killed,
             "he_killed":         he_killed,
             "regime_at_trade":   dominant,
-            "az_decay":          round(_decay_score(history["AZOTH"]), 3),
-            "he_decay":          round(_decay_score(history["HERMES"]), 3),
+            "az_decay":          round(_decay_score(history["CITADEL"]), 3),
+            "he_decay":          round(_decay_score(history["RENAISSANCE"]), 3),
         })
 
         # log kill-switch
-        for s, killed in [("AZOTH", az_killed), ("HERMES", he_killed)]:
+        for s, killed in [("CITADEL", az_killed), ("RENAISSANCE", he_killed)]:
             log = kill_log[s]
             if killed and (not log or len(log) % 2 == 0):
                 log.append(t["timestamp"])
@@ -650,12 +396,12 @@ def print_ensemble_stats(original, reweighted):
         print(f"    Nenhum — Sortino(R) manteve-se > {KILL_SWITCH_SORTINO} durante todo o período")
 
     # decay events
-    decay_events = {"AZOTH": [], "HERMES": []}
+    decay_events = {"CITADEL": [], "RENAISSANCE": []}
     for t in reweighted:
-        if t.get("strategy") == "AZOTH" and t.get("az_decay", 0) > 0.2:
-            decay_events["AZOTH"].append((t["timestamp"], round(t["az_decay"],2)))
-        if t.get("strategy") == "HERMES" and t.get("he_decay", 0) > 0.2:
-            decay_events["HERMES"].append((t["timestamp"], round(t["he_decay"],2)))
+        if t.get("strategy") == "CITADEL" and t.get("az_decay", 0) > 0.2:
+            decay_events["CITADEL"].append((t["timestamp"], round(t["az_decay"],2)))
+        if t.get("strategy") == "RENAISSANCE" and t.get("he_decay", 0) > 0.2:
+            decay_events["RENAISSANCE"].append((t["timestamp"], round(t["he_decay"],2)))
 
     print(f"\n  Decay detection (R-mean declinante):")
     any_decay = False
@@ -752,7 +498,7 @@ def stress_test(pnl_list):
 
 def cross_divergence_multiplier(azoth_trades, hermes_trades):
     """
-    Cross-strategy divergence: taxa de conflitos AZOTH×HERMES como proxy
+    Cross-strategy divergence: taxa de conflitos CITADEL×RENAISSANCE como proxy
     de instabilidade de regime. Quando os dois modelos discordam muito,
     o mercado está em transição → reduzir risco global.
 
@@ -1010,14 +756,14 @@ def aggregate_signals(azoth_trades, hermes_trades):
     return result
 
 def metrics_by_strategy(all_trades):
-    by_s={"AZOTH":[],"HERMES":[],"CONFIRMED":[]}
+    by_s={"CITADEL":[],"RENAISSANCE":[],"CONFIRMED":[]}
     for t in all_trades:
-        s=t.get("strategy","AZOTH"); by_s[s].append(t)
+        s=t.get("strategy","CITADEL"); by_s[s].append(t)
         if t.get("confirmed"): by_s["CONFIRMED"].append(t)
     print(f"\n{SEP}\n  PERFORMANCE POR ESTRATEGIA\n{SEP}")
     print(f"  {'Estrategia':12s}  {'N':>4s}  {'WR':>6s}  {'Sharpe':>7s}  {'MaxDD':>6s}  {'ROI':>7s}  {'PnL':>12s}")
     print(f"  {'─'*72}")
-    for name,ts in [("AZOTH",by_s["AZOTH"]),("HERMES",by_s["HERMES"]),("CONFIRMADOS",by_s["CONFIRMED"])]:
+    for name,ts in [("CITADEL",by_s["CITADEL"]),("RENAISSANCE",by_s["RENAISSANCE"]),("CONFIRMADOS",by_s["CONFIRMED"])]:
         closed=[t for t in ts if t["result"] in ("WIN","LOSS")]
         if not closed: print(f"  {name:12s}  sem trades"); continue
         w=sum(1 for t in closed if t["result"]=="WIN"); wr=w/len(closed)*100
@@ -1031,24 +777,24 @@ def metrics_confirmations(all_trades):
     if not conf: print(f"\n  Confirmacoes: 0 trades"); return
     cw=sum(1 for t in conf if t["result"]=="WIN")
     nw=sum(1 for t in norm if t["result"]=="WIN")
-    print(f"\n  CONFIRMACOES AZOTH+HERMES")
+    print(f"\n  CONFIRMACOES CITADEL+RENAISSANCE")
     print(f"  Confirmados: {len(conf)} trades  WR {cw/len(conf)*100:.1f}%  PnL ${sum(t['pnl'] for t in conf):+,.0f}")
     if norm: print(f"  Individuais: {len(norm)} trades  WR {nw/len(norm)*100:.1f}%")
     by_pat=defaultdict(list)
     for t in conf:
-        if t["strategy"]=="HERMES" and "pattern" in t: by_pat[t["pattern"]].append(t)
+        if t["strategy"]=="RENAISSANCE" and "pattern" in t: by_pat[t["pattern"]].append(t)
     if by_pat:
-        print(f"  Confirmacoes por padrao HERMES:")
+        print(f"  Confirmacoes por padrao RENAISSANCE:")
         for pat,ts in sorted(by_pat.items()):
             w2=sum(1 for t in ts if t["result"]=="WIN")
             print(f"    {pat:12s}  n={len(ts)}  WR={w2/len(ts)*100:.0f}%  PnL=${sum(t['pnl'] for t in ts):+,.0f}")
 
 def print_hermes_patterns(all_trades):
-    ht=[t for t in all_trades if t.get("strategy")=="HERMES" and t["result"] in ("WIN","LOSS")]
-    if not ht: print(f"\n  HERMES: sem trades gerados"); return
+    ht=[t for t in all_trades if t.get("strategy")=="RENAISSANCE" and t["result"] in ("WIN","LOSS")]
+    if not ht: print(f"\n  RENAISSANCE: sem trades gerados"); return
     by_pat=defaultdict(list)
     for t in ht: by_pat[t.get("pattern","?")].append(t)
-    print(f"\n  HERMES — PADROES HARMONICOS")
+    print(f"\n  RENAISSANCE — PADROES HARMONICOS")
     print(f"  {'Padrao':12s}  {'N':>3s}  {'WR':>6s}  {'RR_med':>6s}  {'PnL':>10s}")
     print(f"  {'─'*50}")
     for pat in ["Gartley","Bat","Butterfly","Crab"]:
@@ -1073,7 +819,7 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
         ("Sharpe >= 1.0",ratios["sharpe"] and ratios["sharpe"]>=1.0),
         ("Monte Carlo >= 70% positivo",mc and mc["pct_pos"]>=70),
         (f"Walk-Forward estavel ({wf_label})",wf_ok),
-        ("HERMES tem trades",any(t.get("strategy")=="HERMES" for t in closed)),
+        ("RENAISSANCE tem trades",any(t.get("strategy")=="RENAISSANCE" for t in closed)),
     ]
     passou=sum(1 for _,v in checks if v)
     print(f"\n{SEP}\n  VEREDITO\n{SEP}")
@@ -1087,13 +833,13 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
 def export_ms_json(all_trades, eq, mc, ratios):
     closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
     wr=sum(1 for t in closed if t["result"]=="WIN")/max(len(closed),1)*100
-    azoth_t=[t for t in closed if t.get("strategy")=="AZOTH"]
-    hermes_t=[t for t in closed if t.get("strategy")=="HERMES"]
+    azoth_t=[t for t in closed if t.get("strategy")=="CITADEL"]
+    hermes_t=[t for t in closed if t.get("strategy")=="RENAISSANCE"]
     confirmed_t=[t for t in closed if t.get("confirmed")]
     payload={
         "version":"multistrategy-1.0","run_id":RUN_ID,
         "timestamp":datetime.now().isoformat(),
-        "config":{"azoth_weight":AZOTH_CAPITAL_WEIGHT,"hermes_weight":HERMES_CAPITAL_WEIGHT,
+        "config":{"azoth_weight":CITADEL_CAPITAL_WEIGHT,"hermes_weight":RENAISSANCE_CAPITAL_WEIGHT,
                   "max_open_ms":MAX_OPEN_POSITIONS_MS,"confirm_window":CONFIRM_WINDOW,
                   "confirm_size_mult":CONFIRM_SIZE_MULT,"h_tol":H_TOL,
                   "h_min_score":H_MIN_SCORE,"h_min_rr":H_MIN_RR},
@@ -1103,8 +849,8 @@ def export_ms_json(all_trades, eq, mc, ratios):
                    "final_equity":round(eq[-1],2),
                    **{k:ratios.get(k) for k in ("sharpe","sortino","calmar","ret")}},
         "by_strategy":{
-            "AZOTH":{"n":len(azoth_t),"wr":round(sum(1 for t in azoth_t if t["result"]=="WIN")/max(len(azoth_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in azoth_t),2)},
-            "HERMES":{"n":len(hermes_t),"wr":round(sum(1 for t in hermes_t if t["result"]=="WIN")/max(len(hermes_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in hermes_t),2)},
+            "CITADEL":{"n":len(azoth_t),"wr":round(sum(1 for t in azoth_t if t["result"]=="WIN")/max(len(azoth_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in azoth_t),2)},
+            "RENAISSANCE":{"n":len(hermes_t),"wr":round(sum(1 for t in hermes_t if t["result"]=="WIN")/max(len(hermes_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in hermes_t),2)},
         },
         "monte_carlo":{k:v for k,v in (mc or {}).items() if k not in ("paths","finals","dds")},
         "trades":[{k:(str(v) if k=="timestamp" else v) for k,v in t.items()} for t in all_trades],
@@ -1124,7 +870,7 @@ def export_ms_json(all_trades, eq, mc, ratios):
 def _ask_periodo():
     global SCAN_DAYS, N_CANDLES, HTF_N_CANDLES_MAP
     import backtest as _bt
-    v=input(f"\n  Periodo em dias [{SCAN_DAYS}] > ").strip()
+    v=safe_input(f"\n  Periodo em dias [{SCAN_DAYS}] > ").strip()
     if v.isdigit() and 7<=int(v)<=1500:
         d=int(v)
         _bt.SCAN_DAYS=d; _bt.N_CANDLES=d*24*4
@@ -1140,14 +886,14 @@ def _ask_config():
     import backtest as _bt
 
     # Conta
-    v = input(f"  Tamanho da conta USD [{int(_bt.ACCOUNT_SIZE):,}] > ").strip().replace(",","").replace("$","")
+    v = safe_input(f"  Tamanho da conta USD [{int(_bt.ACCOUNT_SIZE):,}] > ").strip().replace(",","").replace("$","")
     if v.replace(".","").isdigit() and float(v) >= 100:
         _bt.ACCOUNT_SIZE = float(v)
 
     # Leverage
     print(f"\n  Alavancagem  (1× = sem leverage  |  3× recomendado  |  max seguro ~5×)")
     print(f"  MaxDD escala linearmente: {_bt.ACCOUNT_SIZE:,.0f} × leverage × 4.2% ≈ MaxDD estimado")
-    lv = input(f"  Leverage [1] > ").strip()
+    lv = safe_input(f"  Leverage [1] > ").strip()
     leverage = 1.0
     if lv.replace(".","").isdigit():
         leverage = max(1.0, min(float(lv), 20.0))
@@ -1155,15 +901,15 @@ def _ask_config():
 
     # Risk (opcional — avançado)
     print(f"\n  Risk por trade  (BASE={_bt.BASE_RISK*100:.1f}%  MAX={_bt.MAX_RISK*100:.1f}%)  [Enter = manter]")
-    br = input(f"  BASE_RISK % [{_bt.BASE_RISK*100:.1f}] > ").strip()
-    mr = input(f"  MAX_RISK  % [{_bt.MAX_RISK*100:.1f}] > ").strip()
+    br = safe_input(f"  BASE_RISK % [{_bt.BASE_RISK*100:.1f}] > ").strip()
+    mr = safe_input(f"  MAX_RISK  % [{_bt.MAX_RISK*100:.1f}] > ").strip()
     if br.replace(".","").isdigit(): _bt.BASE_RISK = max(0.001, min(float(br)/100, 0.05))
     if mr.replace(".","").isdigit(): _bt.MAX_RISK  = max(_bt.BASE_RISK, min(float(mr)/100, 0.10))
 
     # Convex sizing
     print(f"\n  Convex sizing  (quebra proporcionalidade DD/ROI com leverage)")
     print(f"  0.0 = desligado  |  0.5 = suave  |  1.0 = linear  |  2.0 = agressivo")
-    cv = input(f"  CONVEX_ALPHA [{_bt.CONVEX_ALPHA}] > ").strip()
+    cv = safe_input(f"  CONVEX_ALPHA [{_bt.CONVEX_ALPHA}] > ").strip()
     if cv.replace(".","").isdigit(): _bt.CONVEX_ALPHA = max(0.0, min(float(cv), 3.0))
 
     # Sync module-level globals for _load_dados, _metricas_e_export, etc.
@@ -1174,7 +920,7 @@ def _ask_config():
     return _bt.ACCOUNT_SIZE, _bt.LEVERAGE, _bt.BASE_RISK, _bt.MAX_RISK, _bt.CONVEX_ALPHA
 
 def _ask_plots():
-    return input("  Gerar graficos? [s/N] > ").strip().lower() in ("s","sim","y")
+    return safe_input("  Gerar graficos? [s/N] > ").strip().lower() in ("s","sim","y")
 
 def _load_dados(generate_plots):
     global GENERATE_PLOTS
@@ -1204,22 +950,22 @@ def _load_dados(generate_plots):
     return all_dfs, htf_stack_by_sym, macro_series, corr
 
 def _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr):
-    print(f"\n{SEP}\n  SCAN AZOTH (trend-following fractal)\n{SEP}")
+    print(f"\n{SEP}\n  SCAN CITADEL (trend-following fractal)\n{SEP}")
     azoth_all=[]; azoth_vetos=defaultdict(int)
     for sym,df in all_dfs.items():
         if sym not in SYMBOLS: continue
         trades,vetos=azoth_scan(df,sym,macro_series,corr,htf_stack_by_sym.get(sym) if MTF_ENABLED else None)
-        for t in trades: t["strategy"]="AZOTH"; t.setdefault("confirmed",False)
+        for t in trades: t["strategy"]="CITADEL"; t.setdefault("confirmed",False)
         azoth_all.extend(trades)
         for k,v in vetos.items(): azoth_vetos[k]+=v
         closed=[t for t in trades if t["result"] in ("WIN","LOSS")]
         w=sum(1 for t in closed if t["result"]=="WIN")
         chop_n=sum(1 for t in trades if t.get("chop_trade"))
-        print(f"  AZOTH  {sym:12s}  n={len(trades):>4d}  WR={w/max(len(closed),1)*100:>5.1f}%  PnL=${sum(t['pnl'] for t in closed):>+9,.0f}" + (f"  [MR:{chop_n}]" if chop_n else ""))
+        print(f"  CITADEL  {sym:12s}  n={len(trades):>4d}  WR={w/max(len(closed),1)*100:>5.1f}%  PnL=${sum(t['pnl'] for t in closed):>+9,.0f}" + (f"  [MR:{chop_n}]" if chop_n else ""))
     return azoth_all, azoth_vetos
 
 def _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr):
-    print(f"\n{SEP}\n  SCAN HERMES (harmonicos XABCD — Gartley/Bat/Butterfly/Crab)\n{SEP}")
+    print(f"\n{SEP}\n  SCAN RENAISSANCE (harmonicos XABCD — Gartley/Bat/Butterfly/Crab)\n{SEP}")
     hermes_all=[]; hermes_vetos=defaultdict(int)
     for sym,df in all_dfs.items():
         if sym not in SYMBOLS: continue
@@ -1231,15 +977,15 @@ def _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr):
         by_pat=defaultdict(int)
         for t in trades: by_pat[t.get("pattern","?")]+=1
         pat_str="  ".join(f"{k}:{v}" for k,v in sorted(by_pat.items()) if v)
-        print(f"  HERMES {sym:12s}  n={len(trades):>4d}  WR={w/max(len(closed),1)*100:>5.1f}%  PnL=${sum(t['pnl'] for t in closed):>+9,.0f}" + (f"  [{pat_str}]" if pat_str else ""))
-    print(f"\n{SEP}\n  FILTROS HERMES\n{SEP}")
+        print(f"  RENAISSANCE {sym:12s}  n={len(trades):>4d}  WR={w/max(len(closed),1)*100:>5.1f}%  PnL=${sum(t['pnl'] for t in closed):>+9,.0f}" + (f"  [{pat_str}]" if pat_str else ""))
+    print(f"\n{SEP}\n  FILTROS RENAISSANCE\n{SEP}")
     tv=sum(hermes_vetos.values())
     for k,n in sorted(hermes_vetos.items(),key=lambda x:-x[1])[:12]:
         bar="░"*min(int(n/max(tv,1)*30),30)
         print(f"  {k:40s}  {n:>6d}  {n/max(tv,1)*100:>4.1f}%  {bar}")
     return hermes_all, hermes_vetos
 
-def _metricas_e_export(all_trades, label="AZOTH + HERMES"):
+def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
     closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
     if not closed: print("  Sem trades fechados."); return
     pnl_s=[t["pnl"] for t in closed]; eq,mdd,mdd_pct,ms=equity_stats(pnl_s)
@@ -1249,7 +995,7 @@ def _metricas_e_export(all_trades, label="AZOTH + HERMES"):
     print(f"  Sharpe diário {str(ratios.get('sharpe_daily') or '—'):>5s}  (benchmark-comparable, ann. 252d)")
     print(f"  ROI      {ratios['ret']:>6.2f}%     MaxDD    {mdd_pct:>6.2f}%     Streak  {ms:>5d} perdas")
     print(f"  Capital  ${ACCOUNT_SIZE:>8,.0f}  ->  ${eq[-1]:>10,.0f}   (+${eq[-1]-ACCOUNT_SIZE:,.0f})")
-    if label!="AZOTH":
+    if label!="CITADEL":
         metrics_by_strategy(all_trades); metrics_confirmations(all_trades); print_hermes_patterns(all_trades)
     mc=monte_carlo(pnl_s)
     print(f"\n{SEP}\n  MONTE CARLO   {MC_N}x   bloco={MC_BLOCK}\n{SEP}")
@@ -1277,8 +1023,8 @@ def _metricas_e_export(all_trades, label="AZOTH + HERMES"):
             d=yy[yr]
             if not d: continue
             yr_trades=[t for t in closed if t.get("timestamp") and t["timestamp"].year==yr]
-            az_n=sum(1 for t in yr_trades if t.get("strategy")=="AZOTH")
-            he_n=sum(1 for t in yr_trades if t.get("strategy")=="HERMES")
+            az_n=sum(1 for t in yr_trades if t.get("strategy")=="CITADEL")
+            he_n=sum(1 for t in yr_trades if t.get("strategy")=="RENAISSANCE")
             print(f"  {yr}  {d['n']:>4d}  {d['wr']:>5.1f}%  {d['roi']:>+6.1f}%  ${d['pnl']:>+8,.0f}  {d['mdd']:>5.1f}%  AZ:{az_n}  HE:{he_n}")
 
     # ── ROBUSTNESS TEST ───────────────────────────────────────
@@ -1290,7 +1036,7 @@ def _metricas_e_export(all_trades, label="AZOTH + HERMES"):
     print_auto_diagnostic(diag, conflict_mult)
 
     # ── ENSEMBLE WEIGHTING ────────────────────────────────────
-    if label not in ("AZOTH", "HERMES"):
+    if label not in ("CITADEL", "RENAISSANCE"):
         rew = ensemble_reweight(all_trades)
         print_ensemble_stats(all_trades, rew)
 
@@ -1312,7 +1058,7 @@ def _metricas_e_export(all_trades, label="AZOTH + HERMES"):
             ax.plot(eq, linewidth=1.5, color="#00c8a0")
             ax.fill_between(range(len(eq)), eq, eq[0], alpha=0.15, color="#00c8a0")
             ax.axhline(eq[0], color="#888", linewidth=0.8, linestyle="--")
-            ax.set_title(f"AZOTH × HERMES — Equity Curve ({label})", fontsize=13)
+            ax.set_title(f"CITADEL × RENAISSANCE — Equity Curve ({label})", fontsize=13)
             ax.set_xlabel("Trade #"); ax.set_ylabel("Capital $")
             ax.grid(True, alpha=0.2)
             fname_eq = str(MS_RUN_DIR / "charts" / f"equity_{INTERVAL}.png")
@@ -1340,8 +1086,8 @@ def _resultados_por_simbolo(all_trades, show_he=True):
         if not c: continue
         w=sum(1 for t in c if t["result"]=="WIN"); wr=w/len(c)*100
         if show_he:
-            az=sum(1 for t in c if t.get("strategy")=="AZOTH")
-            he=sum(1 for t in c if t.get("strategy")=="HERMES")
+            az=sum(1 for t in c if t.get("strategy")=="CITADEL")
+            he=sum(1 for t in c if t.get("strategy")=="RENAISSANCE")
             print(f"  {sym:12s}  {len(c):>4d}  {az:>4d}  {he:>4d}  {wr:>5.1f}%  ${sum(t['pnl'] for t in c):>+10,.0f}")
         else:
             print(f"  {sym:12s}  {len(c):>4d}  {wr:>5.1f}%  ${sum(t['pnl'] for t in c):>+10,.0f}")
@@ -1349,31 +1095,32 @@ def _resultados_por_simbolo(all_trades, show_he=True):
 def _menu():
     W = 50
     print(f"\n  {'─'*W}")
-    print(f"  HADRON  ·  Multistrategy Backtest")
+    print(f"  MILLENNIUM  ·  Multistrategy Backtest")
     print(f"  {'─'*W}")
     while True:
         print()
-        print(f"  [1]  GRAVITON + PHOTON")
-        print(f"  [2]  GRAVITON")
-        print(f"  [3]  PHOTON")
+        print(f"  [1]  CITADEL + RENAISSANCE")
+        print(f"  [2]  CITADEL")
+        print(f"  [3]  RENAISSANCE")
         print(f"  [4]  NEWTON")
         print(f"  [5]  MERCURIO")
         print(f"  [6]  THOTH")
         print(f"  [7]  ALL")
-        print(f"  [8]  PROMETEU (ML)")
+        print(f"  [8]  TWO SIGMA (ML)")
         print(f"  [0]  Sair")
         print()
-        op = input("  > ").strip()
+        op = safe_input("  > ").strip()
         if op == "0": sys.exit(0)
         if op in ("1","2","3","4","5","6","7","8"): return op
         print("  opcao invalida")
 
 if __name__ == "__main__":
+    setup_multistrategy()
     op = _menu()
     LABELS = {
-        "1":"GRAVITON + PHOTON", "2":"GRAVITON", "3":"PHOTON",
-        "4":"NEWTON", "5":"MERCURIO", "6":"THOTH",
-        "7":"ALL", "8":"PROMETEU (ML)",
+        "1":"CITADEL + RENAISSANCE", "2":"CITADEL", "3":"RENAISSANCE",
+        "4":"DE SHAW", "5":"JUMP", "6":"BRIDGEWATER",
+        "7":"ALL", "8":"TWO SIGMA (ML)",
     }
     days = _ask_periodo()
     acct, lev, base_r, max_r, convex = _ask_config()
@@ -1385,7 +1132,7 @@ if __name__ == "__main__":
     if plots: print(f"  charts on")
     print(f"  {MS_RUN_DIR}/")
     print(SEP)
-    input("\n  enter para iniciar... ")
+    safe_input("\n  enter para iniciar... ")
     log.info(f"AURUM op={LABELS[op]} dias={days} — {RUN_ID}")
     all_dfs, htf_stack_by_sym, macro_series, corr = _load_dados(plots)
 
@@ -1393,13 +1140,13 @@ if __name__ == "__main__":
         azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
         if not azoth_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(azoth_all, show_he=False)
-        _metricas_e_export(azoth_all, label="GRAVITON")
+        _metricas_e_export(azoth_all, label="CITADEL")
 
     elif op == "3":
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         if not hermes_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(hermes_all, show_he=False)
-        _metricas_e_export(hermes_all, label="PHOTON")
+        _metricas_e_export(hermes_all, label="RENAISSANCE")
 
     elif op == "4":
         from engines.newton import find_cointegrated_pairs, scan_pair
@@ -1416,7 +1163,7 @@ if __name__ == "__main__":
         newton_all.sort(key=lambda t: t["timestamp"])
         if not newton_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(newton_all, show_he=False)
-        _metricas_e_export(newton_all, label="NEWTON")
+        _metricas_e_export(newton_all, label="DE SHAW")
 
     elif op == "5":
         from engines.mercurio import scan_mercurio
@@ -1427,7 +1174,7 @@ if __name__ == "__main__":
         mercurio_all.sort(key=lambda t: t["timestamp"])
         if not mercurio_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(mercurio_all, show_he=False)
-        _metricas_e_export(mercurio_all, label="MERCURIO")
+        _metricas_e_export(mercurio_all, label="JUMP")
 
     elif op == "6":
         from engines.thoth import scan_thoth, collect_sentiment
@@ -1441,17 +1188,17 @@ if __name__ == "__main__":
         thoth_all.sort(key=lambda t: t["timestamp"])
         if not thoth_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(thoth_all, show_he=False)
-        _metricas_e_export(thoth_all, label="THOTH")
+        _metricas_e_export(thoth_all, label="BRIDGEWATER")
 
     elif op == "7":
         # ALL engines
         engine_trades = {}
 
         azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
-        engine_trades["GRAVITON"] = azoth_all
+        engine_trades["CITADEL"] = azoth_all
 
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
-        engine_trades["PHOTON"] = hermes_all
+        engine_trades["RENAISSANCE"] = hermes_all
 
         from engines.newton import find_cointegrated_pairs, scan_pair
         pairs = find_cointegrated_pairs(all_dfs)
@@ -1463,14 +1210,14 @@ if __name__ == "__main__":
             trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
                                   pair, macro_series, corr)
             newton_all.extend(trades)
-        engine_trades["NEWTON"] = newton_all
+        engine_trades["DE SHAW"] = newton_all
 
         from engines.mercurio import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
             mercurio_all.extend(trades)
-        engine_trades["MERCURIO"] = mercurio_all
+        engine_trades["JUMP"] = mercurio_all
 
         from engines.thoth import scan_thoth, collect_sentiment
         sentiment_data = collect_sentiment(list(all_dfs.keys()))
@@ -1479,7 +1226,7 @@ if __name__ == "__main__":
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
                                    sentiment_data=sentiment_data)
             thoth_all.extend(trades)
-        engine_trades["THOTH"] = thoth_all
+        engine_trades["BRIDGEWATER"] = thoth_all
 
         # merge all
         all_trades = []
@@ -1494,7 +1241,7 @@ if __name__ == "__main__":
 
         # summary per engine
         print(f"\n{SEP}\n  RESULTADOS POR ENGINE\n{SEP}")
-        for eng in ["GRAVITON", "PHOTON", "NEWTON", "MERCURIO", "THOTH"]:
+        for eng in ["CITADEL", "RENAISSANCE", "DE SHAW", "JUMP", "BRIDGEWATER"]:
             ts = [t for t in all_trades if t.get("strategy") == eng and t["result"] in ("WIN","LOSS")]
             if not ts: print(f"  {eng:12s}  sem trades"); continue
             w = sum(1 for t in ts if t["result"] == "WIN")
@@ -1504,14 +1251,14 @@ if __name__ == "__main__":
         _metricas_e_export(all_trades, label="ALL ENGINES")
 
     elif op == "8":
-        # PROMETEU (ML ensemble)
+        # TWO SIGMA (ML ensemble)
         engine_trades = {}
 
         azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
-        engine_trades["GRAVITON"] = azoth_all
+        engine_trades["CITADEL"] = azoth_all
 
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
-        engine_trades["PHOTON"] = hermes_all
+        engine_trades["RENAISSANCE"] = hermes_all
 
         from engines.newton import find_cointegrated_pairs, scan_pair
         pairs = find_cointegrated_pairs(all_dfs)
@@ -1523,14 +1270,14 @@ if __name__ == "__main__":
             trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
                                   pair, macro_series, corr)
             newton_all.extend(trades)
-        engine_trades["NEWTON"] = newton_all
+        engine_trades["DE SHAW"] = newton_all
 
         from engines.mercurio import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
             mercurio_all.extend(trades)
-        engine_trades["MERCURIO"] = mercurio_all
+        engine_trades["JUMP"] = mercurio_all
 
         from engines.thoth import scan_thoth, collect_sentiment
         sentiment_data = collect_sentiment(list(all_dfs.keys()))
@@ -1539,20 +1286,20 @@ if __name__ == "__main__":
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
                                    sentiment_data=sentiment_data)
             thoth_all.extend(trades)
-        engine_trades["THOTH"] = thoth_all
+        engine_trades["BRIDGEWATER"] = thoth_all
 
         from engines.prometeu import run_prometeu
         all_trades = run_prometeu(engine_trades)
 
         if not all_trades: print("  Sem trades."); sys.exit(1)
-        _metricas_e_export(all_trades, label="PROMETEU ML")
+        _metricas_e_export(all_trades, label="TWO SIGMA ML")
 
     else:
-        # op == "1" — original GRAVITON + PHOTON
+        # op == "1" — original CITADEL + RENAISSANCE
         azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         print(f"\n{SEP}\n  SIGNAL AGGREGATOR\n{SEP}")
         all_trades = aggregate_signals(azoth_all, hermes_all)
         if not all_trades: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(all_trades, show_he=True)
-        _metricas_e_export(all_trades, label="GRAVITON + PHOTON")
+        _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE")

@@ -95,11 +95,8 @@ KS_DRIFT_TRIGGER  = -0.25
 DRIFT_WINDOW        = 20
 DRIFT_SIZE_PENALTY  = -0.15        # se drift_mean < -0.15R → reduz size global 20%
 
-# Filtros de regime de mercado
-SPEED_MIN           = 0.002        # range_pct mínimo (mercado lento → sem trades)
-SPEED_WINDOW        = 5            # candles para média de speed
-SESSION_BLOCK_HOURS = {2, 3, 4, 5} # UTC: Ásia baixa liquidez (02h-06h)
-SESSION_BLOCK_ACTIVE= False        # True = activa filtro de horário
+# SPEED_MIN, SPEED_WINDOW, SESSION_BLOCK_HOURS, SESSION_BLOCK_ACTIVE agora vivem em config/params.py
+# (single source of truth — partilhados com backtest para paridade)
 
 # Symbol ranking
 SYMBOL_RANK_WINDOW  = 20           # últimos N trades por símbolo para ranking
@@ -203,33 +200,35 @@ class Position:
 
     def update_trailing(self, high: float, low: float) -> Optional[str]:
         """Actualiza trailing stop. Retorna 'WIN'/'LOSS' se fechar, None caso contrário.
-        trail_mult: score alto (≥0.65) usa 0.7× risco de trail → segura winners mais tempo.
+        Espelha label_trade() em core/signals.py para paridade exacta com backtest.
         """
-        trail_mult = 0.7 if self.score >= 0.65 else 0.5
+        _be  = TRAIL_BE_MULT
+        _act = TRAIL_ACTIVATE_MULT
+        _dst = TRAIL_DISTANCE_MULT
         if self.direction == "BULLISH":
             self.peak_fav = max(self.peak_fav, high)
-            if not self.be_done and high >= self.entry + self.risk:
+            if not self.be_done and high >= self.entry + _be * self.risk:
                 self.cur_stop = self.entry; self.be_done = True
                 log.debug(f"  {self.symbol} BE atingido @ {high:.6f}")
-            if self.be_done and high >= self.entry + 1.5 * self.risk:
-                self.cur_stop = max(self.cur_stop, high - trail_mult * self.risk)
+            if self.be_done and not self.trail_done and high >= self.entry + _act * self.risk:
+                self.cur_stop = max(self.cur_stop, high - _dst * self.risk)
                 self.trail_done = True
             elif self.trail_done:
-                self.cur_stop = max(self.cur_stop, high - trail_mult * self.risk)
+                self.cur_stop = max(self.cur_stop, high - _dst * self.risk)
             if low <= self.cur_stop:
                 return "WIN" if self.cur_stop >= self.entry else "LOSS"
             if high >= self.target:
                 return "WIN"
         else:
             self.peak_fav = min(self.peak_fav, low)
-            if not self.be_done and low <= self.entry - self.risk:
+            if not self.be_done and low <= self.entry - _be * self.risk:
                 self.cur_stop = self.entry; self.be_done = True
                 log.debug(f"  {self.symbol} BE atingido @ {low:.6f}")
-            if self.be_done and low <= self.entry - 1.5 * self.risk:
-                self.cur_stop = min(self.cur_stop, low + trail_mult * self.risk)
+            if self.be_done and not self.trail_done and low <= self.entry - _act * self.risk:
+                self.cur_stop = min(self.cur_stop, low + _dst * self.risk)
                 self.trail_done = True
             elif self.trail_done:
-                self.cur_stop = min(self.cur_stop, low + trail_mult * self.risk)
+                self.cur_stop = min(self.cur_stop, low + _dst * self.risk)
             if high >= self.cur_stop:
                 return "WIN" if self.cur_stop <= self.entry else "LOSS"
             if low <= self.target:
@@ -632,10 +631,9 @@ class SignalEngine:
         if rr < 1.5:
             self._veto(symbol, "rr_baixo", score, thresh, f"rr={rr:.2f}"); return None
 
-        # entry com slippage
-        entry_price = float(df["close"].iloc[idx])
-        slip = SLIPPAGE + SPREAD
-        entry_price *= (1 + slip if direction == "BULLISH" else 1 - slip)
+        # Paridade com backtest: calc_levels já devolve entry = open[idx+1]*(1±slip).
+        # Qualquer slippage/spread residual é contabilizado no fill price pelo OrderManager.
+        entry_price = float(entry_signal)
 
         # fix #3a — dd_scale dinâmico
         pk = peak_equity if peak_equity else account
@@ -912,6 +910,10 @@ class LiveEngine:
             funding = +(pos.size * pos.entry * FUNDING_PER_8H *
                         (datetime.now(timezone.utc) - pos.open_ts).total_seconds() / 3600 / 8)
             pnl = round((pos.size * (entry_c - exit_c) + funding) * LEVERAGE, 2)
+
+        # Liquidation check: espelha backtest — se a perda alavancada > 90% da conta, força liquidação
+        if LEVERAGE > 1.0 and abs(pnl) > self.account * 0.9 and pnl < 0:
+            pnl = -round(self.account * 0.95, 2)
 
         # R-multiple real
         risk_usd  = abs(pos.entry - pos.stop) * pos.size

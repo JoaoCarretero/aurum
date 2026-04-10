@@ -1,0 +1,77 @@
+{
+  "active_market": "crypto_futures",
+  "connections": {
+    "binance_futures": {
+      "mode": "testnet",
+      "connected": true,
+      "label": "Binance Futures",
+      "latency_ms": 994,
+      "last_ping": "2026-04-10T16:11:06.222095"
+    },
+    "binance_spot": {
+      "connected": false,
+      "label": "Binance Spot"
+    },
+    "bybit": {
+      "connected": false,
+      "label": "Bybit"
+    },
+    "okx": {
+      "connected": false,
+      "label": "OKX"
+    },
+    "hyperliquid": {
+      "connected": false,
+      "label": "Hyperliquid"
+    },
+    "gate": {
+      "connected": false,
+      "label": "Gate.io"
+    },
+    "mt5": {
+      "connected": false,
+      "label": "MetaTrader 5",
+      "server": "",
+      "login": ""
+    },
+    "ib": {
+      "connected": false,
+      "label": "Interactive Brokers"
+    },
+    "alpaca": {
+      "connected": false,
+      "label": "Alpaca"
+    },
+    "coinglass": {
+      "connected": false,
+      "label": "CoinGlass"
+    },
+    "glassnode": {
+      "connected": false,
+      "label": "Glassnode"
+    },
+    "cftc": {
+      "connected": true,
+      "label": "CFTC COT",
+      "public": true
+    },
+    "fred": {
+      "connected": true,
+      "label": "FRED",
+      "public": true
+    },
+    "yahoo": {
+      "connected": true,
+      "label": "Yahoo Finance",
+      "public": true
+    },
+    "telegram": {
+      "connected": false,
+      "label": "Telegram Bot"
+    },
+    "discord": {
+      "connected": false,
+      "label": "Discord Webhook"
+    }
+  }
+}

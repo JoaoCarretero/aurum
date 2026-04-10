@@ -15,7 +15,7 @@ from core.evolution import DarwinAllocator, calc_fitness
 from analysis.stats import equity_stats, calc_ratios
 
 SEP = "=" * 60
-log = logging.getLogger("darwin")
+log = logging.getLogger("AQR")  # AQR (formerly DARWIN) — Adaptive allocation engine
 
 def load_engine_trades(data_dir: str = "data") -> dict[str, list[dict]]:
     """

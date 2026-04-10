@@ -13,15 +13,7 @@ from datetime import datetime
 
 STATE_FILE = Path("data/.aurum_procs.json")
 
-ENGINE_NAMES = {
-    "backtest": "GRAVITON",
-    "multi":    "HADRON",
-    "live":     "GRAVITON",
-    "arb":      "NEUTRINO",
-    "newton":   "NEWTON",
-    "mercurio": "MERCURIO",
-    "thoth":    "THOTH",
-}
+from config.engines import PROC_NAMES as ENGINE_NAMES
 
 ENGINES = {
     "backtest": {"script": "engines/backtest.py"},
@@ -31,6 +23,9 @@ ENGINES = {
     "newton":   {"script": "engines/newton.py"},
     "mercurio": {"script": "engines/mercurio.py"},
     "thoth":    {"script": "engines/thoth.py"},
+    "prometeu": {"script": "engines/prometeu.py"},
+    "darwin":   {"script": "engines/darwin.py"},
+    "chronos":  {"script": "core/chronos.py"},
 }
 
 

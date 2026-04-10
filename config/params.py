@@ -23,8 +23,10 @@ __all__ = [
     "RSI_BULL_MIN", "RSI_BULL_MAX", "RSI_BEAR_MIN", "RSI_BEAR_MAX",
     "PULLBACK_ATR_MAX", "CASCADE_MIN",
     # Omega & Score
-    "REGIME_MIN_STRENGTH", "SCORE_THRESHOLD", "OMEGA_MIN_COMPONENT", "OMEGA_WEIGHTS",
+    "REGIME_MIN_STRENGTH", "SCORE_THRESHOLD", "OMEGA_MIN_COMPONENT",
+    "OMEGA_WEIGHTS", "OMEGA_WEIGHTS_FOREX", "BASKETS_FOREX",
     "STOP_ATR_M", "TARGET_RR", "RR_MIN", "MAX_HOLD",
+    "TRAIL_BE_MULT", "TRAIL_ACTIVATE_MULT", "TRAIL_DISTANCE_MULT",
     "SCORE_BY_REGIME", "RISK_SCALE_BY_REGIME", "BULL_LONG_MIN_PULLBACK_ATR",
     # Drawdown & Cooldown
     "DD_RISK_SCALE", "REGIME_TRANS_WINDOW", "REGIME_TRANS_ATR_JUMP", "REGIME_TRANS_SIZE_MULT",
@@ -36,10 +38,12 @@ __all__ = [
     # Macro
     "MACRO_SYMBOL", "MACRO_SLOPE_BULL", "MACRO_SLOPE_BEAR",
     # MC & WF
-    "MC_N", "MC_BLOCK", "WF_TRAIN", "WF_TEST",
+    "MC_N", "MC_BLOCK", "WF_TRAIN", "WF_TEST", "VETO_HOURS_UTC",
     # Chop
     "CHOP_BB_PERIOD", "CHOP_BB_STD", "CHOP_RSI_LONG", "CHOP_RSI_SHORT",
     "CHOP_RR", "CHOP_SIZE_MULT", "CHOP_MAX_SLOPE_ABS",
+    # Live/Backtest parity filters
+    "SPEED_MIN", "SPEED_WINDOW", "SESSION_BLOCK_HOURS", "SESSION_BLOCK_ACTIVE",
     # Omega Risk Table
     "OMEGA_RISK_TABLE",
     # TF Scaling (underscore-prefixed — precisa de __all__ para exportar)
@@ -101,6 +105,17 @@ BASKETS = {
                   "INJUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "RENDERUSDT", "FETUSDT",
                   "SANDUSDT", "AAVEUSDT"],
     "custom":    [],  # preenchido interativamente
+}
+
+# ── BASKETS MT5 (Forex, Equities, Commodities, Indices) ─────
+# Exact symbol names depend on the MT5 broker — these are the most common.
+# Verify with mt5.symbols() after connecting.
+BASKETS_FOREX = {
+    "majors":   ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD"],
+    "crosses":  ["EURJPY", "GBPJPY", "EURGBP", "AUDNZD", "CADJPY", "EURAUD"],
+    "metals":   ["XAUUSD", "XAGUSD"],
+    "indices":  ["US500", "US30", "GER40", "UK100", "JPN225"],
+    "energy":   ["XTIUSD", "XNGUSD"],
 }
 
 def select_symbols(current: list | None = None) -> list:
@@ -200,10 +215,21 @@ OMEGA_WEIGHTS       = {
     "struct": 0.25, "flow": 0.25,
     "cascade": 0.20, "momentum": 0.15, "pullback": 0.15,
 }
+# Forex/CFD: flow disabled (no taker aggression data in decentralized FX)
+# Edge comes from struct/cascade/momentum/pullback only
+OMEGA_WEIGHTS_FOREX = {
+    "struct": 0.35, "flow": 0.00,
+    "cascade": 0.30, "momentum": 0.20, "pullback": 0.15,
+}
 STOP_ATR_M          = 1.8
 TARGET_RR           = 2.0
 RR_MIN              = 1.5
 MAX_HOLD            = 48
+
+# Trailing stop phases
+TRAIL_BE_MULT       = 1.0    # move 1.0x risk → stop to breakeven
+TRAIL_ACTIVATE_MULT = 1.5    # move 1.5x risk → activate trailing
+TRAIL_DISTANCE_MULT = 0.5    # trailing stop distance = 0.5x risk
 
 SCORE_BY_REGIME: dict[str, float] = {
     "BEAR": 0.53,
@@ -266,6 +292,10 @@ MACRO_SLOPE_BEAR     = -0.05
 MC_N, MC_BLOCK = 1000, 25
 WF_TRAIN, WF_TEST = 20, 10
 
+# EMPIRICAL — validate OOS: 20-24h UTC tem WR=47.5% (diagnostico 190 trades)
+# REVERTIDO para baseline — re-testar uma correcção de cada vez (§4)
+VETO_HOURS_UTC = []
+
 # ── CHOP MODE ─────────────────────────────────────────────────
 CHOP_BB_PERIOD     = 20
 CHOP_BB_STD        = 2.0
@@ -275,12 +305,20 @@ CHOP_RR            = 1.5
 CHOP_SIZE_MULT     = 0.40
 CHOP_MAX_SLOPE_ABS = 0.025
 
+# ── LIVE/BACKTEST PARITY FILTERS ─────────────────────────────
+# Filtros partilhados por live e backtest para garantir trades idênticos.
+# Single source of truth — evita drift entre os dois engines.
+SPEED_MIN            = 0.002         # range_pct médio mínimo (<mercado muito lento = sem edge>)
+SPEED_WINDOW         = 5             # candles para média de speed
+SESSION_BLOCK_HOURS  = {2, 3, 4, 5}  # UTC: Ásia baixa liquidez
+SESSION_BLOCK_ACTIVE = False         # off por default — backtest e live ambos desligados
+
 # ── OMEGA RISK TABLE ─────────────────────────────────────────
+# Graduated risk table — score alto = mais confiança = mais risco
 OMEGA_RISK_TABLE: list[tuple[float, float]] = [
-    (0.65, 1.30),
-    (0.59, 1.10),
-    (0.55, 0.85),
-    (0.53, 0.70),
+    (0.65, 1.20),
+    (0.59, 1.00),
+    (0.53, 0.80),
     (0.00, 0.50),
 ]
 

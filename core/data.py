@@ -5,8 +5,8 @@ import pandas as pd
 from config.params import *
 from config.params import _TF_MINUTES
 
-log = logging.getLogger("AZOTH")
-_vl = logging.getLogger("AZOTH.val")
+log = logging.getLogger("CITADEL")
+_vl = logging.getLogger("CITADEL.val")
 
 def fetch(symbol: str, interval: str | None = None,
           n_candles: int | None = None,
@@ -36,6 +36,10 @@ def fetch(symbol: str, interval: str | None = None,
             frames.insert(0, data)
             end_time   = data[0][0] - 1
             remaining -= len(data)
+            log.debug(f"[{symbol}] page {len(frames)}: got {len(data)} candles, remaining={remaining}")
+            if len(data) < limit:
+                log.debug(f"[{symbol}] API returned fewer than requested — end of available history")
+                break
             time.sleep(0.08)
         except Exception as e:
             log.warning(f"[{symbol}] fetch error: {e}"); break
@@ -53,12 +57,14 @@ def fetch(symbol: str, interval: str | None = None,
 def fetch_all(symbols: list, interval: str | None = None,
               n_candles: int | None = None,
               label: str = "", workers: int = 6,
-              futures: bool = False) -> dict:
+              futures: bool = False,
+              on_progress=None) -> dict:
     from concurrent.futures import ThreadPoolExecutor, as_completed
     _iv = interval or INTERVAL
     _nc = n_candles or N_CANDLES
     results: dict = {}
     futures_map: dict = {}
+    total = len(symbols)
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for sym in symbols:
@@ -72,14 +78,18 @@ def fetch_all(symbols: list, interval: str | None = None,
             except Exception as e:
                 df = None
                 log.warning(f"[{sym}] {e}")
-            if df is not None and len(df) >= 300:
+            ok = df is not None and len(df) >= 300
+            if ok:
                 results[sym] = df
-                span = (f"{df['time'].iloc[0].strftime('%Y-%m-%d')} → "
-                        f"{df['time'].iloc[-1].strftime('%Y-%m-%d')}")
-                lbl = f"  [{sym:12s}]  ✓  {len(df)}c   {span}"
+            if on_progress:
+                on_progress(sym, done, total, ok)
             else:
-                lbl = f"  [{sym:12s}]  ✗ sem dados"
-            print(lbl, flush=True)
+                if ok:
+                    span = (f"{df['time'].iloc[0].strftime('%Y-%m-%d')} → "
+                            f"{df['time'].iloc[-1].strftime('%Y-%m-%d')}")
+                    print(f"  [{sym:12s}]  ✓  {len(df)}c   {span}", flush=True)
+                else:
+                    print(f"  [{sym:12s}]  ✗ sem dados", flush=True)
     return results
 
 def validate(df: pd.DataFrame, symbol: str) -> bool:
@@ -94,4 +104,17 @@ def validate(df: pd.DataFrame, symbol: str) -> bool:
     _vl.info(f"{symbol:12s}  {'OK' if ok else 'WARN'}  n={len(df)}"
              + (f"  {';'.join(issues)}" if issues else ""))
     return ok
+
+
+def fetch_mt5(symbol: str, timeframe: str = "1h",
+              n_candles: int = 5000,
+              host: str = "localhost", port: int = 8001) -> pd.DataFrame | None:
+    """Convenience wrapper for fetch via MT5 bridge."""
+    from core.mt5 import MT5Bridge
+    bridge = MT5Bridge(host=host, port=port)
+    if not bridge.connect():
+        return None
+    df = bridge.fetch(symbol, timeframe, n_candles)
+    bridge.disconnect()
+    return df
 

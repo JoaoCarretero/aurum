@@ -34,7 +34,7 @@ from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
 
-log = logging.getLogger("MERCURIO")
+log = logging.getLogger("JUMP")  # JUMP (formerly MERCURIO) — Order flow engine
 log.setLevel(logging.INFO)
 if not log.handlers:
     _h = logging.StreamHandler(sys.stdout)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build AURUM Finance into a standalone .exe
+Build AURUM Finance into standalone .exe files
 Usage: python build.py
 """
 import PyInstaller.__main__
@@ -9,11 +9,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 
+# ── BUILD 1: GUI Launcher (windowed) ──
+print("Building AURUM Launcher (GUI)...")
 PyInstaller.__main__.run([
-    str(ROOT / "__main__.py"),
+    str(ROOT / "launcher.py"),
     "--name=AURUM",
     "--onefile",
-    "--console",
+    "--windowed",
     f"--icon={ROOT / 'server' / 'logo' / 'logo_04_favicon.png'}",
     # Include all packages
     "--hidden-import=config",
@@ -60,5 +62,5 @@ PyInstaller.__main__.run([
 ])
 
 print("\n" + "=" * 50)
-print("  AURUM.exe built -> dist/AURUM.exe")
+print("  dist/AURUM.exe  (GUI launcher)")
 print("=" * 50)

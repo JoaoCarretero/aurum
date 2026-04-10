@@ -37,7 +37,7 @@ from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward
 
-log = logging.getLogger("THOTH")
+log = logging.getLogger("BRIDGEWATER")  # BRIDGEWATER (formerly THOTH) — Macro sentiment engine
 log.setLevel(logging.INFO)
 if not log.handlers:
     _h = logging.StreamHandler(sys.stdout)

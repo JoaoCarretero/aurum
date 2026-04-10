@@ -5,7 +5,7 @@ import pandas as pd
 from config.params import *
 from core.indicators import indicators
 
-log = logging.getLogger("AZOTH")
+log = logging.getLogger("CITADEL")
 
 def detect_macro(all_dfs: dict) -> pd.Series:
     btc = all_dfs.get(MACRO_SYMBOL)
