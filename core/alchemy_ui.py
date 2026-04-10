@@ -285,6 +285,21 @@ def render_cockpit(app):
                                 sticky="nsew", padx=1, pady=1)
         setattr(app, f"_alch_p{pid}", body_frame)
 
+    # Stale overlay — shown when snapshot is old AND engine is running
+    overlay = tk.Label(root, text="SNAPSHOT STALE · engine not responding",
+                       font=font("mono_px", 14), fg=HEV_RED, bg="#1a0000",
+                       padx=16, pady=8)
+    app._alch_overlay = overlay
+
+    def update_overlay(snap):
+        stale = snap.get("_stale", True)
+        engine_running = bool(app.proc and app.proc.poll() is None)
+        if stale and engine_running:
+            overlay.place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            overlay.place_forget()
+    app._alch_tick.register(update_overlay)
+
     _init_panel_opportunities(app)
     _init_panel_positions(app)
     _init_panel_venue_health(app)

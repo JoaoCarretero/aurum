@@ -37,3 +37,10 @@ dist/
 
 # Git worktrees (isolated Claude Code sessions)
 .worktrees/
+
+# Claude Code superpowers runtime
+.superpowers/
+
+# Alchemy (ARBITRAGE) param files — generated at runtime, not versioned
+config/alchemy_params.json
+config/alchemy_params.json.reload
