@@ -291,6 +291,9 @@ def render_cockpit(app):
     _init_panel_funding(app)
     _init_panel_risk(app)
     _init_panel_basis(app)
+    _init_panel_connections(app)
+    _init_panel_engine(app)
+    _init_panel_log(app)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -628,5 +631,244 @@ def _init_panel_basis(app):
         mu = _st.mean(all_vals)
         sigma = _st.pstdev(all_vals) if len(all_vals) > 1 else 0
         stats.configure(text=f"σ={sigma:.4f} μ={mu:+.4f}")
+
+    app._alch_tick.register(update)
+
+
+def _init_panel_connections(app):
+    frame = app._alch_p6
+    inner = tk.Frame(frame, bg=HEV_PANEL)
+    inner.pack(fill="both", expand=True, padx=3, pady=2)
+
+    from core.connections import ConnectionManager
+    conn = ConnectionManager()
+
+    venues = [
+        ("binance_futures", "binance",     "Binance"),
+        ("bybit",           "bybit",       "Bybit"),
+        ("okx",             "okx",         "OKX"),
+        ("hyperliquid",     "hyperliquid", "Hyperliquid"),
+        ("gate",            "gate",        "Gate.io"),
+    ]
+
+    rows = {}
+    for conn_key, glyph_key, label in venues:
+        row = tk.Frame(inner, bg=HEV_PANEL); row.pack(fill="x", pady=0)
+        dot = tk.Label(row, text="●", font=font("mono_px", 10),
+                       fg=HEV_DIM, bg=HEV_PANEL)
+        dot.pack(side="left")
+        tk.Label(row, text=label, width=11, anchor="w",
+                 font=font("mono", 9), fg=HEV_AMBER, bg=HEV_PANEL).pack(side="left")
+        mode_lbl = tk.Label(row, text="—", font=font("mono", 8),
+                            fg=HEV_AMBER_D, bg=HEV_PANEL)
+        mode_lbl.pack(side="right")
+        rows[conn_key] = (dot, mode_lbl)
+
+    def update(snap):
+        try:
+            conn_state = conn._load()
+        except Exception:
+            conn_state = {"connections": {}}
+        health = snap.get("venue_health", {}) or {}
+        for conn_key, (dot, mode_lbl) in rows.items():
+            c = (conn_state.get("connections", {}) or {}).get(conn_key, {}) or {}
+            connected = c.get("connected", False)
+            mode = c.get("mode", "—")
+            glyph_key = conn_key.replace("_futures", "")
+            disabled = (health.get(glyph_key, {}) or {}).get("disabled", False)
+            if disabled:
+                dot.configure(fg=HEV_RED)
+                mode_lbl.configure(text="OFFLINE", fg=HEV_RED)
+            elif connected:
+                dot.configure(fg=HEV_GREEN)
+                mode_lbl.configure(text=str(mode).upper(), fg=HEV_GREEN)
+            else:
+                dot.configure(fg=HEV_DIM)
+                mode_lbl.configure(text="IDLE", fg=HEV_AMBER_D)
+    app._alch_tick.register(update)
+
+
+def _init_panel_engine(app):
+    frame = app._alch_p7
+    inner = tk.Frame(frame, bg=HEV_PANEL)
+    inner.pack(fill="both", expand=True, padx=4, pady=1)
+
+    # Left: buttons
+    btn_row = tk.Frame(inner, bg=HEV_PANEL)
+    btn_row.pack(side="left", fill="y")
+
+    from core.alchemy_state import AlchemyState
+    state = AlchemyState()
+
+    def _start_engine(mode):
+        if mode == "live":
+            from tkinter import simpledialog
+            answer = simpledialog.askstring(
+                "LIVE MODE",
+                "REAL CAPITAL AT RISK.\nType 'LIVE' to confirm:",
+                parent=app)
+            if answer != "LIVE":
+                return
+        if app.proc and app.proc.poll() is None:
+            try: app._stop()
+            except Exception: pass
+        import subprocess, sys as _sys
+        from datetime import datetime as _dt
+        _NO_WIN = subprocess.CREATE_NO_WINDOW if _sys.platform == "win32" else 0
+        app._alch_engine_mode = mode
+        run_id = _dt.now().strftime("%Y-%m-%d_%H%M")
+        try:
+            app.proc = subprocess.Popen(
+                [_sys.executable, "engines/arbitrage.py", "--mode", mode, "--run-id", run_id],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE, text=True, bufsize=1,
+                creationflags=_NO_WIN,
+            )
+        except Exception as e:
+            app._alch_log_buf.append(f"spawn failed: {e}")
+            return
+
+        from pathlib import Path as _P
+        try:
+            app._alch_state.pin_run(_P(f"data/arbitrage/{run_id}"))
+        except Exception:
+            pass
+
+        import threading as _th
+        def _reader():
+            try:
+                for line in iter(app.proc.stdout.readline, ""):
+                    app._alch_log_buf.append(line.rstrip())
+                    if len(app._alch_log_buf) > 500:
+                        app._alch_log_buf.pop(0)
+                try: app.proc.stdout.close()
+                except Exception: pass
+            except Exception as e:
+                app._alch_log_buf.append(f"reader error: {e}")
+        _th.Thread(target=_reader, daemon=True).start()
+
+    def _stop_engine():
+        if app.proc and app.proc.poll() is None:
+            try: app._stop()
+            except Exception: pass
+        app._alch_engine_mode = None
+        try: app._alch_state.unpin_run()
+        except Exception: pass
+
+    def _kill_engine():
+        _stop_engine()
+        app._alch_log_buf.append("KILL invoked")
+
+    def _mk_btn(text, handler, danger=False):
+        bg = "#1a0000" if danger else "#0a0500"
+        border = HEV_BLOOD if danger else HEV_AMBER_D
+        fg = HEV_RED if danger else HEV_AMBER
+        b = tk.Label(btn_row, text=text, font=font("mono_px", 10),
+                     fg=fg, bg=bg, padx=6, pady=1,
+                     highlightthickness=1, highlightbackground=border)
+        b.pack(side="left", padx=1)
+        b.bind("<Button-1>", lambda e: handler())
+        return b
+
+    _mk_btn("> PAPER",   lambda: _start_engine("paper"))
+    _mk_btn("> DEMO",    lambda: _start_engine("demo"))
+    _mk_btn("> TESTNET", lambda: _start_engine("testnet"))
+    _mk_btn("> LIVE",    lambda: _start_engine("live"), danger=True)
+    _mk_btn("# STOP",    _stop_engine)
+    _mk_btn("! KILL",    _kill_engine, danger=True)
+
+    # Right: editable params (inline, compact)
+    params_row = tk.Frame(inner, bg=HEV_PANEL)
+    params_row.pack(side="left", padx=8, fill="y")
+
+    PARAMS = [
+        ("MIN_APR",    "40.0"),
+        ("MIN_SPREAD", ".0015"),
+        ("MAX_POS",    "5"),
+        ("POS_PCT",    "0.20"),
+        ("LEV",        "2"),
+        ("SCAN_S",     "30"),
+        ("EXIT_H",     "8"),
+        ("MAX_DD_PCT", "0.05"),
+    ]
+    labels = {}
+    for key, default in PARAMS:
+        cell = tk.Frame(params_row, bg=HEV_PANEL)
+        cell.pack(side="left", padx=4)
+        tk.Label(cell, text=key, font=font("mono", 7),
+                 fg=HEV_AMBER_D, bg=HEV_PANEL).pack()
+        val = tk.Label(cell, text=default, font=font("mono_px", 10),
+                       fg=HEV_AMBER, bg=HEV_PANEL, cursor="xterm")
+        val.pack()
+        labels[key] = val
+
+        def _make_editor(k, lbl):
+            def _edit(event):
+                entry = tk.Entry(lbl.master, font=font("mono_px", 10),
+                                 fg=HEV_HAZARD, bg="#1a1000",
+                                 insertbackground=HEV_AMBER, width=7)
+                entry.insert(0, lbl.cget("text").rstrip("%x "))
+                lbl.pack_forget()
+                entry.pack()
+                entry.focus_set()
+                def _commit(event=None):
+                    new_val = entry.get().strip()
+                    try:
+                        v = float(new_val) if "." in new_val or k in ("MIN_SPREAD", "POS_PCT", "MAX_DD_PCT") else int(new_val)
+                        state.write_params({k: v})
+                        lbl.configure(text=str(v))
+                    except ValueError:
+                        pass
+                    try: entry.destroy()
+                    except Exception: pass
+                    lbl.pack()
+                entry.bind("<Return>", _commit)
+                entry.bind("<FocusOut>", _commit)
+                entry.bind("<Escape>", lambda e: (entry.destroy(), lbl.pack()))
+            return _edit
+        val.bind("<Button-1>", _make_editor(key, val))
+
+    # Load current params on init
+    try:
+        current = state.read_params()
+        for k, lbl in labels.items():
+            if k in current:
+                lbl.configure(text=str(current[k]))
+    except Exception:
+        pass
+
+
+def _init_panel_log(app):
+    frame = app._alch_p9
+    text = tk.Text(frame, bg=HEV_PANEL, fg=HEV_AMBER_B,
+                   font=font("mono", 8), relief="flat",
+                   borderwidth=0, highlightthickness=0,
+                   wrap="none", state="disabled")
+    text.pack(fill="both", expand=True, padx=2, pady=2)
+    text.tag_config("info", foreground=HEV_AMBER_B)
+    text.tag_config("ok",   foreground=HEV_GREEN)
+    text.tag_config("warn", foreground=HEV_HAZARD)
+    text.tag_config("err",  foreground=HEV_RED)
+    text.tag_config("dim",  foreground=HEV_AMBER_D)
+
+    def classify(line):
+        lo = (line or "").lower()
+        if "error" in lo or "fail" in lo:
+            return "err"
+        if "warn" in lo or "rate limit" in lo:
+            return "warn"
+        if "opened" in lo or "closed" in lo or "reloaded" in lo:
+            return "ok"
+        return "info"
+
+    def update(snap):
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        buf = getattr(app, "_alch_log_buf", []) or []
+        tail = buf[-15:]
+        for line in tail:
+            tag = classify(line)
+            text.insert("end", (line or "") + "\n", tag)
+        text.configure(state="disabled")
 
     app._alch_tick.register(update)
