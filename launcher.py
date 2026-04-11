@@ -316,6 +316,367 @@ BRIEFINGS["WINTON"] = {
     "risk": "Dependências ML (hmmlearn, arch). Fallback gracioso se não instaladas.",
 }
 
+
+# ═══════════════════════════════════════════════════════════
+# BRIEFINGS_V2 — technical view (populated Fase 3.3, 2026-04-11)
+# ═══════════════════════════════════════════════════════════
+# Structured strategy briefing schema. Coexists with legacy BRIEFINGS;
+# _brief prefers V2 when a matching name exists, falls back to the
+# narrative dict otherwise. Every entry follows the same shape:
+#
+#   source_files: list of paths, first is the main file
+#   main_function: (file, function_name) — auto-scroll target for CodeViewer
+#   one_liner: one-sentence technical summary
+#   pseudocode: multi-line Python-like block of the decision flow
+#   params: list of dicts {name, default, range, unit, effect}
+#   formulas: list of Unicode math strings
+#   invariants: list of pre-conditions / assumptions
+BRIEFINGS_V2: dict[str, dict] = {
+    "CITADEL": {
+        "source_files": [
+            "engines/backtest.py",
+            "core/signals.py",
+            "core/portfolio.py",
+            "core/htf.py",
+        ],
+        "main_function": ("engines/backtest.py", "scan_symbol"),
+        "one_liner": "Omega 5D fractal trend-follower with MTF alignment "
+                     "and convex Kelly sizing.",
+        "pseudocode": """\
+for idx in range(min_idx, len(df) - MAX_HOLD - 2):
+    if in_cooldown(idx): continue
+    if not portfolio_allows(symbol, active_syms, corr): continue
+
+    direction, reason, fractal_score = decide_direction(row, macro)
+    if direction is None and reason == "chop":
+        direction, chop_score = score_chop(row)  # mean-reversion fallback
+
+    score, comps = score_omega(row, direction)  # 5D ensemble
+    if score < SCORE_THRESHOLD[macro]: continue
+
+    entry, stop, target, rr = calc_levels(df, idx, direction)
+    result, dur, exit_p = label_trade(df, idx+1, direction,
+                                      entry, stop, target)
+
+    size = position_size(account, entry, stop, score,
+                         macro, direction, vol_r, dd_scale,
+                         peak_equity=peak_equity)
+    if not check_aggregate_notional(size*entry, open_pos, account, LEVERAGE):
+        continue   # [L6]
+    commit_trade(...)""",
+        "params": [
+            {"name": "SCORE_THRESHOLD", "default": 0.53, "range": "0.45-0.65",
+             "unit": "—", "effect": "min omega score to fire"},
+            {"name": "KELLY_FRAC",      "default": 0.5,  "range": "0.25-1.0",
+             "unit": "—", "effect": "fractional Kelly multiplier on base risk"},
+            {"name": "TARGET_RR",       "default": 2.0,  "range": "1.5-3.5",
+             "unit": "R",  "effect": "target distance as multiple of stop"},
+            {"name": "STOP_ATR_M",      "default": 1.8,  "range": "1.2-2.5",
+             "unit": "ATR","effect": "stop distance floor in ATR units"},
+            {"name": "MAX_HOLD",        "default": 200,  "range": "100-400",
+             "unit": "bars","effect": "max bars a position can stay open"},
+            {"name": "MAX_OPEN_POSITIONS","default": 3,  "range": "2-5",
+             "unit": "—", "effect": "concurrency cap across symbols"},
+        ],
+        "formulas": [
+            "Ω = 0.30·struct + 0.20·flow + 0.20·cascade + 0.15·momentum + 0.15·pullback",
+            "risk = BASE_RISK + t · (min(kelly, MAX_RISK) - BASE_RISK)",
+            "kelly = max(0, (WR·RR - (1-WR)) / RR) · KELLY_FRAC",
+            "size = account · risk / |entry - stop|",
+            "liq_price = entry · (1 ∓ 1/LEVERAGE ± 0.005)",
+        ],
+        "invariants": [
+            "L1 no look-ahead: features read from [idx] only",
+            "L2 entry fills at open[idx+1] (label_trade)",
+            "L3/L4 fees + slippage applied on both legs",
+            "L6 aggregate notional cap enforced post-sizing",
+            "L7 liquidation check inside label_trade (path-dependent)",
+            "stop is always strictly below entry for long, above for short",
+        ],
+    },
+    "JUMP": {
+        "source_files": ["engines/mercurio.py", "core/indicators.py"],
+        "main_function": ("engines/mercurio.py", "scan_mercurio"),
+        "one_liner": "Order-flow microstructure: CVD divergence + volume "
+                     "imbalance + liquidation cascades.",
+        "pseudocode": """\
+for idx in range(min_idx, len(df) - MAX_HOLD - 2):
+    cvd_div = cvd_div_bull[idx] or cvd_div_bear[idx]
+    vimb    = volume_imbalance[idx]
+    liq     = liquidation_proxy[idx]
+
+    if not (cvd_div or vimb > IMBALANCE_THRESH or liq): continue
+
+    direction = resolve_direction_from_flow(row)
+    score = 0.30·cvd_div + 0.25·vimb + 0.30·struct + 0.15·trend
+    if score < MERCURIO_MIN_SCORE: continue
+
+    entry, stop, target, rr = calc_levels(df, idx, direction)
+    result, dur, exit_p = label_trade(df, idx+1, direction, entry, stop, target)
+    size = position_size(...) · MERCURIO_SIZE_MULT
+    if not check_aggregate_notional(...): continue   # [L6]
+    commit_trade(...)""",
+        "params": [
+            {"name": "MERCURIO_MIN_SCORE","default": 0.45,"range": "0.35-0.60",
+             "unit": "—", "effect": "min composite score to fire"},
+            {"name": "MERCURIO_SIZE_MULT","default": 1.0, "range": "0.5-1.5",
+             "unit": "—", "effect": "risk multiplier vs base Kelly"},
+            {"name": "MERCURIO_CVD_WINDOW","default": 50,"range": "20-100",
+             "unit": "bars","effect": "rolling window for CVD divergence"},
+            {"name": "MERCURIO_LIQ_VOL_MULT","default": 3.0,"range": "2-5",
+             "unit": "—","effect": "volume spike multiplier for liquidation proxy"},
+        ],
+        "formulas": [
+            "CVD[i] = Σ(taker_buy - taker_sell)[0..i]",
+            "vimb  = taker_buy_ratio[i] rolling-window normalized",
+            "liq_proxy = (vol/vol_ma > k) ∧ (range/atr > k)",
+            "score = 0.30·cvd_div + 0.25·vimb + 0.30·struct + 0.15·trend",
+        ],
+        "invariants": [
+            "CVD, vimb, liq_proxy all computed from [0..idx] only (causal)",
+            "label_trade + L6 + L7 inherited from core",
+            "L5 funding uses dynamic _funding_periods_per_8h (fixed Backlog #3)",
+            "requires liquid pairs — taker volume per bar > SPEED_MIN",
+        ],
+    },
+    "BRIDGEWATER": {
+        "source_files": ["engines/thoth.py", "core/sentiment.py"],
+        "main_function": ("engines/thoth.py", "scan_thoth"),
+        "one_liner": "Sentiment contrarian: funding z-score + OI delta + "
+                     "long/short ratio extremes.",
+        "pseudocode": """\
+sentiment_features = fetch_sentiment(symbol)  # funding_z, oi_delta, ls_ratio
+df = merge(df, sentiment_features, on='time', how='left')
+
+for idx in range(min_idx, len(df) - MAX_HOLD - 2):
+    f_z    = funding_z[idx]
+    oi_sig = oi_delta_signal[idx]
+    ls_sig = ls_ratio_signal[idx]
+
+    if abs(f_z) < 1.0 and abs(oi_sig) < 0.3 and abs(ls_sig) < 0.3:
+        continue   # sentiment not extreme enough
+
+    direction = "BEARISH" if crowded_long else "BULLISH"  # contrarian
+    score = 0.40·|f_z|/2 + 0.30·|oi_sig| + 0.30·|ls_sig|
+    if score < THOTH_MIN_SCORE: continue
+    commit_trade(...)""",
+        "params": [
+            {"name": "THOTH_MIN_SCORE", "default": 0.50,"range": "0.40-0.65",
+             "unit": "—", "effect": "min sentiment-composite score"},
+            {"name": "THOTH_SIZE_MULT", "default": 0.8, "range": "0.5-1.2",
+             "unit": "—", "effect": "risk multiplier (sentiment is sparser)"},
+            {"name": "FUNDING_Z_ABS_MIN","default": 1.0,"range": "0.8-1.5",
+             "unit": "σ", "effect": "min |funding z-score| to consider extreme"},
+        ],
+        "formulas": [
+            "funding_z = (funding - μ_30d) / σ_30d",
+            "oi_delta_signal = (OI[i] - OI[i-k]) / OI[i-k]",
+            "ls_ratio_signal = (ls_ratio[i] - 1.0) normalized by regime",
+            "contrarian: direction = opposite(crowded_side)",
+        ],
+        "invariants": [
+            "sentiment merged via merge_asof(backward) — no future info",
+            "direction is always opposite the crowded side by construction",
+            "same L2-L7 guarantees via shared-core calc_levels + label_trade",
+            "signals are sparse — can produce 0 trades on short horizons",
+        ],
+    },
+    "DE SHAW": {
+        "source_files": ["engines/newton.py"],
+        "main_function": ("engines/newton.py", "scan_pair"),
+        "one_liner": "Statistical arbitrage: cointegration-driven pair trading "
+                     "with z-score mean reversion.",
+        "pseudocode": """\
+merged = calc_spread_zscore(df_a, df_b, beta, alpha)   # Engle-Granger
+for idx in range(min_idx, len(merged) - 2):
+    z = zscore[idx]
+
+    if in_trade:
+        if low[idx] <= liq_price(entry, dir): exit("LIQ")   # [Backlog #4]
+        elif z crosses mean in favorable direction: exit("WIN")
+        elif z hits stop threshold: exit("LOSS")
+        elif hold > MAX_HOLD: exit("time")
+        continue
+
+    if abs(z) < NEWTON_ZSCORE_ENTRY: continue
+    direction = "BEARISH" if z > 0 else "BULLISH"    # short/long spread
+    entry = a_open[idx+1] · (1 ± slip)               # [Backlog #1]
+    size  = position_size(account, entry, stop, score)
+    if not check_aggregate_notional(size*entry, [], account, LEVERAGE):
+        continue
+    open_trade(...)""",
+        "params": [
+            {"name": "NEWTON_ZSCORE_ENTRY","default": 2.0,"range": "1.5-3.0",
+             "unit": "σ","effect": "|z| threshold to open a spread trade"},
+            {"name": "NEWTON_ZSCORE_EXIT", "default": 0.0,"range": "-0.5-0.5",
+             "unit": "σ","effect": "|z| level at which winners are closed"},
+            {"name": "NEWTON_ZSCORE_STOP", "default": 3.5,"range": "3.0-5.0",
+             "unit": "σ","effect": "|z| level that triggers stop-out"},
+            {"name": "NEWTON_COINT_PVALUE","default": 0.05,"range": "0.01-0.1",
+             "unit": "p","effect": "pair filter: max ADF test p-value"},
+            {"name": "NEWTON_SPREAD_WINDOW","default": 200,"range":"100-400",
+             "unit": "bars","effect": "rolling window for spread z-score"},
+            {"name": "NEWTON_MAX_HOLD",   "default": 150,"range": "80-300",
+             "unit": "bars","effect": "max hold bars before time exit"},
+        ],
+        "formulas": [
+            "spread = a_close - β · b_close - α",
+            "z = (spread - μ_window) / σ_window",
+            "pair selection: Engle-Granger cointegration, p < NEWTON_COINT_PVALUE",
+            "half_life ≈ -ln(2) / ln(ρ_AR1)",
+        ],
+        "invariants": [
+            "pair cointegration verified offline before scan loop",
+            "one open spread per pair at a time (in_trade bool)",
+            "entry at open[idx+1] + slippage (Backlog #1 fix)",
+            "liquidation guard inside exit loop (Backlog #4 fix)",
+            "L6 single-position cap enforced via check_aggregate_notional",
+        ],
+    },
+    "MILLENNIUM": {
+        "source_files": [
+            "engines/multistrategy.py",
+            "engines/backtest.py",
+            "core/harmonics.py",
+        ],
+        "main_function": ("engines/multistrategy.py", "scan_multistrategy"),
+        "one_liner": "Regime-weighted ensemble of CITADEL (trend) + RENAISSANCE "
+                     "(harmonics), with rolling confidence-scaled weights.",
+        "pseudocode": """\
+citadel_trades     = scan_symbol(df, sym)          # trend
+renaissance_trades = scan_hermes(df, sym)          # harmonic patterns
+
+for trade in merge_by_timestamp(citadel, renaissance):
+    regime = regime_of(trade.timestamp - REGIME_LAG·trade_interval)
+
+    w_citadel     = base_weights[regime] · citadel_sortino_boost
+    w_renaissance = base_weights[regime] · renaissance_sortino_boost
+    # kill switch: rolling sortino below -0.5 → peso fixo em ENSEMBLE_MIN_W
+
+    trade.size *= (w_citadel if trade.engine=="CITADEL" else w_renaissance)
+    commit(trade)""",
+        "params": [
+            {"name": "CITADEL_CAPITAL_WEIGHT","default": 0.65,"range":"0.4-0.8",
+             "unit": "—","effect": "base capital allocation to CITADEL"},
+            {"name": "RENAISSANCE_CAPITAL_WEIGHT","default": 0.35,"range":"0.2-0.6",
+             "unit": "—","effect": "base allocation to RENAISSANCE"},
+            {"name": "ENSEMBLE_WINDOW", "default": 30, "range": "15-60",
+             "unit": "trades","effect": "rolling window for weight recompute"},
+            {"name": "KILL_SWITCH_SORTINO","default": -0.5,"range":"-1.0--0.2",
+             "unit": "σ","effect": "sortino floor that pauses a sub-engine"},
+            {"name": "REGIME_LAG",      "default": 5,  "range": "3-10",
+             "unit": "trades","effect": "lag on regime input to break feedback"},
+            {"name": "CONFIDENCE_N_MIN","default": 50, "range": "30-100",
+             "unit": "trades","effect": "sample size for full-confidence score"},
+        ],
+        "formulas": [
+            "w_i = base_w[regime] · max(ENSEMBLE_MIN_W, sortino_boost_i)",
+            "confidence = min(1, sqrt(n_recent / CONFIDENCE_N_MIN))",
+            "final_weight = confidence · w_i + (1-confidence) · base_w_i",
+            "kill switch: sortino < -0.5 → weight = ENSEMBLE_MIN_W",
+        ],
+        "invariants": [
+            "sub-engines run independently; no cross-signal coupling",
+            "regime lag of REGIME_LAG trades breaks weight→trade feedback",
+            "no sub-engine can be fully silenced (floor at ENSEMBLE_MIN_W)",
+            "all per-strategy invariants (L1-L11) inherited from CITADEL + harmonics",
+        ],
+    },
+    "TWO SIGMA": {
+        "source_files": ["engines/prometeu.py"],
+        "main_function": ("engines/prometeu.py", "trades_to_features"),
+        "one_liner": "LightGBM meta-ensemble: predicts which engine to weight "
+                     "higher given current market context at trade open.",
+        "pseudocode": """\
+# Training (offline, walk-forward per split)
+trades_df = trades_to_features(all_prior_trades)      # AT-OPEN columns only
+split     = int(len(trades_df) * train_ratio)
+train     = trades_df.iloc[:split]
+test      = trades_df.iloc[split:]
+train["target"] = build_target(train)     # best engine next 10 trades
+test["target"]  = build_target(test)      # same, test segment only
+X_train = train[FEATURE_COLS]             # whitelist enforced
+model   = lgb.train(params, X_train, train["target"])
+
+# Inference (online)
+features = trade_context_at_open(trade)
+probs    = model.predict([features])
+weights  = softmax_normalize(probs) → per-engine weight""",
+        "params": [
+            {"name": "retrain_every","default":500,"range":"200-2000",
+             "unit": "trades","effect":"trades before model retrains"},
+            {"name": "train_ratio", "default":0.7,"range":"0.5-0.8",
+             "unit": "—","effect":"walk-forward split for train vs test"},
+            {"name": "lookahead",   "default":10,"range":"5-30",
+             "unit": "trades","effect":"target = best engine in next N trades"},
+            {"name": "num_leaves",  "default":31,"range":"15-63",
+             "unit": "—","effect":"LightGBM leaf count per tree"},
+            {"name": "learning_rate","default":0.05,"range":"0.01-0.1",
+             "unit": "—","effect":"LightGBM learning rate"},
+        ],
+        "formulas": [
+            "target[i] = argmax_engine(mean_pnl of trades [i+1..i+N])",
+            "FEATURE_COLS ⊂ AT_OPEN (strict whitelist, asserted at import)",
+            "X = train[FEATURE_COLS].values  (17 features, no leakage)",
+            "predict: argmax softmax(model.predict(features))",
+        ],
+        "invariants": [
+            "no AT-EXIT field ever lands in FEATURE_COLS (module-level assert)",
+            "train/test split computes targets SEPARATELY per segment (no cross-boundary leak, Backlog #2)",
+            "runtime guard in .train() re-checks feature whitelist before lgb.train",
+            "fallback to static equal-weight when model absent or data < 50 trades",
+        ],
+    },
+    "JANE STREET": {
+        "source_files": ["engines/arbitrage.py"],
+        "main_function": ("engines/arbitrage.py", "ExecutionSimulator"),
+        "one_liner": "Cross-venue funding + basis arbitrage across 13 CEX "
+                     "venues with latency-aware fill simulation.",
+        "pseudocode": """\
+venues = fetch_all_venues()   # 13 CEXs in parallel
+pairs  = find_mispriced_pairs(venues.funding, venues.basis)
+
+for (venue_a, venue_b, symbol) in pairs:
+    edge = |funding_a - funding_b|  # or basis diff
+    if edge < MIN_EDGE_BPS: continue
+
+    book_a = fetch_orderbook(venue_a, symbol)
+    book_b = fetch_orderbook(venue_b, symbol)
+    fill   = ExecutionSimulator.simulate_arb_pair(book_a, book_b, notional)
+    if not fill.feasible: continue
+
+    net_edge = edge - fill.total_slippage_bps - 2·ARB_LATENCY_BPS - 2·fee_bps
+    if net_edge > MIN_NET_EDGE_BPS:
+        execute_both_legs(venue_a, venue_b, notional, side_a, side_b)""",
+        "params": [
+            {"name": "ARB_LATENCY_BPS", "default":2.0,"range":"1-5",
+             "unit": "bps","effect":"pessimistic latency markup per leg (Backlog #5)"},
+            {"name": "MIN_EDGE_BPS",    "default":5,  "range":"3-10",
+             "unit": "bps","effect":"minimum gross edge to consider a pair"},
+            {"name": "MIN_NET_EDGE_BPS","default":2,  "range":"1-5",
+             "unit": "bps","effect":"minimum net edge after costs"},
+            {"name": "NOTIONAL_USD",    "default":1000,"range":"500-5000",
+             "unit": "USD","effect":"size per arb pair attempt"},
+            {"name": "MAX_UNFILLED_PCT","default":0.05,"range":"0.02-0.10",
+             "unit": "—","effect":"max unfilled fraction before pair is skipped"},
+        ],
+        "formulas": [
+            "gross_edge = |funding_a - funding_b| × 10_000",
+            "slippage = book_walk(notional) + ARB_LATENCY_BPS per leg",
+            "avg_price(BUY)  = avg_book × (1 + latency/10_000)",
+            "avg_price(SELL) = avg_book × (1 - latency/10_000)",
+            "feasible = unfilled < 5% on both legs",
+        ],
+        "invariants": [
+            "funding signs respected (long pays when funding > 0)",
+            "both legs must confirm before PnL accrues",
+            "latency markup is pessimistic — conservative edge estimates",
+            "venue latency tracked via LatencyProfiler for post-hoc analysis",
+        ],
+    },
+}
+
+
 BASKETS_UI = [
     ("DEFAULT",  "", ["BNB","INJ","LINK","RENDER","NEAR","SUI","ARB","SAND","XRP","FET","OP"]),
     ("TOP 12",   "2", ["BTC","ETH","BNB","SOL","XRP","DOGE","ADA","AVAX","LINK","DOT","MATIC","SUI"]),
@@ -865,13 +1226,20 @@ class App(tk.Tk):
 
     # ─── STRATEGY BRIEFING ──────────────────────────────
     def _brief(self, name, script, desc, parent_menu):
-        """Show strategy philosophy and logic before running."""
+        """Show strategy philosophy + logic + technical view before running.
+
+        When BRIEFINGS_V2 has an entry for `name`, the technical section
+        (one-liner, params table, formulas, invariants) renders under the
+        legacy narrative. VER CÓDIGO uses the V2 main_function when
+        available for a direct jump into the scan loop.
+        """
         self._clr(); self._clear_kb()
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
         self.h_stat.configure(text="BRIEFING", fg=AMBER_D)
         self.f_lbl.configure(text="ENTER executar  |  ESC voltar")
 
         brief = BRIEFINGS.get(name, {})
+        v2    = BRIEFINGS_V2.get(name, None)
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(fill="both", expand=True, padx=30, pady=16)
@@ -898,6 +1266,69 @@ class App(tk.Tk):
                 row.pack(fill="x", pady=1)
                 tk.Label(row, text=f"  {i+1}.", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, width=4, anchor="e").pack(side="left")
                 tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG, anchor="w").pack(side="left", padx=4)
+
+        # ═══ TECHNICAL VIEW (BRIEFINGS_V2) ═══
+        # Renders after the narrative logic steps, before edge/risk.
+        # One-liner banner, then 3 compact columns: PARAMS | FORMULAS |
+        # INVARIANTS. The full pseudocode is reachable via VER CÓDIGO.
+        if v2:
+            tk.Frame(f, bg=BG, height=12).pack()
+            tk.Label(f, text="TECHNICAL", font=(FONT, 8, "bold"),
+                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+
+            if v2.get("one_liner"):
+                tk.Label(f, text=v2["one_liner"], font=(FONT, 8, "italic"),
+                         fg=WHITE, bg=BG, anchor="w",
+                         wraplength=780, justify="left").pack(anchor="w",
+                                                               pady=(0, 6))
+
+            tech_grid = tk.Frame(f, bg=BG)
+            tech_grid.pack(fill="x")
+
+            # PARAMS — left column
+            if v2.get("params"):
+                pc = tk.Frame(tech_grid, bg=BG)
+                pc.pack(side="left", fill="both", expand=True, padx=(0, 8))
+                tk.Label(pc, text="PARAMS", font=(FONT, 7, "bold"),
+                         fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
+                for p in v2["params"][:8]:
+                    row = tk.Frame(pc, bg=BG)
+                    row.pack(fill="x", pady=0)
+                    tk.Label(row, text=p.get("name", "?"),
+                             font=(FONT, 7, "bold"), fg=WHITE, bg=BG,
+                             width=22, anchor="w").pack(side="left")
+                    tk.Label(row, text=str(p.get("default", "?")),
+                             font=(FONT, 7), fg=AMBER, bg=BG,
+                             width=8, anchor="w").pack(side="left")
+                    tk.Label(row, text=str(p.get("effect", "")),
+                             font=(FONT, 7), fg=DIM, bg=BG,
+                             anchor="w", wraplength=230).pack(side="left",
+                                                               fill="x", expand=True)
+
+            # FORMULAS — middle column
+            if v2.get("formulas"):
+                fc = tk.Frame(tech_grid, bg=BG)
+                fc.pack(side="left", fill="both", expand=True, padx=(0, 8))
+                tk.Label(fc, text="FORMULAS", font=(FONT, 7, "bold"),
+                         fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
+                for form in v2["formulas"][:6]:
+                    tk.Label(fc, text="  " + form,
+                             font=(FONT, 7), fg=WHITE, bg=BG,
+                             anchor="w", wraplength=280,
+                             justify="left").pack(anchor="w")
+
+            # INVARIANTS — right column
+            if v2.get("invariants"):
+                ic = tk.Frame(tech_grid, bg=BG)
+                ic.pack(side="left", fill="both", expand=True)
+                tk.Label(ic, text="INVARIANTS", font=(FONT, 7, "bold"),
+                         fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
+                for inv in v2["invariants"][:6]:
+                    tk.Label(ic, text="  ✓ " + inv,
+                             font=(FONT, 7), fg=GREEN, bg=BG,
+                             anchor="w", wraplength=280,
+                             justify="left").pack(anchor="w")
 
         # Edge + Risk side by side
         if brief.get("edge") or brief.get("risk"):
@@ -942,12 +1373,18 @@ class App(tk.Tk):
         self._kb("<Return>", next_fn)
 
         # VER CÓDIGO — opens the strategy source in a read-only modal viewer.
-        # Falls back to the top of the file if the default function probe
-        # ("scan_symbol") doesn't exist in the target script.
-        def _open_code(_e=None, _script=script):
+        # When BRIEFINGS_V2 has an entry, use its source_files list and
+        # main_function tuple so the viewer opens the exact scan loop the
+        # technical view above is describing. Otherwise fall back to the
+        # single-file lookup with "scan_symbol" as a best-guess anchor.
+        _v2_files = v2.get("source_files") if v2 else None
+        _v2_main  = v2.get("main_function") if v2 else None
+        def _open_code(_e=None, _script=script,
+                       _files=_v2_files, _main=_v2_main):
             try:
-                CodeViewer(self, source_files=[_script],
-                           main_function=(_script, "scan_symbol"))
+                files = _files if _files else [_script]
+                main  = _main  if _main  else (_script, "scan_symbol")
+                CodeViewer(self, source_files=files, main_function=main)
             except Exception as exc:
                 messagebox.showerror("CodeViewer", f"{type(exc).__name__}: {exc}")
 
