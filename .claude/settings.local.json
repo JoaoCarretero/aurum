@@ -72,7 +72,8 @@
       "Bash(pytest tests/ -v)",
       "Bash(rm -rf data/arbitrage/smoketest_t15)",
       "Bash(rm -f config/alchemy_params.json config/alchemy_params.json.reload)",
-      "Bash(PYTHONIOENCODING=utf-8 python smoke_test.py --quiet)"
+      "Bash(PYTHONIOENCODING=utf-8 python smoke_test.py --quiet)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 180 python engines/backtest.py --days 15 --no-menu --basket default)"
     ]
   }
 }
