@@ -15,6 +15,8 @@ from core.indicators import indicators, swing_structure
 from core.signals import label_trade
 from core.portfolio import portfolio_allows, check_aggregate_notional, position_size
 from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
+from core.chronos import enrich_with_regime
+import pandas as _pd
 
 # ── RENAISSANCE CONFIG (formerly HERMES) ─────────────────────────────────────────────
 H_TOL             = 0.10
@@ -167,11 +169,18 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
         log = _logging.getLogger("RENAISSANCE")  # RENAISSANCE (formerly HERMES)
 
     df=indicators(df); df=swing_structure(df)
+    df=enrich_with_regime(df)
     if MTF_ENABLED and htf_stack_dfs: df=merge_all_htf_to_ltf(df,htf_stack_dfs)
     close_a=df["close"].values; high_a=df["high"].values; low_a=df["low"].values
     open_a=df["open"].values; atr_a=df["atr"].values
     vol_r_a=df["vol_regime"].values; trans_a=df["regime_transition"].values
     slope200_a=df["slope200"].values; slope21_a=df["slope21"].values
+    # HMM regime arrays (observation-only)
+    _hmm_lbl = df["hmm_regime_label"].values
+    _hmm_cf  = df["hmm_confidence"].values
+    _hmm_pb  = df["hmm_prob_bull"].values
+    _hmm_pbr = df["hmm_prob_bear"].values
+    _hmm_pc  = df["hmm_prob_chop"].values
     _htfm=df[f"htf{len(HTF_STACK)}_macro"].values if MTF_ENABLED and f"htf{len(HTF_STACK)}_macro" in df.columns else None
     ph, pl=_h_pivots(df); alt=_h_alt_pivots(ph, pl)
     bayes=_BayesWR(); trades=[]; vetos=defaultdict(int)
@@ -327,6 +336,20 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                 "struct_str":0.5,"cascade_n":0,"taker_ma":0.5,"rsi":50.0,
                 "dist_ema21":0.5,"omega_struct":0.0,"omega_flow":0.0,
                 "omega_cascade":0.0,"omega_momentum":score,"omega_pullback":score,"bb_mid":0.0,
+                # Normalised trade outcome in R units
+                "r_multiple": (
+                    (float(ep) - entry) / (entry - stop)
+                    if direction == "BULLISH" and (entry - stop) != 0
+                    else (entry - float(ep)) / (stop - entry)
+                    if direction == "BEARISH" and (stop - entry) != 0
+                    else 0.0
+                ),
+                # HMM regime layer (observation-only)
+                "hmm_regime":      (None if _hmm_lbl[idx] is None or (isinstance(_hmm_lbl[idx], float) and _pd.isna(_hmm_lbl[idx])) else str(_hmm_lbl[idx])),
+                "hmm_confidence":  (None if _pd.isna(_hmm_cf[idx])  else round(float(_hmm_cf[idx]),  4)),
+                "hmm_prob_bull":   (None if _pd.isna(_hmm_pb[idx])  else round(float(_hmm_pb[idx]),  4)),
+                "hmm_prob_bear":   (None if _pd.isna(_hmm_pbr[idx]) else round(float(_hmm_pbr[idx]), 4)),
+                "hmm_prob_chop":   (None if _pd.isna(_hmm_pc[idx])  else round(float(_hmm_pc[idx]),  4)),
             })
     closed=[t for t in trades if t["result"] in ("WIN","LOSS")]
     w=sum(1 for t in closed if t["result"]=="WIN")

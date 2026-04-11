@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
+from core.chronos import enrich_with_regime
 from core import (
     fetch_all, validate, indicators, swing_structure, omega,
     cvd, cvd_divergence, volume_imbalance, liquidation_proxy,
@@ -70,6 +71,7 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
     df = indicators(df)
     df = swing_structure(df)
     df = omega(df)
+    df = enrich_with_regime(df)
     df = cvd(df)
     df = cvd_divergence(df, lookback=MERCURIO_CVD_DIV_BARS)
     df = volume_imbalance(df, window=MERCURIO_VIMB_WINDOW)
@@ -103,6 +105,12 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
     _cls          = df["close"].values
     _sl21         = df["slope21"].values
     _dist         = df["dist_ema21"].values
+    # HMM regime layer (observation-only)
+    _hmm_lbl = df["hmm_regime_label"].values
+    _hmm_cf  = df["hmm_confidence"].values
+    _hmm_pb  = df["hmm_prob_bull"].values
+    _hmm_pbr = df["hmm_prob_bear"].values
+    _hmm_pc  = df["hmm_prob_chop"].values
 
     peak_equity        = ACCOUNT_SIZE
     consecutive_losses = 0
@@ -298,6 +306,20 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
             "liq_proxy":      float(liq),
             "cvd_trend":      cvd_trend,
             "trade_time":     ts,
+            # Normalised trade outcome in R units — required by regime_analysis
+            "r_multiple": (
+                (float(exit_p) - entry) / (entry - stop)
+                if direction == "BULLISH" and (entry - stop) != 0
+                else (entry - float(exit_p)) / (stop - entry)
+                if direction == "BEARISH" and (stop - entry) != 0
+                else 0.0
+            ),
+            # HMM regime layer (observation-only)
+            "hmm_regime":      (None if _hmm_lbl[idx] is None or (isinstance(_hmm_lbl[idx], float) and pd.isna(_hmm_lbl[idx])) else str(_hmm_lbl[idx])),
+            "hmm_confidence":  (None if pd.isna(_hmm_cf[idx])  else round(float(_hmm_cf[idx]),  4)),
+            "hmm_prob_bull":   (None if pd.isna(_hmm_pb[idx])  else round(float(_hmm_pb[idx]),  4)),
+            "hmm_prob_bear":   (None if pd.isna(_hmm_pbr[idx]) else round(float(_hmm_pbr[idx]), 4)),
+            "hmm_prob_chop":   (None if pd.isna(_hmm_pc[idx])  else round(float(_hmm_pc[idx]),  4)),
         }
         trades.append(t)
         icon = "✓" if result == "WIN" else "✗"

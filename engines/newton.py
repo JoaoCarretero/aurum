@@ -24,6 +24,7 @@ from itertools import combinations
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
+from core.chronos import enrich_with_regime
 from core import (
     fetch_all, validate, indicators, swing_structure,
     detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
@@ -195,6 +196,12 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     if len(merged) < 300:
         return [], {}
 
+    # HMM runs on the primary leg's price action (sym_a). ``merged`` uses
+    # the ``a_close`` column for sym_a, so alias it temporarily so that
+    # enrich_with_regime finds a ``close`` column as expected.
+    merged["close"] = merged["a_close"]
+    merged = enrich_with_regime(merged)
+
     trades = []
     vetos = defaultdict(int)
     account = ACCOUNT_SIZE
@@ -203,6 +210,12 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
 
     zscore  = merged["zscore"].values
     a_close = merged["a_close"].values
+    # HMM regime arrays (observation-only)
+    _hmm_lbl = merged["hmm_regime_label"].values
+    _hmm_cf  = merged["hmm_confidence"].values
+    _hmm_pb  = merged["hmm_prob_bull"].values
+    _hmm_pbr = merged["hmm_prob_bear"].values
+    _hmm_pc  = merged["hmm_prob_chop"].values
     # [Backlog #1] a_open needed for next-bar entry fill (not same-bar close).
     # a_high/a_low needed for path-dependent liquidation check [Backlog #4].
     a_open  = merged["a_open"].values  if "a_open"  in merged.columns else a_close
@@ -414,6 +427,17 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                     "coint_pvalue": pvalue,
                     "beta":         beta,
                     "trade_time":   ts_str,
+                    # Normalised trade outcome in R units
+                    "r_multiple":   round(
+                        (abs(exit_p - trade_entry_price) / risk) * (1 if result == "WIN" else -1),
+                        4,
+                    ) if risk > 0 else 0.0,
+                    # HMM regime layer (observation-only) — sampled at entry bar
+                    "hmm_regime":      (None if _hmm_lbl[trade_entry_idx] is None or (isinstance(_hmm_lbl[trade_entry_idx], float) and pd.isna(_hmm_lbl[trade_entry_idx])) else str(_hmm_lbl[trade_entry_idx])),
+                    "hmm_confidence":  (None if pd.isna(_hmm_cf[trade_entry_idx])  else round(float(_hmm_cf[trade_entry_idx]),  4)),
+                    "hmm_prob_bull":   (None if pd.isna(_hmm_pb[trade_entry_idx])  else round(float(_hmm_pb[trade_entry_idx]),  4)),
+                    "hmm_prob_bear":   (None if pd.isna(_hmm_pbr[trade_entry_idx]) else round(float(_hmm_pbr[trade_entry_idx]), 4)),
+                    "hmm_prob_chop":   (None if pd.isna(_hmm_pc[trade_entry_idx])  else round(float(_hmm_pc[trade_entry_idx]),  4)),
                 }
                 trades.append(t)
                 icon = "✓" if result == "WIN" else "✗"
