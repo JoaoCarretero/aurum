@@ -536,6 +536,19 @@ class DepthFetcher:
         else:return None
         return ob if(ob.bids or ob.asks) else None
 
+# [Backlog #5] Pessimistic latency markup applied to every simulated arb
+# fill. Represents the expected unfavorable drift during the ~50-200ms
+# round-trip between observing a quote and the exchange acknowledging
+# the order. Model is intentionally simple: fixed basis-point widening
+# of slippage, adjustable via environment variable ARB_LATENCY_BPS.
+# Conservative default of 2 bps per leg (~matches empirical medians on
+# Binance Futures at mid-frequency).
+try:
+    ARB_LATENCY_BPS = float(os.environ.get("AURUM_ARB_LATENCY_BPS", "2"))
+except ValueError:
+    ARB_LATENCY_BPS = 2.0
+
+
 class ExecutionSimulator:
     @staticmethod
     def simulate_fill(book:OrderBook,side:str,notional_usd:float)->dict:
@@ -549,9 +562,21 @@ class ExecutionSimulator:
             if remaining<=0.001:break
         if total_qty==0:
             return{"avg_price":0,"slippage_bps":float('inf'),"filled_usd":0,"filled_qty":0,"levels_consumed":0,"unfilled_usd":notional_usd}
-        avg_px=total_cost/total_qty;slip=abs(avg_px-best)/best*10_000
+        avg_px=total_cost/total_qty
+        book_slip=abs(avg_px-best)/best*10_000
+        # Latency markup — widens the effective slippage and shifts the
+        # avg_price unfavorably. BUY → price goes up; SELL → price goes
+        # down. This is a floor on the fill cost, not a replacement for
+        # the order-book walk above.
+        latency_drift=ARB_LATENCY_BPS/10_000
+        if side=="BUY":
+            avg_px=avg_px*(1+latency_drift)
+        else:
+            avg_px=avg_px*(1-latency_drift)
+        slip=book_slip+ARB_LATENCY_BPS
         return{"avg_price":round(avg_px,8),"slippage_bps":round(slip,2),"filled_usd":round(total_cost,2),
-               "filled_qty":round(total_qty,8),"levels_consumed":consumed,"unfilled_usd":round(remaining,2)}
+               "filled_qty":round(total_qty,8),"levels_consumed":consumed,"unfilled_usd":round(remaining,2),
+               "latency_bps":ARB_LATENCY_BPS,"book_slippage_bps":round(book_slip,2)}
 
     @staticmethod
     def simulate_arb_pair(book_a:OrderBook,book_b:OrderBook,notional_usd:float,side_a:str="SELL",side_b:str="BUY")->dict:
