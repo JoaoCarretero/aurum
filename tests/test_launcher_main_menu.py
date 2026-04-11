@@ -74,3 +74,51 @@ def test_app_has_menu_live_cache():
         assert isinstance(app._start_t, float)
     finally:
         app.destroy()
+
+
+def test_fetch_markets_fallback_on_exception():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        result = app._fetch_tile_markets()
+        assert isinstance(result, dict)
+        assert set(result.keys()) == {"line1", "line2", "line3", "line4"}
+        for v in result.values():
+            assert isinstance(v, str)
+    finally:
+        app.destroy()
+
+
+def test_fetch_execute_returns_dict():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        result = app._fetch_tile_execute()
+        assert set(result.keys()) == {"line1", "line2", "line3", "line4"}
+    finally:
+        app.destroy()
+
+
+def test_fetch_research_returns_dict():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        result = app._fetch_tile_research()
+        assert set(result.keys()) == {"line1", "line2", "line3", "line4"}
+    finally:
+        app.destroy()
+
+
+def test_fetch_control_uptime_format():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        result = app._fetch_tile_control()
+        assert set(result.keys()) == {"line1", "line2", "line3", "line4"}
+        assert "h" in result["line2"] or "m" in result["line2"] or result["line2"] == "—"
+    finally:
+        app.destroy()

@@ -878,6 +878,137 @@ class App(tk.Tk):
             self.h_site.configure(text="")
         self.after(3000, self._tick)
 
+    # ─── Bloomberg 3D menu — live data fetchers ──────────
+    # Each fetcher returns {"line1","line2","line3","line4"} of strings.
+    # Any failure → "—". Never raises. Called from a worker thread.
+
+    @staticmethod
+    def _fallback_lines() -> dict:
+        return {"line1": "—", "line2": "—", "line3": "—", "line4": "—"}
+
+    def _fetch_tile_markets(self) -> dict:
+        try:
+            from config.params import UNIVERSE
+            lines = {"line1": "—", "line2": "—", "line3": "—", "line4": "—"}
+            try:
+                from core.data import fetch_spot_price
+                btc = fetch_spot_price("BTCUSDT")
+                lines["line1"] = f"BTC {btc/1000:.1f}k" if btc else "BTC —"
+            except Exception:
+                lines["line1"] = "BTC —"
+            try:
+                from core.data import fetch_spot_price
+                eth = fetch_spot_price("ETHUSDT")
+                lines["line2"] = f"ETH {eth/1000:.2f}k" if eth else "ETH —"
+            except Exception:
+                lines["line2"] = "ETH —"
+            lines["line3"] = f"{len(UNIVERSE)} pairs"
+            try:
+                from core.portfolio import detect_macro
+                lines["line4"] = f"MACRO {detect_macro()}"
+            except Exception:
+                lines["line4"] = "MACRO —"
+            return lines
+        except Exception:
+            return self._fallback_lines()
+
+    def _fetch_tile_execute(self) -> dict:
+        try:
+            lines = self._fallback_lines()
+            try:
+                from core import proc
+                n = len(proc.list_active()) if hasattr(proc, "list_active") else 0
+                lines["line1"] = f"procs {n}"
+            except Exception:
+                lines["line1"] = "procs 0"
+            try:
+                ps = json.loads((ROOT / "config" / "paper_state.json").read_text(encoding="utf-8"))
+                pnl = float(ps.get("day_pnl", 0.0))
+                sign = "+" if pnl >= 0 else ""
+                lines["line2"] = f"pnl {sign}{pnl:.1f}%"
+                pos = ps.get("open_positions", [])
+                lines["line3"] = f"{len(pos)} pos" if isinstance(pos, list) else "0 pos"
+            except Exception:
+                lines["line2"] = "pnl —"
+                lines["line3"] = "0 pos"
+            try:
+                rg = json.loads((ROOT / "config" / "risk_gates.json").read_text(encoding="utf-8"))
+                active = sum(1 for v in rg.values() if isinstance(v, dict) and v.get("active"))
+                lines["line4"] = f"risk {active}/5"
+            except Exception:
+                lines["line4"] = "risk —/5"
+            return lines
+        except Exception:
+            return self._fallback_lines()
+
+    def _fetch_tile_research(self) -> dict:
+        try:
+            lines = self._fallback_lines()
+            idx_path = ROOT / "data" / "index.json"
+            if idx_path.exists():
+                try:
+                    runs = json.loads(idx_path.read_text(encoding="utf-8"))
+                    if isinstance(runs, list) and runs:
+                        last = runs[-1] if isinstance(runs[-1], dict) else {}
+                        eng = str(last.get("engine", "—"))[:4].upper()
+                        sharpe = last.get("sharpe") or last.get("metrics", {}).get("sharpe")
+                        lines["line1"] = f"last {eng}"
+                        lines["line2"] = f"sharpe {float(sharpe):.1f}" if sharpe else "sharpe —"
+                        lines["line3"] = f"{len(runs)} runs"
+                    else:
+                        lines["line1"] = "no runs"
+                        lines["line3"] = "0 runs"
+                except Exception:
+                    lines["line1"] = "last —"
+                    lines["line3"] = "— runs"
+            else:
+                lines["line1"] = "no runs"
+                lines["line3"] = "0 runs"
+            try:
+                from core import chronos
+                active = bool(getattr(chronos, "hmm_enabled", lambda: False)())
+                lines["line4"] = "HMM active" if active else "HMM idle"
+            except Exception:
+                lines["line4"] = "HMM —"
+            return lines
+        except Exception:
+            return self._fallback_lines()
+
+    def _fetch_tile_control(self) -> dict:
+        try:
+            lines = self._fallback_lines()
+            try:
+                conn = json.loads((ROOT / "config" / "connections.json").read_text(encoding="utf-8"))
+                if isinstance(conn, dict):
+                    items = conn.get("connections") or list(conn.values())
+                elif isinstance(conn, list):
+                    items = conn
+                else:
+                    items = []
+                total = len(items)
+                up = sum(1 for c in items
+                         if isinstance(c, dict) and c.get("status", "").lower() in {"up", "ok", "connected"})
+                lines["line1"] = f"conn {up}/{total}" if total else "conn —"
+            except Exception:
+                lines["line1"] = "conn —"
+            try:
+                elapsed = time.monotonic() - self._start_t
+                h = int(elapsed // 3600)
+                m = int((elapsed % 3600) // 60)
+                lines["line2"] = f"up {h}h{m:02d}m"
+            except Exception:
+                lines["line2"] = "up —"
+            try:
+                from bot import telegram as tg_mod
+                ok = bool(getattr(tg_mod, "is_online", lambda: False)())
+                lines["line3"] = "tg ONLINE" if ok else "tg OFFLINE"
+            except Exception:
+                lines["line3"] = "tg —"
+            lines["line4"] = "vps —"
+            return lines
+        except Exception:
+            return self._fallback_lines()
+
     # ─── SPLASH (Layer 0) ───────────────────────────────
     # ─── SPLASH (Layer 0) — CD Universe ─────────────────
     def _splash(self):
