@@ -20,8 +20,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import stat
+import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -49,6 +53,57 @@ def _confirm(prompt: str) -> bool:
         print()
         return False
     return ans == "y"
+
+
+def _robust_rmtree(target: Path, retries: int = 3, pause: float = 0.5) -> bool:
+    """Remove a directory tree, robust against Windows + OneDrive locks.
+
+    OneDrive likes to keep handles on freshly-closed files/dirs for a brief
+    window while it syncs. A plain shutil.rmtree can hit PermissionError
+    (WinError 5 "Acesso negado") even on empty directories the current user
+    owns. This helper:
+
+    1. Runs shutil.rmtree with an onexc handler that clears the read-only
+       bit and retries — covers some attribute-based refusals.
+    2. If rmtree still fails, falls back to `cmd /c rmdir /s /q`, which on
+       Windows bypasses some of Python's permission quirks.
+    3. Retries the whole thing up to ``retries`` times with a pause.
+
+    Returns True on success, False if the tree still exists after all
+    attempts. Never raises — the caller decides how to handle the failure.
+    """
+
+    def _on_exc(func, path, exc_info):  # type: ignore[no-untyped-def]
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except OSError:
+            pass
+
+    for attempt in range(retries):
+        if not target.exists():
+            return True
+        try:
+            shutil.rmtree(target, onexc=_on_exc)  # py 3.12+ signature
+        except TypeError:
+            shutil.rmtree(target, onerror=lambda f, p, e: _on_exc(f, p, e))
+        except (OSError, PermissionError):
+            pass
+        if not target.exists():
+            return True
+        # Fallback: native rmdir — bypasses Python file-handle quirks
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", "/s", "/q", str(target)],
+                    check=False, capture_output=True, timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if not target.exists():
+            return True
+        time.sleep(pause)
+    return not target.exists()
 
 
 # ── Core diff ──────────────────────────────────────────────────────────
@@ -222,20 +277,24 @@ def apply_plan(plan: dict, index: list[dict]) -> tuple[list[dict], int]:
     """
     changes = 0
 
-    # 1) Orphans
+    # 1) Orphans — filesystem operations can fail on Windows/OneDrive locks.
+    # Failures are logged but do NOT abort the rest of the plan (index dedupe
+    # is independent and should still land).
     for o in plan["orphans"]:
         rid = o["run_id"]
         _p(f"  orphan: {rid}  ({o['status']}, {_fmt_size(o['size'])})")
         if o["status"] == "complete":
             _p("      — has summary.json, likely a real run never indexed")
             _p("      (you may prefer to re-index instead of deleting)")
-            if _confirm(f"delete {rid}?"):
-                shutil.rmtree(RUNS_DIR / rid)
-                changes += 1
+            approved = _confirm(f"delete {rid}?")
         else:
-            if _confirm(f"delete {rid} (crashed mid-run)?"):
-                shutil.rmtree(RUNS_DIR / rid)
+            approved = _confirm(f"delete {rid} (crashed mid-run)?")
+        if approved:
+            if _robust_rmtree(RUNS_DIR / rid):
                 changes += 1
+            else:
+                _warn(f"failed to delete {rid} — still on disk")
+                _warn("(likely OneDrive / antivirus lock — try again in a minute)")
 
     # 2) Duplicates — keep one row per run_id
     dedupe_keep: dict[str, int] = {}
