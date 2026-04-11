@@ -201,10 +201,26 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     peak_equity = ACCOUNT_SIZE
     min_idx = max(200, NEWTON_SPREAD_WINDOW + 50)
 
-    zscore = merged["zscore"].values
+    zscore  = merged["zscore"].values
     a_close = merged["a_close"].values
-    a_atr = merged["a_atr"].values if "a_atr" in merged.columns else None
-    times = merged["time"].values
+    # [Backlog #1] a_open needed for next-bar entry fill (not same-bar close).
+    # a_high/a_low needed for path-dependent liquidation check [Backlog #4].
+    a_open  = merged["a_open"].values  if "a_open"  in merged.columns else a_close
+    a_high  = merged["a_high"].values  if "a_high"  in merged.columns else a_close
+    a_low   = merged["a_low"].values   if "a_low"   in merged.columns else a_close
+    a_atr   = merged["a_atr"].values   if "a_atr"   in merged.columns else None
+    times   = merged["time"].values
+
+    # [Backlog #4] Liquidation boundaries per direction. At LEVERAGE<=1 these
+    # collapse to sentinels that never fire. At higher leverage, the scan's
+    # exit loop compares a_high/a_low against these before the z-score gate.
+    _MAINT_MARGIN = 0.005
+    def _liq_price(entry: float, direction: str) -> float:
+        if LEVERAGE <= 1.0:
+            return -1.0 if direction == "BULLISH" else entry * 10.0
+        if direction == "BULLISH":
+            return entry * (1 - 1 / LEVERAGE + _MAINT_MARGIN)
+        return entry * (1 + 1 / LEVERAGE - _MAINT_MARGIN)
 
     in_trade = False
     trade_dir = None
@@ -251,7 +267,25 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
             exit_now = False
             result = None
 
-            if trade_dir == "BEARISH":
+            # [Backlog #4] Path-dependent liquidation guard. Check raw price
+            # adverse excursion of the primary asset BEFORE the z-score gate
+            # so a catastrophic wick closes the trade at liq_price regardless
+            # of where z happens to be. Inert at LEVERAGE<=1.
+            bar_low, bar_high = a_low[idx], a_high[idx]
+            if trade_dir == "BULLISH":
+                liq_p = _liq_price(trade_entry_price, "BULLISH")
+                if bar_low <= liq_p:
+                    exit_now = True
+                    result = "LOSS"
+                    liq_exit_price = liq_p
+            else:
+                liq_p = _liq_price(trade_entry_price, "BEARISH")
+                if bar_high >= liq_p:
+                    exit_now = True
+                    result = "LOSS"
+                    liq_exit_price = liq_p
+
+            if not exit_now and trade_dir == "BEARISH":
                 # short spread: entered when z > entry_z, exit when z <= 0
                 if z <= NEWTON_ZSCORE_EXIT:
                     exit_now = True
@@ -259,7 +293,7 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                 elif z >= NEWTON_ZSCORE_STOP:
                     exit_now = True
                     result = "LOSS"
-            else:
+            elif not exit_now:
                 # long spread: entered when z < -entry_z, exit when z >= 0
                 if z >= NEWTON_ZSCORE_EXIT:
                     exit_now = True
@@ -279,7 +313,18 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                     result = "WIN" if z > zscore[trade_entry_idx] else "LOSS"
 
             if exit_now:
-                exit_p = price
+                # If the liquidation branch fired, the exit price is the
+                # liquidation threshold, not the current close — match a
+                # real exchange's fill behavior under forced close.
+                if result == "LOSS" and "liq_exit_price" in dir():
+                    try:
+                        exit_p = liq_exit_price
+                    except NameError:
+                        exit_p = price
+                    finally:
+                        del liq_exit_price
+                else:
+                    exit_p = price
                 duration = idx - trade_entry_idx
 
                 # PnL calculation
@@ -403,8 +448,19 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
         coint_strength = 1.0 - pvalue / NEWTON_COINT_PVALUE
         score = 0.5 * coint_strength + 0.5 * z_strength
 
-        # entry
-        entry_p = price
+        # [Backlog #1] Execution delay + entry slippage. Entry fills at
+        # open[idx+1] with slippage applied per direction — matches the
+        # shared-core engine's execution model. Previous code used
+        # a_close[idx] with no slippage (same-bar, no fill drift), which
+        # biased reported PnL favorably.
+        if idx + 1 >= len(merged):
+            continue
+        raw_entry = float(a_open[idx + 1])
+        slip = SLIPPAGE + SPREAD
+        if direction == "BULLISH":
+            entry_p = raw_entry * (1 + slip)
+        else:
+            entry_p = raw_entry * (1 - slip)
         stop_dist = atr * 2.0
         if direction == "BULLISH":
             stop_p = entry_p - stop_dist
