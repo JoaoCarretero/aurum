@@ -177,6 +177,26 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
     bayes=_BayesWR(); trades=[]; vetos=defaultdict(int)
     account=ACCOUNT_SIZE*capital_weight
     min_idx=max(200,W_NORM,H_PIVOT_N*3,H_HURST_WINDOW)+5
+    # [Backlog #6] HTF precondition assert — scan_hermes reads htf{N}_struct
+    # columns on every iteration. If the caller forgot to run
+    # merge_all_htf_to_ltf, those columns are absent and the strategy
+    # silently vetoes every signal under "hermes_fractal_misalign" without
+    # ever logging the real reason. Fail loud instead.
+    if MTF_ENABLED and HTF_STACK:
+        _n_htf = len(HTF_STACK)
+        _missing = [f"htf{i}_struct" for i in range(1, _n_htf + 1)
+                    if f"htf{i}_struct" not in df.columns]
+        if _missing:
+            raise RuntimeError(
+                f"scan_hermes: HTF merge missing columns {_missing}. "
+                "Call merge_all_htf_to_ltf(df, htf_stack_dfs) before "
+                "scan_hermes when MTF_ENABLED is true.")
+
+    # [Backlog #3] Dynamic funding period denominator — the hardcoded /32
+    # below used to assume 15-minute intervals. Compute from the actual
+    # INTERVAL so non-15m runs accrue funding correctly.
+    _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
+
     # (exit_idx, symbol, size, entry) — size/entry needed for L6 cap
     open_pos: list[tuple[int, str, float, float]] = []
     peak_equity=account; consecutive_losses=0
@@ -270,11 +290,11 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
             if direction=="BULLISH":
                 entry_cost=entry*(1+COMMISSION)
                 ep_net=ep*(1-COMMISSION-slip_exit)
-                pnl=size*(ep_net-entry_cost)-(size*entry*FUNDING_PER_8H*duration/32)
+                pnl=size*(ep_net-entry_cost)-(size*entry*FUNDING_PER_8H*duration/_funding_periods_per_8h)
             else:
                 entry_cost=entry*(1-COMMISSION)
                 ep_net=ep*(1+COMMISSION+slip_exit)
-                pnl=size*(entry_cost-ep_net)+(size*entry*FUNDING_PER_8H*duration/32)
+                pnl=size*(entry_cost-ep_net)+(size*entry*FUNDING_PER_8H*duration/_funding_periods_per_8h)
             pnl=round(pnl*LEVERAGE, 2)
             # Apply real PnL. The previous `max(account+pnl, account*0.5)`
             # silently clamped per-trade losses at 50% of pre-trade account,

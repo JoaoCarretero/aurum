@@ -138,6 +138,9 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     # (exit_idx, symbol, size, entry) — size/entry needed for L6 cap
     open_pos: list[tuple[int, str, float, float]] = []
 
+    # [Backlog #3] Dynamic funding period denominator per candle interval.
+    _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
+
     # pre-extract arrays
     _rsi   = df["rsi"].values
     _atr   = df["atr"].values
@@ -287,12 +290,12 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         if direction == "BULLISH":
             entry_cost = entry * (1 + COMMISSION)
             ep_net = ep * (1 - COMMISSION - slip_exit)
-            funding = -(size * entry * FUNDING_PER_8H * duration / 32)
+            funding = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl = size * (ep_net - entry_cost) + funding
         else:
             entry_cost = entry * (1 - COMMISSION)
             ep_net = ep * (1 + COMMISSION + slip_exit)
-            funding = +(size * entry * FUNDING_PER_8H * duration / 32)
+            funding = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl = size * (entry_cost - ep_net) + funding
         pnl = round(pnl * LEVERAGE, 2)
         # Apply real PnL. The previous `max(account + pnl, account * 0.5)`
