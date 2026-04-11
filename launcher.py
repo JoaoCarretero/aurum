@@ -785,6 +785,8 @@ class App(tk.Tk):
         self._menu_sub_focus = 0         # 0..2 within expanded sub-menu
         self._menu_canvas = None         # tk.Canvas handle, set on render
         self._menu_live_after_id = None  # after() handle for 5s refresh
+        self._active_tile_slots = self._TILE_SLOTS         # overridden by splash
+        self._active_cd_center = (self._CD_CX, self._CD_CY)  # overridden by splash
 
         threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
@@ -1048,6 +1050,14 @@ class App(tk.Tk):
         ("sw", 180, 380),
         ("se", 640, 380),
     ]
+    # Splash screen uses the same 2x2 grid but shifted DOWN ~100px so the
+    # BANNER wordmark has room at the top of the canvas.
+    _SPLASH_TILE_SLOTS = [
+        ("nw", 180, 250),
+        ("ne", 640, 250),
+        ("sw", 180, 480),
+        ("se", 640, 480),
+    ]
     _TILE_W = 200
     _TILE_H = 120
     _TILE_DEPTH = 16
@@ -1055,6 +1065,8 @@ class App(tk.Tk):
     _CD_CX = 460
     _CD_CY = 265
     _CD_R  = 68
+    # CD center on the splash canvas — sits between the shifted 2x2 grid.
+    _SPLASH_CD = (460, 365)
 
     def _dim_color(self, hex_color: str, factor: float) -> str:
         """Scale an #rrggbb color by factor (0..1)."""
@@ -1069,7 +1081,8 @@ class App(tk.Tk):
             return hex_color
 
     def _tile_rect(self, idx: int) -> tuple:
-        _, cx, cy = self._TILE_SLOTS[idx]
+        slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
+        _, cx, cy = slots[idx]
         w, h = self._TILE_W, self._TILE_H
         return (cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2)
 
@@ -1115,7 +1128,9 @@ class App(tk.Tk):
             )
 
     def _draw_cd_center(self, canvas) -> None:
-        cx, cy, r = self._CD_CX, self._CD_CY, self._CD_R
+        center = getattr(self, "_active_cd_center", None) or (self._CD_CX, self._CD_CY)
+        cx, cy = center
+        r = self._CD_R
         canvas.delete("cd")
         canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
                            outline=AMBER, width=2, tags="cd")
@@ -1136,16 +1151,19 @@ class App(tk.Tk):
 
     def _draw_spokes(self, canvas, focused_idx: int) -> None:
         canvas.delete("spokes")
+        slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
+        center = getattr(self, "_active_cd_center", None) or (self._CD_CX, self._CD_CY)
+        cd_cx, cd_cy = center
         for idx in range(4):
             x1, y1, x2, y2 = self._tile_rect(idx)
-            _, cx, cy = self._TILE_SLOTS[idx]
-            anchor_x = x2 if cx < self._CD_CX else x1
-            anchor_y = y2 if cy < self._CD_CY else y1
+            _, cx, cy = slots[idx]
+            anchor_x = x2 if cx < cd_cx else x1
+            anchor_y = y2 if cy < cd_cy else y1
             _, _, color, _ = MAIN_GROUPS[idx]
             line_color = color if idx == focused_idx else DIM2
             width = 2 if idx == focused_idx else 1
             canvas.create_line(
-                anchor_x, anchor_y, self._CD_CX, self._CD_CY,
+                anchor_x, anchor_y, cd_cx, cd_cy,
                 fill=line_color, width=width, dash=(2, 4), tags="spokes",
             )
 
@@ -1159,6 +1177,8 @@ class App(tk.Tk):
         self._clr()
         self._clear_kb()
         self.history.clear()
+        self._active_tile_slots = self._TILE_SLOTS
+        self._active_cd_center = (self._CD_CX, self._CD_CY)
         self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
         self.h_path.configure(text="> PRINCIPAL  ·  O DISCO LÊ A SI MESMO")
         self.f_lbl.configure(text="1-4 direto · ← ↑ ↓ → nav · ENTER · ESC sai")
@@ -1300,130 +1320,105 @@ class App(tk.Tk):
         except Exception:
             self._menu_live_after_id = None
 
-    # ─── SPLASH (Layer 0) ───────────────────────────────
-    # ─── SPLASH (Layer 0) — CD Universe ─────────────────
+    # ─── SPLASH (Layer 0) — Bloomberg 3D ─────────────────
     def _splash(self):
         self._clr(); self._clear_kb(); self.history.clear()
-        self.h_path.configure(text=""); self.h_stat.configure(text="PRONTO", fg=GREEN)
-        self.f_lbl.configure(text="ENTER continuar  |  H hub  |  S strategies  |  Q quit")
+        self.h_path.configure(text="")
+        self.h_stat.configure(text="PRONTO", fg=GREEN)
+        self.f_lbl.configure(text="ENTER main · 1-4 direto · Q quit")
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
+        # Activate splash tile geometry before any render helper runs.
+        self._active_tile_slots = self._SPLASH_TILE_SLOTS
+        self._active_cd_center = self._SPLASH_CD
 
-        # ── CD Radar — market signal topology ──
-        cd_size = 200
-        self._cd_canvas = tk.Canvas(f, width=cd_size, height=cd_size,
-                                     bg=BG, highlightthickness=0)
-        self._cd_canvas.pack(pady=(0, 6))
-        self._cd_t = 0.0
-        self._cd_size = cd_size
-        self._cd_alive = True
-        self._cd_draw()
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True)
+        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=640)
+        canvas.pack(fill="both", expand=True)
+        self._menu_canvas = canvas
+        self._splash_canvas = canvas
 
-        # ── Thin rule ──
-        tk.Frame(f, bg=AMBER_D, height=1, width=480).pack(pady=(4, 8))
+        # ── Header band: BANNER wordmark + subtitle ──
+        canvas.create_text(
+            460, 40, text=BANNER,
+            font=(FONT, 11, "bold"), fill=AMBER, anchor="center", justify="center",
+        )
+        canvas.create_text(
+            460, 78,
+            text="S O V E R E I G N   F I N A N C E   T E R M I N A L",
+            font=(FONT, 8, "bold"), fill=AMBER_D, anchor="center",
+        )
 
-        # ── AURUM wordmark ──
-        tk.Label(f, text=BANNER, font=(FONT, 11, "bold"),
-                 fg=AMBER, bg=BG, justify="left").pack()
+        # ── Thin amber rule below header ──
+        canvas.create_line(220, 96, 700, 96, fill=AMBER_D, width=1)
 
-        # ── Subtitle ──
-        tk.Label(f, text="S O V E R E I G N   F I N A N C E   T E R M I N A L",
-                 font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(pady=(2, 4))
+        # ── Kick off live data fetch on first render ──
+        if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
+            self._menu_live_fetch_async()
 
-        # ── Thin rule ──
-        tk.Frame(f, bg=AMBER_D, height=1, width=480).pack(pady=(6, 10))
+        # ── 2x2 isometric tile grid + CD center + spokes ──
+        self._draw_cd_center(canvas)
+        self._draw_spokes(canvas, self._menu_focused_tile)
+        for idx in range(4):
+            self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
 
-        # ── Status block ──
-        st = _conn.status_summary()
-        keys = self._load_json("keys.json")
-        has_tg = bool(keys.get("telegram", {}).get("bot_token"))
-        has_keys = bool(keys.get("demo", {}).get("api_key") or keys.get("testnet", {}).get("api_key"))
-        conn_color = GREEN if has_keys else DIM
-        conn_text = f"Binance ({'testnet' if keys.get('testnet',{}).get('api_key') else 'demo'})" if has_keys else "not connected"
-        conn_icon = "\u25cf" if has_keys else "\u25cb"
+        # ── Bottom rule + footer ──
+        canvas.create_line(220, 600, 700, 600, fill=AMBER_D, width=1)
+        canvas.create_text(
+            460, 620,
+            text="© 2026  AURUM FINANCE  ·  O disco lê a si mesmo",
+            font=(FONT, 7), fill=DIM2, anchor="center",
+        )
 
-        # Last backtest
-        last_bt = ""
+        # ── Arm live refresh loop ──
+        self._menu_live_schedule()
+
+        # ── Key bindings ──
+        self._kb("<Return>", lambda: self._menu("main"))
+        self._kb("<space>",  lambda: self._menu("main"))
+        self.main.bind("<Button-1>", lambda e: self._menu("main"))
+
+        for n in (1, 2, 3, 4):
+            self._kb(f"<Key-{n}>", lambda _i=n - 1: self._splash_direct_jump(_i))
+
+        self._kb("<Right>", lambda: self._splash_focus_delta(+1))
+        self._kb("<Left>",  lambda: self._splash_focus_delta(-1))
+        self._kb("<Down>",  lambda: self._splash_focus_delta(+2))
+        self._kb("<Up>",    lambda: self._splash_focus_delta(-2))
+        self._kb("<Tab>",   lambda: self._splash_focus_delta(+1))
+
         try:
-            idx = ROOT / "data" / "index.json"
-            if idx.exists():
-                brows = json.loads(idx.read_text(encoding="utf-8"))
-                brows = [r for r in brows if isinstance(r, dict)]
-                brows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
-                if brows:
-                    r0 = brows[0]
-                    wr = r0.get("win_rate")
-                    pnl = r0.get("pnl") or r0.get("total_pnl")
-                    iv = r0.get("interval") or r0.get("engine") or ""
-                    if wr is not None and pnl is not None:
-                        last_bt = f"{iv} — WR {float(wr):.1f}% — ${float(pnl):+,.0f}"
-            if not last_bt:
-                runs_dir = ROOT / "data" / "runs"
-                if runs_dir.exists():
-                    sums = sorted(runs_dir.glob("*/summary.json"),
-                                  key=lambda p: p.stat().st_mtime, reverse=True)
-                    for s_path in sums[:1]:
-                        sdata = json.loads(s_path.read_text(encoding="utf-8"))
-                        wr = sdata.get("win_rate")
-                        pnl = sdata.get("pnl") or sdata.get("total_pnl")
-                        iv = sdata.get("interval") or ""
-                        if wr is not None and pnl is not None:
-                            last_bt = f"{iv} — WR {float(wr):.1f}% — ${float(pnl):+,.0f}"
-            if not last_bt:
-                dd = ROOT / "data"
-                if dd.exists():
-                    for r in sorted(dd.rglob("citadel_*.json"),
-                                    key=lambda p: p.stat().st_mtime, reverse=True):
-                        if "reports" in str(r):
-                            data = json.loads(r.read_text(encoding="utf-8"))
-                            s = data.get("summary", {})
-                            if s.get("win_rate"):
-                                last_bt = (f"{data.get('version','')} — "
-                                           f"WR {s['win_rate']:.1f}% — "
-                                           f"${s.get('total_pnl',0):+,.0f}")
-                            break
-        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            self._kb("<Escape>", self._quit)
+        except Exception:
             pass
 
-        rows = [
-            ("MARKET",      st['market'],                                       AMBER_B),
-            ("CONNECTION",  f"{conn_icon} {conn_text}",                         conn_color),
-            ("TELEGRAM",    "\u25cf connected" if has_tg else "\u25cb offline",  GREEN if has_tg else DIM),
-            ("BACKTEST",    last_bt or "— no data —",                           WHITE if last_bt else DIM),
-            ("ENGINES",     "6 ready · 3 dev · 26k lines",                      DIM),
-            ("KILL-SWITCH", "3 LAYERS ARMED",                                   RED),
-        ]
-
-        stf = tk.Frame(f, bg=BG); stf.pack()
-        for label, value, color in rows:
-            row = tk.Frame(stf, bg=BG); row.pack(anchor="w", pady=1)
-            tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                     fg=DIM, bg=BG, width=13, anchor="w").pack(side="left")
-            tk.Label(row, text="\u2502", font=(FONT, 8),
-                     fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
-            tk.Label(row, text=value, font=(FONT, 8),
-                     fg=color, bg=BG, anchor="w").pack(side="left")
-
-        tk.Frame(f, bg=BG, height=10).pack()
-        tk.Frame(f, bg=AMBER_D, height=1, width=480).pack()
-        tk.Frame(f, bg=BG, height=10).pack()
-
-        # ── Continue ──
-        tk.Label(f, text="[  ENTER  ]",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack()
-
-        tk.Frame(f, bg=BG, height=6).pack()
-
-        # ── Footer ──
-        tk.Label(f, text="© 2026  AURUM FINANCE  ·  O disco lê a si mesmo",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack()
-
-        for ev in ["<Button-1>", "<Return>", "<space>"]:
-            if ev == "<Button-1>":
-                self.main.bind(ev, lambda e: self._menu("main"))
-            else:
-                self._kb(ev, lambda: self._menu("main"))
         self._bind_global_nav()
+
+    def _splash_focus_delta(self, delta: int) -> None:
+        """Cycle focused tile on the splash canvas and repaint."""
+        self._menu_focused_tile = (self._menu_focused_tile + delta) % 4
+        if self._menu_canvas is None:
+            return
+        for idx in range(4):
+            self._draw_isometric_tile(
+                self._menu_canvas, idx, idx == self._menu_focused_tile
+            )
+        self._draw_spokes(self._menu_canvas, self._menu_focused_tile)
+
+    def _splash_direct_jump(self, tile_idx: int) -> None:
+        """Jump directly to the first child of MAIN_GROUPS[tile_idx]."""
+        if not (0 <= tile_idx < len(MAIN_GROUPS)):
+            return
+        children = MAIN_GROUPS[tile_idx][3]
+        if not children:
+            return
+        _, method_name = children[0]
+        fn = getattr(self, method_name, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
 
     def _cd_draw(self):
         """Animate the CD radar on the splash screen."""

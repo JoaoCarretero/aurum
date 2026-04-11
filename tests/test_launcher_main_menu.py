@@ -210,29 +210,30 @@ def test_sub_select_dispatches_to_method(monkeypatch):
         app.destroy()
 
 
-def test_feature_flag_routes_to_bloomberg_by_default(monkeypatch):
-    monkeypatch.delenv("AURUM_MENU_STYLE", raising=False)
+def test_splash_creates_bloomberg_canvas():
     mod = _load_launcher()
     app = mod.App()
     app.withdraw()
     try:
-        app._menu("main")
+        app._splash()
         app.update_idletasks()
         assert app._menu_canvas is not None
+        items = app._menu_canvas.find_all()
+        assert len(items) > 20, f"expected many canvas items on splash, got {len(items)}"
     finally:
         app.destroy()
 
 
-def test_feature_flag_legacy_disables_canvas(monkeypatch):
-    monkeypatch.setenv("AURUM_MENU_STYLE", "legacy")
+def test_splash_key_1_dispatches_to_markets(monkeypatch):
     mod = _load_launcher()
     app = mod.App()
     app.withdraw()
     try:
-        app._menu_canvas = None
-        app._menu("main")
-        app.update_idletasks()
-        assert app._menu_canvas is None
+        app._splash()
+        called = []
+        monkeypatch.setattr(app, "_markets", lambda: called.append("markets"))
+        app._splash_direct_jump(0)
+        assert called == ["markets"]
     finally:
         app.destroy()
 
