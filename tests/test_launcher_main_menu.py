@@ -122,3 +122,17 @@ def test_fetch_control_uptime_format():
         assert "h" in result["line2"] or "m" in result["line2"] or result["line2"] == "—"
     finally:
         app.destroy()
+
+
+def test_menu_live_fetch_populates_cache():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_live_fetch_sync()
+        for key in ("markets", "execute", "research", "control"):
+            live = app._menu_live[key]
+            assert isinstance(live, dict)
+            assert set(live.keys()) == {"line1", "line2", "line3", "line4"}
+    finally:
+        app.destroy()

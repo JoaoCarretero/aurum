@@ -1009,6 +1009,35 @@ class App(tk.Tk):
         except Exception:
             return self._fallback_lines()
 
+    def _menu_live_fetch_sync(self) -> None:
+        """Populate self._menu_live in-thread. Used by tests and by the async worker."""
+        self._menu_live["markets"]  = self._fetch_tile_markets()
+        self._menu_live["execute"]  = self._fetch_tile_execute()
+        self._menu_live["research"] = self._fetch_tile_research()
+        self._menu_live["control"]  = self._fetch_tile_control()
+
+    def _menu_live_fetch_async(self) -> None:
+        """Spawn a worker thread that refreshes the cache, then schedules a repaint."""
+        def _worker():
+            try:
+                self._menu_live_fetch_sync()
+            except Exception:
+                pass
+            try:
+                self.after(0, self._menu_live_apply)
+            except Exception:
+                pass
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _menu_live_apply(self) -> None:
+        """Main-thread: redraw tile texts from self._menu_live if the main menu is shown."""
+        if self._menu_canvas is None:
+            return
+        try:
+            self._menu_tiles_repaint_text()
+        except Exception:
+            pass
+
     # ─── SPLASH (Layer 0) ───────────────────────────────
     # ─── SPLASH (Layer 0) — CD Universe ─────────────────
     def _splash(self):
