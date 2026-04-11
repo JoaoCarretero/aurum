@@ -18,7 +18,6 @@ but not awaited.
 """
 from __future__ import annotations
 
-import os
 import sys
 import time
 import traceback
@@ -82,13 +81,9 @@ def run(quiet: bool = False) -> int:
     call("live fetch sync",      app._menu_live_fetch_sync)
     call("live apply",           app._menu_live_apply)
 
-    # ── LEGACY MAIN MENU (feature flag rollback) ──
-    section("LEGACY FIBONACCI MENU")
-    os.environ["AURUM_MENU_STYLE"] = "legacy"
-    try:
-        call("_menu(main) legacy", app._menu, "main")
-    finally:
-        os.environ.pop("AURUM_MENU_STYLE", None)
+    # ── MAIN MENU (legacy Fibonacci) ──
+    section("MAIN MENU")
+    call("_menu(main)", app._menu, "main")
 
     call("_markets",        app._markets)
     call("_connections",    app._connections)
