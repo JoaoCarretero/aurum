@@ -984,6 +984,189 @@ class LiveEngine:
             log.warning(f"API verify falhou: {e}")
 
     # ── POSIÇÕES ──────────────────────────────────────────────
+    # ── RECONCILIATION LOOP (Fase 4-F) ────────────────────────
+    async def _reconciliation_loop(self, interval_s: int = 60) -> None:
+        """Background task: compare local state with broker state.
+
+        Runs every ``interval_s`` seconds. For each tick:
+          1. Fetch broker positions + balance via the live client
+          2. Compare against self.positions and self.account
+          3. Compute drift_qty_pct and drift_equity_pct per symbol
+          4. If either exceeds threshold → log + audit a "reject" row
+             tagged with source=reconciliation
+          5. If drift exceeds hard threshold 3× in a row → trigger
+             the kill switch
+
+        Paper mode: the loop still runs but fetches from the paper
+        state snapshot — zero broker calls. Logs drift vs expected
+        so you can verify the reconciliation logic is healthy before
+        flipping to live.
+
+        Thresholds (hard-coded for now, can be moved to risk_gates.json
+        when the design settles):
+          max_qty_drift_pct      = 1.0
+          max_equity_drift_pct   = 0.5
+          consecutive_hard_break = 3
+
+        The task is cancelled cleanly when self.running goes False.
+        """
+        MAX_QTY_DRIFT_PCT    = 1.0
+        MAX_EQUITY_DRIFT_PCT = 0.5
+        CONSECUTIVE_BREAK    = 3
+        consecutive_drift = 0
+
+        while self.running:
+            try:
+                await asyncio.sleep(interval_s)
+                if not self.running:
+                    break
+                if getattr(self, "_kill_switch_active", False):
+                    # Engine already in emergency mode — don't re-trigger
+                    continue
+
+                broker_snapshot = await self._fetch_broker_snapshot()
+                if broker_snapshot is None:
+                    log.debug("  reconciliation: broker snapshot unavailable")
+                    continue
+
+                # Build expected state from local
+                expected = {
+                    "equity": self.account,
+                    "positions": {
+                        p.symbol: {
+                            "size":      p.size,
+                            "direction": p.direction,
+                            "entry":     p.entry,
+                        } for p in self.positions
+                    },
+                }
+
+                broker_equity = broker_snapshot.get("equity")
+                broker_positions = broker_snapshot.get("positions", {})
+
+                drift_items = []
+
+                # Equity drift
+                if broker_equity is not None and expected["equity"] > 0:
+                    eq_drift_pct = abs(broker_equity - expected["equity"]) / expected["equity"] * 100.0
+                    if eq_drift_pct > MAX_EQUITY_DRIFT_PCT:
+                        drift_items.append({
+                            "kind":          "equity",
+                            "expected":      round(expected["equity"], 2),
+                            "actual":        round(broker_equity, 2),
+                            "drift_pct":     round(eq_drift_pct, 4),
+                            "threshold_pct": MAX_EQUITY_DRIFT_PCT,
+                        })
+
+                # Per-symbol qty drift (symbols we think we have AND symbols
+                # the broker shows — covers ghost positions on either side)
+                all_syms = set(expected["positions"].keys()) | set(broker_positions.keys())
+                for sym in all_syms:
+                    exp = expected["positions"].get(sym)
+                    act = broker_positions.get(sym)
+                    exp_qty = exp["size"] if exp else 0.0
+                    act_qty = act.get("size", 0.0) if act else 0.0
+                    if exp_qty == 0 and act_qty == 0:
+                        continue
+                    denom = max(abs(exp_qty), abs(act_qty), 1e-9)
+                    qty_drift_pct = abs(exp_qty - act_qty) / denom * 100.0
+                    if qty_drift_pct > MAX_QTY_DRIFT_PCT:
+                        drift_items.append({
+                            "kind":          "qty",
+                            "symbol":        sym,
+                            "expected_qty":  exp_qty,
+                            "actual_qty":    act_qty,
+                            "drift_pct":     round(qty_drift_pct, 4),
+                            "threshold_pct": MAX_QTY_DRIFT_PCT,
+                        })
+
+                if drift_items:
+                    consecutive_drift += 1
+                    log.warning(
+                        f"  reconciliation drift detected ({len(drift_items)} items, "
+                        f"streak={consecutive_drift}/{CONSECUTIVE_BREAK})")
+                    try:
+                        self.audit.write(OrderEvent(
+                            event="reject",
+                            client_oid=f"recon-{int(time.time()*1000)}",
+                            venue=f"binance_futures_{self.orders._mode()}",
+                            symbol="_all_",
+                            side="BUY",
+                            qty=0.0,
+                            price=None,
+                            status="drift",
+                            payload={
+                                "mode":          self.orders._mode(),
+                                "source":        "reconciliation",
+                                "consecutive":   consecutive_drift,
+                                "max_streak":    CONSECUTIVE_BREAK,
+                                "drift_items":   drift_items,
+                            },
+                        ))
+                    except Exception as e:
+                        log.debug(f"  reconciliation audit write failed: {e}")
+
+                    if consecutive_drift >= CONSECUTIVE_BREAK:
+                        await self._kill_switch_trigger(
+                            f"reconciliation drift {consecutive_drift}x consecutive")
+                        break
+                else:
+                    if consecutive_drift > 0:
+                        log.info(f"  reconciliation cleared after {consecutive_drift} drifts")
+                    consecutive_drift = 0
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error(f"  reconciliation loop error: {e}")
+                # Don't crash the loop over a transient error.
+
+    async def _fetch_broker_snapshot(self) -> Optional[dict]:
+        """Return {"equity": float, "positions": {sym: {size, direction, entry}}}.
+
+        Paper mode: returns the engine's own state (so reconciliation
+        is effectively self-check — useful to validate the loop logic
+        works before flipping to live).
+
+        Live/demo/testnet: calls the Binance Futures account + position
+        endpoints via the existing client. Returns None on any error —
+        the caller treats None as "snapshot unavailable, skip this tick".
+        """
+        if self.orders.paper:
+            positions = {}
+            for p in self.positions:
+                positions[p.symbol] = {
+                    "size":      p.size,
+                    "direction": p.direction,
+                    "entry":     p.entry,
+                }
+            return {"equity": self.account, "positions": positions}
+
+        if self.orders.client is None:
+            return None
+
+        try:
+            loop = asyncio.get_running_loop()
+            account_info = await loop.run_in_executor(
+                None, self.orders.client.futures_account)
+            equity = float(account_info.get("totalWalletBalance", 0.0))
+            # Binance returns every symbol; filter to non-zero positions.
+            positions = {}
+            for pos in account_info.get("positions", []):
+                sym = pos.get("symbol", "")
+                amt = float(pos.get("positionAmt", 0.0) or 0.0)
+                if abs(amt) < 1e-9:
+                    continue
+                positions[sym] = {
+                    "size":      abs(amt),
+                    "direction": "BULLISH" if amt > 0 else "BEARISH",
+                    "entry":     float(pos.get("entryPrice", 0.0) or 0.0),
+                }
+            return {"equity": equity, "positions": positions}
+        except Exception as e:
+            log.debug(f"  broker snapshot fetch failed: {e}")
+            return None
+
     # ── KILL SWITCH ORCHESTRATION (Fase 4-D) ──────────────────
     async def _kill_switch_trigger(self, reason: str) -> None:
         """Emergency stop. Flatten first, cancel second, then halt.
@@ -1778,6 +1961,10 @@ class LiveEngine:
         tasks = [asyncio.create_task(self._ws_listen(sym)) for sym in SYMBOLS]
         tasks.append(asyncio.create_task(self._status_ticker()))
         tasks.append(asyncio.create_task(self.telegram.start()))
+        # [Fase 4-F] Background reconciliation loop. 60s cadence; runs
+        # in every mode (paper self-checks against engine state; live
+        # compares against broker). Cancelled cleanly on shutdown.
+        tasks.append(asyncio.create_task(self._reconciliation_loop(interval_s=60)))
         self._ws_tasks = tasks
 
         _run_mode = "DEMO" if DEMO_MODE else "TESTNET" if TESTNET_MODE else "LIVE" if LIVE_MODE else "PAPER"
