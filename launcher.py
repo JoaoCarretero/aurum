@@ -2282,6 +2282,14 @@ class App(tk.Tk):
                         w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
                         w.bind("<Leave>", lambda e, n=nl: n.configure(fg=WHITE))
 
+        tk.Frame(f, bg=BG, height=14).pack()
+        back_btn = tk.Label(f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
+                            cursor="hand2", padx=12, pady=4)
+        back_btn.pack(pady=(4, 0))
+        back_btn.bind("<Button-1>", lambda e: self._menu("main"))
+        back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=AMBER))
+        back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
+
     # ─── STRATEGIES (Layer 2) ─────────────────────────────
     def _strategies(self):
         self._clr(); self._clear_kb()
@@ -4596,22 +4604,82 @@ class App(tk.Tk):
                      font=(FONT, 6), fg=DIM2, bg=PANEL,
                      anchor="w").pack(fill="x", pady=(8, 0))
 
-        # === Secondary action: open HTML report ===
+        # === Secondary actions: open HTML + delete ===
         tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(10, 6))
+        actions = tk.Frame(body, bg=PANEL)
+        actions.pack(fill="x", anchor="w", pady=(0, 2))
+
         report = run_dir / "report.html"
         if report.exists():
-            btn = tk.Label(body, text="  OPEN HTML REPORT  ",
+            btn = tk.Label(actions, text="  OPEN HTML  ",
                            font=(FONT, 7, "bold"),
                            fg=BG, bg=AMBER_D, cursor="hand2",
                            padx=6, pady=4)
-            btn.pack(anchor="w", pady=(0, 2))
+            btn.pack(side="left", padx=(0, 4))
             btn.bind("<Button-1>", lambda e: self._dash_backtest_open(run_id))
             btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=AMBER))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=AMBER_D))
         else:
-            tk.Label(body, text="(no report.html)",
+            tk.Label(actions, text="(no report.html)  ",
                      font=(FONT, 7), fg=DIM2, bg=PANEL,
-                     anchor="w").pack(anchor="w")
+                     anchor="w").pack(side="left")
+
+        del_btn = tk.Label(actions, text="  DELETE  ",
+                           font=(FONT, 7, "bold"),
+                           fg=RED, bg=BG3, cursor="hand2",
+                           padx=6, pady=4)
+        del_btn.pack(side="left")
+        del_btn.bind("<Button-1>", lambda e: self._dash_backtest_delete(run_id))
+        del_btn.bind("<Enter>", lambda e, b=del_btn: b.configure(bg=RED, fg=BG))
+        del_btn.bind("<Leave>", lambda e, b=del_btn: b.configure(bg=BG3, fg=RED))
+
+    def _dash_backtest_delete(self, run_id: str):
+        """Delete a backtest run directory and its index entry, then refresh.
+
+        Confirmation prompt is mandatory — deletion is destructive and the
+        run_dir usually holds the JSON, HTML report, and any plots. The
+        index.json entry is filtered out even if the directory is already
+        missing, so a stale index row can also be cleaned up this way.
+        """
+        if not messagebox.askyesno(
+                "Delete backtest",
+                f"Apagar definitivamente o run\n\n  {run_id}\n\n"
+                f"Todos os ficheiros em data/runs/{run_id}/ serão removidos."):
+            return
+
+        import shutil
+        run_dir = ROOT / "data" / "runs" / run_id
+        if run_dir.exists():
+            try:
+                shutil.rmtree(run_dir)
+            except OSError as e:
+                self.h_stat.configure(text=f"DELETE FAILED: {str(e)[:40]}", fg=RED)
+                self.after(2500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+                return
+
+        idx_path = ROOT / "data" / "index.json"
+        if idx_path.exists():
+            try:
+                idx = json.loads(idx_path.read_text(encoding="utf-8"))
+                idx = [r for r in idx if r.get("run_id") != run_id]
+                idx_path.write_text(json.dumps(idx, indent=2), encoding="utf-8")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Clear detail panel and refresh list
+        body = self._dash_widgets.get(("bt_detail",))
+        if body is not None:
+            try:
+                for w in body.winfo_children():
+                    w.destroy()
+                tk.Label(body, text="  — deleted —",
+                         font=(FONT, 8), fg=DIM, bg=PANEL,
+                         anchor="w").pack(fill="x", pady=10)
+            except Exception:
+                pass
+        self._dash_backtest_render()
+        self.h_stat.configure(text=f"DELETED {run_id[:20]}", fg=AMBER)
+        self.after(2000, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
 
     def _dash_backtest_open(self, run_id: str):
         """Open the HTML report for a given run in the default browser."""
