@@ -1,0 +1,49 @@
+{
+  "_comment": "Circuit breaker config per mode. Loaded by engines/live.py at init. Permissive defaults for paper/demo/testnet; tighter for live. All percentages are 0-100 scale. Keys match core.risk_gates.RiskGateConfig fields.",
+  "_schema_version": 1,
+
+  "paper": {
+    "max_daily_dd_pct":       100.0,
+    "max_daily_loss_pct":     100.0,
+    "max_consecutive_losses": 999,
+    "soft_block_losses":      999,
+    "max_gross_notional_pct": 1e9,
+    "max_net_exposure_pct":   1e9,
+    "max_concurrent_positions": 999,
+    "freeze_hours_utc":       []
+  },
+
+  "demo": {
+    "max_daily_dd_pct":       100.0,
+    "max_daily_loss_pct":     100.0,
+    "max_consecutive_losses": 999,
+    "soft_block_losses":      999,
+    "max_gross_notional_pct": 1e9,
+    "max_net_exposure_pct":   1e9,
+    "max_concurrent_positions": 999,
+    "freeze_hours_utc":       []
+  },
+
+  "testnet": {
+    "max_daily_dd_pct":       100.0,
+    "max_daily_loss_pct":     100.0,
+    "max_consecutive_losses": 999,
+    "soft_block_losses":      999,
+    "max_gross_notional_pct": 1e9,
+    "max_net_exposure_pct":   1e9,
+    "max_concurrent_positions": 999,
+    "freeze_hours_utc":       []
+  },
+
+  "live": {
+    "_comment": "TIGHTENED for real capital. Review and adjust before first live run. Freeze hours block 21-02 UTC (typical low-liquidity window in crypto futures).",
+    "max_daily_dd_pct":         5.0,
+    "max_daily_loss_pct":       3.0,
+    "max_consecutive_losses":   6,
+    "soft_block_losses":        3,
+    "max_gross_notional_pct":   300.0,
+    "max_net_exposure_pct":     150.0,
+    "max_concurrent_positions": 3,
+    "freeze_hours_utc":         [21, 22, 23, 0, 1, 2]
+  }
+}

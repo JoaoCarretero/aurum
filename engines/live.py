@@ -56,12 +56,54 @@ from core import (
     score_omega, score_chop,
 )
 from core.audit_trail import AuditTrail, OrderEvent
+from core.risk_gates import (
+    RiskGateConfig, RiskState, GateDecision, check_gates,
+)
 from bot.telegram import TelegramNotifier
 
 # Fase 4 — engine version stamped on every audit row. Bump when the
 # strategy's decision logic changes materially so auditing can tell
 # which code produced a given order.
 LIVE_ENGINE_VERSION = "live-v1.0-fase4"
+
+
+def _load_risk_gate_config(mode: str) -> RiskGateConfig:
+    """Load the RiskGateConfig for ``mode`` from config/risk_gates.json.
+
+    Falls back to the permissive default (RiskGateConfig()) if the file
+    is absent or the mode section is missing. This keeps the wiring a
+    no-op for any user who hasn't opted into the guardrails yet — their
+    engine runs exactly as before.
+
+    Unknown keys in the JSON are ignored (forward-compat).
+    """
+    cfg_path = Path(__file__).parent.parent / "config" / "risk_gates.json"
+    if not cfg_path.exists():
+        return RiskGateConfig()
+    try:
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return RiskGateConfig()
+    if not isinstance(raw, dict):
+        return RiskGateConfig()
+    section = raw.get(mode, {})
+    if not isinstance(section, dict):
+        return RiskGateConfig()
+    # Filter to only known fields — tolerant of extra keys like "_comment".
+    allowed = {
+        "max_daily_dd_pct", "max_daily_loss_pct",
+        "max_consecutive_losses", "soft_block_losses",
+        "max_gross_notional_pct", "max_net_exposure_pct",
+        "max_concurrent_positions", "freeze_hours_utc",
+    }
+    kwargs = {k: v for k, v in section.items() if k in allowed}
+    # freeze_hours_utc must be a tuple for the dataclass
+    if "freeze_hours_utc" in kwargs and isinstance(kwargs["freeze_hours_utc"], list):
+        kwargs["freeze_hours_utc"] = tuple(int(h) for h in kwargs["freeze_hours_utc"])
+    try:
+        return RiskGateConfig(**kwargs)
+    except TypeError:
+        return RiskGateConfig()
 
 # ── CONFIG ────────────────────────────────────────────────────
 LIVE_MODE         = False          # False = PAPER  |  True = LIVE/TESTNET
@@ -732,6 +774,22 @@ class LiveEngine:
             strategy_ver=LIVE_ENGINE_VERSION,
             hash_chain=True,
         )
+        # [Fase 4-C] Pre-order exposure gates. Complements KillSwitch
+        # (which is outcome-based / post-trade). risk_gates are checked
+        # BEFORE any new entry is submitted — if hard_block fires we
+        # trigger the kill switch orchestration; if soft_block fires we
+        # just skip the new entry for this bar.
+        _mode = self.orders._mode()
+        self.risk_cfg = _load_risk_gate_config(_mode)
+        log.info(f"Risk gates loaded for mode={_mode}: "
+                 f"dd={self.risk_cfg.max_daily_dd_pct}%  "
+                 f"streak={self.risk_cfg.max_consecutive_losses}  "
+                 f"gross={self.risk_cfg.max_gross_notional_pct}%  "
+                 f"concurrent={self.risk_cfg.max_concurrent_positions}")
+        # Start-of-day equity snapshot (used by gate_daily_loss). Reset
+        # on the first tick of each UTC day by _status_ticker.
+        self._sod_equity = ACCOUNT_SIZE
+        self._sod_date   = datetime.now(timezone.utc).date()
         self.positions: list[Position] = []
         self.closed_trades: list = []
         self.macro_series: Optional[pd.Series] = None
@@ -869,6 +927,66 @@ class LiveEngine:
             log.warning(f"API verify falhou: {e}")
 
     # ── POSIÇÕES ──────────────────────────────────────────────
+    # ── RISK GATES (Fase 4-C) ─────────────────────────────────
+    def _check_risk_gates(self) -> GateDecision:
+        """Build a RiskState snapshot from current engine state and run
+        the full gate chain. Returns the first non-allow decision (hard
+        wins over soft). The caller is responsible for honoring the
+        decision — this method is pure."""
+        now = datetime.now(timezone.utc)
+        # Reset start-of-day snapshot on UTC day rollover.
+        if now.date() != self._sod_date:
+            self._sod_equity = self.account
+            self._sod_date = now.date()
+
+        open_positions = []
+        for p in self.positions:
+            notional = p.size * p.entry
+            open_positions.append({
+                "symbol":   p.symbol,
+                "side":     "LONG" if p.direction == "BULLISH" else "SHORT",
+                "notional": notional,
+            })
+
+        daily_pnl = self.account - self._sod_equity
+        state = RiskState(
+            account_equity      = self.account,
+            peak_equity         = self.peak_equity,
+            start_of_day_equity = self._sod_equity,
+            daily_pnl           = daily_pnl,
+            consecutive_losses  = self.consecutive_losses,
+            open_positions      = open_positions,
+            current_hour_utc    = now.hour,
+        )
+        return check_gates(state, self.risk_cfg)
+
+    def _audit_risk_gate(self, decision: GateDecision, severity: str):
+        """Emit an audit row when a risk gate fires. Uses the reject
+        event type so the trail remains searchable with a single filter
+        — a risk gate is effectively the engine rejecting its own order
+        before the venue sees it."""
+        try:
+            self.audit.write(OrderEvent(
+                event="reject",
+                client_oid=f"gate-{int(time.time()*1000)}",
+                venue=f"binance_futures_{self.orders._mode()}",
+                symbol="_all_",
+                side="BUY",   # placeholder — gate vetoes are not side-specific
+                qty=0.0,
+                price=None,
+                status=severity,
+                payload={
+                    "mode":      self.orders._mode(),
+                    "gate":      decision.gate,
+                    "reason":    decision.reason,
+                    "metric":    decision.metric,
+                    "threshold": decision.threshold,
+                    "source":    "risk_gates",
+                },
+            ))
+        except Exception as e:
+            log.debug(f"  risk-gate audit write failed: {e}")
+
     async def _open_position(self, sig: dict):
         """Abre posição a partir de sinal.
 
@@ -1130,11 +1248,30 @@ class LiveEngine:
                     candle["high"] if pos.direction == "BULLISH" else candle["low"])
                 await self._close_position(pos, result, exit_p)
 
-        # 2. Kill-switch check
+        # 2. Kill-switch check (outcome-based, legacy layer)
         ks_triggered, ks_reason = self.kill_sw.check()
         if ks_triggered:
             log.warning(f"  KILL-SWITCH: {ks_reason} — novos sinais bloqueados")
             await self.telegram.notify_killswitch(ks_reason)
+            return
+
+        # [Fase 4-C] Pre-order exposure gates. Independent of the outcome
+        # check above — these look at current state (equity, positions,
+        # dd, streak, time-of-day) rather than rolling trade outcomes.
+        # Called once per candle; if any gate fires we log + audit + skip
+        # this candle's entry logic.
+        gate_decision = self._check_risk_gates()
+        if gate_decision.severity != "allow":
+            if gate_decision.severity == "hard_block":
+                log.warning(f"  RISK-GATE HARD: {gate_decision.reason}")
+                # Kill-switch orchestration lands in Fase 4-D — for now
+                # we just hard-block new entries AND log a critical audit
+                # row so post-hoc analysis can see when the engine went
+                # quiet. The existing KillSwitch-based block still runs.
+                self._audit_risk_gate(gate_decision, severity="hard_block")
+            else:
+                log.info(f"  RISK-GATE SOFT: {gate_decision.reason}")
+                self._audit_risk_gate(gate_decision, severity="soft_block")
             return
 
         # 3. Streak / sym_loss cooldown
