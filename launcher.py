@@ -5256,6 +5256,39 @@ class App(tk.Tk):
                  anchor="w").pack(fill="x", pady=(0, 4))
         tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(0, 6))
 
+        # === PRIMARY ACTIONS — at the top of the detail panel ===
+        # Buttons render here FIRST, right after the header. The metric
+        # blocks below can be as tall as they want; OPEN HTML and DELETE
+        # are always visible regardless of window height or right-panel
+        # overflow. Previously they lived at the bottom of the panel and
+        # were clipped off-screen when the metric content was taller than
+        # the window — user saw "no buttons" even though they were wired
+        # correctly, just rendered below the fold.
+        actions = tk.Frame(body, bg=PANEL)
+        actions.pack(fill="x", anchor="w", pady=(0, 4))
+
+        report = run_dir / "report.html"
+        if report.exists():
+            btn = tk.Label(actions, text="  OPEN HTML  ",
+                           font=(FONT, 8, "bold"),
+                           fg=BG, bg=AMBER, cursor="hand2",
+                           padx=8, pady=5)
+            btn.pack(side="left", padx=(0, 4))
+            btn.bind("<Button-1>", lambda e: self._dash_backtest_open(run_id))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=AMBER_B))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=AMBER))
+
+        del_btn = tk.Label(actions, text="  DELETE  ",
+                           font=(FONT, 8, "bold"),
+                           fg=WHITE, bg=RED, cursor="hand2",
+                           padx=8, pady=5)
+        del_btn.pack(side="left")
+        del_btn.bind("<Button-1>", lambda e: self._dash_backtest_delete(run_id))
+        del_btn.bind("<Enter>", lambda e, b=del_btn: b.configure(bg="#c00000"))
+        del_btn.bind("<Leave>", lambda e, b=del_btn: b.configure(bg=RED))
+
+        tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(8, 4))
+
         if not summary and not idx_entry:
             tk.Label(body, text="\n✗ summary.json missing",
                      font=(FONT, 8), fg=RED, bg=PANEL).pack(anchor="w")
@@ -5329,41 +5362,14 @@ class App(tk.Tk):
         row("Leverage",   f"{lev}x" if lev else "—")
         row("Final eq",   _fm(fe))
 
-        # Config hash (small)
+        # Config hash (small) — last entry in the metric stack. The
+        # action buttons are already rendered at the top of the panel,
+        # so there's nothing below this line.
         ch = g("config_hash")
         if ch:
             tk.Label(body, text=f"hash  {str(ch)[:16]}...",
                      font=(FONT, 6), fg=DIM2, bg=PANEL,
                      anchor="w").pack(fill="x", pady=(8, 0))
-
-        # === Secondary actions: open HTML + delete ===
-        tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(10, 6))
-        actions = tk.Frame(body, bg=PANEL)
-        actions.pack(fill="x", anchor="w", pady=(0, 2))
-
-        report = run_dir / "report.html"
-        if report.exists():
-            btn = tk.Label(actions, text="  OPEN HTML  ",
-                           font=(FONT, 7, "bold"),
-                           fg=BG, bg=AMBER_D, cursor="hand2",
-                           padx=6, pady=4)
-            btn.pack(side="left", padx=(0, 4))
-            btn.bind("<Button-1>", lambda e: self._dash_backtest_open(run_id))
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=AMBER))
-            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=AMBER_D))
-        else:
-            tk.Label(actions, text="(no report.html)  ",
-                     font=(FONT, 7), fg=DIM2, bg=PANEL,
-                     anchor="w").pack(side="left")
-
-        del_btn = tk.Label(actions, text="  DELETE  ",
-                           font=(FONT, 7, "bold"),
-                           fg=RED, bg=BG3, cursor="hand2",
-                           padx=6, pady=4)
-        del_btn.pack(side="left")
-        del_btn.bind("<Button-1>", lambda e: self._dash_backtest_delete(run_id))
-        del_btn.bind("<Enter>", lambda e, b=del_btn: b.configure(bg=RED, fg=BG))
-        del_btn.bind("<Leave>", lambda e, b=del_btn: b.configure(bg=BG3, fg=RED))
 
     def _dash_backtest_delete(self, run_id: str):
         """Delete a backtest run — index row first, disk second.
