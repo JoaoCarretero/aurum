@@ -42,7 +42,11 @@ class PortfolioMonitor:
 
     # ── KEY DETECTION ─────────────────────────────────────────
     def has_keys(self, mode: str) -> bool:
-        """Return True if config/keys.json has a usable block for *mode*."""
+        """Return True if the account is usable:
+        - Paper mode is always usable (local file, no API keys needed).
+        - Live/demo/testnet need a valid config/keys.json entry."""
+        if mode == "paper":
+            return True
         if not self.keys_path.exists():
             return False
         try:
@@ -111,7 +115,9 @@ class PortfolioMonitor:
         return snapshot
 
     def _fetch_account_snapshot(self, client: BinanceFuturesAPI, mode: str) -> dict:
-        """Combine balance + account + positions into a unified dict."""
+        """Combine balance + account + positions into a unified dict.
+        The 4 independent calls (account/balance/positions/income) run in
+        parallel threads — reduces latency from ~5× call-time to ~1× call-time."""
         out: dict = {
             "mode":     mode,
             "status":   "live",
@@ -127,8 +133,31 @@ class PortfolioMonitor:
             "recent_trades": [],
             "income_7d": [],
         }
+        results: dict = {}
 
-        acct = client.account()
+        def fetch_account():
+            try: results["acct"] = client.account()
+            except Exception: results["acct"] = None
+        def fetch_balance():
+            try: results["bal"] = client.balance()
+            except Exception: results["bal"] = None
+        def fetch_positions():
+            try: results["pos"] = client.positions()
+            except Exception: results["pos"] = None
+        def fetch_income():
+            try: results["inc"] = client.income_history(days=7)
+            except Exception: results["inc"] = None
+
+        workers = [
+            threading.Thread(target=fetch_account,   daemon=True),
+            threading.Thread(target=fetch_balance,   daemon=True),
+            threading.Thread(target=fetch_positions, daemon=True),
+            threading.Thread(target=fetch_income,    daemon=True),
+        ]
+        for w in workers: w.start()
+        for w in workers: w.join(timeout=12)
+
+        acct = results.get("acct")
         if isinstance(acct, dict):
             try:
                 out["equity"] = float(acct.get("totalWalletBalance", 0) or 0)
@@ -138,10 +167,10 @@ class PortfolioMonitor:
                 out["unrealized_pnl"] = float(acct.get("totalUnrealizedProfit", 0) or 0)
             except (TypeError, ValueError):
                 pass
-        elif isinstance(acct, dict) and acct.get("code"):
-            out["error"] = f"Binance: {acct.get('msg', acct.get('code'))}"
+            if acct.get("code"):
+                out["error"] = f"Binance: {acct.get('msg', acct.get('code'))}"
 
-        bals = client.balance()
+        bals = results.get("bal")
         if isinstance(bals, list) and not out["equity"]:
             usdt = next((b for b in bals if isinstance(b, dict) and b.get("asset") == "USDT"), None)
             if usdt:
@@ -152,11 +181,11 @@ class PortfolioMonitor:
                 except (TypeError, ValueError):
                     pass
 
-        positions = client.positions()
+        positions = results.get("pos")
         if isinstance(positions, list):
             out["positions"] = self._normalise_positions(positions)
 
-        income = client.income_history(days=7)
+        income = results.get("inc")
         if isinstance(income, list):
             out["income_7d"] = income
             today_iso = datetime.now().date().isoformat()
@@ -170,19 +199,32 @@ class PortfolioMonitor:
                     continue
             out["today_pnl"] = round(today_sum, 2)
 
-        # Pull recent trades for the symbol of each open position.
-        recent: list[dict] = []
-        for pos in out["positions"][:5]:
-            sym = pos.get("symbol")
-            if not sym:
-                continue
-            trades = client.recent_trades(symbol=sym, limit=10)
-            if isinstance(trades, list):
+        # Recent trades: depends on positions, so run after join.
+        # Parallelize across open-position symbols.
+        open_syms = [p.get("symbol") for p in out["positions"][:5] if p.get("symbol")]
+        trades_per_sym: dict[str, list] = {}
+
+        def fetch_trades(sym):
+            try:
+                t = client.recent_trades(symbol=sym, limit=10)
+                if isinstance(t, list):
+                    trades_per_sym[sym] = t
+            except Exception:
+                trades_per_sym[sym] = []
+
+        if open_syms:
+            trade_workers = [threading.Thread(target=fetch_trades, args=(s,), daemon=True)
+                             for s in open_syms]
+            for w in trade_workers: w.start()
+            for w in trade_workers: w.join(timeout=8)
+
+            recent: list[dict] = []
+            for sym, trades in trades_per_sym.items():
                 for t in trades:
                     t["symbol"] = sym
                     recent.append(t)
-        recent.sort(key=lambda r: int(r.get("time", 0) or 0), reverse=True)
-        out["recent_trades"] = recent[:50]
+            recent.sort(key=lambda r: int(r.get("time", 0) or 0), reverse=True)
+            out["recent_trades"] = recent[:50]
 
         return out
 
@@ -215,102 +257,153 @@ class PortfolioMonitor:
             })
         return out
 
-    # ── PAPER (last backtest) ─────────────────────────────────
-    def _load_paper(self) -> dict:
-        """Build a 'paper' account snapshot from the latest local backtest run."""
-        out: dict = {
-            "mode":     "paper",
-            "status":   "paper",
-            "ts":       datetime.now().isoformat(),
-            "error":    None,
-            "balance":  0.0,
-            "equity":   0.0,
-            "today_pnl": 0.0,
-            "positions": [],
-            "recent_trades": [],
-            "trades":   [],
-            "equity_curve": [],
-            "summary":  {},
-            "run_id":   None,
+    # ── PAPER STATE (editable persistent file) ────────────────
+    PAPER_STATE_FILE = Path("config/paper_state.json")
+    PAPER_DEFAULT_BALANCE = 10000.0
+    # Class-level lock: every read/modify/write of paper_state.json goes
+    # through this, protecting the file from concurrent mutations.
+    _PAPER_LOCK = threading.Lock()
+
+    @classmethod
+    def _paper_default_state(cls) -> dict:
+        now = datetime.now().isoformat()
+        return {
+            "initial_balance":  cls.PAPER_DEFAULT_BALANCE,
+            "current_balance":  cls.PAPER_DEFAULT_BALANCE,
+            "equity":           cls.PAPER_DEFAULT_BALANCE,
+            "realized_pnl":     0.0,
+            "unrealized_pnl":   0.0,
+            "total_deposits":   cls.PAPER_DEFAULT_BALANCE,
+            "total_withdraws":  0.0,
+            "positions":        [],
+            "trades":           [],
+            "equity_curve":     [cls.PAPER_DEFAULT_BALANCE],
+            "history": [
+                {"ts": now, "type": "init",
+                 "amount": cls.PAPER_DEFAULT_BALANCE,
+                 "note": "paper account created"}
+            ],
+            "created":          now,
+            "last_modified":    now,
         }
 
-        index_file = self.data_dir / "index.json"
-        if not index_file.exists():
-            out["error"] = "No backtest runs found."
-            return out
-
+    @classmethod
+    def _paper_read_unlocked(cls) -> dict | None:
+        """Read the file without acquiring the lock. Caller must hold it."""
+        f = cls.PAPER_STATE_FILE
+        if not f.exists():
+            return None
         try:
-            runs = json.loads(index_file.read_text(encoding="utf-8"))
+            return json.loads(f.read_text(encoding="utf-8"))
         except Exception:
-            out["error"] = "Could not parse data/index.json."
-            return out
+            return None
 
-        if not isinstance(runs, list) or not runs:
-            out["error"] = "No backtest runs registered."
-            return out
+    @classmethod
+    def _paper_write_unlocked(cls, state: dict) -> None:
+        """Atomic write: tmp file + rename. Caller must hold the lock."""
+        f = cls.PAPER_STATE_FILE
+        f.parent.mkdir(parents=True, exist_ok=True)
+        state["last_modified"] = datetime.now().isoformat()
+        tmp = f.with_suffix(f.suffix + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+        tmp.replace(f)  # atomic rename on both POSIX and Windows
 
-        latest = runs[-1]
-        run_id = latest.get("run_id") or latest.get("id")
-        if not run_id:
-            out["error"] = "Latest run missing run_id."
-            return out
+    @classmethod
+    def paper_state_load(cls) -> dict:
+        """Read config/paper_state.json, create with defaults if missing.
+        Thread-safe — the entire load-or-init is atomic."""
+        with cls._PAPER_LOCK:
+            state = cls._paper_read_unlocked()
+            if state is None:
+                state = cls._paper_default_state()
+                cls._paper_write_unlocked(state)
+            return state
 
-        run_dir = self.data_dir / "runs" / run_id
-        if not run_dir.exists():
-            # Old runs may be elsewhere — fall back to summary in index
-            out["run_id"] = run_id
-            out["summary"] = latest
-            out["equity"]  = float(latest.get("final_equity", 0) or 0)
-            return out
+    @classmethod
+    def paper_state_save(cls, state: dict) -> None:
+        """Thread-safe atomic write."""
+        with cls._PAPER_LOCK:
+            cls._paper_write_unlocked(state)
 
-        out["run_id"] = run_id
+    @classmethod
+    def paper_set_balance(cls, amount: float, note: str = "manual adjust") -> dict:
+        """Thread-safe read-modify-write. Holds the lock for the entire op."""
+        with cls._PAPER_LOCK:
+            state = cls._paper_read_unlocked() or cls._paper_default_state()
+            delta = float(amount) - float(state.get("current_balance", 0) or 0)
+            state["current_balance"] = float(amount)
+            state["equity"]          = float(amount) + float(state.get("unrealized_pnl", 0) or 0)
+            if delta > 0:
+                state["total_deposits"]  = float(state.get("total_deposits", 0) or 0) + delta
+                event_type = "deposit"
+            elif delta < 0:
+                state["total_withdraws"] = float(state.get("total_withdraws", 0) or 0) + abs(delta)
+                event_type = "withdraw"
+            else:
+                event_type = "adjust"
+            state.setdefault("history", []).append({
+                "ts": datetime.now().isoformat(),
+                "type": event_type,
+                "amount": delta,
+                "new_balance": float(amount),
+                "note": note,
+            })
+            state.setdefault("equity_curve", []).append(float(amount))
+            cls._paper_write_unlocked(state)
+            return state
 
-        summary_path = run_dir / "summary.json"
-        if summary_path.exists():
-            try:
-                out["summary"] = json.loads(summary_path.read_text(encoding="utf-8"))
-            except Exception:
-                out["summary"] = latest
-        else:
-            out["summary"] = latest
+    @classmethod
+    def paper_reset(cls) -> dict:
+        """Thread-safe reset to default state."""
+        with cls._PAPER_LOCK:
+            state = cls._paper_default_state()
+            cls._paper_write_unlocked(state)
+            return state
 
-        # Equity curve
-        for fname in ("equity.json", "equity_curve.json"):
-            p = run_dir / fname
-            if p.exists():
+    def _load_paper(self) -> dict:
+        """Build a 'paper' account snapshot from the persistent paper_state.json
+        file. The file is the source of truth — editable via the dashboard."""
+        state = self.paper_state_load()
+
+        out: dict = {
+            "mode":           "paper",
+            "status":         "paper",
+            "ts":             datetime.now().isoformat(),
+            "error":          None,
+            "balance":        float(state.get("current_balance", 0) or 0),
+            "equity":         float(state.get("equity", state.get("current_balance", 0)) or 0),
+            "margin_used":    0.0,
+            "margin_free":    float(state.get("current_balance", 0) or 0),
+            "unrealized_pnl": float(state.get("unrealized_pnl", 0) or 0),
+            "today_pnl":      0.0,
+            "positions":      state.get("positions") or [],
+            "recent_trades":  list(reversed((state.get("trades") or [])[-50:])),
+            "trades":         state.get("trades") or [],
+            "equity_curve":   state.get("equity_curve") or [],
+            "history":        state.get("history") or [],
+            "initial_balance":  float(state.get("initial_balance", 0) or 0),
+            "total_deposits":   float(state.get("total_deposits", 0) or 0),
+            "total_withdraws":  float(state.get("total_withdraws", 0) or 0),
+            "realized_pnl":     float(state.get("realized_pnl", 0) or 0),
+            "summary": {
+                "n_trades":   len(state.get("trades") or []),
+                "pnl":        float(state.get("realized_pnl", 0) or 0),
+                "final_equity": float(state.get("equity", 0) or 0),
+            },
+            "created":        state.get("created"),
+            "last_modified":  state.get("last_modified"),
+        }
+
+        # today_pnl from history entries of today
+        today = datetime.now().date().isoformat()
+        for h in out["history"]:
+            ts = str(h.get("ts", ""))
+            if ts.startswith(today) and h.get("type") in ("trade", "realized_pnl"):
                 try:
-                    out["equity_curve"] = json.loads(p.read_text(encoding="utf-8"))
-                except Exception:
+                    out["today_pnl"] += float(h.get("amount", 0) or 0)
+                except (TypeError, ValueError):
                     pass
-                break
 
-        # Trades
-        for fname in ("trades.json", "all_trades.json"):
-            p = run_dir / fname
-            if p.exists():
-                try:
-                    raw = json.loads(p.read_text(encoding="utf-8"))
-                    if isinstance(raw, dict):
-                        raw = raw.get("trades", [])
-                    out["trades"] = raw if isinstance(raw, list) else []
-                except Exception:
-                    pass
-                break
-
-        eq = out["equity_curve"]
-        if eq:
-            try:
-                out["equity"] = float(eq[-1])
-            except (TypeError, ValueError):
-                pass
-
-        if not out["equity"]:
-            out["equity"] = float(out["summary"].get("final_equity", 0) or 0)
-        out["balance"] = out["equity"]
-
-        # Recent trades = last 50
-        trades = out["trades"] or []
-        out["recent_trades"] = trades[-50:][::-1]
         return out
 
     # ── CACHE ACCESS ──────────────────────────────────────────

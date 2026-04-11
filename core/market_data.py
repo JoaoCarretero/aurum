@@ -43,11 +43,17 @@ class MarketDataFetcher:
 
     # ── PUBLIC API ────────────────────────────────────────────
     def fetch_all(self) -> None:
-        """Run every fetch in sequence. Call from a background thread."""
-        self._fetch_tickers()
-        self._fetch_funding()
-        self._fetch_fear_greed()
-        self._fetch_ls_ratio()
+        """Run every fetch in parallel threads. Call from a background thread.
+        Worst-case latency drops from ~20s (4 × 5s sequential) to ~5s.
+        Each fetcher is self-contained and writes into its own lock-guarded field."""
+        workers = [
+            threading.Thread(target=self._fetch_tickers,    daemon=True),
+            threading.Thread(target=self._fetch_funding,    daemon=True),
+            threading.Thread(target=self._fetch_fear_greed, daemon=True),
+            threading.Thread(target=self._fetch_ls_ratio,   daemon=True),
+        ]
+        for w in workers: w.start()
+        for w in workers: w.join(timeout=_HTTP_TIMEOUT + 2)
         with self._lock:
             self.last_update = datetime.now()
 
