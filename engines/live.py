@@ -166,23 +166,80 @@ LIVE_DIR     = Path(f"data/live/{LIVE_RUN_ID}")
 
 # ── LOGGING ───────────────────────────────────────────────────
 def _load_keys(mode: str) -> tuple[str, str]:
+    """Return (api_key, api_secret) for ``mode``.
+
+    Preference order, first hit wins:
+
+      1. **Encrypted store** — if ``config/keys.json.enc`` exists, use
+         core.key_store.KeyStore(encrypted=True) and unlock with the
+         master password from the env var ``AURUM_KEY_PASSWORD``. If
+         the env var is absent, this path is skipped (no interactive
+         prompt from a background engine process).
+
+      2. **Plaintext store** — the pre-Fase-4 behavior, reading
+         ``config/keys.json`` directly. Still the default — nothing
+         has been forcibly migrated.
+
+    At every error path (missing file, decrypt fails, empty block)
+    the function falls through to the next source and ultimately
+    exits with a clear message. Once the Joao has created the
+    encrypted file via ``tools/encrypt_keys.py`` and set
+    AURUM_KEY_PASSWORD, the live engine will automatically prefer
+    it over the plaintext file.
     """
-    Lê API keys de config/keys.json.
-    Estrutura: {"demo": {"api_key": ..., "api_secret": ...}, "testnet": {...}, "live": {...}}
-    """
-    config_path = Path(__file__).parent.parent / "config" / "keys.json"
-    if not config_path.exists():
-        print(f"\n  ⚠  Ficheiro de keys não encontrado: {config_path}")
+    project_root = Path(__file__).parent.parent
+    plaintext_path = project_root / "config" / "keys.json"
+    encrypted_path = project_root / "config" / "keys.json.enc"
+
+    # ── 1. Encrypted store ────────────────────────────────────
+    if encrypted_path.exists():
+        pw = os.environ.get("AURUM_KEY_PASSWORD")
+        if pw:
+            try:
+                from core.key_store import KeyStore, KeyStoreCorruptError
+                ks = KeyStore(
+                    encrypted=True,
+                    plaintext_path=plaintext_path,
+                    encrypted_path=encrypted_path,
+                )
+                ks.unlock(pw)
+                block = ks.get_block(mode)
+                key = block.get("api_key", "")
+                secret = block.get("api_secret", "")
+                ks.lock()
+                if key and secret and "COLE_AQUI" not in key:
+                    log.info(f"Keys loaded from encrypted store for mode '{mode}'")
+                    return key, secret
+                log.warning(
+                    f"Encrypted store has no usable block for '{mode}' — "
+                    f"falling back to plaintext")
+            except KeyStoreCorruptError as e:
+                log.error(f"Encrypted key store unlock failed: {e}")
+                # Fall through to plaintext rather than exit — operator may
+                # have a working plaintext file to lean on.
+            except ImportError:
+                log.warning(
+                    "cryptography package not installed — encrypted store "
+                    "ignored, falling back to plaintext")
+        else:
+            log.warning(
+                f"{encrypted_path.name} exists but AURUM_KEY_PASSWORD is not set "
+                f"— falling back to plaintext")
+
+    # ── 2. Plaintext store (legacy default) ───────────────────
+    if not plaintext_path.exists():
+        print(f"\n  ⚠  Ficheiro de keys não encontrado: {plaintext_path}")
         print(f"  Cria a pasta config/ e o ficheiro keys.json com a estrutura:")
         print(f'  {{"demo": {{"api_key": "...", "api_secret": "..."}}}}')
+        print(f"  OU migra para encrypted: python tools/encrypt_keys.py")
         sys.exit(1)
-    import stat as _stat
     if sys.platform != "win32":
-        _st = os.stat(config_path)
+        _st = os.stat(plaintext_path)
         if _st.st_mode & 0o077:
-            print(f"  ⚠  keys.json has insecure permissions {oct(_st.st_mode)} — recommend chmod 600")
+            print(f"  ⚠  keys.json has insecure permissions {oct(_st.st_mode)} — "
+                  f"recommend chmod 600 OR migrate to encrypted")
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(plaintext_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         block = cfg.get(mode, {})
         key    = block.get("api_key", "")
