@@ -1127,10 +1127,11 @@ class App(tk.Tk):
                 text=text, font=(FONT, 9), fill=text_color, tags=tag,
             )
 
-    def _draw_cd_center(self, canvas) -> None:
+    def _draw_cd_center(self, canvas, r=None) -> None:
         center = getattr(self, "_active_cd_center", None) or (self._CD_CX, self._CD_CY)
         cx, cy = center
-        r = self._CD_R
+        if r is None:
+            r = self._CD_R
         canvas.delete("cd")
         canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
                            outline=AMBER, width=2, tags="cd")

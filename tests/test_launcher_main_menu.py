@@ -248,3 +248,20 @@ def test_live_refresh_schedule_registered():
         assert app._menu_live_after_id is not None
     finally:
         app.destroy()
+
+
+def test_draw_cd_center_accepts_radius_override():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        import tkinter as tk
+        canvas = tk.Canvas(app, width=200, height=200, bg="#0a0a0a")
+        app._active_cd_center = (100, 100)
+        app._draw_cd_center(canvas, r=36)
+        canvas.update_idletasks()
+        items = canvas.find_all()
+        assert len(items) >= 5, f"expected CD primitives, got {len(items)}"
+        canvas.destroy()
+    finally:
+        app.destroy()
