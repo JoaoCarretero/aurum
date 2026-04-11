@@ -295,7 +295,12 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                     funding = +(size_held * entry_p * FUNDING_PER_8H * duration / 32)
                     pnl = size_held * (entry_cost - ep_net) + funding
                 pnl = round(pnl * LEVERAGE, 2)
-                account = max(account + pnl, account * 0.5)
+                # Apply real PnL. The previous `max(account + pnl, account * 0.5)`
+                # silently clamped per-trade losses at 50% of pre-trade account,
+                # inflating sharpe / maxDD / final equity in backtest reports.
+                # Liquidation simulation, if needed, should be modelled at
+                # position-open time against the real liquidation price.
+                account = account + pnl
 
                 if result == "LOSS":
                     consecutive_losses += 1
