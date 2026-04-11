@@ -150,3 +150,31 @@ def test_menu_main_bloomberg_renders_without_exception():
         assert len(items) > 20, f"expected many canvas items, got {len(items)}"
     finally:
         app.destroy()
+
+
+def test_focus_moves_with_arrow_right():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_main_bloomberg()
+        app.update_idletasks()
+        assert app._menu_focused_tile == 0
+        app._menu_tile_focus(1)
+        assert app._menu_focused_tile == 1
+        app._menu_tile_focus_delta(+1)
+        assert app._menu_focused_tile == 2
+    finally:
+        app.destroy()
+
+
+def test_focus_numeric_jump():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_main_bloomberg()
+        app._menu_tile_focus(3)
+        assert app._menu_focused_tile == 3
+    finally:
+        app.destroy()

@@ -1177,6 +1177,36 @@ class App(tk.Tk):
         for idx in range(4):
             self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
 
+        for n in (1, 2, 3, 4):
+            self._kb(f"<Key-{n}>",
+                     lambda _n=n - 1: (self._menu_tile_focus(_n), self._menu_tile_expand(_n)))
+        self._kb("<Right>",     lambda: self._menu_tile_focus_delta(+1))
+        self._kb("<Left>",      lambda: self._menu_tile_focus_delta(-1))
+        self._kb("<Down>",      lambda: self._menu_tile_focus_delta(+2))
+        self._kb("<Up>",        lambda: self._menu_tile_focus_delta(-2))
+        self._kb("<Tab>",       lambda: self._menu_tile_focus_delta(+1))
+        self._kb("<Return>",    lambda: self._menu_tile_expand(self._menu_focused_tile))
+        self._kb("<Escape>",    self._splash)
+        self._bind_global_nav()
+
+    def _menu_tile_focus(self, idx: int) -> None:
+        if not (0 <= idx <= 3):
+            return
+        prev = self._menu_focused_tile
+        self._menu_focused_tile = idx
+        if self._menu_canvas is None:
+            return
+        self._draw_isometric_tile(self._menu_canvas, prev, False)
+        self._draw_isometric_tile(self._menu_canvas, idx, True)
+        self._draw_spokes(self._menu_canvas, idx)
+
+    def _menu_tile_focus_delta(self, delta: int) -> None:
+        self._menu_tile_focus((self._menu_focused_tile + delta) % 4)
+
+    def _menu_tile_expand(self, idx: int) -> None:
+        """Stub — real drill-down arrives in T7."""
+        pass
+
     # ─── SPLASH (Layer 0) ───────────────────────────────
     # ─── SPLASH (Layer 0) — CD Universe ─────────────────
     def _splash(self):
