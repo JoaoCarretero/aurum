@@ -1188,6 +1188,7 @@ class App(tk.Tk):
         self._kb("<Return>",    lambda: self._menu_tile_expand(self._menu_focused_tile))
         self._kb("<Escape>",    self._splash)
         self._bind_global_nav()
+        self._menu_live_schedule()
 
     def _menu_tile_focus(self, idx: int) -> None:
         if not (0 <= idx <= 3):
@@ -1287,6 +1288,17 @@ class App(tk.Tk):
         self._menu_expanded_tile = None
         self._menu_sub_focus = 0
         self._menu_main_bloomberg()
+
+    def _menu_live_schedule(self) -> None:
+        """Re-arm the 5s live-data refresh while the Bloomberg menu is active."""
+        if self._menu_canvas is None:
+            self._menu_live_after_id = None
+            return
+        self._menu_live_fetch_async()
+        try:
+            self._menu_live_after_id = self.after(5000, self._menu_live_schedule)
+        except Exception:
+            self._menu_live_after_id = None
 
     # ─── SPLASH (Layer 0) ───────────────────────────────
     # ─── SPLASH (Layer 0) — CD Universe ─────────────────

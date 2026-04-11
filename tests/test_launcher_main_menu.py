@@ -235,3 +235,15 @@ def test_feature_flag_legacy_disables_canvas(monkeypatch):
         assert app._menu_canvas is None
     finally:
         app.destroy()
+
+
+def test_live_refresh_schedule_registered():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_main_bloomberg()
+        assert hasattr(app, "_menu_live_after_id")
+        assert app._menu_live_after_id is not None
+    finally:
+        app.destroy()
