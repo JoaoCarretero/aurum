@@ -249,7 +249,7 @@ def _alchemy_enter(self):
     self._alch_prev_minsize = self.minsize()
     self.minsize(1, 1)
     self.attributes('-fullscreen', True)
-    self._clr(); self._unbind()
+    self._clr(); self._clear_kb()
     # ... render cockpit ...
     self.bind('<Escape>', self._alchemy_exit)
 

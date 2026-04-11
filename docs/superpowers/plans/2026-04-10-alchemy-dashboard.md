@@ -1015,7 +1015,7 @@ def _alchemy_enter(self):
     self.attributes("-fullscreen", True)
     self.configure(bg=alchemy_ui.HEV_BG)
 
-    self._clr(); self._unbind()
+    self._clr(); self._clear_kb()
     self.history.append("main")
 
     # Initialize state reader + tick driver
