@@ -10,7 +10,7 @@ from core.signals import (
     label_trade, label_trade_chop,
 )
 from core.portfolio import (
-    detect_macro, build_corr_matrix, portfolio_allows,
+    detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
     _omega_risk_mult, _wr, _global_risk_mult, position_size,
 )
 from core.htf import prepare_htf, merge_all_htf_to_ltf
@@ -23,6 +23,7 @@ __all__ = [
     "calc_levels", "calc_levels_chop",
     "label_trade", "label_trade_chop",
     "detect_macro", "build_corr_matrix", "portfolio_allows",
+    "check_aggregate_notional",
     "_omega_risk_mult", "_wr", "_global_risk_mult", "position_size",
     "prepare_htf", "merge_all_htf_to_ltf",
 ]

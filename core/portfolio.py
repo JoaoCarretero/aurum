@@ -70,6 +70,24 @@ def portfolio_allows(symbol: str, open_positions: list,
     motivo = "ok" if size_mult == 1.0 else f"corr_soft(×{size_mult:.2f})"
     return True, motivo, size_mult
 
+def check_aggregate_notional(new_notional: float, open_pos: list,
+                             account: float, leverage: float) -> tuple[bool, str]:
+    """[L6 fix] Reject entries that would push combined notional over account × leverage.
+
+    The per-trade position sizer is safe in isolation, but nothing before this
+    check ever summed notionals across currently open positions. Several trades
+    firing in the same bar with tight stops and a high Omega score could allocate
+    combined leverage that a real exchange margin system would refuse.
+
+    ``open_pos`` is expected as a list of ``(exit_idx, symbol, size, entry)``
+    tuples — the 4-tuple shape introduced alongside this check in engines/backtest.py.
+    """
+    open_notional = sum(sz * en for _, _, sz, en in open_pos)
+    cap = account * leverage
+    if open_notional + new_notional > cap:
+        return False, f"agg_cap({open_notional + new_notional:.0f}>{cap:.0f})"
+    return True, "ok"
+
 def _omega_risk_mult(score: float) -> float:
     """
     [U1 v3.6] Multiplicador de risco baseado no score Ω.

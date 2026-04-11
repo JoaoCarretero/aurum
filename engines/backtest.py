@@ -26,7 +26,7 @@ from core.signals import (
     label_trade, label_trade_chop,
 )
 from core.portfolio import (
-    detect_macro, build_corr_matrix, portfolio_allows,
+    detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
     position_size, _omega_risk_mult,
 )
 from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
@@ -102,7 +102,8 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
     account = ACCOUNT_SIZE
     min_idx = max(200, W_NORM, PIVOT_N*3) + 5
 
-    open_pos: list[tuple[int, str]] = []
+    # (exit_idx, symbol, size, entry) — size/entry needed for L6 aggregate notional cap
+    open_pos: list[tuple[int, str, float, float]] = []
 
     # pre-extract numpy arrays — evita df.iloc[idx] no loop (3-5x mais rapido)
     _rsi   = df["rsi"].values;          _atr   = df["atr"].values
@@ -153,8 +154,8 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             for i,cols in _htfs.items():
                 for k,arr in cols.items(): row[f"htf{i}_{k}"]=arr[idx]
 
-        open_pos    = [(ei, s) for ei, s in open_pos if ei > idx]
-        active_syms = [s for _, s in open_pos]
+        open_pos    = [(ei, s, sz, en) for ei, s, sz, en in open_pos if ei > idx]
+        active_syms = [s for _, s, _, _ in open_pos]
 
         # EMPIRICAL — validate OOS: 20-24h UTC tem WR=47.5%
         if VETO_HOURS_UTC:
@@ -275,6 +276,16 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
         if not is_chop_trade:
             size = round(size * fractal_score, 4)
 
+        # [L6] Aggregate notional cap across concurrently open positions.
+        # Blocks entries that, when summed with existing open_notional, would
+        # exceed account × LEVERAGE — the ceiling a real margin system enforces.
+        if size > 0:
+            ok_agg, motivo_agg = check_aggregate_notional(
+                size * entry, open_pos, account, LEVERAGE)
+            if not ok_agg:
+                vetos[motivo_agg] += 1
+                continue
+
         ep = float(exit_p)
         slip_exit = SLIPPAGE + SPREAD          # C2: slippage na saída (market order)
         _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
@@ -289,10 +300,11 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             funding    = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl        = size * (entry_cost - ep_net) + funding
         pnl     = round(pnl * LEVERAGE, 2)          # alavancagem escala PnL linearmente
-        # Liquidation check: if leveraged loss exceeds 90% of account, force liquidation
-        if LEVERAGE > 1.0 and abs(pnl) > account * 0.9 and pnl < 0:
-            pnl = -round(account * 0.95, 2)  # liquidated — lose 95%
-        account = max(account + pnl, 0.0)    # account can go to zero (liquidation)
+        # [L7] Post-hoc 90%/95% clamp removed — liquidation is now enforced
+        # inside label_trade at the path level (see core.signals._liq_prices).
+        # The floor at 0 stays: account cannot go negative, but any genuine
+        # liquidation has already been reflected in `pnl` via the liq exit price.
+        account = max(account + pnl, 0.0)
 
         if result == "LOSS":
             consecutive_losses += 1
@@ -304,7 +316,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
         else:
             consecutive_losses = 0
 
-        open_pos.append((idx + 1 + duration, symbol))
+        open_pos.append((idx + 1 + duration, symbol, size, entry))
 
         ts = df["time"].iloc[idx].strftime("%d/%m %Hh")
         trade_type = "CHOP-MR" if is_chop_trade else direction

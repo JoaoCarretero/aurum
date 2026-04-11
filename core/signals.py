@@ -3,6 +3,30 @@ import numpy as np
 import pandas as pd
 from config.params import *
 
+# [L7] Path-dependent liquidation inside label_trade.
+# Exchanges close a leveraged position when the mark price reaches
+#   entry × (1 - 1/LEVERAGE + maintenance)  (long)
+#   entry × (1 + 1/LEVERAGE - maintenance)  (short)
+# At LEVERAGE = 1 the threshold collapses outside the ±100% envelope and
+# the check is a no-op. At LEVERAGE > 1 it forces an adverse-excursion
+# exit at the liquidation price before any favourable trailing-stop WIN
+# can be reported.
+MAINTENANCE_MARGIN_RATIO = 0.005  # 0.5% — typical Binance USDⓈ-M futures tier
+
+
+def _liq_prices(entry: float, direction: str) -> tuple[float, float]:
+    """Return (liq_long_threshold, liq_short_threshold) for `direction`.
+
+    Only one of the two is meaningful — the other is returned as a sentinel
+    that never triggers its branch. Returning both simplifies the call site.
+    """
+    if LEVERAGE <= 1.0:
+        # Sentinels that can never fire: below 0 for long check, above 2× for short.
+        return -1.0, entry * 10.0
+    if direction == "BULLISH":
+        return entry * (1 - 1 / LEVERAGE + MAINTENANCE_MARGIN_RATIO), entry * 10.0
+    return -1.0, entry * (1 + 1 / LEVERAGE - MAINTENANCE_MARGIN_RATIO)
+
 def decide_direction(row, macro_bias: str) -> tuple[str | None, str, float]:
     struct, strength = row["trend_struct"], row["struct_strength"]
 
@@ -211,10 +235,16 @@ def label_trade(df, entry_idx, direction, entry, stop, target):
     _be  = TRAIL_BE_MULT
     _act = TRAIL_ACTIVATE_MULT
     _dst = TRAIL_DISTANCE_MULT
+    liq_long, liq_short = _liq_prices(entry, direction)
 
     for j in range(entry_idx, end):
         h, l = df["high"].iloc[j], df["low"].iloc[j]
         if direction == "BULLISH":
+            # [L7] Liquidation precedes stop/target: if the bar low wicked into
+            # the liq price, the exchange closed the position there regardless
+            # of any favourable trailing stop computed above it.
+            if l <= liq_long:
+                return "LOSS", j-entry_idx, liq_long
             if not be_done and h >= entry + _be * risk:
                 cur_stop = entry; be_done = True
             if be_done and not trail_done and h >= entry + _act * risk:
@@ -227,6 +257,8 @@ def label_trade(df, entry_idx, direction, entry, stop, target):
             if h >= target:
                 return "WIN", j-entry_idx, target
         else:
+            if h >= liq_short:
+                return "LOSS", j-entry_idx, liq_short
             if not be_done and l <= entry - _be * risk:
                 cur_stop = entry; be_done = True
             if be_done and not trail_done and l <= entry - _act * risk:
@@ -248,13 +280,16 @@ def label_trade_chop(df, entry_idx, direction, entry, stop, target):
     """
     chop_max_hold = min(MAX_HOLD // 2, 24)
     end = min(entry_idx + chop_max_hold, len(df))
+    liq_long, liq_short = _liq_prices(entry, direction)
 
     for j in range(entry_idx, end):
         h, l = df["high"].iloc[j], df["low"].iloc[j]
         if direction == "BULLISH":
+            if l <= liq_long: return "LOSS", j-entry_idx, liq_long
             if l <= stop:   return "LOSS", j-entry_idx, stop
             if h >= target: return "WIN",  j-entry_idx, target
         else:
+            if h >= liq_short: return "LOSS", j-entry_idx, liq_short
             if h >= stop:   return "LOSS", j-entry_idx, stop
             if l <= target: return "WIN",  j-entry_idx, target
     return "OPEN", chop_max_hold, df["close"].iloc[min(end-1,len(df)-1)]
