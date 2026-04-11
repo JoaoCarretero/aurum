@@ -5332,12 +5332,25 @@ class App(tk.Tk):
         del_btn.bind("<Leave>", lambda e, b=del_btn: b.configure(bg=BG3, fg=RED))
 
     def _dash_backtest_delete(self, run_id: str):
-        """Delete a backtest run directory and its index entry, then refresh.
+        """Delete a backtest run — index row first, disk second.
 
-        Confirmation prompt is mandatory — deletion is destructive and the
-        run_dir usually holds the JSON, HTML report, and any plots. The
-        index.json entry is filtered out even if the directory is already
-        missing, so a stale index row can also be cleaned up this way.
+        Ordering matters: we remove the row from data/index.json BEFORE
+        trying to rmtree the directory. The JSON write is atomic and
+        always succeeds; the filesystem delete can fail transiently on
+        Windows + OneDrive when the sync engine has a handle on
+        freshly-closed files. Doing the index edit first means:
+
+        - The run disappears from the user's UI immediately (the row is
+          re-rendered without it).
+        - If the disk delete fails, the run is effectively tombstoned —
+          hidden from all UI code paths — and reconcile_runs.py can
+          clean up the leftover directory later.
+        - The user never sees "I clicked DELETE, nothing happened" — the
+          worst case is "deleted from view, disk cleanup deferred" with
+          an explicit messagebox explaining what to do.
+
+        Any exception is caught and surfaced via messagebox.showerror so
+        silent failures (previous bug) can't hide behind a 2s h_stat flash.
         """
         if not messagebox.askyesno(
                 "Delete backtest",
@@ -5345,39 +5358,88 @@ class App(tk.Tk):
                 f"Todos os ficheiros em data/runs/{run_id}/ serão removidos."):
             return
 
-        import shutil
-        run_dir = ROOT / "data" / "runs" / run_id
-        if run_dir.exists():
-            try:
-                shutil.rmtree(run_dir)
-            except OSError as e:
-                self.h_stat.configure(text=f"DELETE FAILED: {str(e)[:40]}", fg=RED)
-                self.after(2500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-                return
+        try:
+            from core.fs import robust_rmtree
+            idx_path = ROOT / "data" / "index.json"
+            run_dir = ROOT / "data" / "runs" / run_id
 
-        idx_path = ROOT / "data" / "index.json"
-        if idx_path.exists():
-            try:
-                idx = json.loads(idx_path.read_text(encoding="utf-8"))
-                idx = [r for r in idx if r.get("run_id") != run_id]
-                idx_path.write_text(json.dumps(idx, indent=2), encoding="utf-8")
-            except (json.JSONDecodeError, OSError):
-                pass
+            # ── Step 1: remove the row from index.json (atomic). ──
+            index_removed = False
+            if idx_path.exists():
+                try:
+                    idx = json.loads(idx_path.read_text(encoding="utf-8"))
+                    if isinstance(idx, list):
+                        before = len(idx)
+                        idx = [r for r in idx if r.get("run_id") != run_id]
+                        if len(idx) != before:
+                            # Atomic write: temp file + os.replace so a
+                            # crash mid-write can't corrupt the index.
+                            tmp = idx_path.with_suffix(".json.tmp")
+                            tmp.write_text(
+                                json.dumps(idx, indent=2, ensure_ascii=False) + "\n",
+                                encoding="utf-8")
+                            os.replace(tmp, idx_path)
+                            index_removed = True
+                except (json.JSONDecodeError, OSError) as e:
+                    messagebox.showerror(
+                        "Delete failed — index.json",
+                        f"Could not update data/index.json:\n\n{e}")
+                    return
 
-        # Clear detail panel and refresh list
-        body = self._dash_widgets.get(("bt_detail",))
-        if body is not None:
-            try:
-                for w in body.winfo_children():
-                    w.destroy()
-                tk.Label(body, text="  — deleted —",
-                         font=(FONT, 8), fg=DIM, bg=PANEL,
-                         anchor="w").pack(fill="x", pady=10)
-            except Exception:
-                pass
-        self._dash_backtest_render()
-        self.h_stat.configure(text=f"DELETED {run_id[:20]}", fg=AMBER)
-        self.after(2000, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            # ── Step 2: clear the detail panel + refresh the list. ──
+            body = self._dash_widgets.get(("bt_detail",))
+            if body is not None:
+                try:
+                    for w in body.winfo_children():
+                        w.destroy()
+                    tk.Label(body, text="  — deleted —",
+                             font=(FONT, 8), fg=DIM, bg=PANEL,
+                             anchor="w").pack(fill="x", pady=10)
+                except tk.TclError:
+                    pass
+            self._dash_backtest_render()
+
+            # ── Step 3: disk delete (best-effort, robust against locks). ──
+            disk_removed = True
+            if run_dir.exists():
+                disk_removed = robust_rmtree(run_dir)
+
+            # ── Step 4: report. ──
+            if index_removed and disk_removed:
+                self.h_stat.configure(text=f"DELETED {run_id[:20]}", fg=AMBER)
+                self.after(2000,
+                           lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            elif index_removed and not disk_removed:
+                # The most common failure mode: OneDrive lock on an empty
+                # charts/ or similar. The run is already hidden; we just
+                # surface the disk leftover so the user knows to retry.
+                self.h_stat.configure(text="DELETED (disk cleanup deferred)",
+                                      fg=AMBER_D)
+                self.after(3000,
+                           lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+                messagebox.showinfo(
+                    "Disk cleanup deferred",
+                    f"The run has been removed from the backtest list.\n\n"
+                    f"However, the directory\n\n"
+                    f"  data/runs/{run_id}/\n\n"
+                    f"could not be deleted right now — usually OneDrive / "
+                    f"antivirus is still holding a handle on a file inside.\n\n"
+                    f"Run `python tools/reconcile_runs.py --apply` in a "
+                    f"minute or two and it will be cleaned up automatically.")
+            else:
+                # Neither index nor disk changed — the run_id probably
+                # wasn't in the index and the directory is already gone
+                # or locked. Say so clearly.
+                self.h_stat.configure(text="NOTHING TO DELETE", fg=AMBER_D)
+                self.after(2000,
+                           lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+        except Exception as e:
+            # Last-resort: any unexpected exception goes to a messagebox
+            # instead of being swallowed. Silent failures are what got us
+            # here in the first place.
+            messagebox.showerror(
+                "Delete failed — unexpected error",
+                f"{type(e).__name__}: {e}")
 
     def _dash_backtest_open(self, run_id: str):
         """Open the HTML report for a given run in the default browser."""
