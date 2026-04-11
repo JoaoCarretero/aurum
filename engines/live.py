@@ -55,7 +55,13 @@ from core import (
     prepare_htf, merge_all_htf_to_ltf, fetch_all, validate,
     score_omega, score_chop,
 )
+from core.audit_trail import AuditTrail, OrderEvent
 from bot.telegram import TelegramNotifier
+
+# Fase 4 — engine version stamped on every audit row. Bump when the
+# strategy's decision logic changes materially so auditing can tell
+# which code produced a given order.
+LIVE_ENGINE_VERSION = "live-v1.0-fase4"
 
 # ── CONFIG ────────────────────────────────────────────────────
 LIVE_MODE         = False          # False = PAPER  |  True = LIVE/TESTNET
@@ -715,6 +721,17 @@ class LiveEngine:
         self.orders    = OrderManager(paper=(not LIVE_MODE and not TESTNET_MODE and not DEMO_MODE))
         self.kill_sw   = KillSwitch()
         self.drift     = ExecutionDrift()
+        # [Fase 4-B] Immutable order audit trail. Hash-chained per month
+        # in data/audit/orders-YYYY-MM.jsonl. Writes an intent row before
+        # every order, ack/reject after the exchange call returns, and
+        # fill on close. Works in paper mode too — paper rows are tagged
+        # via the `mode` field in the payload so post-hoc analysis can
+        # slice by mode.
+        self.audit = AuditTrail(
+            engine="live",
+            strategy_ver=LIVE_ENGINE_VERSION,
+            hash_chain=True,
+        )
         self.positions: list[Position] = []
         self.closed_trades: list = []
         self.macro_series: Optional[pd.Series] = None
@@ -853,15 +870,85 @@ class LiveEngine:
 
     # ── POSIÇÕES ──────────────────────────────────────────────
     async def _open_position(self, sig: dict):
-        """Abre posição a partir de sinal."""
+        """Abre posição a partir de sinal.
+
+        [Fase 4-B] Writes three audit rows per order:
+          - intent: BEFORE place_order, with the full decision context
+          - ack | reject: AFTER place_order, with the real fill price
+                          and order_id (or reject reason on FAILED)
+        The fill row is written later in _close_position. client_oid
+        links all three rows of the same trade.
+        """
+        side = "BUY" if sig["direction"] == "BULLISH" else "SELL"
+        client_oid = f"live-{sig['symbol']}-{int(time.time()*1000)}"
+        mode = self.orders._mode()
+
+        # Intent — we want to open THIS trade, before asking the venue.
+        self.audit.write(OrderEvent(
+            event="intent",
+            client_oid=client_oid,
+            venue=f"binance_futures_{mode}",
+            symbol=sig["symbol"],
+            side=side,
+            qty=float(sig["size"]),
+            price=float(sig["entry"]),
+            status="pending",
+            payload={
+                "mode":       mode,
+                "stop":       float(sig["stop"]),
+                "target":     float(sig["target"]),
+                "score":      float(sig.get("score", 0.0)),
+                "rr":         float(sig.get("rr", 0.0)),
+                "macro":      sig.get("macro"),
+                "vol_regime": sig.get("vol_regime"),
+                "corr_mult":  sig.get("corr_mult"),
+                "is_chop":    bool(sig.get("is_chop", False)),
+            },
+        ))
+
         fill = await self.orders.place_order(
             sig["symbol"], sig["direction"],
             sig["entry"], sig["size"],
             sig["stop"], sig["target"]
         )
-        if fill["status"] == "FAILED": return
+
+        if fill["status"] == "FAILED":
+            # Reject — exchange refused the order. Reason is captured
+            # as status text by OrderManager (see place_order).
+            self.audit.write(OrderEvent(
+                event="reject",
+                client_oid=client_oid,
+                venue=f"binance_futures_{mode}",
+                symbol=sig["symbol"],
+                side=side,
+                qty=float(sig["size"]),
+                price=float(sig["entry"]),
+                status=str(fill.get("status", "FAILED")),
+                payload={"mode": mode, "raw": fill},
+            ))
+            return
 
         real_entry = fill["fill_price"]
+
+        # Ack — exchange accepted and reported a fill price. Record the
+        # actual fill + the broker's order_id for reconciliation.
+        self.audit.write(OrderEvent(
+            event="ack",
+            client_oid=client_oid,
+            venue=f"binance_futures_{mode}",
+            symbol=sig["symbol"],
+            side=side,
+            qty=float(sig["size"]),
+            price=float(real_entry),
+            status=str(fill.get("status", "FILLED")),
+            payload={
+                "mode":       mode,
+                "order_id":   str(fill.get("order_id", "")),
+                "slippage":   float(fill.get("slippage", 0.0)),
+                "signal_px":  float(sig["entry"]),
+            },
+        ))
+
         pos = Position(
             symbol    = sig["symbol"],
             direction = sig["direction"],
@@ -874,6 +961,9 @@ class LiveEngine:
             signal_ts = sig["signal_ts"],
             order_id  = fill["order_id"],
         )
+        # Stamp the client_oid on the position so _close_position can
+        # write the matching fill row with the same linkage.
+        pos.client_oid = client_oid
         self.positions.append(pos)
 
         # regista slippage de entrada — real_r será actualizado no _close_position
@@ -968,6 +1058,33 @@ class LiveEngine:
                   f"account=${self.account:,.2f}")
 
         self.positions = [p for p in self.positions if p is not pos]
+
+        # [Fase 4-B] Fill audit row — links to the intent/ack via client_oid
+        # and carries the definitive pnl + R-multiple for reconciliation.
+        close_side = "SELL" if pos.direction == "BULLISH" else "BUY"
+        self.audit.write(OrderEvent(
+            event="fill",
+            client_oid=getattr(pos, "client_oid", f"legacy-{pos.order_id}"),
+            venue=f"binance_futures_{self.orders._mode()}",
+            symbol=pos.symbol,
+            side=close_side,
+            qty=float(pos.size),
+            price=float(real_exit),
+            status=str(fill.get("status", "FILLED")),
+            payload={
+                "mode":        self.orders._mode(),
+                "result":      result,
+                "pnl":         float(pnl),
+                "real_r":      round(real_r, 4),
+                "expected_r":  round(pos.expected_r, 4),
+                "drift_r":     round(real_r - pos.expected_r, 4),
+                "entry":       float(pos.entry),
+                "stop":        float(pos.stop),
+                "target":      float(pos.target),
+                "account":     round(self.account, 2),
+                "order_id":    str(pos.order_id),
+            },
+        ))
 
         # actualiza drift record com R-multiple real (corrige o placeholder da abertura)
         for rec in reversed(self.drift.records):
