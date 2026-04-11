@@ -36,6 +36,13 @@ RED     = "#e03030"
 
 FONT    = "Consolas"
 
+# ─── BLOOMBERG 3D MENU — tile accents ────────────────────────
+TILE_MARKETS  = "#ff8c00"   # AMBER    — quote + dash
+TILE_EXECUTE  = "#00c864"   # GREEN    — strategies + arb + risk
+TILE_RESEARCH = "#33aaff"   # CYAN     — terminal + data
+TILE_CONTROL  = "#c864c8"   # MAGENTA  — connections + command + settings
+TILE_DIM_FACTOR = 0.3       # idle brightness multiplier
+
 # ═══════════════════════════════════════════════════════════
 # VPS — remote control over SSH (passwordless key auth)
 # ═══════════════════════════════════════════════════════════
@@ -105,6 +112,30 @@ MAIN_MENU = [
     ("RISK",           "risk",        "Portfolio & risk console"),
     ("COMMAND CENTER", "command",     "Site, servers, admin panel"),
     ("SETTINGS",       "settings",    "Config, keys, Telegram"),
+]
+
+# ─── MAIN_GROUPS: 9 destinos agrupados em 4 tiles (Bloomberg 3D) ────
+# Format: (label, key_num, color, [(child_label, method_name), ...])
+# MAIN_MENU (above) kept for legacy Fibonacci fallback + descriptions.
+MAIN_GROUPS = [
+    ("MARKETS",  "1", TILE_MARKETS, [
+        ("QUOTE BOARD", "_markets"),
+        ("CRYPTO DASH", "_crypto_dashboard"),
+    ]),
+    ("EXECUTE",  "2", TILE_EXECUTE, [
+        ("STRATEGIES", "_strategies"),
+        ("ARBITRAGE",  "_arbitrage_hub"),
+        ("RISK",       "_risk_menu"),
+    ]),
+    ("RESEARCH", "3", TILE_RESEARCH, [
+        ("TERMINAL", "_terminal"),
+        ("DATA",     "_data_center"),
+    ]),
+    ("CONTROL",  "4", TILE_CONTROL, [
+        ("CONNECTIONS", "_connections"),
+        ("COMMAND",     "_command_center"),
+        ("SETTINGS",    "_config"),
+    ]),
 ]
 
 # Per-feature roadmap lines for the COMMAND CENTER coming-soon screens.
