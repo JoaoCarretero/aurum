@@ -984,6 +984,126 @@ class LiveEngine:
             log.warning(f"API verify falhou: {e}")
 
     # ── POSIÇÕES ──────────────────────────────────────────────
+    # ── KILL SWITCH ORCHESTRATION (Fase 4-D) ──────────────────
+    async def _kill_switch_trigger(self, reason: str) -> None:
+        """Emergency stop. Flatten first, cancel second, then halt.
+
+        This is the nuclear option. Called either manually (via UI
+        hotkey) or automatically when a hard_block risk gate fires.
+        Guaranteed idempotent — subsequent calls after the first are
+        cheap no-ops, protected by self._kill_switch_active.
+
+        Ordering rationale (flatten FIRST, cancel second):
+
+          The instinct is cancel pending orders → flatten open
+          positions. BUT: on Binance Futures, stop/target orders for
+          an open position live as separate pending orders. If you
+          cancel them FIRST, you create a window (~100-500ms, maybe
+          more under load) where your position has NO stop attached.
+          A fast adverse move in that window would liquidate without
+          the stop firing. Flattening FIRST closes the position at
+          market, then cancelling any residual pendings is harmless
+          because the position is already gone.
+
+          Edge case: a new signal that arrives between flatten and
+          cancel could produce a fresh order — blocked by setting
+          self.running = False before the loop (main loop exits on
+          the next iteration) and by the hard_block risk gate that
+          triggered us in the first place.
+
+        Steps:
+          1. Set self._kill_switch_active = True (idempotency flag)
+          2. Audit row "kill_switch" with reason — first priority so
+             even if step 3+ fails we have a record of WHY this fired
+          3. Log + Telegram alarm (best-effort, can fail silently)
+          4. Flatten every open position at market via
+             orders.close_position(pos, last_known_price)
+          5. Cancel pending orders on every unique symbol
+             (futures_cancel_all_open_orders per symbol) — live mode
+             only; paper has no pending orders
+          6. Set self.running = False so the main loop exits
+
+        Does NOT raise. Every failure is caught and logged so the
+        caller always returns cleanly.
+        """
+        if getattr(self, "_kill_switch_active", False):
+            log.info(f"  kill-switch already active, ignoring: {reason}")
+            return
+        self._kill_switch_active = True
+
+        # Step 2: audit FIRST so the trail captures the trigger even if
+        # the flatten/cancel calls below blow up.
+        try:
+            self.audit.write(OrderEvent(
+                event="cancel",
+                client_oid=f"killsw-{int(time.time()*1000)}",
+                venue=f"binance_futures_{self.orders._mode()}",
+                symbol="_all_",
+                side="BUY",
+                qty=0.0,
+                price=None,
+                status="kill_switch_triggered",
+                payload={
+                    "mode":            self.orders._mode(),
+                    "reason":          reason,
+                    "n_open":          len(self.positions),
+                    "account":         round(self.account, 2),
+                    "peak_equity":     round(self.peak_equity, 2),
+                    "consecutive_losses": self.consecutive_losses,
+                    "source":          "kill_switch",
+                },
+            ))
+        except Exception as e:
+            log.error(f"  kill-switch audit write failed: {e}")
+
+        log.critical(f"  ⚠ KILL-SWITCH TRIGGERED: {reason}")
+        log.critical(f"  flattening {len(self.positions)} positions + cancelling orders")
+
+        try:
+            await self.telegram.notify_killswitch(f"KILL-SWITCH: {reason}")
+        except Exception as e:
+            log.debug(f"  kill-switch telegram failed: {e}")
+
+        # Step 4: flatten every open position at market FIRST.
+        # Use the last known close from the buffer as exit_p — the real
+        # fill is whatever the market gives us, close_position reads the
+        # actual fill back from the exchange.
+        for pos in list(self.positions):
+            try:
+                last_price = pos.entry  # safe default
+                df = self.buffer.to_df(pos.symbol)
+                if df is not None and len(df) > 0:
+                    last_price = float(df["close"].iloc[-1])
+                log.critical(f"  flattening {pos.symbol} @ mkt (last={last_price:.6f})")
+                await self._close_position(pos, "KILL_SWITCH", last_price)
+            except Exception as e:
+                log.error(f"  flatten failed for {pos.symbol}: {e}")
+                # Even if one fails, keep trying the rest.
+
+        # Step 5: cancel any residual pending orders per symbol. Paper
+        # mode has no pending orders so this is a no-op there. Live mode
+        # uses futures_cancel_all_open_orders which is idempotent on the
+        # exchange side.
+        if not self.orders.paper and self.orders.client is not None:
+            touched_symbols = set()
+            # Collect all symbols that had positions + all symbols in the
+            # universe (in case a stop order somehow survived).
+            for pos in self.closed_trades[-20:]:
+                touched_symbols.add(pos.get("symbol"))
+            for sym in list(SYMBOLS):
+                touched_symbols.add(sym)
+            touched_symbols.discard(None)
+
+            for sym in touched_symbols:
+                try:
+                    self.orders.client.futures_cancel_all_open_orders(symbol=sym)
+                except Exception as e:
+                    log.debug(f"  cancel_all on {sym}: {e}")
+
+        # Step 6: halt the main loop.
+        self.running = False
+        log.critical(f"  kill-switch complete — self.running = False")
+
     # ── RISK GATES (Fase 4-C) ─────────────────────────────────
     def _check_risk_gates(self) -> GateDecision:
         """Build a RiskState snapshot from current engine state and run
@@ -1315,20 +1435,18 @@ class LiveEngine:
         # [Fase 4-C] Pre-order exposure gates. Independent of the outcome
         # check above — these look at current state (equity, positions,
         # dd, streak, time-of-day) rather than rolling trade outcomes.
-        # Called once per candle; if any gate fires we log + audit + skip
-        # this candle's entry logic.
         gate_decision = self._check_risk_gates()
         if gate_decision.severity != "allow":
+            self._audit_risk_gate(gate_decision, severity=gate_decision.severity)
             if gate_decision.severity == "hard_block":
                 log.warning(f"  RISK-GATE HARD: {gate_decision.reason}")
-                # Kill-switch orchestration lands in Fase 4-D — for now
-                # we just hard-block new entries AND log a critical audit
-                # row so post-hoc analysis can see when the engine went
-                # quiet. The existing KillSwitch-based block still runs.
-                self._audit_risk_gate(gate_decision, severity="hard_block")
+                # [Fase 4-D] Hard block → trigger kill-switch orchestration.
+                # Idempotent — subsequent fires of the same breach after
+                # the flatten are cheap no-ops.
+                await self._kill_switch_trigger(
+                    f"risk_gate {gate_decision.gate}: {gate_decision.reason}")
             else:
                 log.info(f"  RISK-GATE SOFT: {gate_decision.reason}")
-                self._audit_risk_gate(gate_decision, severity="soft_block")
             return
 
         # 3. Streak / sym_loss cooldown
