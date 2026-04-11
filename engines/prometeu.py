@@ -129,12 +129,30 @@ def build_target(df: pd.DataFrame, lookahead: int = 10) -> pd.Series:
     return pd.Series(targets, index=df.index)
 
 
+# ══════════════════════════════════════════════════════════════
+#  FEATURE WHITELIST — AT-OPEN ONLY
+# ══════════════════════════════════════════════════════════════
+# Every column here must be knowable AT THE TIME the trade was opened.
+# Post-hoc fields (pnl, result, duration, exit_reason, exit_price) are
+# FORBIDDEN — they would leak the target into the feature matrix and
+# inflate walk-forward scores. The _FORBIDDEN_FEATURES set below is
+# asserted against FEATURE_COLS at module import to catch regressions.
 FEATURE_COLS = [
     "score", "struct_str", "rsi", "taker_ma", "cascade_n",
     "dist_ema21", "rr", "dd_scale", "corr_mult",
     "vol_regime", "macro_bias", "direction", "in_transition",
     "funding_z", "vimb", "zscore_entry", "sentiment",
 ]
+
+_FORBIDDEN_FEATURES = frozenset({
+    "pnl", "result", "duration", "exit_reason", "exit_price",
+    "exit_idx", "total_pnl", "final_equity", "win", "loss",
+})
+_leaked = set(FEATURE_COLS) & _FORBIDDEN_FEATURES
+assert not _leaked, (
+    f"PROMETEU feature leakage detected — {_leaked!r} is AT-EXIT data "
+    f"and cannot be used as a model input. Remove from FEATURE_COLS."
+)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -167,23 +185,40 @@ class PrometeuEnsemble:
             log.warning(f"insufficient data ({len(trades_df)} trades) — using static weights")
             return {"status": "insufficient_data"}
 
-        # build target
+        # Walk-forward split FIRST, then compute targets separately for
+        # train and test. The old path built targets over the full
+        # DataFrame before splitting, which meant the last `lookahead`
+        # training trades had targets computed from trades that fell on
+        # the test side of the split — a small but real leakage across
+        # the boundary. Fix: split by index, then build targets in each
+        # segment independently so no train row is labeled using test
+        # data. [Backlog #2]
         trades_df = trades_df.copy()
-        trades_df["target"] = build_target(trades_df)
-        valid = trades_df[trades_df["target"] >= 0].copy()
+        split_idx = int(len(trades_df) * train_ratio)
+        raw_train = trades_df.iloc[:split_idx].copy()
+        raw_test  = trades_df.iloc[split_idx:].copy()
 
-        if len(valid) < 30:
+        raw_train["target"] = build_target(raw_train)
+        raw_test["target"]  = build_target(raw_test)
+        train = raw_train[raw_train["target"] >= 0].copy()
+        test  = raw_test[raw_test["target"] >= 0].copy()
+
+        if len(train) + len(test) < 30:
             return {"status": "insufficient_valid"}
 
-        # train/test split (walk-forward: first N% for train)
-        split_idx = int(len(valid) * train_ratio)
-        train = valid.iloc[:split_idx]
-        test = valid.iloc[split_idx:]
+        # Runtime guard: even if someone accidentally appends a post-hoc
+        # column to FEATURE_COLS elsewhere, refuse to train rather than
+        # silently produce an inflated model.
+        _leak = set(FEATURE_COLS) & _FORBIDDEN_FEATURES
+        if _leak:
+            raise RuntimeError(
+                f"PROMETEU refuses to train — FEATURE_COLS contains "
+                f"leaked post-hoc fields: {_leak!r}")
 
         X_train = train[FEATURE_COLS].values
         y_train = train["target"].values
-        X_test = test[FEATURE_COLS].values
-        y_test = test["target"].values
+        X_test  = test[FEATURE_COLS].values
+        y_test  = test["target"].values
 
         n_classes = len(ENGINE_KEYS)
 
