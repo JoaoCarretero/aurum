@@ -2566,9 +2566,11 @@ class App(tk.Tk):
         detail_body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
         self._dash_widgets[("bt_detail",)] = detail_body
 
+        # Placeholder — overwritten by auto-select below when the index
+        # has any runs. Kept as a fallback for the empty-index case.
         tk.Label(detail_body,
-                 text="\n← click a run to load its metrics",
-                 font=(FONT, 8), fg=DIM, bg=PANEL,
+                 text="\n  click any run on the left\n  to load metrics + actions",
+                 font=(FONT, 9, "bold"), fg=AMBER_D, bg=PANEL,
                  justify="left").pack(anchor="w")
 
         # Bottom bar: back + jump to engine logs
@@ -2594,6 +2596,27 @@ class App(tk.Tk):
         # Trigger the initial render — this reads data/index.json, sorts
         # by timestamp desc, renders up to 50 rows with click handlers.
         self._dash_backtest_render()
+
+        # Auto-select the most recent run so the detail panel is never
+        # empty on first open. The user was getting confused when the
+        # only visible thing in the right pane was "[ DETAILS ]" plus a
+        # dim placeholder — it looked like nothing clickable existed.
+        # With auto-select the detail panel always shows real metrics,
+        # OPEN HTML + DELETE buttons immediately. Clicking other rows
+        # still swaps the selection as before.
+        try:
+            idx_path = ROOT / "data" / "index.json"
+            if idx_path.exists():
+                rows = json.loads(idx_path.read_text(encoding="utf-8"))
+                if isinstance(rows, list) and rows:
+                    rows.sort(key=lambda r: r.get("timestamp", "") or "",
+                              reverse=True)
+                    newest = rows[0].get("run_id")
+                    if newest:
+                        self.after(0, lambda rid=newest:
+                                   self._dash_backtest_select(rid))
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
 
     # ─── ENGINE LOGS (live proc list + log tail) ──────────────
     def _data_engines(self):
