@@ -58,3 +58,19 @@ def test_main_groups_cover_all_legacy_destinations():
     }
     missing = required_methods - reachable_methods
     assert not missing, f"MAIN_GROUPS missing destinations: {missing}"
+
+
+def test_app_has_menu_live_cache():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        assert hasattr(app, "_menu_live")
+        assert isinstance(app._menu_live, dict)
+        for key in ("markets", "execute", "research", "control"):
+            assert key in app._menu_live
+            assert isinstance(app._menu_live[key], dict)
+        assert hasattr(app, "_start_t")
+        assert isinstance(app._start_t, float)
+    finally:
+        app.destroy()

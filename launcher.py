@@ -772,6 +772,20 @@ class App(tk.Tk):
         self.oq = queue.Queue()
         self.history = []  # nav history for back
 
+        # ─── Bloomberg 3D main menu state ────────────────
+        self._start_t = time.monotonic()
+        self._menu_live = {
+            "markets":  {},
+            "execute":  {},
+            "research": {},
+            "control":  {},
+        }
+        self._menu_focused_tile = 0      # 0..3 index into MAIN_GROUPS
+        self._menu_expanded_tile = None  # None or 0..3 when drilled in
+        self._menu_sub_focus = 0         # 0..2 within expanded sub-menu
+        self._menu_canvas = None         # tk.Canvas handle, set on render
+        self._menu_live_after_id = None  # after() handle for 5s refresh
+
         threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
         self._splash()
