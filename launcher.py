@@ -2356,10 +2356,10 @@ class App(tk.Tk):
         rep_count = self._data_count_reports()
 
         cards = [
-            ("B", "BACKTESTS", "backtest runs, metrics, delete",
+            ("B", "BACKTESTS", "standalone list · metrics · delete",
              f"{bt_count} runs on disk",
-             lambda: self._open_backtest_metrics()),
-            ("E", "ENGINE LOGS", "running + recent engines, live log tail",
+             lambda: self._data_backtests()),
+            ("E", "ENGINE LOGS", "running + recent engines · live log tail",
              f"{eng_running} running · {eng_total} total",
              lambda: self._data_engines()),
             ("R", "REPORTS", "raw JSON / log file browser",
@@ -2438,16 +2438,150 @@ class App(tk.Tk):
         return total
 
     def _open_backtest_metrics(self):
-        """Jump straight to the Backtest tab of the crypto-futures dashboard.
+        """Legacy shortcut: jump to the crypto-futures dashboard > Backtest tab.
 
-        The user's mental model is "data → backtests"; the existing dashboard
-        is locked behind Markets > Crypto Futures > tab 5, which is not
-        discoverable. This wrapper preserves the dashboard's live widgets and
-        routing logic while giving DATA CENTER a direct entrance.
+        Kept for any code path that still wants the tabbed dashboard view.
+        The new primary entry for DATA > BACKTESTS is the standalone
+        _data_backtests screen — same list, same detail panel, same DELETE
+        button, but decoupled from Markets > Crypto Futures navigation.
         """
         self._crypto_dashboard()
-        # Tab switch runs after the dashboard shell finishes building.
         self.after(0, lambda: self._dash_render_tab("backtest"))
+
+    # ─── DATA > BACKTESTS (standalone) ────────────────────────
+    def _data_backtests(self):
+        """Standalone backtest browser, decoupled from the crypto-futures tab.
+
+        Reuses the existing dashboard rendering functions
+        (_dash_backtest_render, _dash_backtest_select, _dash_backtest_delete)
+        by registering the local widgets into self._dash_widgets under the
+        same keys the dashboard uses. Zero code duplication — the click
+        handlers, detail panel, and DELETE button already work against
+        (bt_list, bt_count, bt_detail) keys.
+
+        Reached from DATA CENTER > BACKTESTS (or keyboard B at the hub).
+        """
+        self._clr(); self._clear_kb()
+        self.h_path.configure(text="> DATA > BACKTESTS")
+        self.h_stat.configure(text="BROWSE", fg=AMBER_D)
+        self.f_lbl.configure(
+            text="ESC voltar  |  click run for details  |  DELETE to remove")
+        self._kb("<Escape>", lambda: self._data_center())
+
+        # Ensure _dash_widgets exists — the standalone screen owns this
+        # instance attr when it's used outside the dashboard build path.
+        self._dash_widgets = getattr(self, "_dash_widgets", {})
+
+        outer = tk.Frame(self.main, bg=BG)
+        outer.pack(fill="both", expand=True, padx=16, pady=12)
+
+        # Header
+        hdr = tk.Frame(outer, bg=BG); hdr.pack(fill="x")
+        tk.Label(hdr, text="BACKTEST RUNS", font=(FONT, 12, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(hdr, text="  ·  reconciled against data/index.json",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=4)
+        count_l = tk.Label(hdr, text="", font=(FONT, 8), fg=DIM, bg=BG)
+        count_l.pack(side="right")
+        self._dash_widgets[("bt_count",)] = count_l
+        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(4, 10))
+
+        split = tk.Frame(outer, bg=BG)
+        split.pack(fill="both", expand=True)
+
+        # ── LEFT: run list ──
+        left = tk.Frame(split, bg=BG)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
+        cols = [
+            ("DATE / TIME",  17),
+            ("RUN",          15),
+            ("TRADES",        7),
+            ("WIN%",          7),
+            ("PNL",          11),
+            ("SHARPE",        8),
+            ("DD",            7),
+        ]
+        for label, width in cols:
+            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=BG, width=width, anchor="w").pack(side="left")
+        tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+
+        # Scrollable inner frame for the row list
+        canvas_wrap = tk.Frame(left, bg=BG); canvas_wrap.pack(fill="both", expand=True)
+        canvas = tk.Canvas(canvas_wrap, bg=BG, bd=0, highlightthickness=0)
+        scroll = tk.Scrollbar(canvas_wrap, orient="vertical",
+                              command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        inner = tk.Frame(canvas, bg=BG)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
+
+        # Mouse wheel — scoped to the list (not bind_all, which would leak)
+        def _on_wheel(event, c=canvas):
+            try: c.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError: pass
+        def _enter(_e=None, c=canvas):
+            c.bind_all("<MouseWheel>", _on_wheel)
+        def _leave(_e=None, c=canvas):
+            try: c.unbind_all("<MouseWheel>")
+            except tk.TclError: pass
+        canvas.bind("<Enter>", _enter)
+        canvas.bind("<Leave>", _leave)
+        inner.bind("<Enter>", _enter)
+        inner.bind("<Leave>", _leave)
+
+        self._dash_widgets[("bt_list",)] = inner
+        self._dash_widgets[("bt_canvas",)] = canvas
+
+        # ── RIGHT: detail panel ──
+        right = tk.Frame(split, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1,
+                         width=320)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
+
+        tk.Label(right, text=" [ DETAILS ] ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER, padx=6, pady=2).pack(anchor="nw",
+                                                        padx=6, pady=(6, 2))
+
+        detail_body = tk.Frame(right, bg=PANEL)
+        detail_body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+        self._dash_widgets[("bt_detail",)] = detail_body
+
+        tk.Label(detail_body,
+                 text="\n← click a run to load its metrics",
+                 font=(FONT, 8), fg=DIM, bg=PANEL,
+                 justify="left").pack(anchor="w")
+
+        # Bottom bar: back + jump to engine logs
+        tk.Frame(outer, bg=BG, height=10).pack()
+        bottom = tk.Frame(outer, bg=BG); bottom.pack(fill="x")
+
+        back_btn = tk.Label(bottom, text="  VOLTAR  ",
+                            font=(FONT, 9), fg=DIM, bg=BG3,
+                            cursor="hand2", padx=10, pady=3)
+        back_btn.pack(side="left")
+        back_btn.bind("<Button-1>", lambda e: self._data_center())
+        back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=AMBER))
+        back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
+
+        eng_btn = tk.Label(bottom, text="  ENGINE LOGS  ",
+                           font=(FONT, 9, "bold"), fg=AMBER_D, bg=BG3,
+                           cursor="hand2", padx=10, pady=3)
+        eng_btn.pack(side="left", padx=(6, 0))
+        eng_btn.bind("<Button-1>", lambda e: self._data_engines())
+        eng_btn.bind("<Enter>", lambda e: eng_btn.configure(fg=AMBER))
+        eng_btn.bind("<Leave>", lambda e: eng_btn.configure(fg=AMBER_D))
+
+        # Trigger the initial render — this reads data/index.json, sorts
+        # by timestamp desc, renders up to 50 rows with click handlers.
+        self._dash_backtest_render()
 
     # ─── ENGINE LOGS (live proc list + log tail) ──────────────
     def _data_engines(self):
@@ -2778,20 +2912,49 @@ class App(tk.Tk):
         self._bind_global_nav()
 
         f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text=f"STRATEGIES — {market_label}", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 6))
-        tk.Label(f, text="Selecionar engine", font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 16))
+        tk.Label(f, text=f"STRATEGIES — {market_label}",
+                 font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 4))
+
+        # Tesla 3·6·9 subtitle. The repo geometry naturally matches:
+        #   3 tiers      → backtest / live / meta
+        #   6 strategies → CITADEL, JUMP, BRIDGEWATER, DE SHAW, MILLENNIUM, TWO SIGMA
+        #   9 engines    → 6 backtest files + live.py + arbitrage.py + darwin.py
+        # "If you only knew the magnificence of the 3, 6, and 9,
+        #  then you would have a key to the universe." — Nikola Tesla
+        tesla = tk.Frame(f, bg=BG); tesla.pack(pady=(0, 2))
+        tk.Label(tesla, text=" TESLA ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER, padx=4).pack(side="left")
+        tk.Label(tesla, text="  3 tiers", font=(FONT, 8, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(tesla, text="·", font=(FONT, 8),
+                 fg=DIM, bg=BG).pack(side="left", padx=6)
+        tk.Label(tesla, text="6 strategies", font=(FONT, 8, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(tesla, text="·", font=(FONT, 8),
+                 fg=DIM, bg=BG).pack(side="left", padx=6)
+        tk.Label(tesla, text="9 engines", font=(FONT, 8, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left")
+
+        tk.Label(f, text="selecionar engine — ENTER confirma  ·  ESC volta",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(pady=(2, 14))
 
         sections = [
-            ("BACKTEST", SUB_MENUS.get("backtest", []), "backtest"),
-            ("LIVE / PAPER", SUB_MENUS.get("live", []), "live"),
-            ("META", SUB_MENUS.get("tools", []), "tools"),
+            ("BACKTEST",     SUB_MENUS.get("backtest", []), "backtest", 6),
+            ("LIVE / PAPER", SUB_MENUS.get("live", []),     "live",     5),
+            ("META",         SUB_MENUS.get("tools", []),    "tools",    3),
         ]
 
         num = 1
-        for section_name, items, parent_key in sections:
+        for section_name, items, parent_key, tesla_count in sections:
             if not items:
                 continue
-            tk.Label(f, text=section_name, font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", padx=60, pady=(8, 2))
+            # Section header row: name + count badge
+            shead = tk.Frame(f, bg=BG); shead.pack(fill="x", padx=60, pady=(8, 2))
+            tk.Label(shead, text=section_name, font=(FONT, 8, "bold"),
+                     fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
+            tk.Label(shead, text=f" [ {len(items)} ] ",
+                     font=(FONT, 7, "bold"), fg=BG, bg=AMBER_D,
+                     padx=3).pack(side="left", padx=6)
             tk.Frame(f, bg=DIM2, height=1).pack(fill="x", padx=60, pady=(0, 3))
 
             for name, script, desc in items:

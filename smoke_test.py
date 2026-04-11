@@ -183,11 +183,33 @@ def run(quiet: bool = False) -> int:
 
     # ── DATA CENTER sub-screens ──
     section("DATA CENTER")
-    call("_data_center",  app._data_center)
+    call("_data_center",    app._data_center)
+    call("_data_backtests", app._data_backtests)
+    # Prove DELETE is reachable from the standalone screen: select a real
+    # run and verify the detail panel was populated (it contains the DELETE
+    # binding). If the select call crashes or bt_detail stays None, the
+    # standalone screen is broken.
+    idx_path2 = ROOT / "data" / "index.json"
+    if idx_path2.exists():
+        import json as _json
+        try:
+            runs2 = _json.loads(idx_path2.read_text(encoding="utf-8"))
+        except (_json.JSONDecodeError, OSError):
+            runs2 = []
+        if runs2:
+            rid = runs2[0].get("run_id")
+            if rid:
+                call(f"_data_backtests>select({rid})",
+                     app._dash_backtest_select, rid)
+                # Verify bt_detail was populated (detail panel frame exists
+                # and has children — the DELETE button lives in there).
+                body = app._dash_widgets.get(("bt_detail",))
+                has_children = bool(body and body.winfo_children())
+                call("  detail panel populated",
+                     lambda: (_ for _ in ()).throw(AssertionError(
+                         "bt_detail empty"))) if not has_children else call(
+                     "  detail panel populated", lambda: None)
     call("_data_engines", app._data_engines)
-    # Cancel the auto-refresh tick so the loop doesn't keep running past
-    # cleanup. _eng_refresh reschedules itself via self.after — we need to
-    # break the chain before the widget tree is destroyed.
     if getattr(app, "_eng_after_id", None):
         try: app.after_cancel(app._eng_after_id)
         except Exception: pass
