@@ -9,9 +9,16 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 STATE_FILE = Path("data/.aurum_procs.json")
+
+# How long finished entries stay visible in list_procs / state file before
+# _cleanup prunes them. Set to 1 day so a finished engine stays introspectable
+# (logs still readable, status queryable) for the rest of the current session
+# but doesn't accumulate forever. Entries from previous weeks become zombies
+# and pollute the UI. [Fase 0.4 / D6]
+ZOMBIE_TTL = timedelta(days=1)
 
 from config.engines import PROC_NAMES as ENGINE_NAMES
 
@@ -183,10 +190,56 @@ def get_log_path(pid: int) -> Path | None:
 
 
 def _cleanup():
+    """Reconcile the state file with observable process state.
+
+    Two passes:
+
+    1. For every tracked entry with status == "running", check liveness;
+       if dead, flip status to "finished" and timestamp.
+    2. For every tracked entry with status == "finished", check the
+       finished timestamp against ZOMBIE_TTL; if older than the TTL,
+       remove the entry entirely (it's a zombie from a past session).
+
+    The TTL-based prune is what keeps `.aurum_procs.json` from accumulating
+    entries from weeks-old engine runs. Previously _cleanup only changed
+    status from running → finished and never deleted rows, leaving the
+    Terminal > Processes screen permanently populated with dead entries
+    that PID recycling could even flip back to alive=True.
+    """
     state = _load_state()
+    now = datetime.now()
+    dead_keys: list[str] = []
+
     for pid_str, info in state["procs"].items():
         pid = int(pid_str)
         if not _is_alive(pid) and info.get("status") == "running":
             info["status"] = "finished"
-            info["finished"] = datetime.now().isoformat()
+            info["finished"] = now.isoformat()
+
+        if info.get("status") == "finished":
+            fin = info.get("finished")
+            try:
+                fin_dt = datetime.fromisoformat(fin) if fin else now
+            except (TypeError, ValueError):
+                fin_dt = now
+            if now - fin_dt > ZOMBIE_TTL:
+                dead_keys.append(pid_str)
+
+    for k in dead_keys:
+        del state["procs"][k]
+
     _save_state(state)
+
+
+def purge_finished() -> int:
+    """Force-remove every finished entry regardless of TTL.
+
+    Intended for manual zombie cleanup and for the UI's "clear finished"
+    button. Returns the number of entries removed.
+    """
+    state = _load_state()
+    keys = [k for k, v in state["procs"].items() if v.get("status") != "running"]
+    for k in keys:
+        del state["procs"][k]
+    _save_state(state)
+    return len(keys)
