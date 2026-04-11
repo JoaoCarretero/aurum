@@ -1038,6 +1038,145 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    # ─── Bloomberg 3D menu — canvas renderers ────────────
+    # All drawing happens on one full-frame canvas. Tiles are isometric
+    # boxes built from lines/polygons; the CD at the center uses ovals/arcs.
+
+    _TILE_SLOTS = [
+        ("nw", 180, 150),
+        ("ne", 640, 150),
+        ("sw", 180, 380),
+        ("se", 640, 380),
+    ]
+    _TILE_W = 200
+    _TILE_H = 120
+    _TILE_DEPTH = 16
+
+    _CD_CX = 460
+    _CD_CY = 265
+    _CD_R  = 68
+
+    def _dim_color(self, hex_color: str, factor: float) -> str:
+        """Scale an #rrggbb color by factor (0..1)."""
+        try:
+            h = hex_color.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            r = max(0, min(255, int(r * factor)))
+            g = max(0, min(255, int(g * factor)))
+            b = max(0, min(255, int(b * factor)))
+            return f"#{r:02x}{g:02x}{b:02x}"
+        except Exception:
+            return hex_color
+
+    def _tile_rect(self, idx: int) -> tuple:
+        _, cx, cy = self._TILE_SLOTS[idx]
+        w, h = self._TILE_W, self._TILE_H
+        return (cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2)
+
+    def _draw_isometric_tile(self, canvas, idx: int, focused: bool) -> None:
+        label, key_num, color, _children = MAIN_GROUPS[idx]
+        x1, y1, x2, y2 = self._tile_rect(idx)
+        d = self._TILE_DEPTH
+        face_color = color if focused else self._dim_color(color, TILE_DIM_FACTOR)
+        text_color = AMBER_B if focused else WHITE
+        tag = f"tile{idx}"
+
+        canvas.delete(tag)
+
+        canvas.create_polygon(
+            x1, y1, x2, y1, x2 + d, y1 - d, x1 + d, y1 - d,
+            outline=face_color, fill=BG, width=1, tags=tag,
+        )
+        canvas.create_polygon(
+            x2, y1, x2 + d, y1 - d, x2 + d, y2 - d, x2, y2,
+            outline=face_color, fill=BG, width=1, tags=tag,
+        )
+        canvas.create_rectangle(x1, y1, x2, y2,
+                                outline=face_color, width=2 if focused else 1, tags=tag)
+
+        canvas.create_rectangle(
+            x1, y1, x2, y1 + 18,
+            outline=face_color, fill=face_color if focused else BG3, width=0, tags=tag,
+        )
+        canvas.create_text(
+            x1 + 10, y1 + 9, anchor="w",
+            text=f" {label}  [{key_num}]",
+            font=(FONT, 9, "bold"),
+            fill=BG if focused else face_color, tags=tag,
+        )
+
+        live_key = label.lower()
+        live = self._menu_live.get(live_key, {}) if hasattr(self, "_menu_live") else {}
+        for i, line_key in enumerate(("line1", "line2", "line3", "line4")):
+            text = live.get(line_key, "—")
+            canvas.create_text(
+                x1 + 14, y1 + 36 + i * 18, anchor="w",
+                text=text, font=(FONT, 9), fill=text_color, tags=tag,
+            )
+
+    def _draw_cd_center(self, canvas) -> None:
+        cx, cy, r = self._CD_CX, self._CD_CY, self._CD_R
+        canvas.delete("cd")
+        canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                           outline=AMBER, width=2, tags="cd")
+        canvas.create_oval(cx - r + 10, cy - r + 10, cx + r - 10, cy + r - 10,
+                           outline=AMBER_D, width=1, tags="cd")
+        canvas.create_oval(cx - 10, cy - 10, cx + 10, cy + 10,
+                           outline=AMBER, width=1, fill=BG, tags="cd")
+        angle = int((time.monotonic() * 40) % 360)
+        canvas.create_arc(cx - r + 4, cy - r + 4, cx + r - 4, cy + r - 4,
+                          start=angle, extent=30, outline=AMBER_B, width=2,
+                          style="arc", tags="cd")
+        canvas.create_text(cx, cy - 4, text="AURUM", font=(FONT, 8, "bold"),
+                           fill=AMBER, tags="cd")
+        canvas.create_text(cx, cy + 6, text="LASER", font=(FONT, 7),
+                           fill=DIM, tags="cd")
+        canvas.create_text(cx, cy + r + 10, text="φ = 1.618",
+                           font=(FONT, 7), fill=DIM2, tags="cd")
+
+    def _draw_spokes(self, canvas, focused_idx: int) -> None:
+        canvas.delete("spokes")
+        for idx in range(4):
+            x1, y1, x2, y2 = self._tile_rect(idx)
+            _, cx, cy = self._TILE_SLOTS[idx]
+            anchor_x = x2 if cx < self._CD_CX else x1
+            anchor_y = y2 if cy < self._CD_CY else y1
+            _, _, color, _ = MAIN_GROUPS[idx]
+            line_color = color if idx == focused_idx else DIM2
+            width = 2 if idx == focused_idx else 1
+            canvas.create_line(
+                anchor_x, anchor_y, self._CD_CX, self._CD_CY,
+                fill=line_color, width=width, dash=(2, 4), tags="spokes",
+            )
+
+    def _menu_tiles_repaint_text(self) -> None:
+        if self._menu_canvas is None:
+            return
+        for idx in range(4):
+            self._draw_isometric_tile(self._menu_canvas, idx, idx == self._menu_focused_tile)
+
+    def _menu_main_bloomberg(self) -> None:
+        self._clr()
+        self._clear_kb()
+        self.history.clear()
+        self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
+        self.h_path.configure(text="> PRINCIPAL  ·  O DISCO LÊ A SI MESMO")
+        self.f_lbl.configure(text="1-4 direto · ← ↑ ↓ → nav · ENTER · ESC sai")
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True)
+        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=540)
+        canvas.pack(fill="both", expand=True)
+        self._menu_canvas = canvas
+
+        if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
+            self._menu_live_fetch_async()
+
+        self._draw_cd_center(canvas)
+        self._draw_spokes(canvas, self._menu_focused_tile)
+        for idx in range(4):
+            self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
+
     # ─── SPLASH (Layer 0) ───────────────────────────────
     # ─── SPLASH (Layer 0) — CD Universe ─────────────────
     def _splash(self):

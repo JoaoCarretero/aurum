@@ -136,3 +136,17 @@ def test_menu_live_fetch_populates_cache():
             assert set(live.keys()) == {"line1", "line2", "line3", "line4"}
     finally:
         app.destroy()
+
+
+def test_menu_main_bloomberg_renders_without_exception():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_main_bloomberg()
+        app.update_idletasks()
+        assert app._menu_canvas is not None
+        items = app._menu_canvas.find_all()
+        assert len(items) > 20, f"expected many canvas items, got {len(items)}"
+    finally:
+        app.destroy()
