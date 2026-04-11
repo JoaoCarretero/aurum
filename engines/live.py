@@ -911,9 +911,12 @@ class LiveEngine:
                         (datetime.now(timezone.utc) - pos.open_ts).total_seconds() / 3600 / 8)
             pnl = round((pos.size * (entry_c - exit_c) + funding) * LEVERAGE, 2)
 
-        # Liquidation check: espelha backtest — se a perda alavancada > 90% da conta, força liquidação
-        if LEVERAGE > 1.0 and abs(pnl) > self.account * 0.9 and pnl < 0:
-            pnl = -round(self.account * 0.95, 2)
+        # Post-hoc 90%/95% liquidation clamp removed (parity with core
+        # backtest fix in commit 4f8679d). In live trading, the exchange
+        # enforces liquidation at the real mark price — any software clamp
+        # here either never fires (exchange closed first) or reports pnl
+        # that diverges from the real broker fill. The account floor below
+        # at max(..., 0) stays as a safety net for arithmetic safety.
 
         # R-multiple real
         risk_usd  = abs(pos.entry - pos.stop) * pos.size
