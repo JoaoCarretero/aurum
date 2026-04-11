@@ -20,8 +20,8 @@ the Status column, and add a dated entry to the Changelog at the bottom.
 |---|---|---|---|---|---|
 | 0 | Data hygiene + launcher data access | ALTO | ~1h | — | ✅ done 2026-04-11 |
 | 1 | Identity-verified process control (D5) | **CRÍTICO** | ~1.5h | — | ✅ done 2026-04-11 |
-| 2 | Process observability UI | ALTO | ~2h | Fase 1 | 🟡 partial (ENGINE LOGS screen live; SPAWN + scroll pending) |
-| 3 | Per-strategy audit + L6/L7 across all engines | ALTO | multi-session | — | 🟡 3.1 done 2026-04-11; 3.2/3.3 pending |
+| 2 | Process observability UI | ALTO | ~2h | Fase 1 | ✅ done 2026-04-11 |
+| 3 | Per-strategy audit + L6/L7 across all engines | ALTO | multi-session | — | 🟡 3.1 + 3.2 done 2026-04-11; 3.3 pending |
 | 4 | Live trading guardrails (design + impl) | **CRÍTICO** | multi-session | Fase 1, brainstorming | ⏳ pending |
 
 **Severity legend:**
