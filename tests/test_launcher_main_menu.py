@@ -208,3 +208,30 @@ def test_sub_select_dispatches_to_method(monkeypatch):
         assert called == ["markets"]
     finally:
         app.destroy()
+
+
+def test_feature_flag_routes_to_bloomberg_by_default(monkeypatch):
+    monkeypatch.delenv("AURUM_MENU_STYLE", raising=False)
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu("main")
+        app.update_idletasks()
+        assert app._menu_canvas is not None
+    finally:
+        app.destroy()
+
+
+def test_feature_flag_legacy_disables_canvas(monkeypatch):
+    monkeypatch.setenv("AURUM_MENU_STYLE", "legacy")
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_canvas = None
+        app._menu("main")
+        app.update_idletasks()
+        assert app._menu_canvas is None
+    finally:
+        app.destroy()

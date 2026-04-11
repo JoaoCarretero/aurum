@@ -1507,6 +1507,9 @@ class App(tk.Tk):
         self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
 
         if key == "main":
+            if os.environ.get("AURUM_MENU_STYLE", "bloomberg").lower() != "legacy":
+                self._menu_main_bloomberg()
+                return
             self.history.clear()
             items = [(n, k, d) for n, k, d in MAIN_MENU]
             title = "PRINCIPAL"
