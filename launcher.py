@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
 import tkinter as tk
 from tkinter import messagebox
 
+from code_viewer import CodeViewer
+
 # ═══════════════════════════════════════════════════════════
 # BLOOMBERG PALETTE — amber on black, minimal color
 # ═══════════════════════════════════════════════════════════
@@ -830,6 +832,22 @@ class App(tk.Tk):
         run_btn.pack(side="left", padx=4)
         run_btn.bind("<Button-1>", lambda e: next_fn())
         self._kb("<Return>", next_fn)
+
+        # VER CÓDIGO — opens the strategy source in a read-only modal viewer.
+        # Falls back to the top of the file if the default function probe
+        # ("scan_symbol") doesn't exist in the target script.
+        def _open_code(_e=None, _script=script):
+            try:
+                CodeViewer(self, source_files=[_script],
+                           main_function=(_script, "scan_symbol"))
+            except Exception as exc:
+                messagebox.showerror("CodeViewer", f"{type(exc).__name__}: {exc}")
+
+        code_btn = tk.Label(btn_f, text="  VER CÓDIGO  ", font=(FONT, 10, "bold"),
+                            fg=AMBER, bg=BG3, cursor="hand2", padx=12, pady=4)
+        code_btn.pack(side="left", padx=4)
+        code_btn.bind("<Button-1>", _open_code)
+        self._kb("<F2>", _open_code)
 
         back_btn = tk.Label(btn_f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
                             cursor="hand2", padx=12, pady=4)
