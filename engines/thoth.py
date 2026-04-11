@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.params import *
 from core import (
     fetch_all, validate, indicators, swing_structure, omega,
-    detect_macro, build_corr_matrix, portfolio_allows, position_size,
+    detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
+    position_size,
     calc_levels, label_trade,
 )
 from core.sentiment import (
@@ -134,7 +135,8 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         except Exception:
             pass
 
-    open_pos: list[tuple[int, str]] = []
+    # (exit_idx, symbol, size, entry) — size/entry needed for L6 cap
+    open_pos: list[tuple[int, str, float, float]] = []
 
     # pre-extract arrays
     _rsi   = df["rsi"].values
@@ -155,8 +157,8 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     log.info(f"\n{'─'*60}\n  {symbol}\n{'─'*60}")
 
     for idx in range(min_idx, len(df) - MAX_HOLD - 2):
-        open_pos = [(ei, s) for ei, s in open_pos if ei > idx]
-        active_syms = [s for _, s in open_pos]
+        open_pos = [(ei, s, sz, en) for ei, s, sz, en in open_pos if ei > idx]
+        active_syms = [s for _, s, _, _ in open_pos]
 
         macro_b = "CHOP"
         if macro_bias_series is not None:
@@ -271,6 +273,14 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
                              peak_equity=peak_equity)
         size = round(size * corr_size_mult * trans_mult * THOTH_SIZE_MULT, 4)
 
+        # [L6] Aggregate notional cap.
+        if size > 0:
+            ok_agg, motivo_agg = check_aggregate_notional(
+                size * entry, open_pos, account, LEVERAGE)
+            if not ok_agg:
+                vetos[motivo_agg] += 1
+                continue
+
         # ── PnL ──
         ep = float(exit_p)
         slip_exit = SLIPPAGE + SPREAD
@@ -302,7 +312,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         else:
             consecutive_losses = 0
 
-        open_pos.append((idx + 1 + duration, symbol))
+        open_pos.append((idx + 1 + duration, symbol, size, entry))
 
         ts = df["time"].iloc[idx].strftime("%d/%m %Hh")
         t = {

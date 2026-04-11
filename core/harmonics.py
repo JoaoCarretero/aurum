@@ -13,7 +13,7 @@ from collections import defaultdict
 from config.params import *
 from core.indicators import indicators, swing_structure
 from core.signals import label_trade
-from core.portfolio import portfolio_allows, position_size
+from core.portfolio import portfolio_allows, check_aggregate_notional, position_size
 from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
 
 # ── RENAISSANCE CONFIG (formerly HERMES) ─────────────────────────────────────────────
@@ -177,7 +177,9 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
     bayes=_BayesWR(); trades=[]; vetos=defaultdict(int)
     account=ACCOUNT_SIZE*capital_weight
     min_idx=max(200,W_NORM,H_PIVOT_N*3,H_HURST_WINDOW)+5
-    open_pos=[]; peak_equity=account; consecutive_losses=0
+    # (exit_idx, symbol, size, entry) — size/entry needed for L6 cap
+    open_pos: list[tuple[int, str, float, float]] = []
+    peak_equity=account; consecutive_losses=0
     cooldown_until=-1; sym_cooldown_until={}
     patterns_at=defaultdict(list)
     for k in range(len(alt)-4):
@@ -194,8 +196,8 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
             "X":X,"A":A,"D":D,"target":target,"stop":stop,"rr":round(rr,2),"ratios":ratios})
     for idx in range(min_idx, len(df)-H_FORWARD-2):
         if idx not in patterns_at: continue
-        open_pos=[(ei,s) for ei,s in open_pos if ei>idx]
-        active_syms=[s for _,s in open_pos]
+        open_pos=[(ei,s,sz,en) for ei,s,sz,en in open_pos if ei>idx]
+        active_syms=[s for _,s,_,_ in open_pos]
         macro_b="CHOP"
         if MTF_ENABLED and _htfm is not None: macro_b=str(_htfm[idx])
         elif macro_bias_series is not None: macro_b=macro_bias_series.iloc[min(idx,len(macro_bias_series)-1)]
@@ -256,6 +258,13 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
             if result=="OPEN": continue
             size=position_size(account,entry,stop,max(score,SCORE_THRESHOLD),macro_b,direction,vol_r,dd_scale,False,peak_equity=peak_equity)
             size=round(size*corr_size_mult*trans_mult*fractal_score,4)
+            # [L6] Aggregate notional cap across concurrently open positions.
+            if size > 0:
+                ok_agg, motivo_agg = check_aggregate_notional(
+                    size * entry, open_pos, account, LEVERAGE)
+                if not ok_agg:
+                    vetos[motivo_agg] += 1
+                    continue
             ep=float(exit_p)
             slip_exit=SLIPPAGE+SPREAD
             if direction=="BULLISH":
@@ -267,7 +276,11 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                 ep_net=ep*(1+COMMISSION+slip_exit)
                 pnl=size*(entry_cost-ep_net)+(size*entry*FUNDING_PER_8H*duration/32)
             pnl=round(pnl*LEVERAGE, 2)
-            account=max(account+pnl,account*0.5)
+            # Apply real PnL. The previous `max(account+pnl, account*0.5)`
+            # silently clamped per-trade losses at 50% of pre-trade account,
+            # inflating sharpe / maxDD / final equity. Mirror of the fix
+            # already applied in mercurio/newton/thoth/backtest.
+            account=account+pnl
             bayes.update(pat,result,rr)
             if result=="LOSS":
                 consecutive_losses+=1
@@ -275,7 +288,7 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                     if consecutive_losses>=n_l: cooldown_until=idx+STREAK_COOLDOWN[n_l]; break
                 sym_cooldown_until[symbol]=idx+SYM_LOSS_COOLDOWN
             else: consecutive_losses=0
-            open_pos.append((idx+1+duration,symbol))
+            open_pos.append((idx+1+duration,symbol,size,entry))
             ts=df["time"].iloc[idx].strftime("%d/%m %Hh")
             trades.append({
                 "symbol":symbol,"time":ts,"timestamp":df["time"].iloc[idx],

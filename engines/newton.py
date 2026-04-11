@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.params import *
 from core import (
     fetch_all, validate, indicators, swing_structure,
-    detect_macro, build_corr_matrix, portfolio_allows, position_size,
+    detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
+    position_size,
 )
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
@@ -418,6 +419,20 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
 
         if size <= 0:
             vetos["size_zero"] += 1
+            continue
+
+        # [L6] Single-position notional cap.
+        # Newton opens at most one spread trade per pair at a time, so the
+        # aggregate list is always empty here — the check degenerates to
+        # `size * entry ≤ account × LEVERAGE`. In normal conditions this
+        # is guaranteed by position_size (risk-based sizing), but a very
+        # tight stop combined with a high LEVERAGE could in theory push
+        # the nominal exposure over the margin ceiling. The guard makes
+        # the constraint explicit and consistent across all engines.
+        ok_agg, motivo_agg = check_aggregate_notional(
+            size * entry_p, [], account, LEVERAGE)
+        if not ok_agg:
+            vetos[motivo_agg] += 1
             continue
 
         in_trade = True
