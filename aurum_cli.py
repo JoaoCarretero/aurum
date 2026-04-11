@@ -860,6 +860,8 @@ def main():
     p=sub.add_parser("stop"); p.add_argument("pid",type=int)
     sub.add_parser("data",aliases=["logs"])
     sub.add_parser("status")
+    p=sub.add_parser("export",help="generate a single-file analysis snapshot for external review")
+    p.add_argument("-o","--output",type=str,default=None,help="custom output path (default: data/exports/analysis_YYYY-MM-DD_HHMM.json)")
 
     a = pa.parse_args()
 
@@ -891,6 +893,24 @@ def main():
         print(f"  {'✓' if stop_proc(a.pid) else 'nao encontrado'}")
     elif a.cmd in ("data","logs"): screen_data()
     elif a.cmd == "status": screen_status(wait=False)
+    elif a.cmd == "export":
+        from core.analysis_export import export_analysis
+        from datetime import datetime as _dt
+        if a.output:
+            out = Path(a.output)
+        else:
+            ts = _dt.now().strftime("%Y-%m-%d_%H%M")
+            out = _ROOT / "data" / "exports" / f"analysis_{ts}.json"
+        print(f"  {D}generating snapshot...{Z}")
+        d = export_analysis(output_path=out)
+        try:
+            size_mb = out.stat().st_size / (1024 * 1024)
+        except Exception:
+            size_mb = 0.0
+        n_runs = len(d.get("runs", []))
+        n_trades = d.get("analysis", {}).get("n_trades", 0)
+        print(f"  {G}✓{Z} {out}")
+        print(f"  {D}{size_mb:.2f} MB · {n_runs} runs · {n_trades} trades on latest{Z}")
 
 if __name__ == "__main__":
     main()

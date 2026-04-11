@@ -2852,7 +2852,7 @@ class App(tk.Tk):
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> DATA")
         self.h_stat.configure(text="CENTER", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports")
+        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  X export")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
@@ -2860,7 +2860,7 @@ class App(tk.Tk):
         f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
         tk.Label(f, text="DATA CENTER", font=(FONT, 14, "bold"),
                  fg=AMBER, bg=BG).pack(pady=(0, 6))
-        tk.Label(f, text="backtests · engine logs · reports",
+        tk.Label(f, text="backtests · engine logs · reports · export",
                  font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 22))
 
         # Quick counts for each card so the user sees signal, not just titles.
@@ -2878,6 +2878,9 @@ class App(tk.Tk):
             ("R", "REPORTS", "raw JSON / log file browser",
              f"{rep_count} files indexed",
              lambda: self._data()),
+            ("X", "EXPORT ANALYSIS", "gerar snapshot para análise externa",
+             "< 2 MB JSON",
+             lambda: self._export_analysis()),
         ]
 
         for key_label, name, desc, stat, cmd in cards:
@@ -2949,6 +2952,77 @@ class App(tk.Tk):
         except OSError:
             pass
         return total
+
+    # ─── DATA > EXPORT ANALYSIS (single-file snapshot) ────────
+    def _export_analysis(self):
+        """Generate a single-file analysis snapshot for external review.
+
+        Runs the aggregation off the Tk main thread because walking
+        ``data/runs`` on a populated OneDrive mirror can take a couple
+        of seconds. The status bar reflects progress/result; on success
+        we also copy the absolute path to the clipboard so the user can
+        just Ctrl+V into a Claude.ai upload dialog.
+        """
+        import threading
+        from datetime import datetime
+        try:
+            self.h_stat.configure(text="GERANDO EXPORT...", fg=AMBER_D)
+        except Exception:
+            pass
+
+        def _worker():
+            try:
+                from core.analysis_export import export_analysis
+                ts = datetime.now().strftime("%Y-%m-%d_%H%M")
+                out_dir = ROOT / "data" / "exports"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                out_path = out_dir / f"analysis_{ts}.json"
+                export_analysis(output_path=out_path)
+                try:
+                    size_mb = out_path.stat().st_size / (1024 * 1024)
+                except Exception:
+                    size_mb = 0.0
+                self.after(0, lambda: self._export_analysis_done(out_path, size_mb))
+            except Exception as e:
+                self.after(0, lambda: self._export_analysis_failed(str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _export_analysis_done(self, out_path, size_mb: float):
+        try:
+            self.h_stat.configure(
+                text=f"EXPORT OK · {size_mb:.2f} MB",
+                fg=AMBER,
+            )
+        except Exception:
+            pass
+        # Best-effort clipboard copy of the absolute path.
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(str(out_path))
+        except Exception:
+            pass
+        try:
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "Analysis Export",
+                f"Arquivo gerado ({size_mb:.2f} MB):\n\n{out_path}\n\n"
+                "Caminho copiado pro clipboard. "
+                "Anexa no Claude.ai e pede pra analisar.",
+            )
+        except Exception:
+            pass
+
+    def _export_analysis_failed(self, reason: str):
+        try:
+            self.h_stat.configure(text="EXPORT FALHOU", fg=AMBER_D)
+        except Exception:
+            pass
+        try:
+            from tkinter import messagebox
+            messagebox.showerror("Analysis Export", f"Falhou:\n\n{reason}")
+        except Exception:
+            pass
 
     def _open_backtest_metrics(self):
         """Legacy shortcut: jump to the crypto-futures dashboard > Backtest tab.
