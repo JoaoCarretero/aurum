@@ -491,22 +491,52 @@ class App(tk.Tk):
         conn_text = f"Binance ({'testnet' if keys.get('testnet',{}).get('api_key') else 'demo'})" if has_keys else "not connected"
         conn_icon = "\u25cf" if has_keys else "\u25cb"  # ● or ○
 
+        # Last backtest row — prefer data/index.json (modern layout), fall back
+        # to scanning data/runs/*/summary.json, then to the legacy
+        # data/reports/*.json tree. The old filter `"reports" in str(r)`
+        # ignored the entire modern data/runs/ layout and left this row
+        # saying "— no data —" even with 20+ runs on disk. [Fase 0.1 / D2]
         last_bt = ""
         try:
-            dd = ROOT / "data"
-            if dd.exists():
-                reports = sorted(dd.rglob("citadel_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-                if not reports:
-                    reports = sorted(dd.rglob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-                for r in reports:
-                    if "reports" in str(r):
-                        with open(r, "r", encoding="utf-8") as fj:
-                            data = json.load(fj)
-                        s = data.get("summary", {})
-                        if s.get("win_rate"):
-                            last_bt = f"{data.get('version','')} — WR {s['win_rate']:.1f}% — ${s.get('total_pnl',0):+,.0f}"
-                        break
-        except Exception:
+            idx = ROOT / "data" / "index.json"
+            if idx.exists():
+                rows = json.loads(idx.read_text(encoding="utf-8"))
+                rows = [r for r in rows if isinstance(r, dict)]
+                rows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
+                if rows:
+                    r0 = rows[0]
+                    wr = r0.get("win_rate")
+                    pnl = r0.get("pnl") or r0.get("total_pnl")
+                    iv = r0.get("interval") or r0.get("engine") or ""
+                    if wr is not None and pnl is not None:
+                        last_bt = f"{iv} — WR {float(wr):.1f}% — ${float(pnl):+,.0f}"
+            if not last_bt:
+                runs_dir = ROOT / "data" / "runs"
+                if runs_dir.exists():
+                    sums = sorted(runs_dir.glob("*/summary.json"),
+                                  key=lambda p: p.stat().st_mtime, reverse=True)
+                    for s_path in sums[:1]:
+                        sdata = json.loads(s_path.read_text(encoding="utf-8"))
+                        wr = sdata.get("win_rate")
+                        pnl = sdata.get("pnl") or sdata.get("total_pnl")
+                        iv = sdata.get("interval") or ""
+                        if wr is not None and pnl is not None:
+                            last_bt = f"{iv} — WR {float(wr):.1f}% — ${float(pnl):+,.0f}"
+            if not last_bt:
+                # Legacy fallback — old data/2026-*/reports/*.json layout.
+                dd = ROOT / "data"
+                if dd.exists():
+                    for r in sorted(dd.rglob("citadel_*.json"),
+                                    key=lambda p: p.stat().st_mtime, reverse=True):
+                        if "reports" in str(r):
+                            data = json.loads(r.read_text(encoding="utf-8"))
+                            s = data.get("summary", {})
+                            if s.get("win_rate"):
+                                last_bt = (f"{data.get('version','')} — "
+                                           f"WR {s['win_rate']:.1f}% — "
+                                           f"${s.get('total_pnl',0):+,.0f}")
+                            break
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
             pass
 
         rows = [
@@ -2421,18 +2451,34 @@ class App(tk.Tk):
         f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True, padx=16, pady=12)
         tk.Label(f, text="DATA & REPORTS", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0,8))
 
-        # Build (path, stat) tuples in one pass — stat once per file, skip
-        # files that vanish between rglob and stat (race with concurrent
-        # backtest runs writing to data/).
-        reports: list[tuple[Path, object]] = []
+        # Walk every known data tree and tag each file with the section it
+        # came from. Previous filter `"reports" in str(r) or "darwin" in str(r)`
+        # ignored the entire data/runs/ modern layout and left this screen
+        # empty for every backtest run after the write-path refactor. [Fase 0.1 / D1]
+        reports: list[tuple[Path, object, str]] = []  # (path, stat, section)
         dd = ROOT / "data"
-        if dd.exists():
-            for r in dd.rglob("*.json"):
+
+        def _collect(root: Path, section: str, pattern: str = "*.json"):
+            if not root.exists():
+                return
+            for r in root.rglob(pattern):
                 try:
-                    if "reports" in str(r) or "darwin" in str(r):
-                        reports.append((r, r.stat()))
+                    reports.append((r, r.stat(), section))
                 except (OSError, FileNotFoundError):
                     continue
+
+        if dd.exists():
+            _collect(dd / "runs",      "RUNS")       # modern backtest runs
+            _collect(dd / "darwin",    "DARWIN")     # darwin evolution logs
+            _collect(dd / "arbitrage", "ARBITRAGE")  # arbitrage session reports
+            # Legacy per-engine dirs
+            for legacy in ("mercurio", "newton", "thoth", "prometeu",
+                           "multistrategy", "live"):
+                _collect(dd / legacy, legacy.upper())
+            # Legacy dated reports tree (data/YYYY-MM-DD/reports/*.json)
+            for dated in dd.iterdir() if dd.exists() else []:
+                if dated.is_dir() and dated.name[:4].isdigit() and (dated / "reports").exists():
+                    _collect(dated / "reports", "LEGACY")
             reports.sort(key=lambda rs: rs[1].st_mtime, reverse=True)
 
         canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
@@ -2443,23 +2489,65 @@ class App(tk.Tk):
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True); sb.pack(side="right", fill="y")
 
-        tk.Label(sf, text=f"  {'FILE':<55} {'DATE':<18} {'SIZE':>8}", font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x")
+        tk.Label(sf, text=f"  {'SECTION':<10} {'FILE':<60} {'DATE':<15} {'SIZE':>8}",
+                 font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x")
         tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", pady=1)
 
         if not reports:
             tk.Label(sf, text="  No reports found.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w", pady=8)
-        for r, st in reports[:50]:
+            return
+
+        # Section → color for the badge
+        sec_color = {
+            "RUNS":      AMBER,
+            "DARWIN":    GREEN,
+            "ARBITRAGE": AMBER_B,
+            "LEGACY":    DIM,
+        }
+
+        for r, st, section in reports[:200]:
             try:
                 rel = str(r.relative_to(ROOT))
             except ValueError:
                 rel = str(r)
             mt = datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
-            sz = f"{st.st_size/1024:.0f}K"
-            lbl = tk.Label(sf, text=f"  {rel:<55} {mt:<18} {sz:>8}", font=(FONT, 7), fg=DIM, bg=BG, anchor="w", cursor="hand2")
-            lbl.pack(fill="x")
-            lbl.bind("<Enter>", lambda e, l=lbl: l.configure(bg=BG3, fg=WHITE))
-            lbl.bind("<Leave>", lambda e, l=lbl: l.configure(bg=BG, fg=DIM))
-            lbl.bind("<Button-1>", lambda e, p=r: self._open_file(p))
+            sz = f"{st.st_size/1024:.0f}K" if st.st_size < 1024*1024 else f"{st.st_size/(1024*1024):.1f}M"
+            col = sec_color.get(section, WHITE)
+
+            row = tk.Frame(sf, bg=BG, cursor="hand2")
+            row.pack(fill="x")
+            sec_lbl = tk.Label(row, text=f" {section:<9}", font=(FONT, 7, "bold"),
+                               fg=col, bg=BG, width=10, anchor="w")
+            sec_lbl.pack(side="left")
+            name_lbl = tk.Label(row, text=f" {rel:<60}",
+                                font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
+            name_lbl.pack(side="left")
+            date_lbl = tk.Label(row, text=f" {mt:<15}",
+                                font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
+            date_lbl.pack(side="left")
+            size_lbl = tk.Label(row, text=f" {sz:>8}",
+                                font=(FONT, 7), fg=DIM, bg=BG, anchor="e")
+            size_lbl.pack(side="left")
+
+            labels = (sec_lbl, name_lbl, date_lbl, size_lbl)
+
+            def _enter(_e=None, labels=labels):
+                for l in labels:
+                    try: l.configure(bg=BG3)
+                    except tk.TclError: pass
+                try: name_lbl.configure(fg=WHITE)
+                except tk.TclError: pass
+            def _leave(_e=None, labels=labels):
+                for l in labels:
+                    try: l.configure(bg=BG)
+                    except tk.TclError: pass
+                try: name_lbl.configure(fg=DIM)
+                except tk.TclError: pass
+
+            for w in (row, *labels):
+                w.bind("<Enter>", _enter)
+                w.bind("<Leave>", _leave)
+                w.bind("<Button-1>", lambda e, p=r: self._open_file(p))
 
     def _procs(self):
         self._clr(); self._clear_kb()
