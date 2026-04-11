@@ -20,6 +20,16 @@ from config.params import _tf_params, _TF_MINUTES
 # ── Core modules ──────────────────────────────────────────────
 from core.data import fetch, fetch_all, validate
 from core.indicators import indicators, swing_structure, omega
+from core.chronos import enrich_with_regime
+from analysis.stats import regime_analysis as _hmm_regime_analysis
+
+
+def _regime_analysis_safe(trades: list) -> dict:
+    """Wrap regime_analysis so a failure never breaks the export."""
+    try:
+        return _hmm_regime_analysis(trades)
+    except Exception:
+        return {}
 from core.signals import (
     decide_direction, score_omega, score_chop,
     calc_levels, calc_levels_chop,
@@ -93,6 +103,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
     df = indicators(df)
     df = swing_structure(df)
     df = omega(df)
+    df = enrich_with_regime(df)
 
     if MTF_ENABLED and htf_stack_dfs:
         df = merge_all_htf_to_ltf(df, htf_stack_dfs)
@@ -120,6 +131,12 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
     _bbu   = df["bb_upper"].values;     _bbl   = df["bb_lower"].values
     _bbm   = df["bb_mid"].values;       _bbw   = df["bb_width"].values
     _cls   = df["close"].values
+    # HMM regime layer (observation-only in Fase 3 — no gate yet)
+    _hmm_lbl = df["hmm_regime_label"].values
+    _hmm_cf  = df["hmm_confidence"].values
+    _hmm_pb  = df["hmm_prob_bull"].values
+    _hmm_pbr = df["hmm_prob_bear"].values
+    _hmm_pc  = df["hmm_prob_chop"].values
     # Live/backtest parity: speed filter precomputado (mesma fórmula do live check_signal)
     _speed = (
         ((df["high"] - df["low"]) / df["close"])
@@ -350,6 +367,20 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             "omega_pullback": comps["pullback"],
             "chop_trade":     is_chop_trade,
             "bb_mid":         chop_info.get("bb_mid", 0.0) if is_chop_trade else 0.0,
+            # Normalised trade outcome in R units — required by regime_analysis
+            "r_multiple": (
+                (float(exit_p) - entry) / (entry - stop)
+                if direction == "BULLISH" and (entry - stop) != 0
+                else (entry - float(exit_p)) / (stop - entry)
+                if direction == "BEARISH" and (stop - entry) != 0
+                else 0.0
+            ),
+            # HMM regime layer (observation-only in Fase 3 — informs analysis, not gating)
+            "hmm_regime":      (None if _hmm_lbl[idx] is None or (isinstance(_hmm_lbl[idx], float) and pd.isna(_hmm_lbl[idx])) else str(_hmm_lbl[idx])),
+            "hmm_confidence":  (None if pd.isna(_hmm_cf[idx])  else round(float(_hmm_cf[idx]),  4)),
+            "hmm_prob_bull":   (None if pd.isna(_hmm_pb[idx])  else round(float(_hmm_pb[idx]),  4)),
+            "hmm_prob_bear":   (None if pd.isna(_hmm_pbr[idx]) else round(float(_hmm_pbr[idx]), 4)),
+            "hmm_prob_chop":   (None if pd.isna(_hmm_pc[idx])  else round(float(_hmm_pc[idx]),  4)),
         }
         trades.append(t)
         icon = "✓" if result=="WIN" else "✗"
@@ -481,6 +512,7 @@ def export_json(all_trades, eq, mc, cond, ratios, price_data=None):
         "conditional": cond,
         "bear_market": {r: d for r, d in bear_market_analysis(all_trades).items() if d},
         "monte_carlo": {k:v for k,v in (mc or {}).items() if k not in ("paths","finals","dds")},
+        "hmm_regime_analysis": _regime_analysis_safe(closed),
         "trades": [{k:(str(v) if k=="timestamp" else v) for k,v in t.items() if k!="timestamp"}
                    for t in all_trades],
         "equity": eq,
@@ -780,8 +812,8 @@ if __name__ == "__main__":
         print(_m("Median MaxDD", f"{mc['avg_dd']:.1f}%",
                                                   "P95 MaxDD",     f"{mc['worst_dd']:.1f}%"))
 
-    # Regime breakdown
-    print(f"  │ REGIME BREAKDOWN {'─'*33}│")
+    # Regime breakdown (macro: BTC slope200)
+    print(f"  │ REGIME BREAKDOWN (macro) {'─'*25}│")
     for _regime in ("BEAR", "BULL", "CHOP"):
         _rts = [t for t in closed if t.get("macro_bias") == _regime]
         if _rts:
@@ -791,6 +823,22 @@ if __name__ == "__main__":
             _rexp = _rpnl/len(_rts)
             print(f"  │ {_regime:5s} {len(_rts):>3d}t  WR {_rwr:>4.0f}%  "
                   f"${_rpnl:>+7,.0f}   avg ${_rexp:>+.0f}/trade{'':>5s}│")
+
+    # Regime breakdown (HMM — Fase 3 observation layer)
+    try:
+        from analysis.stats import regime_analysis as _regime_analysis
+        _hmm_stats = _regime_analysis(closed)
+    except Exception as _e:
+        _hmm_stats = {}
+        log.debug(f"regime_analysis failed: {_e}")
+    if any(_hmm_stats.get(r, {}).get("n", 0) for r in ("BULL", "BEAR", "CHOP")):
+        print(f"  │ REGIME BREAKDOWN (HMM)  {'─'*26}│")
+        for _regime in ("BEAR", "BULL", "CHOP"):
+            _st = _hmm_stats.get(_regime, {})
+            if _st.get("n", 0):
+                _hpnl = sum(t["pnl"] for t in closed if t.get("hmm_regime") == _regime)
+                print(f"  │ {_regime:5s} {_st['n']:>3d}t  WR {_st['wr']:>4.0f}%  "
+                      f"${_hpnl:>+7,.0f}   avgR {_st['avg_r']:>+.2f}  sort {_st['sortino']:>+.2f}│")
 
     # Conditional omega
     print(f"  │ CONDITIONAL Omega SCORE {'─'*27}│")
