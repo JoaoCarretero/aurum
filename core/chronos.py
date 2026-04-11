@@ -10,10 +10,15 @@ Features generated:
 3. Momentum Decay — exponential decay rate of current momentum
 4. Fractal Dimension — rolling Hurst exponent
 5. Seasonality Score — hour/day edge from historical patterns
+
+HMM backend order of preference:
+1. hmmlearn.GaussianHMM  (if installed)
+2. GaussianHMMNp         (numpy-pure fallback implemented below)
 """
 import logging
 import numpy as np
 import pandas as pd
+from scipy.special import logsumexp
 
 log = logging.getLogger("chronos")
 
@@ -32,6 +37,371 @@ try:
     _HAS_ARCH = True
 except ImportError:
     pass
+
+
+# ══════════════════════════════════════════════════════════════
+#  0. GaussianHMMNp — numpy-pure Gaussian HMM (diagonal cov)
+# ══════════════════════════════════════════════════════════════
+class GaussianHMMNp:
+    """Minimal Gaussian-emission HMM with diagonal covariances.
+
+    Implements Baum-Welch (EM) training, forward-backward posteriors,
+    and Viterbi decoding in log-space for numerical stability.
+
+    Purpose: disciplined fallback when ``hmmlearn`` cannot be installed
+    (e.g. Python 3.14 on Windows without MSVC Build Tools). The API
+    mirrors the subset of ``hmmlearn.hmm.GaussianHMM`` we actually use.
+
+    Parameters
+    ----------
+    n_states : number of hidden states K
+    n_iter   : max EM iterations
+    tol      : relative log-likelihood convergence tolerance
+    random_state : seed for deterministic initialisation
+    min_covar : floor applied to variances for numerical safety
+    """
+
+    _LOG_ZERO_EPS = 1e-300
+
+    def __init__(self, n_states=3, n_iter=100, tol=1e-4,
+                 random_state=None, min_covar=1e-6):
+        self.n_states = int(n_states)
+        self.n_iter = int(n_iter)
+        self.tol = float(tol)
+        self.random_state = random_state
+        self.min_covar = float(min_covar)
+
+    # ── Initialisation ────────────────────────────────────────
+    def _kmeans_init(self, X, rng, max_iter=25):
+        """Lloyd's k-means to seed the HMM means robustly."""
+        n_samples, n_features = X.shape
+        K = self.n_states
+        if n_samples < K:
+            # Pad with random draws when the sequence is shorter than K.
+            pick = rng.integers(0, max(n_samples, 1), size=K)
+            return X[pick].copy() if n_samples else np.zeros((K, n_features))
+
+        # Seed centers via k-means++ (deterministic under the given rng).
+        first = int(rng.integers(0, n_samples))
+        centers = [X[first]]
+        for _ in range(1, K):
+            d2 = np.min(
+                np.sum((X[:, None, :] - np.array(centers)[None, :, :]) ** 2, axis=2),
+                axis=1,
+            )
+            total = d2.sum()
+            if total <= 0:
+                centers.append(X[int(rng.integers(0, n_samples))])
+                continue
+            probs = d2 / total
+            idx = int(rng.choice(n_samples, p=probs))
+            centers.append(X[idx])
+        centers = np.array(centers, dtype=float)
+
+        for _ in range(max_iter):
+            dists = np.sum(
+                (X[:, None, :] - centers[None, :, :]) ** 2, axis=2
+            )
+            labels = dists.argmin(axis=1)
+            new_centers = centers.copy()
+            for k in range(K):
+                mask = labels == k
+                if mask.any():
+                    new_centers[k] = X[mask].mean(axis=0)
+            if np.allclose(new_centers, centers, atol=1e-8):
+                centers = new_centers
+                break
+            centers = new_centers
+        return centers
+
+    def _init_params(self, X):
+        n_samples, n_features = X.shape
+        K = self.n_states
+        rng = np.random.default_rng(self.random_state)
+
+        self.means_ = self._kmeans_init(X, rng)
+
+        global_var = X.var(axis=0) if n_samples > 1 else np.ones(n_features)
+        global_var = np.maximum(global_var, self.min_covar)
+        self.covars_ = np.tile(global_var, (K, 1))
+
+        self.startprob_ = np.full(K, 1.0 / K)
+
+        # Persistent transition (diagonal dominant) reflects our prior
+        # that regimes don't flip every bar.
+        self.transmat_ = np.full((K, K), 0.05 / max(K - 1, 1))
+        np.fill_diagonal(self.transmat_, 0.95)
+        if K == 1:
+            self.transmat_ = np.ones((1, 1))
+
+    # ── Emission log-probabilities ────────────────────────────
+    def _log_gaussian(self, X):
+        T, D = X.shape
+        K = self.n_states
+        log_B = np.empty((T, K))
+        for k in range(K):
+            var = np.maximum(self.covars_[k], self.min_covar)
+            diff = X - self.means_[k]
+            log_B[:, k] = -0.5 * np.sum(
+                np.log(2.0 * np.pi * var) + (diff * diff) / var, axis=1
+            )
+        return log_B
+
+    # ── Forward (log-space) ───────────────────────────────────
+    def _forward(self, log_B):
+        T, K = log_B.shape
+        log_pi = np.log(self.startprob_ + self._LOG_ZERO_EPS)
+        log_A = np.log(self.transmat_ + self._LOG_ZERO_EPS)
+        log_alpha = np.empty((T, K))
+        log_alpha[0] = log_pi + log_B[0]
+        for t in range(1, T):
+            log_alpha[t] = logsumexp(log_alpha[t - 1, :, None] + log_A, axis=0) + log_B[t]
+        ll = logsumexp(log_alpha[-1])
+        return log_alpha, ll
+
+    # ── Backward (log-space) ──────────────────────────────────
+    def _backward(self, log_B):
+        T, K = log_B.shape
+        log_A = np.log(self.transmat_ + self._LOG_ZERO_EPS)
+        log_beta = np.zeros((T, K))
+        for t in range(T - 2, -1, -1):
+            log_beta[t] = logsumexp(
+                log_A + (log_B[t + 1] + log_beta[t + 1])[None, :], axis=1
+            )
+        return log_beta
+
+    # ── Fit via Baum-Welch ────────────────────────────────────
+    def fit(self, X):
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        if X.shape[0] == 1 and X.shape[1] != 1 and X.ndim == 2:
+            # Treat 1-D input as column vector
+            pass
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        self._init_params(X)
+        n_samples = X.shape[0]
+        K = self.n_states
+
+        if n_samples < 2 or K == 1:
+            return self
+
+        prev_ll = -np.inf
+        for _ in range(self.n_iter):
+            log_B = self._log_gaussian(X)
+            log_alpha, ll = self._forward(log_B)
+            log_beta = self._backward(log_B)
+
+            # Posteriors gamma_t(k)
+            log_gamma = log_alpha + log_beta
+            log_gamma -= logsumexp(log_gamma, axis=1, keepdims=True)
+            gamma = np.exp(log_gamma)
+
+            # Pairwise posteriors xi_t(i,j), t = 0..T-2
+            log_A = np.log(self.transmat_ + self._LOG_ZERO_EPS)
+            log_xi = (
+                log_alpha[:-1, :, None]
+                + log_A[None, :, :]
+                + log_B[1:, None, :]
+                + log_beta[1:, None, :]
+                - ll
+            )
+            # Sum over time in log-space -> (K, K)
+            xi_sum = np.exp(logsumexp(log_xi, axis=0))
+
+            # M-step
+            self.startprob_ = gamma[0] / max(gamma[0].sum(), self._LOG_ZERO_EPS)
+            denom = xi_sum.sum(axis=1, keepdims=True)
+            denom = np.where(denom > 0, denom, 1.0)
+            self.transmat_ = xi_sum / denom
+
+            gamma_sum = gamma.sum(axis=0)
+            gamma_sum_safe = np.where(gamma_sum > 0, gamma_sum, 1.0)
+            self.means_ = (gamma.T @ X) / gamma_sum_safe[:, None]
+            for k in range(K):
+                diff = X - self.means_[k]
+                self.covars_[k] = (gamma[:, k, None] * diff * diff).sum(axis=0) / gamma_sum_safe[k]
+                self.covars_[k] = np.maximum(self.covars_[k], self.min_covar)
+
+            # Convergence: relative log-likelihood improvement
+            if np.isfinite(prev_ll) and abs(ll - prev_ll) < self.tol * max(abs(ll), 1.0):
+                break
+            prev_ll = ll
+
+        return self
+
+    # ── Inference ─────────────────────────────────────────────
+    def predict_proba(self, X):
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        log_B = self._log_gaussian(X)
+        log_alpha, _ = self._forward(log_B)
+        log_beta = self._backward(log_B)
+        log_gamma = log_alpha + log_beta
+        log_gamma -= logsumexp(log_gamma, axis=1, keepdims=True)
+        return np.exp(log_gamma)
+
+    def predict(self, X):
+        """Viterbi decoding: most likely state sequence."""
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        log_B = self._log_gaussian(X)
+        T, K = log_B.shape
+        log_pi = np.log(self.startprob_ + self._LOG_ZERO_EPS)
+        log_A = np.log(self.transmat_ + self._LOG_ZERO_EPS)
+        delta = np.full((T, K), -np.inf)
+        psi = np.zeros((T, K), dtype=int)
+        delta[0] = log_pi + log_B[0]
+        for t in range(1, T):
+            tmp = delta[t - 1, :, None] + log_A
+            psi[t] = tmp.argmax(axis=0)
+            delta[t] = tmp.max(axis=0) + log_B[t]
+        states = np.zeros(T, dtype=int)
+        states[-1] = int(delta[-1].argmax())
+        for t in range(T - 2, -1, -1):
+            states[t] = psi[t + 1, states[t + 1]]
+        return states
+
+
+# ══════════════════════════════════════════════════════════════
+#  enrich_with_regime — engine-facing HMM wrapper
+# ══════════════════════════════════════════════════════════════
+HMM_COLS = [
+    "hmm_regime", "hmm_regime_label",
+    "hmm_prob_bull", "hmm_prob_bear", "hmm_prob_chop",
+    "hmm_confidence",
+]
+
+
+def _build_hmm_backend(n_states: int, random_state: int = 42):
+    """Prefer hmmlearn.GaussianHMM when available, else fall back to
+    the numpy-pure GaussianHMMNp implemented above."""
+    if _HAS_HMM:
+        return GaussianHMM(
+            n_components=n_states,
+            covariance_type="diag",
+            n_iter=100,
+            random_state=random_state,
+            verbose=False,
+        )
+    return GaussianHMMNp(
+        n_states=n_states,
+        random_state=random_state,
+        n_iter=100,
+    )
+
+
+def enrich_with_regime(df: pd.DataFrame,
+                       n_states: int | None = None,
+                       lookback: int | None = None) -> pd.DataFrame:
+    """Attach HMM regime columns to ``df`` in place-safe fashion.
+
+    Columns added (all float / object, NaN where unavailable):
+        hmm_regime        : int state index under the internal permutation
+        hmm_regime_label  : "BULL" / "BEAR" / "CHOP"
+        hmm_prob_bull     : posterior P(bull | observations)
+        hmm_prob_bear     : posterior P(bear | observations)
+        hmm_prob_chop     : posterior P(chop | observations)
+        hmm_confidence    : max of the three probabilities
+
+    Behaviour:
+        - Idempotent: if every column already exists, returns ``df`` untouched.
+        - Graceful: missing ``close``, empty frame, or training failure
+          leave the HMM columns as NaN instead of raising.
+        - Trains the HMM ONCE per call using the last ``lookback`` bars
+          and then predicts posteriors over the full frame — no per-bar
+          retraining.
+
+    This function is the single entry point every engine should call
+    AFTER ``indicators(df)`` and BEFORE its trade loop.
+    """
+    # Params are loaded lazily so tests / standalone usage don't require
+    # the full config import chain when they pass explicit values.
+    if n_states is None or lookback is None:
+        try:
+            from config.params import CHRONOS_HMM_REGIMES, CHRONOS_HMM_LOOKBACK
+            n_states = n_states or CHRONOS_HMM_REGIMES
+            lookback = lookback or CHRONOS_HMM_LOOKBACK
+        except Exception:
+            n_states = n_states or 3
+            lookback = lookback or 500
+
+    if all(c in df.columns for c in HMM_COLS):
+        return df
+
+    df = df.copy()
+    df["hmm_regime"] = np.nan
+    df["hmm_regime_label"] = None
+    df["hmm_prob_bull"] = np.nan
+    df["hmm_prob_bear"] = np.nan
+    df["hmm_prob_chop"] = np.nan
+    df["hmm_confidence"] = np.nan
+
+    if len(df) == 0 or "close" not in df.columns:
+        return df
+
+    min_warmup = max(n_states * 20, 80)
+    if len(df) < min_warmup:
+        return df
+
+    try:
+        close = df["close"].astype(float).values
+        returns = np.zeros_like(close)
+        returns[1:] = np.log(close[1:] / np.maximum(close[:-1], 1e-12))
+        returns = np.nan_to_num(returns, nan=0.0, posinf=0.0, neginf=0.0)
+
+        vol = (
+            pd.Series(returns).rolling(20, min_periods=5).std()
+            .bfill().fillna(0.01).values
+        )
+
+        n = len(df)
+        start = max(0, n - lookback)
+        X_train = np.column_stack([returns[start:], vol[start:]])
+        X_train = X_train[np.isfinite(X_train).all(axis=1)]
+
+        if len(X_train) < min_warmup:
+            return df
+
+        model = _build_hmm_backend(n_states=n_states)
+        model.fit(X_train)
+
+        X_full = np.column_stack([returns, vol])
+        X_full = np.nan_to_num(X_full, nan=0.0, posinf=0.0, neginf=0.0)
+        proba = model.predict_proba(X_full)
+
+        # Map internal state indices to BEAR/CHOP/BULL by sorting on the
+        # first feature (mean return): lowest = BEAR, highest = BULL.
+        state_means = np.asarray(model.means_)[:, 0]
+        order = np.argsort(state_means)
+        if n_states >= 3:
+            bear_idx = int(order[0])
+            bull_idx = int(order[-1])
+            # Collapse any extra middle states into CHOP
+            chop_idx_set = [int(i) for i in order[1:-1]]
+            df["hmm_prob_bear"] = proba[:, bear_idx]
+            df["hmm_prob_bull"] = proba[:, bull_idx]
+            df["hmm_prob_chop"] = (
+                proba[:, chop_idx_set].sum(axis=1) if chop_idx_set else 0.0
+            )
+        else:
+            # Degenerate case (n_states < 3): still populate the columns.
+            df["hmm_prob_bear"] = proba[:, int(order[0])]
+            df["hmm_prob_bull"] = proba[:, int(order[-1])]
+            df["hmm_prob_chop"] = 0.0
+
+        prob_mat = df[["hmm_prob_bear", "hmm_prob_chop", "hmm_prob_bull"]].values
+        label_arr = np.array(["BEAR", "CHOP", "BULL"])
+        winner = prob_mat.argmax(axis=1)
+        df["hmm_regime"] = winner.astype(float)
+        df["hmm_regime_label"] = label_arr[winner]
+        df["hmm_confidence"] = prob_mat.max(axis=1)
+
+    except Exception as e:
+        log.warning(f"enrich_with_regime failed: {e}")
+
+    return df
 
 
 # ══════════════════════════════════════════════════════════════

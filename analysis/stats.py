@@ -2,6 +2,62 @@
 import numpy as np
 from config.params import ACCOUNT_SIZE
 
+REGIME_LABELS = ("BULL", "BEAR", "CHOP")
+
+
+def regime_analysis(trades: list[dict]) -> dict:
+    """Group a list of trade dicts by their ``hmm_regime`` label and
+    compute per-regime summary metrics.
+
+    Expected trade fields:
+        - ``hmm_regime``  : "BULL" / "BEAR" / "CHOP" (trades without
+                            this key are ignored)
+        - ``r_multiple``  : realised R multiple (float)
+
+    Returns a dict keyed by regime with metrics:
+        {
+            "BULL": {"n": int, "wr": float, "avg_r": float, "sortino": float},
+            "BEAR": {...},
+            "CHOP": {...},
+        }
+    Regimes with zero trades still appear in the output with ``n=0`` so
+    downstream code can iterate deterministically.
+    """
+    groups: dict[str, list[float]] = {r: [] for r in REGIME_LABELS}
+    for t in trades:
+        regime = t.get("hmm_regime")
+        if regime in groups:
+            try:
+                groups[regime].append(float(t.get("r_multiple", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                continue
+
+    result: dict[str, dict] = {}
+    for regime, rs in groups.items():
+        n = len(rs)
+        if n == 0:
+            result[regime] = {"n": 0, "wr": 0.0, "avg_r": 0.0, "sortino": 0.0}
+            continue
+        rs_arr = np.asarray(rs, dtype=float)
+        wins = int((rs_arr > 0).sum())
+        wr = 100.0 * wins / n
+        avg_r = float(rs_arr.mean())
+        neg = rs_arr[rs_arr < 0]
+        if len(neg) > 1:
+            downside = float(neg.std(ddof=1))
+        elif len(neg) == 1:
+            downside = float(abs(neg[0]))
+        else:
+            downside = 0.0
+        sortino = (avg_r / downside) if downside > 0 else 0.0
+        result[regime] = {
+            "n": n,
+            "wr": float(wr),
+            "avg_r": avg_r,
+            "sortino": float(sortino),
+        }
+    return result
+
 def equity_stats(pnl_list, start=ACCOUNT_SIZE):
     eq = [start]
     for p in pnl_list: eq.append(eq[-1]+p)
