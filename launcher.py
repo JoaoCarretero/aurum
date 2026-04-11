@@ -5293,14 +5293,30 @@ class App(tk.Tk):
         def _fmt_n(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "—"
         def _fmt_m(v): return f"${v:+,.0f}" if v is not None else "—"
 
+        # [Backlog #7] Pre-L6 warning badge for engines whose pre-fix
+        # reports are potentially inflated. Runs written before commit
+        # ea1f6ba (2026-04-11) are tagged in the RUN column with a "⚠"
+        # prefix. All five engines that only got the aggregate notional
+        # cap in that commit are flagged; historical runs of citadel
+        # (backtest.py) are untagged because L6 landed earlier there.
+        _L6_FIX_DATE = "2026-04-11"
+        _L6_AFFECTED = {"mercurio", "thoth", "harmonics", "newton",
+                         "multistrategy"}
+
         for run in runs[:50]:
             run_id = run.get("run_id", "?")
-            ts     = self._bt_fmt_timestamp(run.get("timestamp", ""))
+            engine = str(run.get("engine") or "").lower()
+            ts_raw = run.get("timestamp") or ""
+            ts     = self._bt_fmt_timestamp(ts_raw)
             n_tr   = run.get("n_trades") or 0
             wr     = run.get("win_rate")
             pnl    = run.get("pnl")
             sh     = run.get("sharpe")
             dd     = run.get("max_dd_pct")
+
+            pre_l6 = (engine in _L6_AFFECTED
+                      and isinstance(ts_raw, str)
+                      and ts_raw < _L6_FIX_DATE)
 
             row = tk.Frame(list_wrap, bg=BG, cursor="hand2")
             row.pack(fill="x", pady=0)
@@ -5308,13 +5324,24 @@ class App(tk.Tk):
             pnl_col = GREEN if (pnl or 0) > 0 else (RED if (pnl or 0) < 0 else DIM)
             # Strip 'citadel_' prefix from run_id for compactness — the
             # column is 17 chars wide, so keep up to 16 chars of content.
-            short_id = run_id.replace("citadel_", "")[:16]
+            # When tagged as pre-L6, prefix "! " eats 2 chars (ASCII to
+            # avoid tk font fallback weirdness on the unicode warning
+            # glyph; color-only cue in the RUN cell instead).
+            short_id = run_id.replace("citadel_", "")
+            if pre_l6:
+                short_id = ("! " + short_id)[:16]
+            else:
+                short_id = short_id[:16]
 
             # Widths pulled from _BT_COLS to guarantee header ↔ row parity.
             (_dw, _rw, _tw, _ww, _pw, _shw, _ddw) = [w for _, w in _BT_COLS]
+            # Pre-L6 runs render the RUN cell in RED to match the "!"
+            # prefix; the rest of the row keeps its normal coloring so
+            # the PnL/Sharpe contrast still works.
+            run_col = RED if pre_l6 else AMBER
             cells = [
                 (ts,                  _dw,  WHITE,   "normal"),
-                (short_id,            _rw,  AMBER,   "bold"),
+                (short_id,            _rw,  run_col, "bold"),
                 (f"{n_tr}",           _tw,  WHITE,   "normal"),
                 (_fmt_n(wr),          _ww,  WHITE,   "normal"),
                 (_fmt_m(pnl),         _pw,  pnl_col, "bold"),
