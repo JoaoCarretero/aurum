@@ -50,23 +50,144 @@ def _save_state(state: dict):
     STATE_FILE.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
 
-def _is_alive(pid: int) -> bool:
+# Windows API constants
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
+
+
+def _win_get_creation_time(pid: int) -> int | None:
+    """Return the Windows creation time of ``pid`` as a 100-ns FILETIME int.
+
+    The FILETIME encodes 100-nanosecond intervals since 1601-01-01 UTC and
+    is process-unique: two different processes (including a new PID that
+    inherited the slot of a long-dead one) will never share the exact same
+    FILETIME. That's what makes it the load-bearing field for the D5 /
+    PID-recycling defense.
+
+    Returns None if the process cannot be opened or the API call fails.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        creation = wintypes.FILETIME()
+        exit_t   = wintypes.FILETIME()
+        kernel_t = wintypes.FILETIME()
+        user_t   = wintypes.FILETIME()
+        ok = kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_t),
+            ctypes.byref(kernel_t),
+            ctypes.byref(user_t),
+        )
+        if not ok:
+            return None
+        return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _win_get_image_name(pid: int) -> str | None:
+    """Return the basename of the process image (lowercased), or None.
+
+    Typical values for tracked engines: ``python.exe`` or ``pythonw.exe``.
+    Any other value — e.g. ``chrome.exe``, ``svchost.exe`` — is a clear
+    signal that the PID has been recycled and identity verification should
+    fail the _is_alive check.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(len(buf))
+        ok = kernel32.QueryFullProcessImageNameW(
+            handle, 0, buf, ctypes.byref(size))
+        if not ok:
+            return None
+        return Path(buf.value).name.lower()
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _is_alive(pid: int, expected: dict | None = None) -> bool:
+    """Return True iff ``pid`` is alive AND matches the expected identity.
+
+    Two-layer check:
+
+    1. **Liveness** — OpenProcess + GetExitCodeProcess (Windows) or
+       os.kill(pid, 0) (POSIX). Matches the pre-D5 behavior.
+
+    2. **Identity** — when ``expected`` is a tracked proc dict, the
+       Windows FILETIME creation_time and image_name of the current PID
+       must match the values captured by ``spawn()`` when the tracked
+       process first started. Any mismatch means the PID has been
+       recycled (Windows does this aggressively) and the function returns
+       False even though the OS says something with that PID is running.
+
+       This is the D5 / PID-recycling defense. Without it, a zombie proc
+       entry can silently "come back to life" as soon as Windows gives
+       its PID to an unrelated process (browser, svchost, …), and a
+       subsequent stop_proc call would taskkill that unrelated process.
+
+    ``expected`` is optional — legacy callers that still pass only ``pid``
+    get the old liveness-only behavior. New callers and all stop_proc /
+    delete_proc paths MUST pass the tracked entry.
+    """
+    # Step 1: plain liveness
     try:
         if sys.platform == "win32":
             import ctypes
             kernel32 = ctypes.windll.kernel32
-            handle = kernel32.OpenProcess(0x1000, False, pid)
-            if handle:
+            handle = kernel32.OpenProcess(
+                _PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            try:
                 exit_code = ctypes.c_ulong()
                 kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                if exit_code.value != _STILL_ACTIVE:
+                    return False
+            finally:
                 kernel32.CloseHandle(handle)
-                return exit_code.value == 259
-            return False
         else:
             os.kill(pid, 0)
-            return True
     except (OSError, PermissionError):
         return False
+
+    if expected is None:
+        return True
+
+    # Step 2: identity. Windows only for now — POSIX falls back to liveness.
+    if sys.platform != "win32":
+        return True
+
+    exp_ct = expected.get("creation_time")
+    if exp_ct is not None:
+        current_ct = _win_get_creation_time(pid)
+        if current_ct != exp_ct:
+            return False
+
+    exp_img = expected.get("image_name")
+    if exp_img is not None:
+        current_img = _win_get_image_name(pid)
+        if current_img != exp_img:
+            return False
+
+    return True
 
 
 def spawn(engine: str, stdin_lines: list[str] | None = None) -> dict | None:
@@ -78,8 +199,8 @@ def spawn(engine: str, stdin_lines: list[str] | None = None) -> dict | None:
 
     state = _load_state()
     for pid_str, info in state["procs"].items():
-        if info["engine"] == engine and _is_alive(int(pid_str)):
-            return None  # already running
+        if info["engine"] == engine and _is_alive(int(pid_str), expected=info):
+            return None  # already running (identity-verified)
 
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     log_dir = Path("data/.proc_logs")
@@ -124,6 +245,17 @@ def spawn(engine: str, stdin_lines: list[str] | None = None) -> dict | None:
         "log_file": str(log_file),
         "status": "running",
     }
+    # [Fase 1 / D5] Capture process identity fingerprints the instant the
+    # child process exists. creation_time is a 100ns FILETIME that is
+    # process-unique — any future PID that inherits proc.pid will have a
+    # different creation_time and fail _is_alive's identity check.
+    if sys.platform == "win32":
+        ct = _win_get_creation_time(proc.pid)
+        if ct is not None:
+            info["creation_time"] = ct
+        img = _win_get_image_name(proc.pid)
+        if img is not None:
+            info["image_name"] = img
     state["procs"][str(proc.pid)] = info
     _save_state(state)
     return info
@@ -135,17 +267,66 @@ def list_procs() -> list[dict]:
     result = []
     for pid_str, info in state["procs"].items():
         pid = int(pid_str)
-        alive = _is_alive(pid)
+        # Identity-aware liveness — a recycled PID reads as False even if
+        # the OS has something running with that number.
+        alive = _is_alive(pid, expected=info)
         info["alive"] = alive
         if not alive and info.get("status") == "running":
             info["status"] = "finished"
+            info.setdefault("finished", datetime.now().isoformat())
         result.append(info)
     return sorted(result, key=lambda x: x.get("started", ""), reverse=True)
 
 
-def stop_proc(pid: int) -> bool:
-    if not _is_alive(pid):
-        return False
+class PidRecycledError(RuntimeError):
+    """Raised when stop_proc detects a PID that has been reused by an
+    unrelated process. This is the D5 safety net — refuse to taskkill
+    something we didn't spawn."""
+
+
+def stop_proc(pid: int, expected: dict | None = None) -> bool:
+    """Stop a tracked process, verifying identity to defend against
+    Windows PID recycling.
+
+    Safety contract:
+    - If ``expected`` is None, auto-fetch the tracked entry from the
+      state file. This means UI code that still calls ``stop_proc(pid)``
+      gets identity verification automatically, as long as the PID is
+      in the state file (which it is for every engine spawned through
+      this module).
+    - If the pid is NOT in the state file and ``expected`` is still
+      None, falls back to the old liveness-only check. This preserves
+      the pre-D5 behavior for the narrow case where a caller holds a
+      pid from outside this module.
+    - If ``expected`` IS provided and identity verification fails, we
+      raise PidRecycledError rather than silently taskkilling the wrong
+      process. The caller is forced to notice.
+
+    Returns True iff the process was running AND was successfully killed.
+    Returns False if it was already dead.
+    """
+    if expected is None:
+        state = _load_state()
+        expected = state["procs"].get(str(pid))
+
+    # Liveness-only when we have no identity fingerprint to compare against.
+    if expected is None:
+        if not _is_alive(pid):
+            return False
+    else:
+        # Separate the two checks so we can tell "already dead" (benign)
+        # apart from "PID was reused by someone else" (CRITICAL).
+        if not _is_alive(pid):  # liveness-only first
+            return False
+        if not _is_alive(pid, expected=expected):
+            raise PidRecycledError(
+                f"pid {pid} no longer matches the tracked identity "
+                f"(engine={expected.get('engine')}, "
+                f"expected creation_time={expected.get('creation_time')}, "
+                f"expected image_name={expected.get('image_name')}). "
+                f"Refusing to taskkill an unrelated process."
+            )
+
     try:
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/F", "/PID", str(pid)],
@@ -161,14 +342,21 @@ def stop_proc(pid: int) -> bool:
 
 
 def delete_proc(pid: int) -> bool:
-    """Remove a process entry from state and delete its log file."""
+    """Remove a process entry from state and delete its log file.
+
+    If the tracked process is still alive under its original identity,
+    it is stopped first (identity-verified). If the PID has been
+    recycled, stop_proc raises PidRecycledError and we propagate — the
+    caller decides whether to force-delete the stale entry without
+    touching the OS process.
+    """
     state = _load_state()
     pid_str = str(pid)
     info = state["procs"].get(pid_str)
     if not info:
         return False
-    if _is_alive(pid):
-        stop_proc(pid)
+    if _is_alive(pid, expected=info):
+        stop_proc(pid, expected=info)
     log_file = info.get("log_file")
     if log_file:
         try:
@@ -212,7 +400,8 @@ def _cleanup():
 
     for pid_str, info in state["procs"].items():
         pid = int(pid_str)
-        if not _is_alive(pid) and info.get("status") == "running":
+        # Identity-aware check — a recycled PID reads as dead here too.
+        if not _is_alive(pid, expected=info) and info.get("status") == "running":
             info["status"] = "finished"
             info["finished"] = now.isoformat()
 
