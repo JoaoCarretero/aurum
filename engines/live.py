@@ -66,6 +66,34 @@ from bot.telegram import TelegramNotifier
 # which code produced a given order.
 LIVE_ENGINE_VERSION = "live-v1.0-fase4"
 
+# [Fase 4-G] Canary mode — capital-scaling wrapper for a new live
+# session. Three states, OFF by default. When "canary" is active the
+# engine multiplies every size by CANARY_CAPITAL_PCT so the first N
+# trades run at a small fraction of the full allocation. Promotion to
+# "full" is a manual decision — the engine does not auto-ramp.
+#
+# Override via env var AURUM_CANARY_MODE (off|canary|full) and
+# AURUM_CANARY_PCT (0.01..1.0). Examples:
+#   AURUM_CANARY_MODE=canary AURUM_CANARY_PCT=0.01  → 1% size
+#   AURUM_CANARY_MODE=full                           → 100% (same as off)
+#
+# Promotion criteria (human decision, not code):
+#   - n_trades >= 50 in the canary window
+#   - Sharpe   > 1.5 over those trades
+#   - max_dd   < 5%
+#   - no hard_block or kill_switch events during the window
+# When all four hold, the user flips AURUM_CANARY_MODE=full and
+# restarts the engine.
+CANARY_MODE: str = os.environ.get("AURUM_CANARY_MODE", "off").lower()
+try:
+    CANARY_CAPITAL_PCT: float = float(os.environ.get("AURUM_CANARY_PCT", "0.01"))
+except ValueError:
+    CANARY_CAPITAL_PCT = 0.01
+# Clamp to sane range — a 0 or negative value would be catastrophic,
+# and >1.0 has no meaning.
+if CANARY_CAPITAL_PCT <= 0.0 or CANARY_CAPITAL_PCT > 1.0:
+    CANARY_CAPITAL_PCT = 0.01
+
 
 def _load_risk_gate_config(mode: str) -> RiskGateConfig:
     """Load the RiskGateConfig for ``mode`` from config/risk_gates.json.
@@ -1361,6 +1389,21 @@ class LiveEngine:
         client_oid = f"live-{sig['symbol']}-{int(time.time()*1000)}"
         mode = self.orders._mode()
 
+        # [Fase 4-G] Canary capital scaling. If CANARY_MODE == "canary",
+        # multiply the computed size by CANARY_CAPITAL_PCT (default 1%).
+        # "off" and "full" both leave size unchanged. Paper/demo modes
+        # are NOT exempt — the user may want to test the canary path
+        # in paper before flipping to live, so we honor the flag
+        # everywhere. The original unscaled size is preserved in the
+        # audit intent payload for post-hoc review.
+        original_size = float(sig["size"])
+        if CANARY_MODE == "canary":
+            sig["size"] = round(original_size * CANARY_CAPITAL_PCT, 8)
+            log.info(
+                f"  CANARY scaling {sig['symbol']}: "
+                f"{original_size:.4f} → {sig['size']:.4f} "
+                f"(× {CANARY_CAPITAL_PCT:.4f})")
+
         # Intent — we want to open THIS trade, before asking the venue.
         self.audit.write(OrderEvent(
             event="intent",
@@ -1372,15 +1415,18 @@ class LiveEngine:
             price=float(sig["entry"]),
             status="pending",
             payload={
-                "mode":       mode,
-                "stop":       float(sig["stop"]),
-                "target":     float(sig["target"]),
-                "score":      float(sig.get("score", 0.0)),
-                "rr":         float(sig.get("rr", 0.0)),
-                "macro":      sig.get("macro"),
-                "vol_regime": sig.get("vol_regime"),
-                "corr_mult":  sig.get("corr_mult"),
-                "is_chop":    bool(sig.get("is_chop", False)),
+                "mode":           mode,
+                "stop":           float(sig["stop"]),
+                "target":         float(sig["target"]),
+                "score":          float(sig.get("score", 0.0)),
+                "rr":             float(sig.get("rr", 0.0)),
+                "macro":          sig.get("macro"),
+                "vol_regime":     sig.get("vol_regime"),
+                "corr_mult":      sig.get("corr_mult"),
+                "is_chop":        bool(sig.get("is_chop", False)),
+                "canary_mode":    CANARY_MODE,
+                "canary_pct":     CANARY_CAPITAL_PCT if CANARY_MODE == "canary" else 1.0,
+                "original_size":  original_size,
             },
         ))
 
