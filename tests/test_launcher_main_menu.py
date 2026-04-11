@@ -265,3 +265,18 @@ def test_draw_cd_center_accepts_radius_override():
         canvas.destroy()
     finally:
         app.destroy()
+
+
+def test_app_has_splash_pulse_state():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        assert hasattr(app, "_splash_cursor_on")
+        assert isinstance(app._splash_cursor_on, bool)
+        assert hasattr(app, "_splash_pulse_after_id")
+        assert app._splash_pulse_after_id is None
+        assert hasattr(app, "_splash_canvas")
+        assert app._splash_canvas is None
+    finally:
+        app.destroy()

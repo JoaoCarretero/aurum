@@ -788,9 +788,19 @@ class App(tk.Tk):
         self._active_tile_slots = self._TILE_SLOTS         # overridden by splash
         self._active_cd_center = (self._CD_CX, self._CD_CY)  # overridden by splash
 
+        # ─── Splash HL1 gate state ────────────────────────
+        self._splash_cursor_on = True
+        self._splash_pulse_after_id = None
+        self._splash_canvas = None
+
         threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
         self._splash()
+        # HL1 gate state: `_splash_canvas` is written by `_splash()` when the
+        # HL1 rewrite (Task 3) installs the gate canvas; reset it here so that
+        # the default legacy splash doesn't leak a canvas reference into the
+        # pulse-tick state before the real gate is rendered.
+        self._splash_canvas = None
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self._quit)
 
