@@ -98,7 +98,8 @@ _conn = ConnectionManager()
 MAIN_MENU = [
     ("MARKETS",        "markets",     "Seleccionar mercado activo"),
     ("CONNECTIONS",    "connections", "Contas & exchanges"),
-    ("TERMINAL",       "terminal",    "Data, charts, research"),
+    ("TERMINAL",       "terminal",    "Charts, macro, research"),
+    ("DATA",           "data",        "Backtests · engine logs · reports"),
     ("STRATEGIES",     "strategies",  "Backtest & live engines"),
     ("ARBITRAGE",      "alchemy",     "Cross-venue arbitrage cockpit"),
     ("RISK",           "risk",        "Portfolio & risk console"),
@@ -589,7 +590,7 @@ class App(tk.Tk):
     # ─── MENU ────────────────────────────────────────────
     def _menu(self, key):
         # Route to specialized screens
-        if key in ("markets", "connections", "terminal", "risk", "settings", "alchemy"):
+        if key in ("markets", "connections", "terminal", "risk", "settings", "alchemy", "data"):
             {
                 "markets": self._markets,
                 "connections": self._connections,
@@ -597,6 +598,7 @@ class App(tk.Tk):
                 "risk": self._risk_menu,
                 "settings": self._config,
                 "alchemy": self._alchemy_enter,
+                "data": self._data_center,
             }[key]()
             return
         if key == "strategies":
@@ -2319,6 +2321,451 @@ class App(tk.Tk):
         back_btn.bind("<Button-1>", lambda e: self._menu("main"))
         back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=AMBER))
         back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
+
+    # ─── DATA CENTER (hub) ─────────────────────────────────
+    def _data_center(self):
+        """Unified entry point for everything data: backtest metrics,
+        running/finished engine logs, and raw report files.
+
+        The hub has three cards. Each card opens a focused screen:
+
+          BACKTESTS  →  crypto-futures dashboard routed to its Backtest tab
+                        (reuses _dash_backtest_render + detail panel with
+                        OPEN HTML / DELETE buttons).
+          ENGINE LOGS → _data_engines (new screen with proc list +
+                        live log tail streaming).
+          REPORTS    →  legacy _data raw JSON/log file browser.
+        """
+        self._clr(); self._clear_kb()
+        self.h_path.configure(text="> DATA")
+        self.h_stat.configure(text="CENTER", fg=AMBER_D)
+        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports")
+        self._kb("<Escape>", lambda: self._menu("main"))
+        self._kb("<Key-0>", lambda: self._menu("main"))
+        self._bind_global_nav()
+
+        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
+        tk.Label(f, text="DATA CENTER", font=(FONT, 14, "bold"),
+                 fg=AMBER, bg=BG).pack(pady=(0, 6))
+        tk.Label(f, text="backtests · engine logs · reports",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 22))
+
+        # Quick counts for each card so the user sees signal, not just titles.
+        bt_count = self._data_count_backtests()
+        eng_running, eng_total = self._data_count_procs()
+        rep_count = self._data_count_reports()
+
+        cards = [
+            ("B", "BACKTESTS", "backtest runs, metrics, delete",
+             f"{bt_count} runs on disk",
+             lambda: self._open_backtest_metrics()),
+            ("E", "ENGINE LOGS", "running + recent engines, live log tail",
+             f"{eng_running} running · {eng_total} total",
+             lambda: self._data_engines()),
+            ("R", "REPORTS", "raw JSON / log file browser",
+             f"{rep_count} files indexed",
+             lambda: self._data()),
+        ]
+
+        for key_label, name, desc, stat, cmd in cards:
+            row = tk.Frame(f, bg=BG, cursor="hand2")
+            row.pack(fill="x", padx=80, pady=3)
+
+            tk.Label(row, text=f" {key_label} ", font=(FONT, 10, "bold"),
+                     fg=BG, bg=AMBER, width=3).pack(side="left")
+
+            txt_frame = tk.Frame(row, bg=BG3)
+            txt_frame.pack(side="left", fill="x", expand=True, padx=(0, 0))
+            name_lbl = tk.Label(txt_frame, text=f"  {name}", font=(FONT, 11, "bold"),
+                                fg=WHITE, bg=BG3, anchor="w")
+            name_lbl.pack(fill="x", padx=6, pady=(5, 0))
+            desc_lbl = tk.Label(txt_frame, text=f"  {desc}", font=(FONT, 8),
+                                fg=DIM, bg=BG3, anchor="w")
+            desc_lbl.pack(fill="x", padx=6)
+            stat_lbl = tk.Label(txt_frame, text=f"  {stat}", font=(FONT, 7),
+                                fg=AMBER_D, bg=BG3, anchor="w")
+            stat_lbl.pack(fill="x", padx=6, pady=(0, 5))
+
+            for w in (row, txt_frame, name_lbl, desc_lbl, stat_lbl):
+                w.bind("<Button-1>", lambda e, c=cmd: c())
+                w.bind("<Enter>", lambda e, n=name_lbl: n.configure(fg=AMBER))
+                w.bind("<Leave>", lambda e, n=name_lbl: n.configure(fg=WHITE))
+
+            key_bind = f"<Key-{key_label.lower()}>"
+            self._kb(key_bind, cmd)
+
+        tk.Frame(f, bg=BG, height=22).pack()
+        back_btn = tk.Label(f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM,
+                            bg=BG3, cursor="hand2", padx=12, pady=4)
+        back_btn.pack()
+        back_btn.bind("<Button-1>", lambda e: self._menu("main"))
+        back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=AMBER))
+        back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
+
+    # ── Counts used by the DATA CENTER cards ──────────────────
+    def _data_count_backtests(self) -> int:
+        try:
+            runs_dir = ROOT / "data" / "runs"
+            if runs_dir.exists():
+                return sum(1 for d in runs_dir.iterdir() if d.is_dir())
+        except OSError:
+            pass
+        return 0
+
+    def _data_count_procs(self) -> tuple[int, int]:
+        try:
+            from core.proc import list_procs
+            procs = list_procs()
+            running = sum(1 for p in procs if p.get("alive"))
+            return running, len(procs)
+        except Exception:
+            return 0, 0
+
+    def _data_count_reports(self) -> int:
+        total = 0
+        try:
+            dd = ROOT / "data"
+            if not dd.exists():
+                return 0
+            for sub in ("runs", "darwin", "arbitrage",
+                        "mercurio", "newton", "thoth",
+                        "prometeu", "multistrategy", "live"):
+                p = dd / sub
+                if p.exists():
+                    total += sum(1 for _ in p.rglob("*.json"))
+        except OSError:
+            pass
+        return total
+
+    def _open_backtest_metrics(self):
+        """Jump straight to the Backtest tab of the crypto-futures dashboard.
+
+        The user's mental model is "data → backtests"; the existing dashboard
+        is locked behind Markets > Crypto Futures > tab 5, which is not
+        discoverable. This wrapper preserves the dashboard's live widgets and
+        routing logic while giving DATA CENTER a direct entrance.
+        """
+        self._crypto_dashboard()
+        # Tab switch runs after the dashboard shell finishes building.
+        self.after(0, lambda: self._dash_render_tab("backtest"))
+
+    # ─── ENGINE LOGS (live proc list + log tail) ──────────────
+    def _data_engines(self):
+        """Live engine control & log tail view.
+
+        Implements part of Fase 2 from the professional-fund-readiness plan:
+        two-column layout with a proc list on the left (auto-refresh 2s) and
+        a live log tail stream on the right for the currently selected proc.
+
+        Backed by core.proc.list_procs (identity-aware, safe against PID
+        recycling) and stop_proc (raises PidRecycledError on mismatch rather
+        than taskkilling the wrong process).
+        """
+        self._clr(); self._clear_kb()
+        self.h_path.configure(text="> DATA > ENGINES")
+        self.h_stat.configure(text="LIVE", fg=GREEN)
+        self.f_lbl.configure(text="ESC voltar  |  click proc to tail  |  STOP / PURGE")
+        self._kb("<Escape>", lambda: self._data_center())
+
+        # State for this screen — held as instance attrs so the worker thread
+        # and the UI poll can reach them. Cleaned up on screen exit.
+        self._eng_selected_pid: int | None = None
+        self._eng_tail_stop: threading.Event = threading.Event()
+        self._eng_tail_thread: threading.Thread | None = None
+        self._eng_log_queue: queue.Queue = queue.Queue()
+        self._eng_after_id: str | None = None
+
+        outer = tk.Frame(self.main, bg=BG)
+        outer.pack(fill="both", expand=True, padx=16, pady=12)
+
+        tk.Label(outer, text="ENGINE LOGS", font=(FONT, 12, "bold"),
+                 fg=AMBER, bg=BG).pack(anchor="w")
+        tk.Label(outer, text="running + recent engines · live log tail · identity-verified stop",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", pady=(0, 10))
+        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(0, 8))
+
+        split = tk.Frame(outer, bg=BG)
+        split.pack(fill="both", expand=True)
+
+        # ── LEFT: proc list ──────────────────────────────────
+        left = tk.Frame(split, bg=BG, width=420)
+        left.pack(side="left", fill="y", padx=(0, 8))
+        left.pack_propagate(False)
+
+        tk.Label(left, text=" [ PROCS ] ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER, padx=4).pack(anchor="w", pady=(0, 4))
+
+        hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
+        for label, width in [("STATE", 7), ("ENGINE", 10), ("PID", 7),
+                             ("STARTED", 12)]:
+            tk.Label(hrow, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG,
+                     width=width, anchor="w").pack(side="left")
+        tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+
+        list_wrap = tk.Frame(left, bg=BG)
+        list_wrap.pack(fill="both", expand=True)
+        self._eng_list_wrap = list_wrap
+
+        # Bottom action bar for the list
+        actions_l = tk.Frame(left, bg=BG); actions_l.pack(fill="x", pady=(6, 0))
+
+        def _do_stop():
+            pid = self._eng_selected_pid
+            if pid is None:
+                self.h_stat.configure(text="NO PROC SELECTED", fg=RED)
+                self.after(1200, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+                return
+            try:
+                from core.proc import stop_proc, PidRecycledError
+                ok = stop_proc(pid)
+                msg = f"STOPPED {pid}" if ok else f"{pid} NOT RUNNING"
+                self.h_stat.configure(text=msg, fg=GREEN if ok else AMBER_D)
+            except PidRecycledError as e:
+                self.h_stat.configure(text=f"REFUSED: PID REUSE", fg=RED)
+                messagebox.showerror("PID recycling detected",
+                                     f"stop_proc refused:\n\n{e}")
+            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            self._eng_refresh()
+
+        def _do_purge():
+            try:
+                from core.proc import purge_finished
+                n = purge_finished()
+                self.h_stat.configure(text=f"PURGED {n}", fg=AMBER)
+            except Exception as e:
+                self.h_stat.configure(text=f"PURGE FAILED: {str(e)[:30]}", fg=RED)
+            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            self._eng_refresh()
+
+        for label, cmd, color in [
+                ("STOP",  _do_stop,  RED),
+                ("PURGE", _do_purge, AMBER_D),
+                ("REFRESH", lambda: self._eng_refresh(), AMBER)]:
+            b = tk.Label(actions_l, text=f"  {label}  ", font=(FONT, 7, "bold"),
+                         fg=color, bg=BG3, cursor="hand2", padx=6, pady=3)
+            b.pack(side="left", padx=2)
+            b.bind("<Button-1>", lambda e, c=cmd: c())
+
+        # ── RIGHT: log tail viewer ───────────────────────────
+        right = tk.Frame(split, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1)
+        right.pack(side="right", fill="both", expand=True)
+
+        tk.Label(right, text=" [ LOG TAIL ] ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER, padx=4).pack(anchor="nw", padx=6, pady=(6, 2))
+
+        self._eng_log_header = tk.Label(
+            right, text=" — select a proc to stream its log — ",
+            font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w")
+        self._eng_log_header.pack(fill="x", padx=6)
+
+        self._eng_log_text = tk.Text(
+            right, wrap="none", bg=BG, fg=WHITE, font=(FONT, 8),
+            insertbackground=WHITE, padx=6, pady=6,
+            borderwidth=0, highlightthickness=0)
+        self._eng_log_text.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+        self._eng_log_text.config(state="disabled")
+
+        # Initial list render + auto-refresh tick
+        self._eng_refresh()
+        self._eng_poll_logs()
+
+    def _eng_refresh(self):
+        """Rebuild the proc list and reschedule the 2s auto-refresh tick."""
+        if not hasattr(self, "_eng_list_wrap"):
+            return
+        try:
+            if not self._eng_list_wrap.winfo_exists():
+                return
+        except Exception:
+            return
+
+        for w in self._eng_list_wrap.winfo_children():
+            try: w.destroy()
+            except Exception: pass
+
+        try:
+            from core.proc import list_procs
+            procs = list_procs()
+        except Exception as e:
+            tk.Label(self._eng_list_wrap,
+                     text=f"  list_procs failed: {e}",
+                     font=(FONT, 7), fg=RED, bg=BG,
+                     anchor="w").pack(fill="x")
+            procs = []
+
+        if not procs:
+            tk.Label(self._eng_list_wrap,
+                     text="  — no tracked engines —",
+                     font=(FONT, 7), fg=DIM, bg=BG,
+                     anchor="w").pack(fill="x", pady=8)
+        else:
+            for p in procs:
+                self._eng_render_row(p)
+
+        # Reschedule
+        try:
+            if getattr(self, "_eng_after_id", None):
+                self.after_cancel(self._eng_after_id)
+        except Exception:
+            pass
+        try:
+            self._eng_after_id = self.after(2000, self._eng_refresh)
+        except Exception:
+            pass
+
+    def _eng_render_row(self, proc: dict):
+        alive = bool(proc.get("alive"))
+        pid = proc.get("pid")
+        engine = proc.get("engine", "?")
+        started = str(proc.get("started", ""))[:16].replace("T", " ")
+        state = "LIVE" if alive else "done"
+        state_color = GREEN if alive else DIM
+
+        row = tk.Frame(self._eng_list_wrap, bg=BG, cursor="hand2")
+        row.pack(fill="x", pady=0)
+
+        cells = [
+            (state,   7,  state_color, "bold"),
+            (engine, 10,  WHITE,       "bold"),
+            (str(pid), 7, AMBER_D,     "normal"),
+            (started, 12, DIM,         "normal"),
+        ]
+        labels = []
+        for text, width, color, weight in cells:
+            lbl = tk.Label(row, text=text, font=(FONT, 7, weight),
+                           fg=color, bg=BG, width=width, anchor="w")
+            lbl.pack(side="left")
+            labels.append(lbl)
+
+        def _select(_e=None, p=proc):
+            self._eng_select(p)
+        def _hover_on(_e=None, labels=labels):
+            for l in labels:
+                try: l.configure(bg=BG3)
+                except Exception: pass
+        def _hover_off(_e=None, labels=labels, p=proc):
+            bg = BG3 if self._eng_selected_pid == p.get("pid") else BG
+            for l in labels:
+                try: l.configure(bg=bg)
+                except Exception: pass
+
+        for w in (row, *labels):
+            w.bind("<Button-1>", _select)
+            w.bind("<Enter>", _hover_on)
+            w.bind("<Leave>", _hover_off)
+
+        if self._eng_selected_pid == pid:
+            for l in labels:
+                try: l.configure(bg=BG3)
+                except Exception: pass
+
+    def _eng_select(self, proc: dict):
+        """Stop old log tail, start a new one for the selected proc."""
+        pid = proc.get("pid")
+        self._eng_selected_pid = pid
+
+        # Stop old tail worker if any
+        if self._eng_tail_thread is not None:
+            self._eng_tail_stop.set()
+            self._eng_tail_thread = None
+        self._eng_tail_stop = threading.Event()
+
+        # Clear the text widget and reset header
+        try:
+            self._eng_log_text.config(state="normal")
+            self._eng_log_text.delete("1.0", "end")
+            self._eng_log_text.config(state="disabled")
+        except tk.TclError:
+            return
+
+        log_file = proc.get("log_file") or ""
+        engine = proc.get("engine", "?")
+        self._eng_log_header.configure(
+            text=f"  {engine} · pid {pid} · {log_file}", fg=AMBER_D)
+
+        if not log_file:
+            return
+
+        log_path = ROOT / log_file if not Path(log_file).is_absolute() else Path(log_file)
+        t = threading.Thread(
+            target=self._eng_tail_worker,
+            args=(log_path, self._eng_tail_stop),
+            daemon=True)
+        t.start()
+        self._eng_tail_thread = t
+        # Trigger list re-render so the new selection highlights
+        self._eng_refresh()
+
+    def _eng_tail_worker(self, log_path: Path, stop_event: threading.Event):
+        """Read the log file tail-f style, push new lines into the queue.
+
+        Starts by reading the LAST ~500 lines so the viewer isn't empty on
+        open, then follows appends. The queue is consumed by the UI thread
+        in _eng_poll_logs.
+        """
+        if not log_path.exists():
+            self._eng_log_queue.put(("SYSTEM",
+                                     f"(log file not found: {log_path})"))
+            return
+        try:
+            # Seed with last ~500 lines for context
+            with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+                for line in lines[-500:]:
+                    self._eng_log_queue.put(("LINE", line.rstrip("\n")))
+                fh.seek(0, 2)  # EOF
+
+                while not stop_event.is_set():
+                    line = fh.readline()
+                    if not line:
+                        if stop_event.wait(0.25):
+                            break
+                        continue
+                    self._eng_log_queue.put(("LINE", line.rstrip("\n")))
+        except OSError as e:
+            self._eng_log_queue.put(("SYSTEM", f"(log read error: {e})"))
+
+    def _eng_poll_logs(self):
+        """UI-thread poll: drain the queue, append to the Text widget,
+        cap at 1000 lines to keep memory bounded, reschedule tick."""
+        try:
+            if not hasattr(self, "_eng_log_text"):
+                return
+            if not self._eng_log_text.winfo_exists():
+                return
+        except Exception:
+            return
+
+        drained = 0
+        max_drain = 200  # don't block the UI if logs burst
+        new_lines: list[str] = []
+        try:
+            while drained < max_drain:
+                kind, line = self._eng_log_queue.get_nowait()
+                new_lines.append(line)
+                drained += 1
+        except queue.Empty:
+            pass
+
+        if new_lines:
+            try:
+                self._eng_log_text.config(state="normal")
+                self._eng_log_text.insert("end", "\n".join(new_lines) + "\n")
+                # Cap to 1000 lines — delete oldest
+                total_lines = int(self._eng_log_text.index("end-1c").split(".")[0])
+                if total_lines > 1000:
+                    self._eng_log_text.delete("1.0",
+                                              f"{total_lines - 1000}.0")
+                self._eng_log_text.see("end")
+                self._eng_log_text.config(state="disabled")
+            except tk.TclError:
+                return
+
+        try:
+            self.after(200, self._eng_poll_logs)
+        except Exception:
+            pass
 
     # ─── STRATEGIES (Layer 2) ─────────────────────────────
     def _strategies(self):

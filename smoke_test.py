@@ -178,8 +178,21 @@ def run(quiet: bool = False) -> int:
     # ── MENU routing ──
     section("menu routing")
     for key in ("main", "markets", "connections", "terminal", "strategies",
-                "risk", "command", "settings"):
+                "risk", "command", "settings", "data"):
         call(f"  menu:{key}", app._menu, key)
+
+    # ── DATA CENTER sub-screens ──
+    section("DATA CENTER")
+    call("_data_center",  app._data_center)
+    call("_data_engines", app._data_engines)
+    # Cancel the auto-refresh tick so the loop doesn't keep running past
+    # cleanup. _eng_refresh reschedules itself via self.after — we need to
+    # break the chain before the widget tree is destroyed.
+    if getattr(app, "_eng_after_id", None):
+        try: app.after_cancel(app._eng_after_id)
+        except Exception: pass
+    if getattr(app, "_eng_tail_stop", None):
+        app._eng_tail_stop.set()
 
     # ── ROUND-TRIP BACK TO SPLASH ──
     section("roundtrip splash")
