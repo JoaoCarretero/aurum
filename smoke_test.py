@@ -18,6 +18,7 @@ but not awaited.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 import traceback
@@ -65,6 +66,30 @@ def run(quiet: bool = False) -> int:
     # ── SPLASH + TOP-LEVEL SCREENS ──
     section("SPLASH + TOP-LEVEL")
     call("_splash",         app._splash)
+
+    # ── BLOOMBERG 3D MAIN MENU ──
+    section("BLOOMBERG MAIN MENU")
+    call("_menu_main_bloomberg", app._menu_main_bloomberg)
+    call("focus tile 1",         app._menu_tile_focus, 1)
+    call("focus tile 2",         app._menu_tile_focus, 2)
+    call("focus tile 3",         app._menu_tile_focus, 3)
+    call("focus delta +1",       app._menu_tile_focus_delta, +1)
+    call("expand tile 0",        app._menu_tile_expand, 0)
+    call("sub focus +1",         app._menu_sub_focus_delta, +1)
+    call("collapse",             app._menu_tile_collapse)
+    call("expand tile 2",        app._menu_tile_expand, 2)
+    call("collapse again",       app._menu_tile_collapse)
+    call("live fetch sync",      app._menu_live_fetch_sync)
+    call("live apply",           app._menu_live_apply)
+
+    # ── LEGACY MAIN MENU (feature flag rollback) ──
+    section("LEGACY FIBONACCI MENU")
+    os.environ["AURUM_MENU_STYLE"] = "legacy"
+    try:
+        call("_menu(main) legacy", app._menu, "main")
+    finally:
+        os.environ.pop("AURUM_MENU_STYLE", None)
+
     call("_markets",        app._markets)
     call("_connections",    app._connections)
     call("_terminal",       app._terminal)
