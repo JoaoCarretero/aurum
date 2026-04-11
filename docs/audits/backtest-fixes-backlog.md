@@ -4,7 +4,11 @@
 **Source:** `docs/audits/backtest-physics-core-2026-04-10.md`
 **Scope:** core engine only — `engines/backtest.py`, `core/signals.py`, `core/indicators.py`, `core/portfolio.py`, `core/htf.py`.
 
-This backlog lists only items with status `⚠️ SMELL` or `✗ FAIL` from the audit above. Items are ordered by severity. **No fixes have been applied yet** — this document is the input for a future fixes-only implementation plan.
+> **Status 2026-04-11 — RESOLVED.** Both MÉDIO items in this backlog have been
+> fixed in the core engine. See **Resolution** subsections below each item for
+> the commit, files touched, and behavior at `LEVERAGE = 1` (default) vs `> 1`.
+
+This backlog lists only items with status `⚠️ SMELL` or `✗ FAIL` from the audit above. Items are ordered by severity.
 
 The good news up front: **no critical bugs.** The core engine is causally sound (no look-ahead), applies fees / slippage / funding correctly, and enforces stop/target geometry. See the audit doc for the 9 PASS checks.
 
@@ -12,14 +16,14 @@ The good news up front: **no critical bugs.** The core engine is causally sound 
 
 ## Totals
 
-| Severity | Count |
-|----------|-------|
-| CRÍTICO  | 0     |
-| ALTO     | 0     |
-| MÉDIO    | 2     |
-| BAIXO    | 0     |
-| INFO     | 0     |
-| **Total non-PASS** | **2** |
+| Severity | Count | Resolved |
+|----------|-------|----------|
+| CRÍTICO  | 0     | —        |
+| ALTO     | 0     | —        |
+| MÉDIO    | 2     | 2 ✅     |
+| BAIXO    | 0     | —        |
+| INFO     | 0     | —        |
+| **Total non-PASS** | **2** | **2 ✅** |
 
 Plus 1 check marked `n/a` (L12 — survivorship bias, delegated to the caller that constructs `BASKETS`, outside the core).
 
@@ -48,6 +52,17 @@ and reject (or scale down) any new entry that would push `open_notional + new_si
 **Estimated effort:** 1 small PR. 20-40 lines changed, plus a regression test that simulates 5 concurrent signals and asserts the cap.
 
 **Severity:** MÉDIO. Not a correctness bug in the physics sense — PnL math is right — but it lets the backtest model a reality that real margin systems prohibit.
+
+**Resolution (2026-04-11):** ✅ Fixed in `core/portfolio.py` via new helper
+`check_aggregate_notional(new_notional, open_pos, account, leverage) -> (ok, motivo)`.
+`engines/backtest.py` now stores `open_pos` as 4-tuples `(exit_idx, symbol, size, entry)`
+and calls the helper immediately after final sizing, before the trade is committed.
+Rejections are counted under the veto label `agg_cap(<x>/<cap>)`. At default
+`LEVERAGE = 1.0` the cap is `account × 1.0` which is never approached by the
+per-trade risk fractions — regression backtest showed zero vetoed trades.
+Scope note: the fix only touches `engines/backtest.py`; the same pattern exists
+in `engines/mercurio.py`, `engines/newton.py`, `engines/thoth.py`, and
+`core/harmonics.py` and is tracked as follow-up work in the full plan.
 
 ---
 
@@ -89,6 +104,18 @@ Remove the post-hoc clamp once this is in place.
 **Estimated effort:** 1 medium PR. `label_trade` and `label_trade_chop` each gain ~15 lines. Needs a regression test that injects a synthetic bar with a huge wick and confirms liquidation triggers.
 
 **Severity:** MÉDIO. At current typical leverage, this is effectively inert. It becomes material if the user increases leverage for stress tests — exactly when liquidation modeling matters most.
+
+**Resolution (2026-04-11):** ✅ Fixed in `core/signals.py`. New helper
+`_liq_prices(entry, direction)` returns `(liq_long, liq_short)` using the
+formula from the recommendation with `MAINTENANCE_MARGIN_RATIO = 0.005`.
+At `LEVERAGE ≤ 1.0` the helper returns sentinel values (`-1.0`, `entry × 10`)
+that no real bar can ever satisfy, so the check is a true no-op. Both
+`label_trade` and `label_trade_chop` now evaluate `l <= liq_long` (long) or
+`h >= liq_short` (short) **before** the stop/target branches so a catastrophic
+wick that grazes liquidation is reported as a LOSS at `liq_price` regardless
+of any favourable trailing stop computed higher. The post-hoc 90% / 95%
+clamp at `engines/backtest.py:292-295` has been removed — the `account` floor
+at `max(account + pnl, 0.0)` stays as a safety net.
 
 ---
 
