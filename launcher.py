@@ -2554,7 +2554,7 @@ class App(tk.Tk):
         # ── RIGHT: detail panel ──
         right = tk.Frame(split, bg=PANEL,
                          highlightbackground=BORDER, highlightthickness=1,
-                         width=320)
+                         width=340)
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
 
@@ -2562,8 +2562,41 @@ class App(tk.Tk):
                  fg=BG, bg=AMBER, padx=6, pady=2).pack(anchor="nw",
                                                         padx=6, pady=(6, 2))
 
-        detail_body = tk.Frame(right, bg=PANEL)
-        detail_body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+        # Scrollable inner area — metric blocks (PERFORMANCE/TRADES/CONFIG)
+        # can overflow the panel height on smaller windows. Wrapping the
+        # detail body in a Canvas + Scrollbar lets the content grow without
+        # clipping, while the "[ DETAILS ]" badge above stays pinned.
+        scroll_wrap = tk.Frame(right, bg=PANEL)
+        scroll_wrap.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+
+        d_canvas = tk.Canvas(scroll_wrap, bg=PANEL, bd=0,
+                             highlightthickness=0)
+        d_scroll = tk.Scrollbar(scroll_wrap, orient="vertical",
+                                command=d_canvas.yview)
+        d_canvas.configure(yscrollcommand=d_scroll.set)
+        d_canvas.pack(side="left", fill="both", expand=True)
+        d_scroll.pack(side="right", fill="y")
+
+        detail_body = tk.Frame(d_canvas, bg=PANEL)
+        d_canvas.create_window((0, 0), window=detail_body, anchor="nw",
+                               width=300)
+        detail_body.bind("<Configure>",
+                         lambda e, c=d_canvas:
+                         c.configure(scrollregion=c.bbox("all")))
+
+        def _on_dwheel(event, c=d_canvas):
+            try: c.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError: pass
+        def _d_enter(_e=None, c=d_canvas):
+            c.bind_all("<MouseWheel>", _on_dwheel)
+        def _d_leave(_e=None, c=d_canvas):
+            try: c.unbind_all("<MouseWheel>")
+            except tk.TclError: pass
+        d_canvas.bind("<Enter>", _d_enter)
+        d_canvas.bind("<Leave>", _d_leave)
+        detail_body.bind("<Enter>", _d_enter)
+        detail_body.bind("<Leave>", _d_leave)
+
         self._dash_widgets[("bt_detail",)] = detail_body
 
         # Placeholder — overwritten by auto-select below when the index
@@ -2705,6 +2738,59 @@ class App(tk.Tk):
                 self.h_stat.configure(text=f"PURGE FAILED: {str(e)[:30]}", fg=RED)
             self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
             self._eng_refresh()
+
+        # SPAWN dropdown — needs a popup menu rather than a simple onclick
+        # because the user picks an engine from a list. Attaches a Tk.Menu
+        # populated from core.proc.ENGINES at click time.
+        def _do_spawn(engine_name: str):
+            try:
+                from core.proc import spawn
+                info = spawn(engine_name)
+            except Exception as e:
+                self.h_stat.configure(
+                    text=f"SPAWN ERR: {str(e)[:30]}", fg=RED)
+                info = None
+            if info:
+                self.h_stat.configure(
+                    text=f"SPAWNED {engine_name} pid={info['pid']}",
+                    fg=GREEN)
+                # Auto-select the newly-spawned proc so its log tail
+                # immediately starts streaming.
+                self.after(300, lambda p=info: self._eng_select(p))
+            else:
+                self.h_stat.configure(
+                    text=f"SPAWN FAILED: {engine_name}", fg=RED)
+            self.after(2000,
+                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            self._eng_refresh()
+
+        try:
+            from core.proc import ENGINES as _ENGINES
+        except Exception:
+            _ENGINES = {}
+        spawn_menu = tk.Menu(actions_l, tearoff=0,
+                             bg=BG3, fg=AMBER,
+                             activebackground=AMBER, activeforeground=BG,
+                             font=(FONT, 8))
+        for eng_name in sorted(_ENGINES.keys()):
+            spawn_menu.add_command(
+                label=eng_name.upper(),
+                command=lambda n=eng_name: _do_spawn(n))
+
+        def _popup_spawn(event, m=spawn_menu):
+            try:
+                m.tk_popup(event.x_root, event.y_root)
+            finally:
+                m.grab_release()
+
+        spawn_btn = tk.Label(actions_l, text="  SPAWN ▸  ",
+                             font=(FONT, 7, "bold"),
+                             fg=GREEN, bg=BG3, cursor="hand2",
+                             padx=6, pady=3)
+        spawn_btn.pack(side="left", padx=(0, 6))
+        spawn_btn.bind("<Button-1>", _popup_spawn)
+        spawn_btn.bind("<Enter>", lambda e: spawn_btn.configure(bg=GREEN, fg=BG))
+        spawn_btn.bind("<Leave>", lambda e: spawn_btn.configure(bg=BG3, fg=GREEN))
 
         for label, cmd, color in [
                 ("STOP",  _do_stop,  RED),
