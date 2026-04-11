@@ -337,6 +337,27 @@ PERIODS_UI = [
 ]
 
 
+# ═══════════════════════════════════════════════════════════
+# BACKTEST LIST COLUMNS — single source of truth
+# ═══════════════════════════════════════════════════════════
+# (label, widget width in chars). Used by both the crypto-futures
+# dashboard Backtest tab and the standalone DATA > BACKTESTS screen,
+# plus the row renderer in _dash_backtest_render. Keeping the widths
+# here instead of duplicating them in three places is what stopped
+# the header and the rows from drifting out of alignment. Monospace
+# char widths only match at the same font size AND weight, so header
+# and rows both render at (FONT, 8, *).
+_BT_COLS: list[tuple[str, int]] = [
+    ("DATE / TIME",  19),
+    ("RUN",          17),
+    ("TRADES",        8),
+    ("WIN%",          8),
+    ("PNL",          12),
+    ("SHARPE",        9),
+    ("DD",            8),
+]
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -2494,17 +2515,8 @@ class App(tk.Tk):
         left.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
         hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
-        cols = [
-            ("DATE / TIME",  17),
-            ("RUN",          15),
-            ("TRADES",        7),
-            ("WIN%",          7),
-            ("PNL",          11),
-            ("SHARPE",        8),
-            ("DD",            7),
-        ]
-        for label, width in cols:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
+        for label, width in _BT_COLS:
+            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
                      fg=DIM, bg=BG, width=width, anchor="w").pack(side="left")
         tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
 
@@ -4983,19 +4995,14 @@ class App(tk.Tk):
         left = tk.Frame(split, bg=BG)
         left.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        # Column headers — compact
+        # Column headers — widths pulled from _BT_COLS so header and row
+        # widgets always render at the same character positions. Same
+        # font size (8, bold dim) as the rows in _dash_backtest_render,
+        # otherwise monospace char widths desync and the whole list
+        # skews by a few pixels per column.
         hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
-        cols = [
-            ("DATE / TIME",  17),
-            ("RUN",          15),
-            ("TRADES",        7),
-            ("WIN%",          7),
-            ("PNL",          11),
-            ("SHARPE",        8),
-            ("DD",            7),
-        ]
-        for label, width in cols:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
+        for label, width in _BT_COLS:
+            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
                      fg=DIM, bg=BG, width=width,
                      anchor="w").pack(side="left")
         tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
@@ -5135,17 +5142,21 @@ class App(tk.Tk):
             row.pack(fill="x", pady=0)
 
             pnl_col = GREEN if (pnl or 0) > 0 else (RED if (pnl or 0) < 0 else DIM)
-            # Strip 'citadel_' prefix from run_id for compactness
-            short_id = run_id.replace("citadel_", "")[:15]
+            # Strip 'citadel_' prefix from run_id for compactness — the
+            # column is 17 chars wide, so keep up to 16 chars of content.
+            short_id = run_id.replace("citadel_", "")[:16]
 
+            # Widths pulled from _BT_COLS to guarantee header ↔ row parity.
+            (_dw, _rw, _tw, _ww, _pw, _shw, _ddw) = [w for _, w in _BT_COLS]
             cells = [
-                (ts,                  17, WHITE, "normal"),
-                (short_id,            15, AMBER, "bold"),
-                (f"{n_tr}",            7, WHITE, "normal"),
-                (_fmt_n(wr),           7, WHITE, "normal"),
-                (_fmt_m(pnl),         11, pnl_col, "bold"),
-                (_fmt_n(sh),           8, WHITE, "normal"),
-                (_fmt_n(dd, "%"),      7, RED if (dd or 0) > 5 else DIM, "normal"),
+                (ts,                  _dw,  WHITE,   "normal"),
+                (short_id,            _rw,  AMBER,   "bold"),
+                (f"{n_tr}",           _tw,  WHITE,   "normal"),
+                (_fmt_n(wr),          _ww,  WHITE,   "normal"),
+                (_fmt_m(pnl),         _pw,  pnl_col, "bold"),
+                (_fmt_n(sh),          _shw, WHITE,   "normal"),
+                (_fmt_n(dd, "%"),     _ddw,
+                 RED if (dd or 0) > 5 else DIM, "normal"),
             ]
             row_labels = []
             for text, width, color, weight in cells:
