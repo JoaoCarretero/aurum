@@ -1,6 +1,6 @@
 # ALCHEMY Dashboard Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Ship a new top-level `ALCHEMY` menu entry in the AURUM launcher that opens a fullscreen Half-Life HEV-Terminal arbitrage cockpit with 9 live panels, reading state from and controlling `engines/arbitrage.py`.
 
@@ -51,12 +51,12 @@ Today the engine reads two module-level booleans `ARB_LIVE` and `ARB_DEMO` set b
 **Files:**
 - Modify: `engines/arbitrage.py` — find the existing `ARB_LIVE,ARB_DEMO=False,False` line near the top and the `safe_input` block
 
-- [ ] **Step 1: Locate the mode-selection logic**
+- [x] **Step 1: Locate the mode-selection logic**
 
 Run: `grep -n "ARB_LIVE\|ARB_DEMO\|safe_input" engines/arbitrage.py | head -30`
 Expected: shows the globals at the top and a `safe_input`-based prompt somewhere in `main()`/`__main__`.
 
-- [ ] **Step 2: Replace globals with argparse at module load**
+- [x] **Step 2: Replace globals with argparse at module load**
 
 At the very top of `engines/arbitrage.py`, just after existing imports and before `ARB_LIVE,ARB_DEMO=False,False`, add:
 
@@ -80,7 +80,7 @@ ARB_MODE = _ARGS.mode or "paper"
 
 Then find the existing `ARB_LIVE,ARB_DEMO=False,False` line and DELETE it (it's replaced by the argparse-driven assignments above).
 
-- [ ] **Step 3: Override RUN_ID if provided**
+- [x] **Step 3: Override RUN_ID if provided**
 
 Find the existing `RUN_ID=f"{_D}_{_T}"` line in `engines/arbitrage.py`. Replace with:
 
@@ -88,7 +88,7 @@ Find the existing `RUN_ID=f"{_D}_{_T}"` line in `engines/arbitrage.py`. Replace 
 RUN_ID = _ARGS.run_id or f"{_D}_{_T}"
 ```
 
-- [ ] **Step 4: Remove interactive `safe_input` mode prompt**
+- [x] **Step 4: Remove interactive `safe_input` mode prompt**
 
 Search for `safe_input` calls that ask about PAPER/DEMO/LIVE. Keep any interactive confirm for *live trading itself* (the double-confirm safety gate), but bypass the initial mode selection when `_ARGS.mode is not None`. Wrap existing prompts with:
 
@@ -100,12 +100,12 @@ else:
     log.info(f"Mode fixed via CLI: {ARB_MODE}")
 ```
 
-- [ ] **Step 5: Smoke test the CLI flag**
+- [x] **Step 5: Smoke test the CLI flag**
 
 Run: `python engines/arbitrage.py --mode paper --run-id smoketest_t1 2>&1 | head -20` then immediately `Ctrl+C`.
 Expected: engine boots into paper mode without any interactive prompts, creates `data/arbitrage/smoketest_t1/` with `logs/` `state/` `reports/` subdirs. Log line `Mode fixed via CLI: paper` is visible.
 
-- [ ] **Step 6: Clean up + commit**
+- [x] **Step 6: Clean up + commit**
 
 ```bash
 rm -rf data/arbitrage/smoketest_t1
@@ -124,7 +124,7 @@ Publish the dashboard-consumable state as `data/arbitrage/<run_id>/state/snapsho
 - Create: `tests/test_alchemy_snapshot.py`
 - Create: `tests/conftest.py`
 
-- [ ] **Step 1: Set up pytest infrastructure**
+- [x] **Step 1: Set up pytest infrastructure**
 
 Create `tests/conftest.py`:
 
@@ -155,7 +155,7 @@ dev = [
 
 Install: `pip install pytest`
 
-- [ ] **Step 2: Write failing test for snapshot shape**
+- [x] **Step 2: Write failing test for snapshot shape**
 
 Create `tests/test_alchemy_snapshot.py`:
 
@@ -197,14 +197,14 @@ def test_snapshot_contains_required_keys(tmp_run, monkeypatch):
     assert data["killed"] is False
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `pytest tests/test_alchemy_snapshot.py -v`
 Expected: FAIL — either `ImportError` on `Engine` (you need to find the real class name) or `AttributeError` on `_write_snapshot`.
 
 Go check `engines/arbitrage.py` to find the actual engine class name (`grep -n "^class " engines/arbitrage.py`) and update the import in the test.
 
-- [ ] **Step 4: Implement `_write_snapshot()`**
+- [x] **Step 4: Implement `_write_snapshot()`**
 
 In `engines/arbitrage.py`, locate the engine class that owns `_save_state`. Add right after `_save_state`:
 
@@ -276,12 +276,12 @@ s._latest_venue_health = {}
 s._sortino_rolling = 0.0
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `pytest tests/test_alchemy_snapshot.py -v`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/conftest.py tests/test_alchemy_snapshot.py engines/arbitrage.py pyproject.toml
@@ -295,12 +295,12 @@ git commit -m "feat(arbitrage): add snapshot writer for ALCHEMY dashboard"
 **Files:**
 - Modify: `engines/arbitrage.py` — scan loop, param reload, basis capture
 
-- [ ] **Step 1: Locate the main scan loop**
+- [x] **Step 1: Locate the main scan loop**
 
 Run: `grep -n "async def.*scan\|async def main\|async def run" engines/arbitrage.py`
 Expected: shows the scan loop method of the engine class.
 
-- [ ] **Step 2: Add param reload checker**
+- [x] **Step 2: Add param reload checker**
 
 Add as a method on the engine class:
 
@@ -330,7 +330,7 @@ def _check_reload_params(s):
         except: pass
 ```
 
-- [ ] **Step 3: Add basis ring buffer**
+- [x] **Step 3: Add basis ring buffer**
 
 In `__init__` of the engine class, add:
 
@@ -351,7 +351,7 @@ def _record_basis(s, symbol, perp_px, spot_px):
     s._latest_basis_history = {k: list(v) for k, v in s._basis_buffers.items()}
 ```
 
-- [ ] **Step 4: Hook into scan loop**
+- [x] **Step 4: Hook into scan loop**
 
 Find the scan loop method (from Step 1). At its top, inside the `while` loop's body, add:
 
@@ -396,7 +396,7 @@ s._latest_venue_health = {
 s._write_snapshot()
 ```
 
-- [ ] **Step 5: Manual smoke test**
+- [x] **Step 5: Manual smoke test**
 
 Run: `timeout 45 python engines/arbitrage.py --mode paper --run-id smoketest_t3 2>&1 | tail -20`
 Expected: engine runs at least one scan cycle, snapshot.json exists and is populated.
@@ -411,7 +411,7 @@ touch config/alchemy_params.json.reload
 ```
 Then watch the log — within one scan cycle you should see `params reloaded: MIN_APR=20.0 MAX_POS=3`.
 
-- [ ] **Step 6: Cleanup + commit**
+- [x] **Step 6: Cleanup + commit**
 
 ```bash
 rm -rf data/arbitrage/smoketest_t3
@@ -430,7 +430,7 @@ git commit -m "feat(arbitrage): wire snapshot writer, param reload, basis buffer
 - Create: `core/alchemy_state.py`
 - Create: `tests/test_alchemy_state.py`
 
-- [ ] **Step 1: Write failing tests for snapshot reader**
+- [x] **Step 1: Write failing tests for snapshot reader**
 
 Create `tests/test_alchemy_state.py`:
 
@@ -497,12 +497,12 @@ def test_discovers_latest_run(tmp_path, monkeypatch):
     assert snap["account"] == 200.0
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_alchemy_state.py -v`
 Expected: all FAIL with `ImportError: cannot import name 'AlchemyState'`.
 
-- [ ] **Step 3: Implement `core/alchemy_state.py`**
+- [x] **Step 3: Implement `core/alchemy_state.py`**
 
 Create `core/alchemy_state.py`:
 
@@ -589,12 +589,12 @@ class AlchemyState:
         return data
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_alchemy_state.py -v`
 Expected: all 5 tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/alchemy_state.py tests/test_alchemy_state.py
@@ -609,7 +609,7 @@ git commit -m "feat(alchemy): add AlchemyState snapshot reader"
 - Modify: `core/alchemy_state.py`
 - Modify: `tests/test_alchemy_state.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/test_alchemy_state.py`:
 
@@ -640,12 +640,12 @@ def test_write_params_merges_with_existing(tmp_path, monkeypatch):
     assert data["LEV"] == 2       # preserved
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run: `pytest tests/test_alchemy_state.py::test_write_params_creates_file_and_flag -v`
 Expected: FAIL with `AttributeError: 'AlchemyState' object has no attribute 'write_params'`.
 
-- [ ] **Step 3: Add `write_params` to `AlchemyState`**
+- [x] **Step 3: Add `write_params` to `AlchemyState`**
 
 Append to the `AlchemyState` class in `core/alchemy_state.py`:
 
@@ -684,12 +684,12 @@ Append to the `AlchemyState` class in `core/alchemy_state.py`:
         (p.parent / "alchemy_params.json.reload").touch()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_alchemy_state.py -v`
 Expected: all 7 tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/alchemy_state.py tests/test_alchemy_state.py
@@ -706,7 +706,7 @@ git commit -m "feat(alchemy): add param writer with reload flag"
 - Create: `core/alchemy_ui.py`
 - Create: `server/fonts/` (download three TTFs)
 
-- [ ] **Step 1: Download fonts**
+- [x] **Step 1: Download fonts**
 
 Fonts are Google Fonts OFL-licensed. Download directly:
 
@@ -720,7 +720,7 @@ curl -L -o server/fonts/Cinzel.ttf "https://github.com/google/fonts/raw/main/ofl
 Verify: `ls -la server/fonts/`
 Expected: three files, each at least 30KB.
 
-- [ ] **Step 2: Create the palette + font loader module**
+- [x] **Step 2: Create the palette + font loader module**
 
 Create `core/alchemy_ui.py`:
 
@@ -812,12 +812,12 @@ def font(kind: str, size: int, weight: str = "normal") -> tuple:
     return (name, size, weight)
 ```
 
-- [ ] **Step 3: Smoke test fonts module import**
+- [x] **Step 3: Smoke test fonts module import**
 
 Run: `python -c "from core.alchemy_ui import HEV_AMBER, VENUE_GLYPH, load_fonts; print(HEV_AMBER, VENUE_GLYPH['binance'])"`
 Expected: `#ff8c00 ☉`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add core/alchemy_ui.py server/fonts/
@@ -833,7 +833,7 @@ The `make_panel()` helper is the single render point used by all 9 panels. It cr
 **Files:**
 - Modify: `core/alchemy_ui.py`
 
-- [ ] **Step 1: Add `make_panel` helper**
+- [x] **Step 1: Add `make_panel` helper**
 
 Append to `core/alchemy_ui.py`:
 
@@ -890,7 +890,7 @@ def hazard_strip(parent, height: int = 10) -> tk.Canvas:
     return c
 ```
 
-- [ ] **Step 2: Add tick driver shell**
+- [x] **Step 2: Add tick driver shell**
 
 Append to `core/alchemy_ui.py`:
 
@@ -934,12 +934,12 @@ class TickDriver:
         self._after_id = self.root.after(self.interval_ms, self._tick)
 ```
 
-- [ ] **Step 3: Smoke test**
+- [x] **Step 3: Smoke test**
 
 Run: `python -c "from core.alchemy_ui import make_panel, TickDriver, hazard_strip; print('ok')"`
 Expected: `ok`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add core/alchemy_ui.py
@@ -953,7 +953,7 @@ git commit -m "feat(alchemy): add panel chrome helper and tick driver"
 **Files:**
 - Modify: `launcher.py`
 
-- [ ] **Step 1: Add `ALCHEMY` to `MAIN_MENU`**
+- [x] **Step 1: Add `ALCHEMY` to `MAIN_MENU`**
 
 In `launcher.py`, locate the `MAIN_MENU` list (around line 93). Insert `ALCHEMY` between `STRATEGIES` and `RISK`:
 
@@ -970,7 +970,7 @@ MAIN_MENU = [
 ]
 ```
 
-- [ ] **Step 2: Import alchemy modules at the top of launcher.py**
+- [x] **Step 2: Import alchemy modules at the top of launcher.py**
 
 Below the existing `from core.connections import ConnectionManager, MARKETS` line, add:
 
@@ -979,7 +979,7 @@ from core.alchemy_state import AlchemyState
 from core import alchemy_ui
 ```
 
-- [ ] **Step 3: Wire `_menu("alchemy")` into the router**
+- [x] **Step 3: Wire `_menu("alchemy")` into the router**
 
 Find the `_menu` method (around line 551). Add handling for the new key. Inside the existing `if key in ("markets", "connections", "terminal", "risk", "settings"):` block, extend the tuple and dict to include `"alchemy"`:
 
@@ -996,7 +996,7 @@ if key in ("markets", "connections", "terminal", "risk", "settings", "alchemy"):
     return
 ```
 
-- [ ] **Step 4: Add `_alchemy_enter` and `_alchemy_exit` methods**
+- [x] **Step 4: Add `_alchemy_enter` and `_alchemy_exit` methods**
 
 Add these as methods on the `App` class in `launcher.py`, placed near the other page methods (after `_connections` is a good spot):
 
@@ -1061,7 +1061,7 @@ def _alchemy_exit(self, event=None):
     self._menu("main")
 ```
 
-- [ ] **Step 5: Add stub `render_cockpit` in `core/alchemy_ui.py`**
+- [x] **Step 5: Add stub `render_cockpit` in `core/alchemy_ui.py`**
 
 In `core/alchemy_ui.py`, append a stub that just paints a visible "ALCHEMY ONLINE" label so we can smoke-test the menu wiring before building the panels. We will replace this in later tasks.
 
@@ -1077,7 +1077,7 @@ def render_cockpit(app):
              font=font("mono", 14), fg=HEV_AMBER_D, bg=HEV_BG).pack()
 ```
 
-- [ ] **Step 6: Manual smoke test**
+- [x] **Step 6: Manual smoke test**
 
 Run: `python launcher.py`
 
@@ -1090,7 +1090,7 @@ Expected behavior:
 
 If fullscreen fails on the user's Windows setup, fall back to `self.attributes("-zoomed", True)` inside `_alchemy_enter` with a try/except.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add launcher.py core/alchemy_ui.py
@@ -1106,7 +1106,7 @@ git commit -m "feat(alchemy): wire menu entry and fullscreen lifecycle"
 **Files:**
 - Modify: `core/alchemy_ui.py`
 
-- [ ] **Step 1: Replace `render_cockpit` with grid scaffold + top bar**
+- [x] **Step 1: Replace `render_cockpit` with grid scaffold + top bar**
 
 Replace the stub `render_cockpit` from Task 8 with:
 
@@ -1222,7 +1222,7 @@ def render_cockpit(app):
         setattr(app, f"_alch_p{pid}", body_frame)
 ```
 
-- [ ] **Step 2: Manual smoke test**
+- [x] **Step 2: Manual smoke test**
 
 Run: `python launcher.py` → ALCHEMY.
 
@@ -1234,7 +1234,7 @@ Expected:
 - Giant faint λ watermark behind everything
 - Esc returns to main menu
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add core/alchemy_ui.py
@@ -1250,7 +1250,7 @@ These three panels share a simple table-rendering pattern. Build them together.
 **Files:**
 - Modify: `core/alchemy_ui.py`
 
-- [ ] **Step 1: Add shared table helper**
+- [x] **Step 1: Add shared table helper**
 
 Append to `core/alchemy_ui.py`:
 
@@ -1285,7 +1285,7 @@ def _render_table(parent, header: list[str], widths: list[int]) -> tuple[tk.Fram
     return body, update
 ```
 
-- [ ] **Step 2: Add panel [01] OPPORTUNITIES renderer**
+- [x] **Step 2: Add panel [01] OPPORTUNITIES renderer**
 
 Append:
 
@@ -1321,7 +1321,7 @@ def _init_panel_opportunities(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 3: Add panel [04] POSITIONS renderer**
+- [x] **Step 3: Add panel [04] POSITIONS renderer**
 
 Append:
 
@@ -1360,7 +1360,7 @@ def _init_panel_positions(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 4: Add panel [05] VENUE HEALTH renderer**
+- [x] **Step 4: Add panel [05] VENUE HEALTH renderer**
 
 Append:
 
@@ -1401,7 +1401,7 @@ def _init_panel_venue_health(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 5: Wire the three initializers into `render_cockpit`**
+- [x] **Step 5: Wire the three initializers into `render_cockpit`**
 
 At the end of `render_cockpit`, after the panel stubs loop, add:
 
@@ -1411,7 +1411,7 @@ At the end of `render_cockpit`, after the panel stubs loop, add:
     _init_panel_venue_health(app)
 ```
 
-- [ ] **Step 6: Manual smoke test**
+- [x] **Step 6: Manual smoke test**
 
 Run: `python launcher.py` → ALCHEMY.
 
@@ -1423,7 +1423,7 @@ Spawn the engine in another terminal: `python engines/arbitrage.py --mode paper 
 Expected:
 - Panels 1, 4, 5 populate with live data within 2-4s of engine's first scan completing.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add core/alchemy_ui.py
@@ -1437,7 +1437,7 @@ git commit -m "feat(alchemy): panels [01] [04] [05] tabular renderers"
 **Files:**
 - Modify: `core/alchemy_ui.py`
 
-- [ ] **Step 1: Add panel [02] FUNDING heatmap renderer**
+- [x] **Step 1: Add panel [02] FUNDING heatmap renderer**
 
 Append to `core/alchemy_ui.py`:
 
@@ -1509,7 +1509,7 @@ def _init_panel_funding(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 2: Add panel [08] RISK CONSOLE gauges renderer**
+- [x] **Step 2: Add panel [08] RISK CONSOLE gauges renderer**
 
 Append:
 
@@ -1574,7 +1574,7 @@ def _init_panel_risk(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 3: Wire into `render_cockpit`**
+- [x] **Step 3: Wire into `render_cockpit`**
 
 At the end of `render_cockpit`, add:
 
@@ -1583,7 +1583,7 @@ At the end of `render_cockpit`, add:
     _init_panel_risk(app)
 ```
 
-- [ ] **Step 4: Manual smoke test**
+- [x] **Step 4: Manual smoke test**
 
 Run launcher → ALCHEMY. Start engine in paper mode.
 
@@ -1592,7 +1592,7 @@ Expected:
 - Next-funding countdowns shown at bottom
 - Risk gauges show EXPO, DD DAY, DD MAX, LOSSES, SORTINO, TRADES with animated bars
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/alchemy_ui.py
@@ -1606,7 +1606,7 @@ git commit -m "feat(alchemy): panels [02] funding heatmap and [08] risk gauges"
 **Files:**
 - Modify: `core/alchemy_ui.py`
 
-- [ ] **Step 1: Add basis panel renderer**
+- [x] **Step 1: Add basis panel renderer**
 
 Append to `core/alchemy_ui.py`:
 
@@ -1673,7 +1673,7 @@ def _init_panel_basis(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 2: Wire into `render_cockpit`**
+- [x] **Step 2: Wire into `render_cockpit`**
 
 Add to the list of initializer calls:
 
@@ -1681,7 +1681,7 @@ Add to the list of initializer calls:
     _init_panel_basis(app)
 ```
 
-- [ ] **Step 3: Manual smoke test**
+- [x] **Step 3: Manual smoke test**
 
 Start engine, open ALCHEMY. Wait 3-5 scan cycles.
 
@@ -1690,7 +1690,7 @@ Expected:
 - Legend shows σ and μ stats bottom-left
 - "no basis data yet" placeholder if engine hasn't completed a cycle
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add core/alchemy_ui.py
@@ -1704,7 +1704,7 @@ git commit -m "feat(alchemy): panel [03] basis canvas chart"
 **Files:**
 - Modify: `core/alchemy_ui.py`
 
-- [ ] **Step 1: Add panel [06] CONNECTIONES renderer**
+- [x] **Step 1: Add panel [06] CONNECTIONES renderer**
 
 Append:
 
@@ -1765,7 +1765,7 @@ def _init_panel_connections(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 2: Add panel [07] ENGINE CONTROL renderer**
+- [x] **Step 2: Add panel [07] ENGINE CONTROL renderer**
 
 Append:
 
@@ -1905,7 +1905,7 @@ def _init_panel_engine(app):
             lbl.configure(text=str(current[k]))
 ```
 
-- [ ] **Step 3: Add panel [09] LOG STREAM renderer**
+- [x] **Step 3: Add panel [09] LOG STREAM renderer**
 
 Append:
 
@@ -1942,7 +1942,7 @@ def _init_panel_log(app):
     app._alch_tick.register(update)
 ```
 
-- [ ] **Step 4: Wire all three into `render_cockpit`**
+- [x] **Step 4: Wire all three into `render_cockpit`**
 
 Add to the initializer calls at the end of `render_cockpit`:
 
@@ -1952,7 +1952,7 @@ Add to the initializer calls at the end of `render_cockpit`:
     _init_panel_log(app)
 ```
 
-- [ ] **Step 5: Manual smoke test**
+- [x] **Step 5: Manual smoke test**
 
 Run launcher → ALCHEMY.
 
@@ -1965,7 +1965,7 @@ Expected:
 - Within one scan cycle of the engine, you should see "params reloaded" in the log
 - Click `■ STOP` → engine terminates, vitals go back to IDLE
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add core/alchemy_ui.py
@@ -1982,7 +1982,7 @@ git commit -m "feat(alchemy): panels [06] connections [07] engine control [09] l
 - Modify: `core/alchemy_ui.py`
 - Modify: `launcher.py`
 
-- [ ] **Step 1: Add stale overlay to cockpit**
+- [x] **Step 1: Add stale overlay to cockpit**
 
 In `core/alchemy_ui.py`, inside `render_cockpit`, after `body.grid_...` setup, add:
 
@@ -2003,7 +2003,7 @@ In `core/alchemy_ui.py`, inside `render_cockpit`, after `body.grid_...` setup, a
     app._alch_tick.register(update_overlay)
 ```
 
-- [ ] **Step 2: Pin run dir when engine starts**
+- [x] **Step 2: Pin run dir when engine starts**
 
 In `_start_engine` inside `_init_panel_engine` (from Task 13), after creating `app.proc`, add:
 
@@ -2030,11 +2030,11 @@ Note: this means you need to pass `--run-id` to match. Update the Popen call:
 
 Move the `run_id` line above the Popen call so it's in scope.
 
-- [ ] **Step 3: Handle Esc-to-exit with running engine gracefully**
+- [x] **Step 3: Handle Esc-to-exit with running engine gracefully**
 
 This is already done in `_alchemy_exit` from Task 8. Verify it still works by starting the engine, pressing Esc, confirming the dialog, and watching the engine get stopped and the launcher return to the main menu.
 
-- [ ] **Step 4: Add `.gitignore` entries**
+- [x] **Step 4: Add `.gitignore` entries**
 
 Append to `.gitignore`:
 
@@ -2044,7 +2044,7 @@ config/alchemy_params.json
 config/alchemy_params.json.reload
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/alchemy_ui.py launcher.py .gitignore
@@ -2057,12 +2057,12 @@ git commit -m "feat(alchemy): stale overlay + pinned run dir + engine lifecycle 
 
 **Files:** none (diagnostic task)
 
-- [ ] **Step 1: Run all unit tests**
+- [x] **Step 1: Run all unit tests**
 
 Run: `pytest tests/ -v`
 Expected: all tests from Phase 1-2 PASS. If any fail, fix the specific test before moving on.
 
-- [ ] **Step 2: Full UI smoke test**
+- [x] **Step 2: Full UI smoke test**
 
 Run: `python launcher.py`. Work through this checklist:
 
@@ -2087,16 +2087,16 @@ Run: `python launcher.py`. Work through this checklist:
 19. [ ] Press Esc → if engine running, prompts to confirm; if stopped, returns to main menu
 20. [ ] Main menu at original 960×660 geometry
 
-- [ ] **Step 3: Stale overlay test**
+- [x] **Step 3: Stale overlay test**
 
 Start engine, then manually rename `data/arbitrage/<run_id>/state/snapshot.json` → within 10s the red `SNAPSHOT STALE` overlay should appear. Rename back → overlay disappears.
 
-- [ ] **Step 4: Font fallback test**
+- [x] **Step 4: Font fallback test**
 
 If bundled fonts loaded: panels show VT323/Share Tech Mono/Cinzel correctly.
 If tkextrafont is not installed: panels fall back to Consolas with no crash. Test by temporarily renaming the `server/fonts/` dir and relaunching. Restore after.
 
-- [ ] **Step 5: Debug any issues found**
+- [x] **Step 5: Debug any issues found**
 
 For each broken item in the smoke test checklist:
 1. Find the relevant task's code
@@ -2104,7 +2104,7 @@ For each broken item in the smoke test checklist:
 3. Re-run the specific smoke test item
 4. Commit the fix with `fix(alchemy): <what>`
 
-- [ ] **Step 6: Final commit**
+- [x] **Step 6: Final commit**
 
 If there were any fixes not yet committed:
 
