@@ -1204,8 +1204,89 @@ class App(tk.Tk):
         self._menu_tile_focus((self._menu_focused_tile + delta) % 4)
 
     def _menu_tile_expand(self, idx: int) -> None:
-        """Stub — real drill-down arrives in T7."""
-        pass
+        """Expand tile idx in-place: fade others, grow focused tile, draw sub-menu."""
+        if not (0 <= idx <= 3):
+            return
+        if self._menu_canvas is None:
+            return
+        self._menu_expanded_tile = idx
+        self._menu_sub_focus = 0
+
+        canvas = self._menu_canvas
+        for i in range(4):
+            if i == idx:
+                continue
+            canvas.delete(f"tile{i}")
+        canvas.delete("cd")
+        canvas.delete("spokes")
+
+        label, key_num, color, children = MAIN_GROUPS[idx]
+        canvas.delete(f"tile{idx}")
+        x1, y1, x2, y2 = 80, 60, 840, 480
+        canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2, tags=f"tile{idx}")
+        canvas.create_rectangle(x1, y1, x2, y1 + 26,
+                                outline=color, fill=color, width=0, tags=f"tile{idx}")
+        canvas.create_text(x1 + 16, y1 + 13, anchor="w",
+                           text=f" {label}  [{key_num}]",
+                           font=(FONT, 11, "bold"), fill=BG, tags=f"tile{idx}")
+
+        self._menu_sub_render(idx)
+
+        self._clear_kb()
+        for i, (_clabel, _method) in enumerate(children):
+            n = i + 1
+            self._kb(f"<Key-{n}>",
+                     lambda _i=i, _tile=idx: self._menu_sub_select(_tile, _i))
+        self._kb("<Down>",   lambda: self._menu_sub_focus_delta(+1))
+        self._kb("<Up>",     lambda: self._menu_sub_focus_delta(-1))
+        self._kb("<Return>", lambda _tile=idx: self._menu_sub_select(_tile, self._menu_sub_focus))
+        self._kb("<Escape>", self._menu_tile_collapse)
+        self._kb("<Key-0>",  self._menu_tile_collapse)
+        self._bind_global_nav()
+        self.f_lbl.configure(text="1-N selecionar · ↑↓ nav · ENTER · ESC voltar")
+
+    def _menu_sub_render(self, idx: int) -> None:
+        if self._menu_canvas is None:
+            return
+        canvas = self._menu_canvas
+        canvas.delete("submenu")
+        _label, _key, color, children = MAIN_GROUPS[idx]
+        for i, (child_label, _method) in enumerate(children):
+            y = 120 + i * 42
+            focused = i == self._menu_sub_focus
+            fg = AMBER_B if focused else WHITE
+            bg = color if focused else BG3
+            canvas.create_rectangle(140, y - 16, 780, y + 16,
+                                    outline=color, fill=bg, width=1, tags="submenu")
+            canvas.create_text(160, y, anchor="w",
+                               text=f"  › {i+1}  {child_label}",
+                               font=(FONT, 11, "bold"),
+                               fill=(BG if focused else fg), tags="submenu")
+
+    def _menu_sub_focus_delta(self, delta: int) -> None:
+        if self._menu_expanded_tile is None:
+            return
+        children = MAIN_GROUPS[self._menu_expanded_tile][3]
+        self._menu_sub_focus = (self._menu_sub_focus + delta) % len(children)
+        self._menu_sub_render(self._menu_expanded_tile)
+
+    def _menu_sub_select(self, tile_idx: int, sub_idx: int) -> None:
+        if not (0 <= tile_idx <= 3):
+            return
+        children = MAIN_GROUPS[tile_idx][3]
+        if not (0 <= sub_idx < len(children)):
+            return
+        _, method_name = children[sub_idx]
+        fn = getattr(self, method_name, None)
+        if callable(fn):
+            self._menu_expanded_tile = None
+            self._menu_canvas = None
+            fn()
+
+    def _menu_tile_collapse(self) -> None:
+        self._menu_expanded_tile = None
+        self._menu_sub_focus = 0
+        self._menu_main_bloomberg()
 
     # ─── SPLASH (Layer 0) ───────────────────────────────
     # ─── SPLASH (Layer 0) — CD Universe ─────────────────

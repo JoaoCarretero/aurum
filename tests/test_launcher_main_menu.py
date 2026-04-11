@@ -178,3 +178,33 @@ def test_focus_numeric_jump():
         assert app._menu_focused_tile == 3
     finally:
         app.destroy()
+
+
+def test_expand_and_collapse_state():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_main_bloomberg()
+        app._menu_tile_expand(0)
+        assert app._menu_expanded_tile == 0
+        assert app._menu_sub_focus == 0
+        app._menu_tile_collapse()
+        assert app._menu_expanded_tile is None
+    finally:
+        app.destroy()
+
+
+def test_sub_select_dispatches_to_method(monkeypatch):
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._menu_main_bloomberg()
+        called = []
+        monkeypatch.setattr(app, "_markets", lambda: called.append("markets"))
+        app._menu_tile_expand(0)
+        app._menu_sub_select(0, 0)
+        assert called == ["markets"]
+    finally:
+        app.destroy()
