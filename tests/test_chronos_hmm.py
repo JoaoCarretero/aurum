@@ -330,3 +330,27 @@ class TestRegimeAnalysis:
         ]
         result = regime_analysis(trades)
         assert result["BULL"]["n"] == 1
+
+    def test_sortino_uses_downside_deviation_not_std(self):
+        """Sortino ratio must use sqrt(mean(min(0, r)^2)) — the
+        downside deviation — not std of negatives. With wins of
+        +2R and losses of -1R, the ratio must be strictly positive."""
+        from analysis.stats import regime_analysis
+        import pytest
+        trades = [
+            self._trade("BULL", 2.0),
+            self._trade("BULL", 2.0),
+            self._trade("BULL", 2.0),
+            self._trade("BULL", -1.0),
+        ]
+        result = regime_analysis(trades)
+        # avg_r = (2 + 2 + 2 - 1) / 4 = 1.25
+        # downside deviation: only one loss = -1.0 -> sqrt((1^2)/4) = 0.5
+        # sortino = 1.25 / 0.5 = 2.5
+        assert result["BULL"]["sortino"] == pytest.approx(2.5, abs=1e-4)
+
+    def test_sortino_zero_when_no_losses(self):
+        from analysis.stats import regime_analysis
+        trades = [self._trade("BULL", 1.0) for _ in range(5)]
+        result = regime_analysis(trades)
+        assert result["BULL"]["sortino"] == 0.0

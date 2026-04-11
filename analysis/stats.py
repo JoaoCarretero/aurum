@@ -42,13 +42,10 @@ def regime_analysis(trades: list[dict]) -> dict:
         wins = int((rs_arr > 0).sum())
         wr = 100.0 * wins / n
         avg_r = float(rs_arr.mean())
-        neg = rs_arr[rs_arr < 0]
-        if len(neg) > 1:
-            downside = float(neg.std(ddof=1))
-        elif len(neg) == 1:
-            downside = float(abs(neg[0]))
-        else:
-            downside = 0.0
+        # Target downside deviation with MAR=0:
+        # sqrt( mean( min(0, r)^2 ) ). Zero losses -> zero downside -> sortino=0.
+        below = np.minimum(rs_arr, 0.0)
+        downside = float(np.sqrt(np.mean(below ** 2)))
         sortino = (avg_r / downside) if downside > 0 else 0.0
         result[regime] = {
             "n": n,
