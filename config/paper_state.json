@@ -1,0 +1,24 @@
+{
+  "initial_balance": 10000.0,
+  "current_balance": 10000.0,
+  "equity": 10000.0,
+  "realized_pnl": 0.0,
+  "unrealized_pnl": 0.0,
+  "total_deposits": 10000.0,
+  "total_withdraws": 0.0,
+  "positions": [],
+  "trades": [],
+  "equity_curve": [
+    10000.0
+  ],
+  "history": [
+    {
+      "ts": "2026-04-10T17:32:18.970175",
+      "type": "init",
+      "amount": 10000.0,
+      "note": "paper account created"
+    }
+  ],
+  "created": "2026-04-10T17:32:18.970175",
+  "last_modified": "2026-04-10T17:32:18.970714"
+}

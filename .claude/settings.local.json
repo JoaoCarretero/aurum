@@ -49,7 +49,30 @@
       "Bash(find /c/Users/Joao/OneDrive/aurum.finance -name \"*.json\" -path \"*/reports/*\" -exec grep -l \"strategy\\\\|engine\" {} \\\\;)",
       "Bash(awk '{print $NF}')",
       "Bash(xargs -I {} basename {})",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git worktree:*)",
+      "Bash(bash:*)",
+      "Bash(2>&1)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 45 python engines/arbitrage.py --mode paper --run-id smoketest_t3)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 45 python /c/Users/Joao/OneDrive/aurum.finance/engines/arbitrage.py --mode paper --run-id smoketest_t3)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 5 python engines/arbitrage.py --mode paper --run-id smoketest_t3)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 8 python engines/arbitrage.py --mode paper --run-id smoketest_t3)",
+      "Read(//c/tmp/**)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 8 python /c/Users/Joao/OneDrive/aurum.finance/engines/arbitrage.py --mode paper --run-id smoketest_t3)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 120 python /c/Users/Joao/OneDrive/aurum.finance/engines/arbitrage.py --mode paper --run-id smoketest_t3)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(jobs)",
+      "Bash(curl -L -o \"/c/Users/Joao/OneDrive/aurum.finance/server/fonts/VT323.ttf\" \"https://github.com/google/fonts/raw/main/ofl/vt323/VT323-Regular.ttf\")",
+      "Bash(curl -L -o \"/c/Users/Joao/OneDrive/aurum.finance/server/fonts/ShareTechMono.ttf\" \"https://github.com/google/fonts/raw/main/ofl/sharetechmono/ShareTechMono-Regular.ttf\")",
+      "Bash(curl -L -o \"/c/Users/Joao/OneDrive/aurum.finance/server/fonts/Cinzel.ttf\" \"https://github.com/google/fonts/raw/main/ofl/cinzel/static/Cinzel-Regular.ttf\")",
+      "Bash(pytest tests/ -v)",
+      "Bash(rm -rf data/arbitrage/smoketest_t15)",
+      "Bash(rm -f config/alchemy_params.json config/alchemy_params.json.reload)",
+      "Bash(PYTHONIOENCODING=utf-8 python smoke_test.py --quiet)"
     ]
   }
 }
