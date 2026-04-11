@@ -72,6 +72,8 @@ __all__ = [
     "CHRONOS_HMM_REGIMES", "CHRONOS_HMM_LOOKBACK",
     "CHRONOS_GARCH_HORIZON", "CHRONOS_GARCH_LOOKBACK",
     "CHRONOS_HURST_WINDOW", "CHRONOS_HURST_MIN", "CHRONOS_SEASON_MIN_SAMPLES",
+    # HMM gate — observation-only until manually enabled
+    "HMM_GATE_ENABLED", "HMM_MIN_CONFIDENCE", "HMM_BLOCK_REGIMES",
 ]
 
 # ── UNIVERSO ──────────────────────────────────────────────────
@@ -397,6 +399,16 @@ CHRONOS_GARCH_LOOKBACK  = 500     # candles para fit GARCH
 CHRONOS_HURST_WINDOW    = 100     # janela rolling Hurst
 CHRONOS_HURST_MIN       = 50      # min períodos para Hurst
 CHRONOS_SEASON_MIN_SAMPLES = 30   # min samples por slot de seasonality
+
+# ── HMM GATE — observação → bloqueio seletivo ───────────────
+# Quando HMM_GATE_ENABLED=False (default) o HMM é só observação —
+# rótulos aparecem nos trades e no regime_analysis, mas nenhum trade
+# é bloqueado pelo HMM. Ligar manualmente só depois de analisar a
+# tabela regime_analysis de um backtest longo e decidir quais
+# combinações (engine, regime) são tóxicas.
+HMM_GATE_ENABLED    = False
+HMM_MIN_CONFIDENCE  = 0.60                       # confiança mínima para gate
+HMM_BLOCK_REGIMES: dict[str, list[str]] = {}     # ex: {"CHOP": ["CITADEL"]}
 
 # Derived params para o ENTRY_TF default
 _TFP            = _tf_params(ENTRY_TF)

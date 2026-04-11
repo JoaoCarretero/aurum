@@ -225,6 +225,20 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
         if not ok:
             vetos[motivo_p] += 1; continue
 
+        # HMM gate — Fase 6 scaffold. Default HMM_GATE_ENABLED=False means
+        # this block is inert; the layer is observation-only. Operator
+        # flips the flag after reviewing regime_analysis on a long run.
+        if HMM_GATE_ENABLED:
+            _hmm_r = _hmm_lbl[idx]
+            _hmm_c = _hmm_cf[idx]
+            if _hmm_r is not None and not (isinstance(_hmm_r, float) and pd.isna(_hmm_r)):
+                _hmm_r = str(_hmm_r)
+                if not pd.isna(_hmm_c) and float(_hmm_c) >= HMM_MIN_CONFIDENCE:
+                    _blocked = HMM_BLOCK_REGIMES.get(_hmm_r, [])
+                    if "CITADEL" in _blocked:
+                        vetos["hmm_gate"] += 1
+                        continue
+
         direction, motivo, fractal_score = decide_direction(row, macro_b)
 
         is_chop_trade = False
