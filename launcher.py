@@ -101,7 +101,7 @@ MAIN_MENU = [
     ("TERMINAL",       "terminal",    "Charts, macro, research"),
     ("DATA",           "data",        "Backtests · engine logs · reports"),
     ("STRATEGIES",     "strategies",  "Backtest & live engines"),
-    ("ARBITRAGE",      "alchemy",     "Cross-venue arbitrage cockpit"),
+    ("ARBITRAGE",      "alchemy",     "CEX·CEX execution + DEX·DEX / CEX·DEX scanner"),
     ("RISK",           "risk",        "Portfolio & risk console"),
     ("COMMAND CENTER", "command",     "Site, servers, admin panel"),
     ("SETTINGS",       "settings",    "Config, keys, Telegram"),
@@ -788,6 +788,11 @@ class App(tk.Tk):
         # Site console poll loop self-terminates when this flag flips false.
         # The SiteRunner subprocess itself keeps running independently.
         self._site_screen_alive = False
+        # Funding scanner screen uses a self-rearming after() tick. Flip the
+        # alive flag off and clear the armed flag so re-entry starts a fresh
+        # chain instead of stacking.
+        self._funding_alive = False
+        self._funding_timer_armed = False
         for w in self.main.winfo_children(): w.destroy()
 
     def _clear_kb(self):
@@ -1034,7 +1039,7 @@ class App(tk.Tk):
                 "terminal": self._terminal,
                 "risk": self._risk_menu,
                 "settings": self._config,
-                "alchemy": self._alchemy_enter,
+                "alchemy": self._arbitrage_hub,
                 "data": self._data_center,
             }[key]()
             return
@@ -2757,6 +2762,476 @@ class App(tk.Tk):
             pass
 
         self._menu("main")
+
+    # ═══════════════════════════════════════════════════════════════
+    # ARBITRAGE HUB — MP3-style router
+    # Three legs of funding/basis arbitrage, one minimalist menu:
+    #   C  CEX ↔ CEX  → JANE STREET cockpit (execution)
+    #   D  DEX ↔ DEX  → funding scanner (observation)
+    #   X  CEX ↔ DEX  → funding scanner (observation)
+    # ═══════════════════════════════════════════════════════════════
+    _ARB_HUB_ITEMS = [
+        ("C", "CEX  \u2194  CEX",
+         "jane street execution cockpit",
+         "_alchemy_enter"),
+        ("D", "DEX  \u2194  DEX",
+         "pure cross-dex funding spread",
+         ("_funding_scanner_screen", "dex-dex")),
+        ("X", "CEX  \u2194  DEX",
+         "cex/dex spread  \u2014  biggest apr",
+         ("_funding_scanner_screen", "cex-dex")),
+    ]
+
+    def _arbitrage_hub(self):
+        """Three-card arbitrage hub. Minimalist MP3-player aesthetic.
+
+        Top: header + live scanner telemetry (venues online, best APR).
+        Middle: three rows with a ► cursor. Up/Down moves it, Enter picks.
+        Keyboard: C / D / X shortcuts. ESC back to main menu.
+
+        The telemetry row kicks off a non-blocking scan so the user
+        sees real numbers on return visits without blocking Tk.
+        """
+        self._clr(); self._clear_kb()
+        self.history.append("main")
+        self.h_path.configure(text="> ARBITRAGE")
+        self.h_stat.configure(text="HUB", fg=AMBER_D)
+        self.f_lbl.configure(
+            text="\u2191\u2193 nav  |  ENTER select  |  C jane  |  D dex\u2194dex  |  X cex\u2194dex  |  ESC back"
+        )
+        self._kb("<Escape>", lambda: self._menu("main"))
+        self._bind_global_nav()
+
+        f = tk.Frame(self.main, bg=BG); f.pack(expand=True, fill="both")
+
+        # ── Title block (LCD-display style) ──────────────────────
+        tk.Frame(f, bg=BG, height=24).pack()
+        tk.Label(f, text="A  R  B  I  T  R  A  G  E",
+                 font=(FONT, 16, "bold"), fg=AMBER, bg=BG).pack()
+        tk.Label(f, text="funding  \u00b7  basis  \u00b7  spread",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(pady=(2, 6))
+        tk.Frame(f, bg=AMBER_D, height=1, width=440).pack(pady=(0, 4))
+
+        # ── Live telemetry strip (populated by background scan) ──
+        telem_frame = tk.Frame(f, bg=BG)
+        telem_frame.pack(pady=(0, 12))
+        self._arb_hub_telem = tk.Label(
+            telem_frame,
+            text="  scanning venues\u2026  ",
+            font=(FONT, 7), fg=DIM, bg=BG,
+        )
+        self._arb_hub_telem.pack()
+
+        # ── Menu list ───────────────────────────────────────────
+        list_frame = tk.Frame(f, bg=BG); list_frame.pack(pady=(0, 14))
+
+        self._arb_hub_idx = 0
+        self._arb_hub_rows: list[dict] = []
+
+        for i, (key, name, desc, _target) in enumerate(self._ARB_HUB_ITEMS):
+            row = tk.Frame(list_frame, bg=BG); row.pack(pady=4, anchor="w")
+
+            # cursor cell (► when selected, space otherwise)
+            cur = tk.Label(row, text="  ", font=(FONT, 12, "bold"),
+                           fg=AMBER, bg=BG, width=3)
+            cur.pack(side="left")
+
+            # keyboard shortcut badge
+            tk.Label(row, text=f" {key} ", font=(FONT, 9, "bold"),
+                     fg=BG, bg=AMBER, width=3).pack(side="left", padx=(0, 8))
+
+            # two-line cell: big title + dim description
+            text_cell = tk.Frame(row, bg=BG)
+            text_cell.pack(side="left")
+            nlbl = tk.Label(text_cell, text=name, font=(FONT, 13, "bold"),
+                            fg=WHITE, bg=BG, anchor="w")
+            nlbl.pack(anchor="w")
+            dlbl = tk.Label(text_cell, text=desc, font=(FONT, 8),
+                            fg=DIM, bg=BG, anchor="w")
+            dlbl.pack(anchor="w")
+
+            self._arb_hub_rows.append(
+                {"cursor": cur, "name": nlbl, "desc": dlbl}
+            )
+
+        # keyboard shortcuts
+        self._kb("<Key-c>", lambda: self._arb_hub_pick(0))
+        self._kb("<Key-d>", lambda: self._arb_hub_pick(1))
+        self._kb("<Key-x>", lambda: self._arb_hub_pick(2))
+        self._kb("<Up>",    lambda: self._arb_hub_move(-1))
+        self._kb("<Down>",  lambda: self._arb_hub_move(1))
+        self._kb("<Return>", lambda: self._arb_hub_pick(self._arb_hub_idx))
+        self._kb("<space>",  lambda: self._arb_hub_pick(self._arb_hub_idx))
+
+        self._arb_hub_repaint()
+
+        # ── Background scan for live telemetry ──────────────────
+        self._arb_hub_scan_async()
+
+        # ── Footer hint ─────────────────────────────────────────
+        tk.Frame(f, bg=AMBER_D, height=1, width=440).pack(pady=(8, 0))
+        tk.Label(f, text="\u25ba  every hour hyperliquid pays funding\u2014"
+                         "8\u00d7 faster than cex",
+                 font=(FONT, 7), fg=DIM2, bg=BG).pack(pady=(6, 0))
+
+    def _arb_hub_move(self, delta: int):
+        if not getattr(self, "_arb_hub_rows", None):
+            return
+        self._arb_hub_idx = (self._arb_hub_idx + delta) % len(self._arb_hub_rows)
+        self._arb_hub_repaint()
+
+    def _arb_hub_repaint(self):
+        rows = getattr(self, "_arb_hub_rows", None) or []
+        for i, row in enumerate(rows):
+            if i == self._arb_hub_idx:
+                row["cursor"].configure(text=" \u25ba")
+                row["name"].configure(fg=AMBER)
+                row["desc"].configure(fg=AMBER_D)
+            else:
+                row["cursor"].configure(text="  ")
+                row["name"].configure(fg=WHITE)
+                row["desc"].configure(fg=DIM)
+
+    def _arb_hub_pick(self, idx: int):
+        if idx < 0 or idx >= len(self._ARB_HUB_ITEMS):
+            return
+        target = self._ARB_HUB_ITEMS[idx][3]
+        if isinstance(target, tuple):
+            method, arg = target
+            getattr(self, method)(arg)
+        else:
+            getattr(self, target)()
+
+    # ── Background scan: populates telemetry strip without blocking Tk ─
+    def _arb_hub_scan_async(self):
+        """Kick off a funding_scanner.scan() in a daemon thread, then
+        marshal the result back to the UI via self.after(0, ...).
+
+        The scanner itself is cached (CACHE_TTL) so hitting the hub
+        repeatedly doesn't hammer venue APIs.
+        """
+        import threading
+        try:
+            from core.funding_scanner import FundingScanner
+        except Exception as e:
+            self._arb_hub_telem.configure(
+                text=f"  scanner unavailable: {e}  ", fg=RED)
+            return
+        scanner = getattr(self, "_funding_scanner", None)
+        if scanner is None:
+            scanner = FundingScanner()
+            self._funding_scanner = scanner
+
+        def _worker():
+            try:
+                opps = scanner.scan()
+                stats = scanner.stats()
+                arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=5.0)
+                arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=5.0)
+                # snapshot top signed APR across all
+                top = opps[0] if opps else None
+                self.after(0, lambda: self._arb_hub_telem_update(
+                    stats, top, arb_dd, arb_cd))
+            except Exception as e:
+                self.after(0, lambda: self._arb_hub_telem.configure(
+                    text=f"  scan failed: {e}  ", fg=RED))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _arb_hub_telem_update(self, stats, top, arb_dd, arb_cd):
+        if not hasattr(self, "_arb_hub_telem"):
+            return
+        try:
+            dex_on = stats.get("dex_online", 0)
+            cex_on = stats.get("cex_online", 0)
+            total  = stats.get("total", 0)
+            parts = [
+                f"\u25cf {dex_on} dex",
+                f"\u25cf {cex_on} cex",
+                f"{total} perps",
+            ]
+            if top is not None:
+                parts.append(
+                    f"top {top.symbol} {top.apr:+.0f}% @ {top.venue}"
+                )
+            if arb_dd:
+                a = arb_dd[0]
+                parts.append(
+                    f"dex\u2194dex best {a['symbol']} {a['net_apr']:+.0f}%"
+                )
+            if arb_cd:
+                a = arb_cd[0]
+                parts.append(
+                    f"cex\u2194dex best {a['symbol']} {a['net_apr']:+.0f}%"
+                )
+            text = "   \u00b7   ".join(parts)
+            self._arb_hub_telem.configure(text="  " + text + "  ", fg=AMBER_D)
+        except Exception:
+            pass
+
+    # ═══════════════════════════════════════════════════════════════
+    # FUNDING SCANNER SCREEN — shared between DEX-DEX and CEX-DEX modes
+    # ═══════════════════════════════════════════════════════════════
+    def _funding_scanner_screen(self, mode: str = "dex-dex"):
+        """Live cross-venue funding rate observer.
+
+        mode:
+            "dex-dex"  — show only DEX opps, arb pairs filtered to DEX-DEX
+            "cex-dex"  — show top of everything, arb pairs require mix
+
+        Layout is intentionally LCD/MP3-player minimal: monochrome amber,
+        one thin divider per section, no heavy borders. Auto-refresh every
+        60 seconds via self.after; manual refresh with R. Scan runs in a
+        background thread so the Tk loop never blocks.
+        """
+        assert mode in ("dex-dex", "cex-dex")
+        self._clr(); self._clear_kb()
+        self._funding_alive = True
+        self._funding_mode = mode
+
+        if mode == "dex-dex":
+            title_text = "D E X    F U N D I N G"
+            subtitle = "pure cross-dex  \u00b7  hyperliquid  \u00b7  dydx  \u00b7  paradex"
+            self.h_path.configure(text="> ARBITRAGE > DEX\u2194DEX")
+        else:
+            title_text = "C E X    \u2194    D E X    S P R E A D"
+            subtitle = "cex/dex funding differential  \u00b7  biggest historical apr"
+            self.h_path.configure(text="> ARBITRAGE > CEX\u2194DEX")
+
+        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
+        self.f_lbl.configure(
+            text="R refresh  |  C jane  |  D dex\u2194dex  |  X cex\u2194dex  |  ESC back"
+        )
+
+        self._kb("<Escape>", lambda: self._arbitrage_hub())
+        self._kb("<Key-r>", lambda: self._funding_refresh(force=True))
+        self._kb("<Key-c>", lambda: self._alchemy_enter())
+        self._kb("<Key-d>", lambda: self._funding_scanner_screen("dex-dex"))
+        self._kb("<Key-x>", lambda: self._funding_scanner_screen("cex-dex"))
+        self._bind_global_nav()
+
+        outer = tk.Frame(self.main, bg=BG)
+        outer.pack(fill="both", expand=True, padx=24, pady=12)
+
+        # ── Title block ─────────────────────────────────────────
+        tk.Label(outer, text=title_text, font=(FONT, 14, "bold"),
+                 fg=AMBER, bg=BG).pack(anchor="center")
+        tk.Label(outer, text=subtitle, font=(FONT, 7),
+                 fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
+
+        self._funding_meta = tk.Label(
+            outer, text="  last scan \u2014\u2014  \u00b7  \u2014 venues  ",
+            font=(FONT, 7), fg=DIM2, bg=BG)
+        self._funding_meta.pack(anchor="center")
+
+        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(6, 4))
+
+        # ── Table header ────────────────────────────────────────
+        cols = [
+            ("#",       3,  "e"),
+            ("SYMBOL",  10, "w"),
+            ("VENUE",   12, "w"),
+            ("TYPE",    4,  "w"),
+            ("RATE",    12, "e"),
+            ("APR",     9,  "e"),
+            ("VOL",     10, "e"),
+            ("RISK",    5,  "w"),
+        ]
+        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
+        for label, w, anchor in cols:
+            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
+                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
+        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+
+        # ── Scrollable row container ────────────────────────────
+        table_wrap = tk.Frame(outer, bg=BG, height=280)
+        table_wrap.pack(fill="both", expand=False)
+        table_wrap.pack_propagate(False)
+
+        canvas = tk.Canvas(table_wrap, bg=BG, bd=0, highlightthickness=0)
+        scroll = tk.Scrollbar(table_wrap, orient="vertical",
+                              command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        inner = tk.Frame(canvas, bg=BG)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
+
+        def _on_wheel(event, c=canvas):
+            try: c.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError: pass
+        canvas.bind("<Enter>",
+                    lambda e, c=canvas: c.bind_all("<MouseWheel>", _on_wheel))
+        canvas.bind("<Leave>",
+                    lambda e, c=canvas: c.unbind_all("<MouseWheel>"))
+
+        self._funding_table_inner = inner
+        self._funding_cols = cols
+
+        # ── Arb spreads strip ───────────────────────────────────
+        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(8, 4))
+        tk.Label(outer, text="\u25ba  ARB  SPREADS  (same symbol, venues diverging)",
+                 font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(
+                     fill="x")
+        self._funding_arb_frame = tk.Frame(outer, bg=BG)
+        self._funding_arb_frame.pack(fill="x", pady=(2, 0))
+
+        # ── First load ──────────────────────────────────────────
+        self._funding_refresh(force=False)
+
+    def _funding_refresh(self, force: bool = False):
+        """Fire a background scan and repaint on completion."""
+        if not getattr(self, "_funding_alive", False):
+            return
+        import threading
+        from core.funding_scanner import FundingScanner
+
+        scanner = getattr(self, "_funding_scanner", None)
+        if scanner is None:
+            scanner = FundingScanner()
+            self._funding_scanner = scanner
+
+        try:
+            self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
+        except Exception:
+            pass
+
+        mode = getattr(self, "_funding_mode", "dex-dex")
+
+        def _worker():
+            try:
+                scanner.scan(force=force)
+                stats = scanner.stats()
+                if mode == "dex-dex":
+                    rows = scanner.top(n=40, min_apr=5.0, venue_type="DEX")
+                else:
+                    rows = scanner.top(n=40, min_apr=20.0)
+                arb = scanner.arb_pairs(mode=mode, min_spread_apr=5.0)[:5]
+                # fire optional telegram alerts for the biggest opps
+                try:
+                    from core.funding_scanner import maybe_alert_telegram
+                    maybe_alert_telegram(rows, apr_threshold=100.0)
+                except Exception:
+                    pass
+                self.after(0, lambda: self._funding_paint(rows, arb, stats))
+            except Exception as e:
+                self.after(0, lambda: self._funding_fail(str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        # schedule next auto-refresh (60s) — only once per screen
+        if not getattr(self, "_funding_timer_armed", False):
+            self._funding_timer_armed = True
+            def _tick():
+                if not getattr(self, "_funding_alive", False):
+                    return
+                self._funding_refresh(force=False)
+                try:
+                    self.after(60_000, _tick)
+                except tk.TclError:
+                    pass
+            self.after(60_000, _tick)
+
+    def _funding_paint(self, rows, arb, stats):
+        from datetime import datetime
+        if not getattr(self, "_funding_alive", False):
+            return
+        inner = getattr(self, "_funding_table_inner", None)
+        if inner is None:
+            return
+
+        # rebuild rows
+        for w in inner.winfo_children():
+            w.destroy()
+
+        for i, o in enumerate(rows, 1):
+            bg = BG if i % 2 == 1 else BG2
+            rf = tk.Frame(inner, bg=bg)
+            rf.pack(fill="x")
+
+            # APR color classes
+            apr_abs = abs(o.apr)
+            if apr_abs >= 100:
+                apr_fg = GREEN
+            elif apr_abs >= 50:
+                apr_fg = AMBER
+            else:
+                apr_fg = DIM
+            risk_fg = RED if o.risk == "HIGH" else (AMBER_D if o.risk == "MED" else DIM)
+            sym_fg = WHITE
+            venue_fg = AMBER_D
+
+            cells = [
+                (f"{i:>3}", DIM),
+                (o.symbol, sym_fg),
+                (o.venue, venue_fg),
+                (o.venue_type, DIM2),
+                (f"{o.rate*100:+.3f}%/{o.interval_h:.0f}h", DIM),
+                (f"{o.apr:+.0f}%", apr_fg),
+                (f"${o.volume_24h/1e6:.1f}M", DIM),
+                (o.risk, risk_fg),
+            ]
+            for (txt, fg), (_lbl, w, anchor) in zip(cells, self._funding_cols):
+                tk.Label(rf, text=txt, font=(FONT, 8),
+                         fg=fg, bg=bg, width=w, anchor=anchor).pack(side="left")
+
+        if not rows:
+            tk.Label(inner, text="  \u2014 no opportunities above threshold \u2014  ",
+                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
+
+        # arb pairs strip
+        arb_frame = getattr(self, "_funding_arb_frame", None)
+        if arb_frame:
+            for w in arb_frame.winfo_children():
+                w.destroy()
+            if arb:
+                for a in arb:
+                    line = (
+                        f"   {a['symbol']:8s}  "
+                        f"SHORT {a['short_venue']:<11s} ({a['short_apr']:+6.1f}%)  "
+                        f"\u2192  "
+                        f"LONG {a['long_venue']:<11s} ({a['long_apr']:+6.1f}%)  "
+                        f"net {a['net_apr']:+6.0f}%"
+                    )
+                    net_fg = GREEN if abs(a["net_apr"]) >= 50 else AMBER
+                    tk.Label(arb_frame, text=line, font=(FONT, 8),
+                             fg=net_fg, bg=BG, anchor="w").pack(fill="x")
+            else:
+                tk.Label(arb_frame,
+                         text="   \u2014 no cross-venue spreads above 5% APR \u2014",
+                         font=(FONT, 8), fg=DIM2, bg=BG, anchor="w").pack(fill="x")
+
+        # meta strip
+        try:
+            now = datetime.now().strftime("%H:%M:%S")
+            total = stats.get("total", 0)
+            dex_on = stats.get("dex_online", 0)
+            cex_on = stats.get("cex_online", 0)
+            errs = stats.get("errors") or {}
+            err_tag = f"  \u00b7  {len(errs)} failed" if errs else ""
+            self._funding_meta.configure(
+                text=f"  last scan {now}  \u00b7  "
+                     f"{dex_on} dex  {cex_on} cex  "
+                     f"\u00b7  {total} perps{err_tag}  ",
+                fg=DIM,
+            )
+            self.h_stat.configure(text="LIVE", fg=GREEN)
+        except Exception:
+            pass
+
+    def _funding_fail(self, reason: str):
+        if not getattr(self, "_funding_alive", False):
+            return
+        try:
+            self.h_stat.configure(text="SCAN FAILED", fg=RED)
+            meta = getattr(self, "_funding_meta", None)
+            if meta:
+                meta.configure(text=f"  scan failed: {reason[:80]}  ", fg=RED)
+        except Exception:
+            pass
 
     # ─── TERMINAL (Layer 2) ───────────────────────────────
     def _terminal(self):
