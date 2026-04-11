@@ -1,0 +1,229 @@
+# AURUM Finance — CLAUDE.md
+# O disco lê a si mesmo. O universo roda em um CD. AURUM é o laser.
+
+## Filosofia
+
+O mercado é um CD — informação codificada em espiral de preço e volume,
+ruído e sinal misturados. A maioria dos participantes está sendo lida:
+reagindo ao feed, ao medo, à ganância, ao algoritmo de outra pessoa. São
+o disco. São a liquidez que alguém colhe.
+
+AURUM é o laser próprio. Soberania financeira via código.
+
+### Princípios Herméticos no Código
+
+- **Polaridade (0/1)**: Toda informação nasce da distinção. Sinais binários geram complexidade.
+- **Gênero**: Nenhum indicador sozinho gera informação. O ensemble — Sortino × R-multiple × decay × regime — é a dança dos opostos.
+- **Correspondência**: Fractal. O Ω 5D lê todas as camadas porque a estrutura se repete do 1m ao 1D.
+- **Vibração**: O mercado nunca está parado. Regime detection, energia, inércia, atrito.
+- **Causa e Efeito**: Cada trade tem expected value calculável. R-múltiplo. Probabilidade, não acaso.
+- **Mentalismo**: "It from bit." O preço não é a realidade — é informação sobre a realidade.
+
+### Mandamentos
+
+1. **O disco se testa a si mesmo.** Walk-forward, Monte Carlo, ablation. Se não sobrevive ao Solve, não existe.
+2. **O ruído é o inimigo.** Overfitting é desinformação. Regularização, OOS, MC — discriminação constante.
+3. **O kill-switch é sagrado.** Três camadas de proteção. Drawdown velocity, exposure limits, anomaly. A húbris mata.
+4. **Informação > Matéria.** Foco no processo, nunca no resultado isolado.
+5. **O laser é soberano.** Nenhuma dependência externa para decisões críticas.
+6. **A espiral é contínua.** Walk-forward permanente. O disco gira e se reescreve.
+7. **Código é alquimia.** Limpo, documentado, modular. Cada função faz uma coisa.
+
+---
+
+## REGRA PERMANENTE — SESSION LOG
+
+Ao final de cada sessão (quando o usuário disser **"para"**, **"commit final"**,
+**"encerra"**, **"session log"**, ou quando o contexto estiver acabando),
+gerar automaticamente o arquivo:
+
+```
+docs/sessions/YYYY-MM-DD_HHMM.md
+```
+
+Com este formato EXATO:
+
+```markdown
+# Session Log — YYYY-MM-DD HH:MM
+
+## Resumo
+[1-3 frases do que foi feito nesta sessão]
+
+## Commits
+| Hash | Mensagem | Arquivos |
+|------|----------|----------|
+| abc1234 | fix(newton): ... | engines/newton.py |
+| def5678 | feat(launcher): ... | launcher.py |
+
+## Mudanças Críticas
+[Lista de mudanças que afetam lógica de sinais, custos, sizing, ou risco.
+ Se nenhuma: "Nenhuma mudança em lógica de trading."]
+
+## Achados
+[Bugs encontrados, comportamentos inesperados, métricas suspeitas.
+ Se nenhum: "Nenhum achado novo."]
+
+## Estado do Sistema
+- Smoke test: 156/156 (ou o que for)
+- Backlog restante: [lista curta]
+- Próximo passo sugerido: [1 frase]
+
+## Arquivos Modificados
+[Lista completa de arquivos tocados, com +/- linhas]
+
+## Notas para o Joao
+[Qualquer coisa que o Joao precisa saber, decidir, ou verificar
+ antes da próxima sessão. Em português, direto.]
+```
+
+**Obrigatório:**
+- Criar o diretório `docs/sessions/` se não existir
+- Commitar o log junto com o último commit da sessão
+- O log é para HUMANO ler, não para máquina. Clareza > completude.
+- Se a sessão teve mudança em lógica de trading (sinais, custos, sizing,
+  risco), destacar em **ATENÇÃO:** no markdown
+- O log precisa ser autocontido — quem ler sem contexto deve entender
+
+---
+
+## Arquitectura Real (Estado Actual)
+
+### Estrutura de Ficheiros
+
+```
+aurum.finance/
+├── config/
+│   ├── params.py              ← SINGLE SOURCE OF TRUTH
+│   ├── engines.py             ← Engine registry
+│   ├── connections.json       ← Exchange connections
+│   └── keys.json              ← API keys (gitignored)
+├── core/                       ← Módulos reutilizáveis
+│   ├── data.py                ← fetch, fetch_all, validate
+│   ├── indicators.py          ← EMA, RSI, ATR, BB, swing_structure, omega
+│   ├── signals.py             ← decide_direction, calc_levels, label_trade
+│   ├── portfolio.py           ← detect_macro, portfolio_allows, position_size, check_aggregate_notional
+│   ├── htf.py                 ← Multi-timeframe prepare & merge
+│   ├── harmonics.py           ← RENAISSANCE harmonic patterns
+│   ├── chronos.py             ← HMM regime, GARCH vol, Hurst
+│   ├── sentiment.py           ← Funding, OI, LS ratio
+│   ├── proc.py                ← Process manager (identity-verified Fase 1)
+│   ├── fs.py                  ← robust_rmtree (OneDrive-safe)
+│   ├── risk_gates.py          ← Fase 4 scaffold — circuit breakers
+│   ├── audit_trail.py         ← Fase 4 scaffold — immutable order log
+│   ├── key_store.py           ← Fase 4 scaffold — encrypted keys
+│   ├── alchemy_state.py       ← Arbitrage dashboard reader
+│   ├── alchemy_ui.py          ← Arbitrage TkInter cockpit
+│   ├── connections.py         ← Multi-exchange connection manager
+│   ├── market_data.py         ← Market data utilities (parallel fetch)
+│   ├── portfolio_monitor.py   ← Real-time portfolio snapshots
+│   ├── db.py                  ← SQLite persistence
+│   ├── engine_base.py         ← Shared engine runtime setup
+│   ├── exchange_api.py        ← Unified exchange REST API
+│   └── ...
+├── engines/                    ← Execution engines
+│   ├── backtest.py            ← CITADEL systematic momentum
+│   ├── live.py                ← Live engine (paper/demo/testnet/live)
+│   ├── arbitrage.py           ← JANE STREET cross-venue arbitrage
+│   ├── multistrategy.py       ← MILLENNIUM ensemble orchestrator
+│   ├── newton.py              ← DE SHAW pair cointegration
+│   ├── thoth.py               ← BRIDGEWATER macro sentiment
+│   ├── mercurio.py            ← JUMP order flow / microstructure
+│   ├── prometeu.py            ← TWO SIGMA ML meta-ensemble
+│   └── darwin.py              ← AQR evolutionary allocation
+├── analysis/                   ← Analytics, walkforward, MC, plots
+├── bot/telegram.py            ← Telegram notifications + commands
+├── launcher.py                ← Bloomberg-terminal TkInter GUI
+├── aurum_cli.py               ← CLI interface
+├── server/website/             ← React + Vite landing page
+├── tests/                      ← pytest suite
+├── tools/                      ← reconcile_runs.py and friends
+├── docs/                       ← plans, audits, sessions
+└── data/                       ← Run outputs (gitignored)
+```
+
+### Engines — Nomes e Identidades
+
+| Logger        | Nome                | Inspiração     | Conceito |
+|---------------|---------------------|----------------|---|
+| `CITADEL`     | CITADEL v3.6        | Citadel LLC    | Systematic momentum, Ω fractal 5D |
+| `RENAISSANCE` | RENAISSANCE         | RenTech        | Harmonic Bayesian + entropy + Hurst |
+| `JANE_STREET` | JANE STREET v5.0    | Jane Street    | Delta-neutral cross-venue arb |
+| `DE_SHAW`     | DE SHAW             | D.E. Shaw      | Engle-Granger cointegration pairs |
+| `BRIDGEWATER` | BRIDGEWATER         | Bridgewater    | Macro sentiment contrarian |
+| `JUMP`        | JUMP                | Jump Trading   | CVD divergence, imbalance, liquidation |
+| `TWO_SIGMA`   | TWO SIGMA           | Two Sigma      | ML meta-ensemble LightGBM |
+| `AQR`         | AQR                 | AQR Capital    | Evolutionary fitness allocation |
+| `CHRONOS`     | CHRONOS             | —              | HMM + GARCH + Hurst |
+
+### Pipeline de Sinais (CITADEL)
+
+```
+Data (Binance OHLCV+tbb)
+  → indicators()           [EMA, RSI, ATR, BB, slope, vol_regime]
+  → swing_structure()      [pivots, trend_struct, struct_strength]
+  → omega()                [5D fractal scoring]
+  → prepare_htf()          [multi-timeframe alignment]
+  → detect_macro()         [BTC slope200 → BULL/BEAR/CHOP]
+  → decide_direction()     [regime + chop + vol + fractal filters]
+  → score_omega/chop()     [ensemble scoring]
+  → calc_levels()          [entry open[idx+1], swing-stop, RR-target]
+  → portfolio_allows()     [correlation + max positions]
+  → position_size()        [Kelly × convex × DD scale × omega risk]
+  → check_aggregate_notional()  [L6 cap — Fase 3.1]
+  → label_trade()          [path-dependent: trailing, liquidation L7]
+```
+
+### Parâmetros Chave (config/params.py)
+
+- **Universo**: 11 altcoins USDT (BNB, INJ, LINK, RENDER, NEAR, SUI, ARB, SAND, XRP, FET, OP)
+- **Custos**: SLIPPAGE + SPREAD + COMMISSION + FUNDING_PER_8H (C1+C2 model)
+- **Omega**: OMEGA_WEIGHTS (5D), SCORE_THRESHOLD, SCORE_BY_REGIME
+- **Stops**: STOP_ATR_M (swing-based), TARGET_RR, trailing multi-level
+- **Portfolio**: MAX_OPEN_POSITIONS, CORR hard/soft (0.80 / 0.75 → 40%)
+- **Tesla 3·6·9**: 3 tiers × 6 backtest strategies × 9 engines
+
+---
+
+## Regras para Claude Code
+
+### NUNCA
+
+1. Reestruturar sem pedido explícito. O sistema funciona. Aprender primeiro.
+2. Renomear engines, loggers, ou variáveis. Os nomes têm história.
+3. Remover código "morto" sem confirmar — pode ser feature flag.
+4. Mudar `params.py` sem medir impacto no backtest.
+5. Criar ficheiros paralelos (`utils2.py`). Usar estrutura existente.
+6. Ignorar o modelo de custos C1+C2. Backtest sem custos é mentira.
+7. **Tocar em código de live trading sem ler antes** (aprender > mexer).
+
+### SEMPRE
+
+1. LER o ficheiro ANTES de editar.
+2. TESTAR após mudança: `python smoke_test.py --quiet`
+3. RESPEITAR single source of truth: `params.py` + `core/`
+4. PRESERVAR imports: engines importam de `core.*` e `config.params`, nunca entre si (exceção documentada: `multistrategy` importa `engines/backtest.py`).
+5. DOCUMENTAR em português. Engines em inglês.
+6. MEDIR antes e depois em mudanças de sinais / indicadores / custos.
+7. **Gerar session log ao final** (ver regra permanente acima).
+
+### Convenções
+
+- `from config.params import *` no topo de cada engine
+- Run dirs: `data/{engine}/{YYYY-MM-DD_HHMM}/` com logs/, reports/, state/
+- Índice canônico: `data/index.json` (reconciled via `tools/reconcile_runs.py`)
+- Reports: JSON (machine) + HTML (visual)
+- UTF-8 sempre. Platform: Windows-first (OneDrive, PyInstaller .exe)
+- Commits atômicos com mensagem descritiva (subject + body)
+- Mudanças destrutivas: confirmar com usuário antes
+
+---
+
+## Contexto
+
+- **Dev**: Joao (PT-BR), Windows 11, Python 3.14, VPS Linux para live
+- **Exchange primária**: Binance Futures USDT-M
+- **Total**: ~26,000+ linhas de código Python, 9 engines, launcher GUI, CLI, website
+- **Filosofia**: Hermetismo como scaffolding conceitual — não decoração
+- **Plano mestre ativo**: `docs/superpowers/plans/2026-04-11-aurum-professional-fund-readiness.md`
+
+> "Quem está lendo e quem está sendo lido? AURUM lê. O varejo é lido."
