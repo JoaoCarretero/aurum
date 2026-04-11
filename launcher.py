@@ -3,7 +3,7 @@
 AURUM Finance — Terminal v4
 Bloomberg Terminal aesthetic. Clean, functional, no bugs.
 """
-import os, sys, subprocess, threading, queue, json, time
+import os, sys, subprocess, threading, queue, json, time, math
 from pathlib import Path
 from datetime import datetime
 
@@ -468,6 +468,7 @@ class App(tk.Tk):
         self.after(3000, self._tick)
 
     # ─── SPLASH (Layer 0) ───────────────────────────────
+    # ─── SPLASH (Layer 0) — CD Universe ─────────────────
     def _splash(self):
         self._clr(); self._clear_kb(); self.history.clear()
         self.h_path.configure(text=""); self.h_stat.configure(text="PRONTO", fg=GREEN)
@@ -475,58 +476,49 @@ class App(tk.Tk):
 
         f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
 
-        # ── Top caption: the golden ratio, spelled out ──
-        tk.Label(f, text="φ   ·   G O L D E N   R A T I O   ·   1.6180339887498948",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 10))
+        # ── CD Radar — market signal topology ──
+        cd_size = 200
+        self._cd_canvas = tk.Canvas(f, width=cd_size, height=cd_size,
+                                     bg=BG, highlightthickness=0)
+        self._cd_canvas.pack(pady=(0, 6))
+        self._cd_t = 0.0
+        self._cd_size = cd_size
+        self._cd_alive = True
+        self._cd_draw()
 
-        # ── Upper rule ──
-        tk.Frame(f, bg=AMBER_D, height=1, width=560).pack()
-        tk.Frame(f, bg=BG, height=10).pack()
+        # ── Thin rule ──
+        tk.Frame(f, bg=AMBER_D, height=1, width=480).pack(pady=(4, 8))
 
-        # ── AURUM wordmark (ANSI Shadow blocks, amber on black) ──
-        tk.Label(f, text=BANNER, font=(FONT, 12, "bold"),
+        # ── AURUM wordmark ──
+        tk.Label(f, text=BANNER, font=(FONT, 11, "bold"),
                  fg=AMBER, bg=BG, justify="left").pack()
 
-        tk.Frame(f, bg=BG, height=6).pack()
-
         # ── Subtitle ──
-        tk.Label(f, text="F · I · N · A · N · C · E       T · E · R · M · I · N · A · L",
-                 font=(FONT, 9, "bold"), fg=AMBER_B, bg=BG).pack()
+        tk.Label(f, text="S O V E R E I G N   F I N A N C E   T E R M I N A L",
+                 font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(pady=(2, 4))
 
-        tk.Frame(f, bg=BG, height=8).pack()
+        # ── Thin rule ──
+        tk.Frame(f, bg=AMBER_D, height=1, width=480).pack(pady=(6, 10))
 
-        # ── Fibonacci spine ──
-        tk.Label(f, text="1  ·  1  ·  2  ·  3  ·  5  ·  8  ·  13  ·  21  ·  34  ·  55  ·  89  ·  144   →   ∞",
-                 font=(FONT, 8), fg=AMBER_D, bg=BG).pack()
-
-        # ── Lower rule ──
-        tk.Frame(f, bg=BG, height=12).pack()
-        tk.Frame(f, bg=AMBER_D, height=1, width=560).pack()
-        tk.Frame(f, bg=BG, height=14).pack()
-
-        # ── Status block (load data) ──
+        # ── Status block ──
         st = _conn.status_summary()
         keys = self._load_json("keys.json")
         has_tg = bool(keys.get("telegram", {}).get("bot_token"))
         has_keys = bool(keys.get("demo", {}).get("api_key") or keys.get("testnet", {}).get("api_key"))
         conn_color = GREEN if has_keys else DIM
         conn_text = f"Binance ({'testnet' if keys.get('testnet',{}).get('api_key') else 'demo'})" if has_keys else "not connected"
-        conn_icon = "\u25cf" if has_keys else "\u25cb"  # ● or ○
+        conn_icon = "\u25cf" if has_keys else "\u25cb"
 
-        # Last backtest row — prefer data/index.json (modern layout), fall back
-        # to scanning data/runs/*/summary.json, then to the legacy
-        # data/reports/*.json tree. The old filter `"reports" in str(r)`
-        # ignored the entire modern data/runs/ layout and left this row
-        # saying "— no data —" even with 20+ runs on disk. [Fase 0.1 / D2]
+        # Last backtest
         last_bt = ""
         try:
             idx = ROOT / "data" / "index.json"
             if idx.exists():
-                rows = json.loads(idx.read_text(encoding="utf-8"))
-                rows = [r for r in rows if isinstance(r, dict)]
-                rows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
-                if rows:
-                    r0 = rows[0]
+                brows = json.loads(idx.read_text(encoding="utf-8"))
+                brows = [r for r in brows if isinstance(r, dict)]
+                brows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
+                if brows:
+                    r0 = brows[0]
                     wr = r0.get("win_rate")
                     pnl = r0.get("pnl") or r0.get("total_pnl")
                     iv = r0.get("interval") or r0.get("engine") or ""
@@ -545,7 +537,6 @@ class App(tk.Tk):
                         if wr is not None and pnl is not None:
                             last_bt = f"{iv} — WR {float(wr):.1f}% — ${float(pnl):+,.0f}"
             if not last_bt:
-                # Legacy fallback — old data/2026-*/reports/*.json layout.
                 dd = ROOT / "data"
                 if dd.exists():
                     for r in sorted(dd.rglob("citadel_*.json"),
@@ -564,33 +555,34 @@ class App(tk.Tk):
         rows = [
             ("MARKET",      st['market'],                                       AMBER_B),
             ("CONNECTION",  f"{conn_icon} {conn_text}",                         conn_color),
-            ("TELEGRAM",    "\u25cf connected" if has_tg else "\u25cb offline", GREEN if has_tg else DIM),
+            ("TELEGRAM",    "\u25cf connected" if has_tg else "\u25cb offline",  GREEN if has_tg else DIM),
             ("BACKTEST",    last_bt or "— no data —",                           WHITE if last_bt else DIM),
-            ("BUILD",       f"{datetime.now().strftime('%Y.%m.%d')}  ·  python {sys.version.split()[0]}  ·  10 engines", DIM2),
+            ("ENGINES",     "6 ready · 3 dev · 26k lines",                      DIM),
+            ("KILL-SWITCH", "3 LAYERS ARMED",                                   RED),
         ]
 
         stf = tk.Frame(f, bg=BG); stf.pack()
         for label, value, color in rows:
             row = tk.Frame(stf, bg=BG); row.pack(anchor="w", pady=1)
             tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                     fg=DIM, bg=BG, width=12, anchor="w").pack(side="left")
+                     fg=DIM, bg=BG, width=13, anchor="w").pack(side="left")
             tk.Label(row, text="\u2502", font=(FONT, 8),
-                     fg=DIM2, bg=BG).pack(side="left", padx=(0, 10))
+                     fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
             tk.Label(row, text=value, font=(FONT, 8),
                      fg=color, bg=BG, anchor="w").pack(side="left")
 
-        tk.Frame(f, bg=BG, height=14).pack()
-        tk.Frame(f, bg=AMBER_D, height=1, width=560).pack()
-        tk.Frame(f, bg=BG, height=12).pack()
+        tk.Frame(f, bg=BG, height=10).pack()
+        tk.Frame(f, bg=AMBER_D, height=1, width=480).pack()
+        tk.Frame(f, bg=BG, height=10).pack()
 
-        # ── Continue prompt ──
-        tk.Label(f, text="[   press   ENTER   to   continue   ]",
+        # ── Continue ──
+        tk.Label(f, text="[  ENTER  ]",
                  font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack()
 
         tk.Frame(f, bg=BG, height=6).pack()
 
-        # ── Footer: gold lore ──
-        tk.Label(f, text="©  2026   AURUM  FINANCE   ·   Au · 79 · 196.966569",
+        # ── Footer ──
+        tk.Label(f, text="© 2026  AURUM FINANCE  ·  O disco lê a si mesmo",
                  font=(FONT, 7), fg=DIM2, bg=BG).pack()
 
         for ev in ["<Button-1>", "<Return>", "<space>"]:
@@ -599,6 +591,69 @@ class App(tk.Tk):
             else:
                 self._kb(ev, lambda: self._menu("main"))
         self._bind_global_nav()
+
+    def _cd_draw(self):
+        """Animate the CD radar on the splash screen."""
+        if not getattr(self, "_cd_alive", False):
+            return
+        cv = self._cd_canvas
+        sz = self._cd_size
+        self._cd_t += 0.015
+        t = self._cd_t
+        cx, cy = sz / 2, sz / 2
+        R = sz * 0.44
+
+        cv.delete("all")
+
+        # Grid rings
+        for pct in (0.2, 0.4, 0.6, 0.8, 1.0):
+            r = R * pct
+            alpha = "#2a1800" if pct < 1.0 else "#3d2200"
+            cv.create_oval(cx - r, cy - r, cx + r, cy + r,
+                           outline=alpha, width=1)
+
+        # Crosshairs
+        for angle_deg in (0, 45, 90, 135):
+            a = math.radians(angle_deg)
+            cv.create_line(cx + math.cos(a) * R, cy + math.sin(a) * R,
+                           cx - math.cos(a) * R, cy - math.sin(a) * R,
+                           fill="#1a1000", width=1)
+
+        # Data spiral — binary encoded
+        N = 400
+        for i in range(N):
+            ang = (i / N) * math.pi * 12 + t * 0.3
+            r = 6 + (i / N) * R
+            x = cx + math.cos(ang) * r
+            y = cy + math.sin(ang) * r
+            signal = math.sin(i * 0.73 + t * 12) > 0.2
+            if signal:
+                # Brighter toward edge
+                c = "#4d2800" if i < N * 0.5 else "#663800"
+                cv.create_rectangle(x, y, x + 1, y + 1, fill=c, outline="")
+
+        # Sweep line
+        sweep = t * 1.2
+        sx = cx + math.cos(sweep) * R
+        sy = cy + math.sin(sweep) * R
+        cv.create_line(cx, cy, sx, sy, fill="#3d2200", width=1)
+
+        # Read head
+        rr = ((t * 10) % R) + 6
+        lx = cx + math.cos(sweep) * rr
+        ly = cy + math.sin(sweep) * rr
+        cv.create_oval(lx - 1.5, ly - 1.5, lx + 1.5, ly + 1.5,
+                       fill=AMBER, outline="")
+
+        # Center dot
+        cv.create_oval(cx - 2, cy - 2, cx + 2, cy + 2,
+                       fill=AMBER_D, outline="")
+
+        # Label
+        cv.create_text(cx, cy + R + 12, text="Ω  SIGNAL  TOPOLOGY",
+                       font=(FONT, 7), fill=DIM2, anchor="center")
+
+        self.after(33, self._cd_draw)  # ~30 fps
 
     def _bind_global_nav(self):
         """Bind global navigation keys available on all screens."""
