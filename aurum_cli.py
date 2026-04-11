@@ -776,9 +776,15 @@ def _trade_charts(files):
     if idx is not None and k=="enter": _openf(files[idx])
 
 def _openf(path):
-    if sys.platform=="win32":   os.startfile(str(path))
-    elif sys.platform=="darwin": subprocess.run(["open", str(path)])
-    else:                        subprocess.run(["xdg-open", str(path)])
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(path))
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+    except (OSError, FileNotFoundError):
+        pass
 
 def _open_folder(run):
     jp = run.get("json_path")
@@ -841,9 +847,14 @@ def main():
     pa = argparse.ArgumentParser(prog="aurum", description="☿ AURUM Finance v2")
     sub = pa.add_subparsers(dest="cmd")
 
-    p=sub.add_parser("backtest",aliases=["bt"]); p.add_argument("strategy",choices=["graviton","photon","hadron"],nargs="?",default="graviton"); p.add_argument("--days",type=int,default=90); p.add_argument("--plots",action="store_true"); p.add_argument("--leverage",type=float,default=None)
-    p=sub.add_parser("simulator",aliases=["sim"]); p.add_argument("strategy",choices=["graviton","neutrino"],nargs="?",default="graviton"); p.add_argument("--mode",type=int,default=1)
-    p=sub.add_parser("live"); p.add_argument("strategy",choices=["graviton","neutrino"],nargs="?",default="graviton"); p.add_argument("--mode",type=int,default=3)
+    # Real strategy names (must match keys in STRATEGIES dict and branches in _resolve).
+    # backtest supports 6; simulator/live are limited to engines with a runtime mode.
+    BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium"]
+    LIVE_STRATS = ["citadel", "janestreet"]
+
+    p=sub.add_parser("backtest",aliases=["bt"]); p.add_argument("strategy",choices=BT_STRATS,nargs="?",default="citadel"); p.add_argument("--days",type=int,default=90); p.add_argument("--plots",action="store_true"); p.add_argument("--leverage",type=float,default=None)
+    p=sub.add_parser("simulator",aliases=["sim"]); p.add_argument("strategy",choices=LIVE_STRATS,nargs="?",default="citadel"); p.add_argument("--mode",type=int,default=1)
+    p=sub.add_parser("live"); p.add_argument("strategy",choices=LIVE_STRATS,nargs="?",default="citadel"); p.add_argument("--mode",type=int,default=3)
     sub.add_parser("ps")
     p=sub.add_parser("tail"); p.add_argument("pid",type=int)
     p=sub.add_parser("stop"); p.add_argument("pid",type=int)
@@ -852,23 +863,27 @@ def main():
 
     a = pa.parse_args()
 
-    # Map CLI names to internal keys
-    _CLI_MAP = {"graviton":"quasar","photon":"fermion","neutrino":"muon","hadron":"ensemble"}
+    def _unsupported(strat, method):
+        print(f"\n  {R}✗ strategy '{strat}' does not support method '{method}'{Z}")
+        print(f"  {D}supported for {method}: {', '.join(BT_STRATS if method == 'backtest' else LIVE_STRATS)}{Z}\n")
 
     if a.cmd is None: screen_main()
     elif a.cmd in ("backtest","bt"):
-        st = _CLI_MAP.get(a.strategy, a.strategy)
+        st = a.strategy
         lev = str(a.leverage) if a.leverage else ""
         ek,sc,si = _resolve(st,"backtest",{"days":str(a.days),"plots":a.plots,"leverage":lev})
         if ek: _launch(ek,sc,si,STRATEGIES[st]["name"],"BACKTEST")
+        else:  _unsupported(st, "backtest")
     elif a.cmd in ("simulator","sim"):
-        st = _CLI_MAP.get(a.strategy, a.strategy)
+        st = a.strategy
         ek,sc,si = _resolve(st,"simulator",{"mode":str(a.mode)})
         if ek: _launch(ek,sc,si,STRATEGIES[st]["name"],"SIMULADOR")
+        else:  _unsupported(st, "simulator")
     elif a.cmd == "live":
-        st = _CLI_MAP.get(a.strategy, a.strategy)
+        st = a.strategy
         ek,sc,si = _resolve(st,"live",{"mode":str(a.mode)})
         if ek: _launch(ek,sc,si,STRATEGIES[st]["name"],"LIVE")
+        else:  _unsupported(st, "live")
     elif a.cmd == "ps":   screen_procs()
     elif a.cmd == "tail":  _screen_tail(a.pid)
     elif a.cmd == "stop":
