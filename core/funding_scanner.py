@@ -10,6 +10,11 @@ DEX:
   hyperliquid  1h  130+ perps  — highest funding cadence in the industry
   dydx         8h  220+ perps  — largest Cosmos-based perp DEX
   paradex      1h  100+ perps  — Starknet-based perp DEX
+  gmx          1h  40+  perps  — GMX v2 Arbitrum perpetuals
+  vertex       8h  20+  perps  — Vertex Protocol Arbitrum orderbook
+  aevo         1h  100+ perps  — Aevo options + perp exchange
+  drift        1h  50+  perps  — Drift Protocol Solana perps
+  apex         1h  50+  perps  — ApeX Pro StarkEx perps
 
 CEX:
   binance      8h  400+ perps  — largest perps venue globally
@@ -438,11 +443,270 @@ def fetch_bitget() -> list[FundingOpp]:
     return out
 
 
-# Venue registry (priority ordered — doesn't affect logic, only display).
+def fetch_gmx() -> list[FundingOpp]:
+    """GET https://arbitrum-api.gmxinfra.io/markets/info
+    GMX v2 Arbitrum perpetuals.  Rates are in wei (1e30 divisor) per second;
+    we normalise to per-hour.  netRateLong / netRateShort give the dominant
+    direction — we take the one with higher absolute value as the signal."""
+    resp = requests.get(
+        "https://arbitrum-api.gmxinfra.io/markets/info",
+        timeout=HTTP_TIMEOUT,
+    )
+    resp.raise_for_status()
+    markets = (resp.json() or {})
+
+    out: list[FundingOpp] = []
+    for info in (markets if isinstance(markets, list) else markets.values() if isinstance(markets, dict) else []):
+        try:
+            if not isinstance(info, dict):
+                continue
+            # Extract token symbol from indexToken or marketToken data
+            index_token = info.get("indexToken") or {}
+            symbol = (index_token.get("symbol") or "").upper()
+            if not symbol:
+                continue
+
+            # Rates are per-second in wei (divisor 1e30)
+            rate_long_raw = float(info.get("netRateLong") or 0.0)
+            rate_short_raw = float(info.get("netRateShort") or 0.0)
+            # Convert wei/second → rate/hour
+            rate_long_h = (rate_long_raw / 1e30) * 3600.0
+            rate_short_h = (rate_short_raw / 1e30) * 3600.0
+            # Pick the dominant (higher abs) direction
+            rate = rate_long_h if abs(rate_long_h) >= abs(rate_short_h) else rate_short_h
+
+            mark = float(info.get("indexPrice") or 0.0)
+            if mark == 0.0:
+                # Try midPrice fallback
+                mark = float(info.get("midPrice") or 0.0)
+
+            # OI in wei (1e30 divisor gives USD)
+            oi_long_raw = float(info.get("openInterestLong") or 0.0)
+            oi_short_raw = float(info.get("openInterestShort") or 0.0)
+            oi_usd = (oi_long_raw + oi_short_raw) / 1e30
+
+            vol_usd = float(info.get("volumeUsd24h") or 0.0)
+
+            if rate == 0.0 or mark == 0.0:
+                continue
+            # GMX often has low vol on small markets — allow 0 vol (HIGH risk)
+            out.append(_mk(symbol, "gmx", "DEX",
+                           rate, 1.0, mark, vol_usd, oi_usd))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+    return out
+
+
+# Vertex product_id → base asset for major perps (Arbitrum orderbook)
+_VERTEX_PRODUCTS: dict[int, str] = {
+    2: "BTC",
+    4: "ETH",
+    6: "ARB",
+    8: "BNB",
+    10: "XRP",
+    12: "SOL",
+    14: "MATIC",
+    16: "SUI",
+    18: "OP",
+    20: "AVAX",
+    22: "LINK",
+    24: "DOGE",
+    26: "INJ",
+    28: "NEAR",
+    30: "MKR",
+    32: "PEPE",
+    34: "APT",
+    36: "LTC",
+    38: "BCH",
+    40: "ATOM",
+}
+
+
+def fetch_vertex() -> list[FundingOpp]:
+    """POST https://archive.prod.vertexprotocol.com/v1/indexer
+    body: {"funding_rates": {"product_ids": [...]}}
+    Rates as x18 strings (divide by 1e18). 8h interval."""
+    product_ids = list(_VERTEX_PRODUCTS.keys())
+    resp = requests.post(
+        "https://archive.prod.vertexprotocol.com/v1/indexer",
+        json={"funding_rates": {"product_ids": product_ids}},
+        timeout=HTTP_TIMEOUT,
+    )
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    funding_rates = payload.get("funding_rates") or {}
+
+    out: list[FundingOpp] = []
+    for product_id_str, rate_info in funding_rates.items():
+        try:
+            product_id = int(product_id_str)
+            symbol = _VERTEX_PRODUCTS.get(product_id)
+            if not symbol:
+                continue
+            if not isinstance(rate_info, dict):
+                continue
+            # rate is an x18 fixed-point string
+            rate_raw = rate_info.get("funding_rate_x18") or rate_info.get("rate") or "0"
+            rate = float(rate_raw) / 1e18
+
+            # Mark price also x18 if present
+            mark_raw = rate_info.get("product_price_x18") or rate_info.get("price_x18") or "0"
+            mark = float(mark_raw) / 1e18
+
+            if rate == 0.0:
+                continue
+            # Vol/OI not available in funding endpoint — pass 0 (HIGH risk)
+            out.append(_mk(symbol, "vertex", "DEX",
+                           rate, 8.0, mark, 0.0, 0.0))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+    return out
+
+
+def fetch_aevo() -> list[FundingOpp]:
+    """GET https://api.aevo.xyz/funding
+    Simple list of {instrument_name, funding_rate, ...}. 1h interval."""
+    resp = requests.get(
+        "https://api.aevo.xyz/funding",
+        timeout=HTTP_TIMEOUT,
+    )
+    resp.raise_for_status()
+    rows = resp.json() or []
+    if isinstance(rows, dict):
+        rows = rows.get("data") or []
+
+    out: list[FundingOpp] = []
+    for row in rows:
+        try:
+            if not isinstance(row, dict):
+                continue
+            instrument = row.get("instrument_name") or ""
+            if not instrument.endswith("-PERP"):
+                continue
+            symbol = instrument.replace("-PERP", "").upper()
+            rate = float(row.get("funding_rate") or 0.0)
+            mark = float(row.get("mark_price") or row.get("index_price") or 0.0)
+
+            vol_usd = float(row.get("volume_24h") or row.get("daily_volume") or 0.0)
+            oi_usd = float(row.get("open_interest") or 0.0)
+            # OI field on aevo is in USD already when present
+            if oi_usd == 0.0 and mark > 0.0:
+                oi_base = float(row.get("open_interest_notional") or 0.0)
+                oi_usd = oi_base * mark
+
+            if rate == 0.0:
+                continue
+            out.append(_mk(symbol, "aevo", "DEX",
+                           rate, 1.0, mark, vol_usd, oi_usd))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+    return out
+
+
+def fetch_drift() -> list[FundingOpp]:
+    """GET https://data.api.drift.trade/fundingRates?limit=50
+    Solana-based Drift Protocol perps. 1h funding.
+    Deduplicates by symbol, keeping the latest entry by ``ts``."""
+    resp = requests.get(
+        "https://data.api.drift.trade/fundingRates?limit=50",
+        timeout=HTTP_TIMEOUT,
+    )
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    rows = payload if isinstance(payload, list) else (payload.get("data") or [])
+
+    # Deduplicate: keep latest ts per symbol
+    latest: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sym = (row.get("symbol") or row.get("marketSymbol") or "").upper()
+        if not sym:
+            continue
+        # Normalise: "SOL-PERP" → "SOL"
+        sym = sym.replace("-PERP", "").replace("_PERP", "")
+        ts = float(row.get("ts") or row.get("timestamp") or 0.0)
+        if sym not in latest or ts > float(latest[sym].get("ts") or latest[sym].get("timestamp") or 0.0):
+            row["_sym"] = sym
+            latest[sym] = row
+
+    out: list[FundingOpp] = []
+    for sym, row in latest.items():
+        try:
+            rate_raw = row.get("fundingRate") or row.get("funding_rate") or 0.0
+            rate = float(rate_raw)
+            mark = float(row.get("oraclePrice") or row.get("markPrice") or row.get("price") or 0.0)
+            vol_usd = float(row.get("volume24h") or row.get("volume") or 0.0)
+            oi_usd = float(row.get("openInterest") or row.get("open_interest") or 0.0)
+            if oi_usd == 0.0 and mark > 0.0:
+                oi_base = float(row.get("openInterestBase") or 0.0)
+                oi_usd = oi_base * mark
+
+            if rate == 0.0:
+                continue
+            out.append(_mk(sym, "drift", "DEX",
+                           rate, 1.0, mark, vol_usd, oi_usd))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+    return out
+
+
+def fetch_apex() -> list[FundingOpp]:
+    """GET https://omni.apex.exchange/api/v3/ticker
+    ApeX Pro StarkEx perpetuals. 1h funding.
+    Volume from ``volume24h`` or ``turnover24h``, OI from ``openInterest``."""
+    resp = requests.get(
+        "https://omni.apex.exchange/api/v3/ticker",
+        timeout=HTTP_TIMEOUT,
+    )
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    rows = payload if isinstance(payload, list) else (
+        payload.get("data") or payload.get("tickers") or []
+    )
+
+    out: list[FundingOpp] = []
+    for row in rows:
+        try:
+            if not isinstance(row, dict):
+                continue
+            sym_raw = row.get("symbol") or row.get("ticker") or ""
+            # ApeX symbols often like "BTC-USDT" or "BTCUSDT"
+            base = _is_usdt_base(sym_raw)
+            if not base:
+                # Try stripping "-USD" or direct symbol
+                base = sym_raw.replace("-USD", "").replace("_USD", "").upper() or None
+            if not base:
+                continue
+
+            rate = float(row.get("fundingRate") or row.get("lastFundingRate") or 0.0)
+            mark = float(row.get("lastPrice") or row.get("markPrice") or row.get("indexPrice") or 0.0)
+            vol_usd = float(
+                row.get("volume24h") or row.get("turnover24h") or row.get("quoteVolume24h") or 0.0
+            )
+            oi_usd = float(row.get("openInterest") or row.get("openInterestValue") or 0.0)
+
+            if rate == 0.0:
+                continue
+            out.append(_mk(base, "apex", "DEX",
+                           rate, 1.0, mark, vol_usd, oi_usd))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+    return out
+
+
+# Venue registry (priority ordered — DEX first, then CEX).
 VENUE_FETCHERS = {
+    # ── DEX ──────────────────────────────────────────────────────────────
     "hyperliquid": (fetch_hyperliquid, "DEX"),
     "dydx":        (fetch_dydx,        "DEX"),
     "paradex":     (fetch_paradex,     "DEX"),
+    "gmx":         (fetch_gmx,         "DEX"),
+    "vertex":      (fetch_vertex,      "DEX"),
+    "aevo":        (fetch_aevo,        "DEX"),
+    "drift":       (fetch_drift,       "DEX"),
+    "apex":        (fetch_apex,        "DEX"),
+    # ── CEX ──────────────────────────────────────────────────────────────
     "binance":     (fetch_binance,     "CEX"),
     "bybit":       (fetch_bybit,       "CEX"),
     "gate":        (fetch_gate,        "CEX"),
