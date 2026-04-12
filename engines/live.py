@@ -882,8 +882,11 @@ class LiveEngine:
         self.corr: dict = {}
         self.htf_dfs: dict = {}
         self.running   = False
+        self.killed    = False   # set True to abort before trading starts
         self._last_hb  = time.time()
         self._ws_tasks: list = []
+        self._reconnect_attempts   = 0   # [Item 3] per-symbol backoff counter
+        self._consecutive_api_errors = 0  # [Item 6] API error rate gate
         # ── tracking para paridade com backtest ──────────────────────
         self.account            = ACCOUNT_SIZE    # actualizado a cada close
         self.peak_equity        = ACCOUNT_SIZE    # para CONVEX_ALPHA
@@ -1013,6 +1016,64 @@ class LiveEngine:
             log.warning(f"API verify falhou: {e}")
 
     # ── POSIÇÕES ──────────────────────────────────────────────
+    # ── STARTUP RECONCILIATION (Item 1) ───────────────────────
+    async def _startup_reconcile(self) -> None:
+        """Check broker positions match local state before trading starts.
+
+        Fetches open symbols from Binance (GET /fapi/v2/positionRisk for
+        live/demo/testnet; skipped in paper mode). Compares the set of
+        open symbols against self.positions loaded from local state.
+
+        On mismatch: logs CRITICAL with details and sets self.killed=True
+        so the run() method aborts before launching the trading loop.
+        On match: logs INFO confirmation and continues.
+
+        Only the set of open symbols is compared — quantity reconciliation
+        is handled by the background _reconciliation_loop.
+        """
+        if self.orders.paper:
+            log.info("Startup reconciliation: PAPER mode — skipped (no broker state)")
+            return
+
+        if self.orders.client is None:
+            log.warning("Startup reconciliation: client not initialised — skipped")
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+            raw = await loop.run_in_executor(
+                None, self.orders.client.futures_position_information)
+            # Filter to symbols with a non-zero positionAmt
+            broker_syms = set()
+            for pos in raw:
+                amt = float(pos.get("positionAmt", 0.0) or 0.0)
+                if abs(amt) > 1e-9:
+                    broker_syms.add(pos.get("symbol", ""))
+        except Exception as e:
+            log.warning(f"Startup reconciliation: broker fetch failed ({e}) — skipped")
+            return
+
+        local_syms = {p.symbol for p in self.positions}
+
+        if broker_syms == local_syms:
+            log.info(
+                f"Startup reconciliation OK — "
+                f"broker={sorted(broker_syms) or 'none'}  "
+                f"local={sorted(local_syms) or 'none'}"
+            )
+            return
+
+        # Mismatch — abort to avoid trading over unknown positions
+        only_broker = broker_syms - local_syms
+        only_local  = local_syms  - broker_syms
+        log.critical(
+            "STARTUP RECONCILIATION FAILED — position mismatch detected!\n"
+            f"  Broker has (not in local state): {sorted(only_broker) or 'none'}\n"
+            f"  Local state has (not at broker): {sorted(only_local) or 'none'}\n"
+            "  Engine will NOT start. Resolve positions manually and restart."
+        )
+        self.killed = True
+
     # ── RECONCILIATION LOOP (Fase 4-F) ────────────────────────
     async def _reconciliation_loop(self, interval_s: int = 60) -> None:
         """Background task: compare local state with broker state.
@@ -2004,6 +2065,16 @@ class LiveEngine:
 
         # Seed REST data
         await self.seed()
+
+        # ── [Item 1] Startup position reconciliation ───────────────────
+        # Fetch broker open positions and compare with self.positions
+        # (empty on a fresh start). If broker shows open symbols that
+        # don't match local state, log CRITICAL and abort — avoids
+        # trading on top of ghost positions left from a prior session.
+        await self._startup_reconcile()
+        if self.killed:
+            log.critical("Startup reconciliation failed — engine aborted before trading.")
+            return
 
         # Lança WebSocket por símbolo
         tasks = [asyncio.create_task(self._ws_listen(sym)) for sym in SYMBOLS]
