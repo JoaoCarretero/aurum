@@ -6,6 +6,10 @@
 # v5.0: +Fill Probability +Adversarial Detector +OmegaV2 +Dynamic Sizing +Order Flow
 
 import os,sys,json,time,asyncio,logging,signal,math,hmac,hashlib,statistics
+# Fase 4-H — engine version stamped on every audit row. Bump when the
+# arbitrage decision logic changes materially so auditing can tell which
+# code produced a given order.
+ARB_ENGINE_VERSION = "jane_street-v5.0-fase4"
 # Force UTF-8 on stdout/stderr so box-drawing glyphs don't crash on Windows cp1252
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -39,6 +43,10 @@ ARB_MODE=_ARGS.mode or "paper"
 sys.path.insert(0,str(Path(__file__).parent.parent))
 from config.params import safe_input
 from bot.telegram import TelegramNotifier
+from core.audit_trail import AuditTrail, OrderEvent
+from core.risk_gates import (
+    RiskGateConfig, RiskState, GateDecision, check_gates,
+)
 
 ACCT=5000.0;MAX_POS=5;CROSS_MAX=3;LEV=2;POS_PCT=0.20;MAX_EXPO=3000.0
 SPLIT_N=5;SPLIT_DLY=0.5;SCAN_S=30;STATUS_N=3;WS_ON=True
@@ -59,15 +67,86 @@ def _keys(v):
     """Load API key/secret for a venue. Returns ('','') on any failure —
     the caller can then fall back to paper mode instead of crashing the
     whole engine subprocess (the dashboard spawns this as a child and
-    can't diagnose a silent crash at load time)."""
+    can't diagnose a silent crash at load time).
+
+    [Fase 4-H] Preference order: encrypted keystore first (if
+    config/keys.json.enc exists AND AURUM_KEY_PASSWORD is set), then
+    plaintext config/keys.json. Silently falls through to plaintext on
+    any encrypted-store error — arbitrage venues load keys in bulk at
+    construction and cannot tolerate a sys.exit.
+    """
+    project_root = Path(__file__).parent.parent
+    plaintext_path = project_root / "config" / "keys.json"
+    encrypted_path = project_root / "config" / "keys.json.enc"
+
+    # ── 1. Encrypted store ────────────────────────────────────
+    if encrypted_path.exists():
+        pw = os.environ.get("AURUM_KEY_PASSWORD")
+        if pw:
+            try:
+                from core.key_store import KeyStore, KeyStoreCorruptError
+                ks = KeyStore(
+                    encrypted=True,
+                    plaintext_path=plaintext_path,
+                    encrypted_path=encrypted_path,
+                )
+                ks.unlock(pw)
+                block = ks.get_block(v)
+                key = block.get("api_key", "")
+                secret = block.get("api_secret", "")
+                ks.lock()
+                if key and secret and "COLE_AQUI" not in key:
+                    log.info(f"_keys({v}): loaded from encrypted store")
+                    return key, secret
+            except KeyStoreCorruptError as e:
+                log.warning(f"_keys({v}): encrypted store unlock failed — {e}")
+            except ImportError:
+                log.warning(f"_keys({v}): cryptography package missing — falling back to plaintext")
+            except Exception as e:
+                log.debug(f"_keys({v}): encrypted store error — {e}")
+
+    # ── 2. Plaintext store ────────────────────────────────────
     try:
-        with open(Path(__file__).parent.parent/"config"/"keys.json", encoding="utf-8") as f:
+        with open(plaintext_path, encoding="utf-8") as f:
             c = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
         log.error(f"_keys({v}): could not load config/keys.json — {e}")
         return "", ""
     b = c.get(v, {})
     return b.get("api_key", ""), b.get("api_secret", "")
+
+def _load_risk_gate_config(mode: str) -> RiskGateConfig:
+    """[Fase 4-H] Load arbitrage-specific RiskGateConfig for ``mode``.
+
+    Looks up the ``arbitrage_<mode>`` section in config/risk_gates.json
+    first, falls back to the generic ``<mode>`` section, then to the
+    permissive default. Unknown keys ignored (forward-compat)."""
+    cfg_path = Path(__file__).parent.parent / "config" / "risk_gates.json"
+    if not cfg_path.exists():
+        return RiskGateConfig()
+    try:
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return RiskGateConfig()
+    if not isinstance(raw, dict):
+        return RiskGateConfig()
+    section = raw.get(f"arbitrage_{mode}") or raw.get(mode) or {}
+    if not isinstance(section, dict):
+        return RiskGateConfig()
+    allowed = {
+        "max_daily_dd_pct", "max_daily_loss_pct",
+        "max_consecutive_losses", "soft_block_losses",
+        "max_gross_notional_pct", "max_net_exposure_pct",
+        "max_concurrent_positions", "freeze_hours_utc",
+    }
+    kwargs = {k: v for k, v in section.items() if k in allowed}
+    if "freeze_hours_utc" in kwargs and isinstance(kwargs["freeze_hours_utc"], list):
+        kwargs["freeze_hours_utc"] = tuple(int(h) for h in kwargs["freeze_hours_utc"])
+    try:
+        return RiskGateConfig(**kwargs)
+    except TypeError:
+        return RiskGateConfig()
+
 
 async def _http(url,params=None,method="GET",json_body=None,headers=None,retries=3):
     import requests as r
@@ -1276,6 +1355,30 @@ class Engine:
         s.venues={v.name:v for v in venues};s.ws=BinanceWS() if WS_ON else None
         s.positions=[];s.closed=[];s.account=ACCT;s.peak=ACCT;s.running=False;s._sc=0
         s.killed=False;s.consecutive_losses=0
+        # [Fase 4-H] Kill switch orchestration flag — idempotency guard.
+        # `s.killed` is the legacy "halt new entries" flag; `_kill_switch_active`
+        # is the "flatten + halt" orchestration flag. Set once per session.
+        s._kill_switch_active=False
+        # [Fase 4-H] Immutable order audit trail. Hash-chained, per-month
+        # files under data/audit/orders-YYYY-MM.jsonl. Shared with live.py
+        # so one trail sees every AURUM engine that touches money.
+        s.audit=AuditTrail(
+            engine="arbitrage",
+            strategy_ver=ARB_ENGINE_VERSION,
+            hash_chain=True,
+        )
+        # [Fase 4-H] Pre-trade exposure gates. Built around the delta-neutral
+        # profile of this engine: net_exposure_pct is kept tight (<30% live)
+        # because any hedge break should surface as drift here.
+        s.risk_cfg=_load_risk_gate_config(ARB_MODE)
+        s._sod_equity=ACCT
+        s._sod_date=datetime.now(timezone.utc).date()
+        log.info(f"Risk gates loaded for arbitrage_{ARB_MODE}: "
+                 f"dd={s.risk_cfg.max_daily_dd_pct}% "
+                 f"streak={s.risk_cfg.max_consecutive_losses} "
+                 f"gross={s.risk_cfg.max_gross_notional_pct}% "
+                 f"net={s.risk_cfg.max_net_exposure_pct}% "
+                 f"concurrent={s.risk_cfg.max_concurrent_positions}")
         s.tg_tk,s.tg_ch="",""
         try:
             from bot.telegram import _load_telegram_config
@@ -1403,6 +1506,228 @@ class Engine:
         try:await asyncio.get_event_loop().run_in_executor(None,lambda:r.post(f"https://api.telegram.org/bot{s.tg_tk}/sendMessage",json={"chat_id":s.tg_ch,"text":txt,"parse_mode":"HTML"},timeout=10))
         except Exception as e:log.warning("telegram send failed: %s", e)
 
+    # ── [Fase 4-H] RISK GATES ────────────────────────────────────
+    def _check_risk_gates(s) -> GateDecision:
+        """Build a RiskState snapshot from current engine state and run the
+        full gate chain. Returns the first non-allow decision. Hard wins
+        over soft. The caller honors the decision — this method is pure."""
+        now = datetime.now(timezone.utc)
+        if now.date() != s._sod_date:
+            s._sod_equity = s.account
+            s._sod_date = now.date()
+
+        # Build open_positions list in the shape check_gates expects.
+        # Arbitrage is delta-neutral: each pair produces one LONG leg and
+        # one SHORT leg, so gross_notional = 2 × size_usd (with leverage
+        # baked in), net_exposure ≈ 0 barring hedge drift.
+        open_positions = []
+        for p in s.positions:
+            leg_notional = p.size_usd * LEV
+            if p.type == "INTERNAL":
+                # Perp short + spot long — delta-neutral at the pair level.
+                open_positions.append({"symbol": p.symbol, "side": "LONG",
+                                       "notional": leg_notional})
+                open_positions.append({"symbol": p.symbol, "side": "SHORT",
+                                       "notional": leg_notional})
+            else:
+                # PERP_PERP: SHORT on v_a, LONG on v_b.
+                open_positions.append({"symbol": p.symbol, "side": "SHORT",
+                                       "notional": leg_notional})
+                open_positions.append({"symbol": p.symbol, "side": "LONG",
+                                       "notional": leg_notional})
+
+        daily_pnl = s.account - s._sod_equity
+        state = RiskState(
+            account_equity      = s.account,
+            peak_equity         = s.peak,
+            start_of_day_equity = s._sod_equity,
+            daily_pnl           = daily_pnl,
+            consecutive_losses  = s.consecutive_losses,
+            open_positions      = open_positions,
+            current_hour_utc    = now.hour,
+        )
+        return check_gates(state, s.risk_cfg)
+
+    def _audit_risk_gate(s, decision: GateDecision, severity: str):
+        """Write a 'reject' audit row when a risk gate fires."""
+        try:
+            s.audit.write(OrderEvent(
+                event="reject",
+                client_oid=f"arb-gate-{int(time.time()*1000)}",
+                venue=f"arbitrage_{ARB_MODE}",
+                symbol="_all_",
+                side="BUY",  # placeholder
+                qty=0.0,
+                price=None,
+                status=severity,
+                payload={
+                    "mode":      ARB_MODE,
+                    "gate":      decision.gate,
+                    "reason":    decision.reason,
+                    "metric":    decision.metric,
+                    "threshold": decision.threshold,
+                    "source":    "risk_gates",
+                    "engine":    "arbitrage",
+                },
+            ))
+        except Exception as e:
+            log.debug(f"  risk-gate audit write failed: {e}")
+
+    # ── [Fase 4-H] AUDITED LEG EXECUTION ─────────────────────────
+    async def _exec_leg_audited(s, kind: str, venue: str, sym: str, side: str,
+                                qty: float, client_oid: str,
+                                extra: dict | None = None) -> float:
+        """Wrap _split_exec with intent/ack audit rows.
+
+        Paper mode writes rows tagged with mode=paper so post-hoc analysis
+        can slice by mode. On underfill (filled < qty*0.5) an extra reject
+        row is written to flag the leg as failed — the caller still gets
+        the real filled qty back and decides whether to rollback.
+
+        kind: "open_leg_a" | "open_leg_b" | "close_leg_a" | "close_leg_b"
+              | "rollback_leg_a" | "rollback_leg_b" | "hedge_break_rollback"
+        """
+        v = s.venues.get(venue)
+        price = v.prices.get(sym, 0.0) if v else 0.0
+        extra = extra or {}
+        payload_base = {
+            "mode":    ARB_MODE,
+            "kind":    kind,
+            "engine":  "arbitrage",
+            **extra,
+        }
+        try:
+            s.audit.write(OrderEvent(
+                event="intent",
+                client_oid=client_oid,
+                venue=f"{venue}_{ARB_MODE}",
+                symbol=sym,
+                side=side,
+                qty=float(qty),
+                price=float(price) if price else None,
+                status="pending",
+                payload=payload_base,
+            ))
+        except Exception as e:
+            log.debug(f"  audit intent write failed: {e}")
+
+        if ARB_LIVE or ARB_DEMO:
+            filled = await s._split_exec(venue, sym, side, qty)
+        else:
+            # Paper mode: assume perfect fill so the audit trail has a
+            # complete intent→ack pair. No real execution, no sleep.
+            filled = v.round_qty(sym, qty) if v else qty
+
+        try:
+            if filled <= 0:
+                s.audit.write(OrderEvent(
+                    event="reject",
+                    client_oid=client_oid,
+                    venue=f"{venue}_{ARB_MODE}",
+                    symbol=sym,
+                    side=side,
+                    qty=float(qty),
+                    price=float(price) if price else None,
+                    status="zero_fill",
+                    payload={**payload_base, "filled": 0.0},
+                ))
+            else:
+                fill_ratio = filled / qty if qty > 0 else 0.0
+                status = "FILLED" if fill_ratio >= 0.5 else "PARTIAL"
+                s.audit.write(OrderEvent(
+                    event="ack",
+                    client_oid=client_oid,
+                    venue=f"{venue}_{ARB_MODE}",
+                    symbol=sym,
+                    side=side,
+                    qty=float(filled),
+                    price=float(price) if price else None,
+                    status=status,
+                    payload={
+                        **payload_base,
+                        "requested_qty": float(qty),
+                        "fill_ratio":    round(fill_ratio, 4),
+                    },
+                ))
+                if fill_ratio < 0.5:
+                    s.audit.write(OrderEvent(
+                        event="reject",
+                        client_oid=client_oid,
+                        venue=f"{venue}_{ARB_MODE}",
+                        symbol=sym,
+                        side=side,
+                        qty=float(qty),
+                        price=float(price) if price else None,
+                        status="underfill",
+                        payload={**payload_base, "filled": float(filled)},
+                    ))
+        except Exception as e:
+            log.debug(f"  audit ack/reject write failed: {e}")
+
+        return filled
+
+    # ── [Fase 4-H] KILL SWITCH ORCHESTRATION ──────────────────────
+    async def _kill_switch_trigger(s, reason: str) -> None:
+        """Emergency stop. Flatten-first, then halt.
+
+        Arbitrage is delta-neutral by design, so flattening closes both
+        legs of every open pair via _close (which already has per-type
+        close logic: INTERNAL → perp buy + spot sell, PERP_PERP → buy
+        leg_a + sell leg_b). Idempotent via _kill_switch_active.
+
+        Ordering rationale:
+          1. Set _kill_switch_active (idempotency)
+          2. Write audit row FIRST so the trigger is recorded even if
+             flatten blows up
+          3. Flatten every open position via _close(reason="KILL_SWITCH")
+          4. Set s.running = False so the main loop exits cleanly
+        """
+        if s._kill_switch_active:
+            log.info(f"  kill-switch already active, ignoring: {reason}")
+            return
+        s._kill_switch_active = True
+        s.killed = True  # legacy flag — blocks new entries
+
+        try:
+            s.audit.write(OrderEvent(
+                event="cancel",
+                client_oid=f"arb-killsw-{int(time.time()*1000)}",
+                venue=f"arbitrage_{ARB_MODE}",
+                symbol="_all_",
+                side="BUY",
+                qty=0.0,
+                price=None,
+                status="kill_switch_triggered",
+                payload={
+                    "mode":               ARB_MODE,
+                    "reason":             reason,
+                    "n_open":             len(s.positions),
+                    "account":            round(s.account, 2),
+                    "peak":               round(s.peak, 2),
+                    "consecutive_losses": s.consecutive_losses,
+                    "source":             "kill_switch",
+                    "engine":             "arbitrage",
+                },
+            ))
+        except Exception as e:
+            log.error(f"  kill-switch audit write failed: {e}")
+
+        log.critical(f"  ⚠ KILL-SWITCH TRIGGERED: {reason}")
+        log.critical(f"  flattening {len(s.positions)} positions")
+        try:
+            await s._tg(f"🚨 KILL-SWITCH arbitrage: {reason}. Flattening {len(s.positions)} positions.")
+        except Exception as e:
+            log.debug(f"  kill-switch telegram failed: {e}")
+
+        for pos in list(s.positions):
+            try:
+                await s._close(pos, "KILL_SWITCH")
+            except Exception as e:
+                log.error(f"  flatten failed for {pos.symbol}: {e}")
+
+        s.running = False
+        log.critical(f"  kill-switch complete — s.running = False")
+
     def _avail(s):return max(0,s.account-sum(p.size_usd for p in s.positions))
 
     async def _split_exec(s,venue,sym,side,qty):
@@ -1434,6 +1759,20 @@ class Engine:
 
     async def _open(s,opp):
         sym=opp["sym"]
+
+        # ── [Fase 4-H] PRE-ORDER RISK GATES ──
+        # Checked once per pair; blocks both legs atomically. Hard block
+        # → kill_switch (flatten + halt). Soft block → skip this pair.
+        gate_decision = s._check_risk_gates()
+        if gate_decision.severity != "allow":
+            s._audit_risk_gate(gate_decision, severity=gate_decision.severity)
+            if gate_decision.severity == "hard_block":
+                log.warning(f"  RISK-GATE HARD: {gate_decision.reason}")
+                await s._kill_switch_trigger(
+                    f"risk_gate {gate_decision.gate}: {gate_decision.reason}")
+                return
+            log.info(f"  RISK-GATE SOFT {sym}: {gate_decision.reason}")
+            return
 
         # ── [M3] REGIME GATE ──
         regime=s.regime.classify(sym)
@@ -1516,47 +1855,115 @@ class Engine:
             await v_a_obj.set_leverage(sym,LEV)
             if v_b_obj.name!=v_a_obj.name:await v_b_obj.set_leverage(sym,LEV)
         t0=time.monotonic()
+        # [Fase 4-H] client_oid root links all legs of this pair across
+        # the intent→ack→fill chain. legA/legB suffixes disambiguate sides.
+        client_oid_root=f"arb-{sym}-{int(time.time()*1000)}"
+        intent_ctx={
+            "type":       opp["type"],
+            "edge":       opp.get("edge",""),
+            "spread":     round(float(opp.get("spread",0)),6),
+            "omega":      round(float(omega_r["omega"]),2),
+            "p_fill":     round(p_fill,4),
+            "lev_size":   round(lev_size,2),
+            "slippage_bps": round(slippage_bps,2),
+            "regime":     regime,
+        }
         if opp["type"]=="INTERNAL":
             log.info(f"  OPEN {sym} INTERNAL@{opp['v_a']} ${lev_size:.0f} Ωv2={omega_r['omega']:.0f} Pf={p_fill:.2f}")
+            f1=await s._exec_leg_audited(
+                "open_internal_perp_short", opp["v_a"], sym, "SELL", qty,
+                f"{client_oid_root}-legA", intent_ctx)
+            if f1<qty*0.5:
+                log.error(f"  INTERNAL perp short underfill {f1:.4f}/{qty:.4f} — ABORT")
+                if f1>0 and (ARB_LIVE or ARB_DEMO):
+                    await s._exec_leg_audited(
+                        "rollback_internal_perp", opp["v_a"], sym, "BUY", f1,
+                        f"{client_oid_root}-legA-rb", intent_ctx)
+                return
             if ARB_LIVE or ARB_DEMO:
-                f1=await s._split_exec(opp["v_a"],sym,"SELL",qty)
-                if f1<qty*0.5:
-                    log.error(f"  INTERNAL perp short underfill {f1:.4f}/{qty:.4f} — ABORT")
-                    if f1>0:await s._split_exec(opp["v_a"],sym,"BUY",f1)
-                    return
                 if isinstance(v_a_obj,Binance):
-                    spot_r=await v_a_obj.spot_order(sym,"BUY",v_a_obj.round_qty(sym,f1))
+                    # Spot leg uses a direct API path (not _split_exec),
+                    # so write intent/ack inline.
+                    spot_oid=f"{client_oid_root}-legB"
+                    spot_qty=v_a_obj.round_qty(sym,f1)
+                    try:
+                        s.audit.write(OrderEvent(
+                            event="intent", client_oid=spot_oid,
+                            venue=f"binance_spot_{ARB_MODE}", symbol=sym, side="BUY",
+                            qty=float(spot_qty), price=None, status="pending",
+                            payload={**intent_ctx,"kind":"open_internal_spot_buy","mode":ARB_MODE,"engine":"arbitrage"}))
+                    except Exception as e:log.debug(f"  spot intent audit failed: {e}")
+                    spot_r=await v_a_obj.spot_order(sym,"BUY",spot_qty)
                     spot_fill=float(spot_r.get("executedQty",0)) if isinstance(spot_r,dict) else 0
+                    try:
+                        s.audit.write(OrderEvent(
+                            event="ack" if spot_fill>0 else "reject",
+                            client_oid=spot_oid,
+                            venue=f"binance_spot_{ARB_MODE}", symbol=sym, side="BUY",
+                            qty=float(spot_fill), price=None,
+                            status="FILLED" if spot_fill>=f1*0.5 else "PARTIAL" if spot_fill>0 else "zero_fill",
+                            payload={**intent_ctx,"kind":"open_internal_spot_buy","mode":ARB_MODE,"engine":"arbitrage","requested_qty":float(spot_qty)}))
+                    except Exception as e:log.debug(f"  spot ack audit failed: {e}")
                     if spot_fill<f1*0.5:
                         log.error(f"  INTERNAL spot buy failed {spot_fill:.4f}/{f1:.4f} — ROLLBACK perp")
-                        await s._split_exec(opp["v_a"],sym,"BUY",f1)
+                        await s._exec_leg_audited(
+                            "rollback_internal_perp", opp["v_a"], sym, "BUY", f1,
+                            f"{client_oid_root}-legA-rb", intent_ctx)
                         return
                     qty=min(f1,spot_fill)
-            else:log.info(f"    [P] SHORT perp {qty:.4f} + BUY spot {qty:.4f}")
+            else:
+                log.info(f"    [P] SHORT perp {qty:.4f} + BUY spot {qty:.4f}")
+                # Paper mode: the audited wrapper above already logged leg A.
+                # Log the spot leg too for trail parity.
+                try:
+                    s.audit.write(OrderEvent(
+                        event="intent", client_oid=f"{client_oid_root}-legB",
+                        venue=f"binance_spot_{ARB_MODE}", symbol=sym, side="BUY",
+                        qty=float(qty), price=None, status="pending",
+                        payload={**intent_ctx,"kind":"open_internal_spot_buy","mode":ARB_MODE,"engine":"arbitrage"}))
+                    s.audit.write(OrderEvent(
+                        event="ack", client_oid=f"{client_oid_root}-legB",
+                        venue=f"binance_spot_{ARB_MODE}", symbol=sym, side="BUY",
+                        qty=float(qty), price=None, status="FILLED",
+                        payload={**intent_ctx,"kind":"open_internal_spot_buy","mode":ARB_MODE,"engine":"arbitrage","requested_qty":float(qty)}))
+                except Exception as e:log.debug(f"  paper spot audit failed: {e}")
         elif opp["type"]=="PERP_PERP":
             log.info(f"  OPEN {sym} PERP_PERP SHORT@{opp['v_a']} LONG@{opp['v_b']} ${lev_size:.0f} Ωv2={omega_r['omega']:.0f} Pf={p_fill:.2f} {comp['competition_level']}")
+            t_leg1=time.monotonic()
+            f1=await s._exec_leg_audited(
+                "open_perp_perp_leg_a", opp["v_a"], sym, "SELL", qty,
+                f"{client_oid_root}-legA", intent_ctx)
+            t_leg1_done=time.monotonic()
+            if f1<qty*0.5:
+                log.error(f"  LEG1 underfill {f1:.4f}/{qty:.4f} — ABORT")
+                s.adversarial.record_fill_failure(opp["v_a"])
+                if f1>0 and (ARB_LIVE or ARB_DEMO):
+                    await s._exec_leg_audited(
+                        "rollback_perp_perp_leg_a", opp["v_a"], sym, "BUY", f1,
+                        f"{client_oid_root}-legA-rb", intent_ctx)
+                return
+            f2=await s._exec_leg_audited(
+                "open_perp_perp_leg_b", opp["v_b"], sym, "BUY", f1,
+                f"{client_oid_root}-legB", intent_ctx)
+            t_leg2_done=time.monotonic()
+            s.latency.record_leg_imbalance((t_leg2_done-t_leg1_done)*1000)
+            imbalance=abs(f1-f2)/max(f1,1)
+            if imbalance>0.2:
+                log.error(f"  HEDGE BREAK: {f1:.4f} vs {f2:.4f} ({imbalance:.0%}) — EMERGENCY ROLLBACK")
+                s.adversarial.record_fill_failure(opp["v_b"])
+                if ARB_LIVE or ARB_DEMO:
+                    await s._exec_leg_audited(
+                        "rollback_perp_perp_leg_a", opp["v_a"], sym, "BUY", f1,
+                        f"{client_oid_root}-legA-rb", {**intent_ctx,"hedge_break":True})
+                    if f2>0:
+                        await s._exec_leg_audited(
+                            "rollback_perp_perp_leg_b", opp["v_b"], sym, "SELL", f2,
+                            f"{client_oid_root}-legB-rb", {**intent_ctx,"hedge_break":True})
+                await s._tg(f"🚨 HEDGE BREAK {sym}: {f1:.4f} vs {f2:.4f}. Rolled back.")
+                return
+            qty=min(f1,f2)
             if ARB_LIVE or ARB_DEMO:
-                t_leg1=time.monotonic()
-                f1=await s._split_exec(opp["v_a"],sym,"SELL",qty)
-                t_leg1_done=time.monotonic()
-                if f1<qty*0.5:
-                    log.error(f"  LEG1 underfill {f1:.4f}/{qty:.4f} — ABORT")
-                    s.adversarial.record_fill_failure(opp["v_a"])
-                    if f1>0:await s._split_exec(opp["v_a"],sym,"BUY",f1)
-                    return
-                f2=await s._split_exec(opp["v_b"],sym,"BUY",f1)
-                t_leg2_done=time.monotonic()
-                s.latency.record_leg_imbalance((t_leg2_done-t_leg1_done)*1000)
-                imbalance=abs(f1-f2)/max(f1,1)
-                if imbalance>0.2:
-                    log.error(f"  HEDGE BREAK: {f1:.4f} vs {f2:.4f} ({imbalance:.0%}) — EMERGENCY ROLLBACK")
-                    s.adversarial.record_fill_failure(opp["v_b"])
-                    await s._split_exec(opp["v_a"],sym,"BUY",f1)
-                    if f2>0:await s._split_exec(opp["v_b"],sym,"SELL",f2)
-                    await s._tg(f"🚨 HEDGE BREAK {sym}: {f1:.4f} vs {f2:.4f}. Rolled back.")
-                    return
-                qty=min(f1,f2)
-                # [M5] record fills
+                # [M5] record fills (live/demo only — paper has no real timings)
                 s.fill_model.record_fill(FillRecord(opp["v_a"],sym,"SELL",qty,f1,slippage_bps/2,(t_leg1_done-t_leg1)*1000))
                 s.fill_model.record_fill(FillRecord(opp["v_b"],sym,"BUY",qty,f2,slippage_bps/2,(t_leg2_done-t_leg1_done)*1000))
             else:
@@ -1567,21 +1974,71 @@ class Engine:
         s.latency.record(opp["v_a"],"round_trip",(time.monotonic()-t0)*1000)
         px_a=v_a_obj.prices.get(sym,0);px_b=v_b_obj.prices.get(sym,0)
         pos=Position(sym,opp["type"],opp["v_a"],opp["v_b"],qty,own,opp["spread"],opp["edge"],px_a,px_b)
+        # [Fase 4-H] stamp client_oid root on pos so _close can link its
+        # fill audit rows back to this open.
+        pos.client_oid=client_oid_root
         s.positions.append(pos)
         s.hedge_mon.register(pos.symbol,pos.v_a,pos.v_b,pos.qty)
         tlog.info(f"OPEN {sym:12s} {opp['type']:10s} {opp['edge']} ${lev_size:.0f} Ωv2={omega_r['omega']:.0f} Pf={p_fill:.2f} {comp['competition_level']}")
         await s._tg(f"<b>OPEN {sym}</b>\n{opp['type']} Ωv2={omega_r['omega']:.0f} Pf={p_fill:.2f}\n{comp['competition_level']} {opp['edge']}\n${lev_size:.0f}")
 
     async def _close(s,pos,reason):
-        if ARB_LIVE or ARB_DEMO:
-            if pos.type=="INTERNAL":
-                await s._split_exec(pos.v_a,pos.symbol,"BUY",pos.qty)
+        # [Fase 4-H] use the same client_oid root as _open stamped on the
+        # pos, so every open/close leg is discoverable via one filter.
+        # Falls back to a synthetic root for positions restored from disk
+        # that predate Fase 4-H.
+        close_root=getattr(pos,"client_oid",None) or f"arb-legacy-{pos.symbol}-{int(time.time()*1000)}"
+        close_ctx={"type":pos.type,"reason":reason,"engine":"arbitrage"}
+        if pos.type=="INTERNAL":
+            await s._exec_leg_audited(
+                "close_internal_perp_buy", pos.v_a, pos.symbol, "BUY", pos.qty,
+                f"{close_root}-close-legA", close_ctx)
+            if ARB_LIVE or ARB_DEMO:
                 v=s.venues.get(pos.v_a)
-                if isinstance(v,Binance):await v.spot_order(pos.symbol,"SELL",pos.qty)
-            elif pos.type=="PERP_PERP":
-                await s._split_exec(pos.v_a,pos.symbol,"BUY",pos.qty)
-                await s._split_exec(pos.v_b,pos.symbol,"SELL",pos.qty)
-        else:log.info(f"  [P] CLOSE {pos.symbol} {pos.type} {reason}")
+                if isinstance(v,Binance):
+                    spot_oid=f"{close_root}-close-legB"
+                    try:
+                        s.audit.write(OrderEvent(
+                            event="intent", client_oid=spot_oid,
+                            venue=f"binance_spot_{ARB_MODE}", symbol=pos.symbol, side="SELL",
+                            qty=float(pos.qty), price=None, status="pending",
+                            payload={**close_ctx,"kind":"close_internal_spot_sell","mode":ARB_MODE}))
+                    except Exception as e:log.debug(f"  close spot intent audit failed: {e}")
+                    spot_r=await v.spot_order(pos.symbol,"SELL",pos.qty)
+                    spot_fill=float(spot_r.get("executedQty",pos.qty)) if isinstance(spot_r,dict) else pos.qty
+                    try:
+                        s.audit.write(OrderEvent(
+                            event="ack" if spot_fill>0 else "reject",
+                            client_oid=spot_oid,
+                            venue=f"binance_spot_{ARB_MODE}", symbol=pos.symbol, side="SELL",
+                            qty=float(spot_fill), price=None,
+                            status="FILLED" if spot_fill>=pos.qty*0.5 else "PARTIAL" if spot_fill>0 else "zero_fill",
+                            payload={**close_ctx,"kind":"close_internal_spot_sell","mode":ARB_MODE,"requested_qty":float(pos.qty)}))
+                    except Exception as e:log.debug(f"  close spot ack audit failed: {e}")
+            else:
+                # Paper parity for spot leg.
+                try:
+                    spot_oid=f"{close_root}-close-legB"
+                    s.audit.write(OrderEvent(
+                        event="intent", client_oid=spot_oid,
+                        venue=f"binance_spot_{ARB_MODE}", symbol=pos.symbol, side="SELL",
+                        qty=float(pos.qty), price=None, status="pending",
+                        payload={**close_ctx,"kind":"close_internal_spot_sell","mode":ARB_MODE}))
+                    s.audit.write(OrderEvent(
+                        event="ack", client_oid=spot_oid,
+                        venue=f"binance_spot_{ARB_MODE}", symbol=pos.symbol, side="SELL",
+                        qty=float(pos.qty), price=None, status="FILLED",
+                        payload={**close_ctx,"kind":"close_internal_spot_sell","mode":ARB_MODE,"requested_qty":float(pos.qty)}))
+                except Exception as e:log.debug(f"  paper close spot audit failed: {e}")
+        elif pos.type=="PERP_PERP":
+            await s._exec_leg_audited(
+                "close_perp_perp_leg_a", pos.v_a, pos.symbol, "BUY", pos.qty,
+                f"{close_root}-close-legA", close_ctx)
+            await s._exec_leg_audited(
+                "close_perp_perp_leg_b", pos.v_b, pos.symbol, "SELL", pos.qty,
+                f"{close_root}-close-legB", close_ctx)
+        else:
+            log.info(f"  [P] CLOSE {pos.symbol} {pos.type} {reason}")
         ca=s.venues.get(pos.v_a);cb=s.venues.get(pos.v_b)
         cost=(ca.cost if ca else 0.001)+(cb.cost if cb else 0.001)
         cost*=2*pos.qty*(ca.prices.get(pos.symbol,0) or 1)
@@ -1594,6 +2051,41 @@ class Engine:
         s.account+=pnl;s.positions=[p for p in s.positions if p is not pos]
         s.peak=max(s.peak,s.account)
 
+        # [Fase 4-H] fill audit row — carries the definitive pnl for
+        # reconciliation and links back to open via client_oid root.
+        try:
+            s.audit.write(OrderEvent(
+                event="fill",
+                client_oid=f"{close_root}-pnl",
+                venue=f"arbitrage_{ARB_MODE}",
+                symbol=pos.symbol,
+                side="BUY",  # placeholder — pair close is bilateral
+                qty=float(pos.qty),
+                price=None,
+                status="CLOSED",
+                payload={
+                    "mode":              ARB_MODE,
+                    "engine":            "arbitrage",
+                    "type":              pos.type,
+                    "reason":            reason,
+                    "pnl":               round(pnl,4),
+                    "mtm":               round(mtm,4),
+                    "funding_collected": round(pos.funding_collected,4),
+                    "cost":              round(cost,4),
+                    "hours_open":        round(pos.hours_open(),2),
+                    "account":           round(s.account,2),
+                    "peak":              round(s.peak,2),
+                    "v_a":               pos.v_a,
+                    "v_b":               pos.v_b,
+                    "entry_px_a":        pos.entry_px_a,
+                    "entry_px_b":        pos.entry_px_b,
+                    "exit_px_a":         round(exit_px_a,8),
+                    "exit_px_b":         round(exit_px_b,8),
+                },
+            ))
+        except Exception as e:
+            log.debug(f"  close fill audit failed: {e}")
+
         # [M4] unregister hedge
         s.hedge_mon.unregister(pos.symbol)
         # [M8] feed sizer
@@ -1601,12 +2093,17 @@ class Engine:
 
         if pnl<0:s.consecutive_losses+=1
         else:s.consecutive_losses=0
-        if s.consecutive_losses>=KILL_LOSSES:
-            s.killed=True;log.warning(f"  KILL SWITCH: {KILL_LOSSES} consecutive losses")
-            await s._tg(f"🚨 KILL SWITCH: {KILL_LOSSES} consecutive losses. Halting new entries.")
-        if(s.peak-s.account)/s.peak>MAX_DD_PCT:
-            s.killed=True;log.warning(f"  KILL SWITCH: drawdown {(s.peak-s.account)/s.peak*100:.1f}% > {MAX_DD_PCT*100:.0f}%")
-            await s._tg(f"🚨 KILL SWITCH: max drawdown exceeded")
+        # [Fase 4-H] Legacy kill-switch triggers now route through the
+        # full orchestration (flatten + audit + halt). Idempotent — if
+        # _kill_switch_trigger is already running (e.g. caller is already
+        # a KILL_SWITCH close), subsequent calls are no-ops.
+        if s.consecutive_losses>=KILL_LOSSES and not s._kill_switch_active:
+            log.warning(f"  KILL SWITCH: {KILL_LOSSES} consecutive losses")
+            await s._kill_switch_trigger(f"{KILL_LOSSES} consecutive losses")
+        elif s.peak>0 and (s.peak-s.account)/s.peak>MAX_DD_PCT and not s._kill_switch_active:
+            dd_pct=(s.peak-s.account)/s.peak*100
+            log.warning(f"  KILL SWITCH: drawdown {dd_pct:.1f}% > {MAX_DD_PCT*100:.0f}%")
+            await s._kill_switch_trigger(f"drawdown {dd_pct:.1f}% > {MAX_DD_PCT*100:.0f}%")
         tlog.info(f"CLOSE {pos.symbol:12s} F=${pos.funding_collected:+.4f} MTM=${mtm:+.4f} PnL=${pnl:+.4f} {reason}")
         await s._tg(f"<b>CLOSE {pos.symbol}</b>\nPnL=${pnl:+.4f} {reason}")
 

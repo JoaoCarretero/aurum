@@ -45,5 +45,51 @@
     "max_net_exposure_pct":     150.0,
     "max_concurrent_positions": 3,
     "freeze_hours_utc":         [21, 22, 23, 0, 1, 2]
+  },
+
+  "arbitrage_paper": {
+    "_comment": "Fase 4-H — JANE STREET arbitrage in paper mode. Permissive defaults: this engine is delta-neutral by construction, so net exposure should always be near zero. Gross cap is high because each pair trades 2 legs.",
+    "max_daily_dd_pct":       100.0,
+    "max_daily_loss_pct":     100.0,
+    "max_consecutive_losses": 999,
+    "soft_block_losses":      999,
+    "max_gross_notional_pct": 1e9,
+    "max_net_exposure_pct":   1e9,
+    "max_concurrent_positions": 999,
+    "freeze_hours_utc":       []
+  },
+
+  "arbitrage_demo": {
+    "max_daily_dd_pct":       100.0,
+    "max_daily_loss_pct":     100.0,
+    "max_consecutive_losses": 999,
+    "soft_block_losses":      999,
+    "max_gross_notional_pct": 1e9,
+    "max_net_exposure_pct":   1e9,
+    "max_concurrent_positions": 999,
+    "freeze_hours_utc":       []
+  },
+
+  "arbitrage_testnet": {
+    "max_daily_dd_pct":       100.0,
+    "max_daily_loss_pct":     100.0,
+    "max_consecutive_losses": 999,
+    "soft_block_losses":      999,
+    "max_gross_notional_pct": 1e9,
+    "max_net_exposure_pct":   1e9,
+    "max_concurrent_positions": 999,
+    "freeze_hours_utc":       []
+  },
+
+  "arbitrage_live": {
+    "_comment": "Fase 4-H — JANE STREET LIVE. Conservative defaults. max_concurrent_positions mirrors MAX_POS (5 pair trades = 10 legs). max_gross_notional_pct is 2x leverage * max_pos * pos_pct = ~200%; bumped to 250% to absorb 1 extra pair. max_net_exposure tight at 30% since delta-neutral by design.",
+    "max_daily_dd_pct":         5.0,
+    "max_daily_loss_pct":       3.0,
+    "max_consecutive_losses":   4,
+    "soft_block_losses":        3,
+    "max_gross_notional_pct":   250.0,
+    "max_net_exposure_pct":     30.0,
+    "max_concurrent_positions": 5,
+    "freeze_hours_utc":         [21, 22, 23, 0, 1, 2]
   }
 }
