@@ -431,3 +431,19 @@ def test_arbitrage_hub_hover_enter_moves_cursor():
         assert app._arb_hub_row_widgets[0]["label"].cget("fg") == mod.WHITE
     finally:
         app.destroy()
+
+
+def test_scanner_filter_bar_renders():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._funding_scanner_screen("dex-dex")
+        app.update_idletasks()
+        assert hasattr(app, "_arb_filters")
+        assert "min_apr" in app._arb_filters
+        assert hasattr(app, "_arb_filter_labels")
+        assert len(app._arb_filter_labels) == 5
+    finally:
+        app._funding_alive = False
+        app.destroy()

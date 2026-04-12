@@ -3669,6 +3669,7 @@ class App(tk.Tk):
         self._kb("<Key-c>", lambda: self._alchemy_enter())
         self._kb("<Key-d>", lambda: self._funding_scanner_screen("dex-dex"))
         self._kb("<Key-x>", lambda: self._funding_scanner_screen("cex-dex"))
+        self._kb("<Key-f>", lambda: self._funding_filter_toggle())
         self._bind_global_nav()
 
         outer = tk.Frame(self.main, bg=BG)
@@ -3687,6 +3688,83 @@ class App(tk.Tk):
 
         tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(6, 4))
 
+        # ── Filter bar ──────────────────────────────────────────
+        try:
+            from config.params import ARB_FILTER_DEFAULTS
+        except (ImportError, AttributeError):
+            ARB_FILTER_DEFAULTS = {
+                "min_apr": 20.0, "min_volume": 500_000,
+                "min_oi": 0, "risk_max": "HIGH", "grade_min": "SKIP",
+            }
+        if not hasattr(self, "_arb_filters"):
+            self._arb_filters = dict(ARB_FILTER_DEFAULTS)
+
+        _APR_OPTS    = [5, 10, 20, 50, 100]
+        _VOL_OPTS    = [0, 100_000, 500_000, 1_000_000, 5_000_000]
+        _OI_OPTS     = [0, 50_000, 100_000, 500_000, 1_000_000]
+        _RISK_OPTS   = ["HIGH", "MED", "LOW"]
+        _GRADE_OPTS  = ["SKIP", "MAYBE", "GO"]
+
+        def _fmt_filter(key, val):
+            if key == "min_apr":
+                return f"APR \u2265{int(val)}%"
+            if key == "min_volume":
+                if val == 0:
+                    return "VOL \u2265OFF"
+                if val >= 1_000_000:
+                    return f"VOL \u2265{int(val/1_000_000)}M"
+                return f"VOL \u2265{int(val/1_000)}K"
+            if key == "min_oi":
+                if val == 0:
+                    return "OI \u2265OFF"
+                if val >= 1_000_000:
+                    return f"OI \u2265{int(val/1_000_000)}M"
+                return f"OI \u2265{int(val/1_000)}K"
+            if key == "risk_max":
+                return f"RISK \u2264{val}"
+            if key == "grade_min":
+                return f"GRADE \u2265{val}"
+            return f"{key}={val}"
+
+        def _cycle_filter(key, opts):
+            cur = self._arb_filters.get(key)
+            try:
+                idx = opts.index(cur)
+            except ValueError:
+                idx = 0
+            nxt = opts[(idx + 1) % len(opts)]
+            self._arb_filters[key] = nxt
+            lbl = self._arb_filter_labels.get(key)
+            if lbl:
+                lbl.configure(text=_fmt_filter(key, nxt))
+            self._funding_repaint_filtered()
+
+        fbar = tk.Frame(outer, bg=BG2)
+        fbar.pack(fill="x", pady=(0, 3))
+        self._funding_filter_bar = fbar
+
+        self._arb_filter_labels = {}
+        _filter_defs = [
+            ("min_apr",    _APR_OPTS),
+            ("min_volume", _VOL_OPTS),
+            ("min_oi",     _OI_OPTS),
+            ("risk_max",   _RISK_OPTS),
+            ("grade_min",  _GRADE_OPTS),
+        ]
+        for fkey, fopts in _filter_defs:
+            cur_val = self._arb_filters.get(fkey)
+            lbl = tk.Label(
+                fbar, text=_fmt_filter(fkey, cur_val),
+                font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG2,
+                cursor="hand2", padx=6,
+            )
+            lbl.pack(side="left")
+            lbl.bind("<Button-1>", lambda e, k=fkey, o=fopts: _cycle_filter(k, o))
+            self._arb_filter_labels[fkey] = lbl
+
+        tk.Label(fbar, text="F:toggle", font=(FONT, 6), fg=DIM2, bg=BG2,
+                 padx=4).pack(side="right")
+
         # ── Table header ────────────────────────────────────────
         cols = [
             ("#",       3,  "e"),
@@ -3697,6 +3775,7 @@ class App(tk.Tk):
             ("APR",     9,  "e"),
             ("VOL",     10, "e"),
             ("RISK",    5,  "w"),
+            ("SCORE",   10, "w"),
         ]
         hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
         for label, w, anchor in cols:
@@ -3804,6 +3883,60 @@ class App(tk.Tk):
         if inner is None:
             return
 
+        # cache for filter repaint
+        self._funding_cached = (rows, arb, stats)
+
+        # ── Scoring & filtering ──────────────────────────────────
+        try:
+            from core.arb_scoring import score_opp, score_batch
+            _scoring_ok = True
+        except Exception:
+            _scoring_ok = False
+
+        filters = getattr(self, "_arb_filters", None)
+
+        # Build score list for all rows (parallel)
+        row_scores = None
+        if _scoring_ok:
+            try:
+                opp_dicts = [o.to_dict() for o in rows]
+                row_scores = score_batch(opp_dicts)
+            except Exception:
+                row_scores = None
+
+        # Apply filters
+        if filters and rows:
+            _RISK_ORDER  = {"LOW": 0, "MED": 1, "HIGH": 2}
+            _GRADE_ORDER = {"GO": 0, "MAYBE": 1, "SKIP": 2}
+            risk_max_ord  = _RISK_ORDER.get(filters.get("risk_max", "HIGH"), 2)
+            grade_min_ord = _GRADE_ORDER.get(filters.get("grade_min", "SKIP"), 2)
+            min_apr    = filters.get("min_apr", 0)
+            min_volume = filters.get("min_volume", 0)
+            min_oi     = filters.get("min_oi", 0)
+
+            filtered_rows   = []
+            filtered_scores = []
+            for idx, o in enumerate(rows):
+                if abs(o.apr) < min_apr:
+                    continue
+                if min_volume and o.volume_24h < min_volume:
+                    continue
+                if min_oi and o.open_interest < min_oi:
+                    continue
+                if _RISK_ORDER.get(o.risk, 2) < risk_max_ord:
+                    # row risk is stricter than allowed max — include it
+                    pass
+                elif _RISK_ORDER.get(o.risk, 2) > risk_max_ord:
+                    continue
+                sr = row_scores[idx] if row_scores else None
+                if sr is not None:
+                    if _GRADE_ORDER.get(sr.grade, 2) > grade_min_ord:
+                        continue
+                filtered_rows.append(o)
+                filtered_scores.append(sr)
+            rows      = filtered_rows
+            row_scores = filtered_scores
+
         # rebuild rows
         for w in inner.winfo_children():
             w.destroy()
@@ -3825,6 +3958,23 @@ class App(tk.Tk):
             sym_fg = WHITE
             venue_fg = AMBER_D
 
+            # SCORE cell
+            sr = row_scores[i - 1] if row_scores else None
+            if sr is not None:
+                sc = int(sr.score)
+                if sr.grade == "GO":
+                    score_txt = f"\u2588\u2588 {sc:>2} GO"
+                    score_fg  = GREEN
+                elif sr.grade == "MAYBE":
+                    score_txt = f"\u2588\u2591 {sc:>2} MAYBE"
+                    score_fg  = AMBER
+                else:
+                    score_txt = f"\u2591\u2591 {sc:>2} SKIP"
+                    score_fg  = DIM2
+            else:
+                score_txt = ""
+                score_fg  = DIM2
+
             cells = [
                 (f"{i:>3}", DIM),
                 (o.symbol, sym_fg),
@@ -3834,6 +3984,7 @@ class App(tk.Tk):
                 (f"{o.apr:+.0f}%", apr_fg),
                 (f"${o.volume_24h/1e6:.1f}M", DIM),
                 (o.risk, risk_fg),
+                (score_txt, score_fg),
             ]
             for (txt, fg), (_lbl, w, anchor) in zip(cells, self._funding_cols):
                 tk.Label(rf, text=txt, font=(FONT, 8),
@@ -3850,12 +4001,26 @@ class App(tk.Tk):
                 w.destroy()
             if arb:
                 for a in arb:
+                    # score arb pair
+                    arb_score_tag = ""
+                    if _scoring_ok:
+                        try:
+                            asr = score_opp(a)
+                            if asr.grade == "GO":
+                                arb_score_tag = f"  \u2588\u2588{int(asr.score):>2}GO"
+                            elif asr.grade == "MAYBE":
+                                arb_score_tag = f"  \u2588\u2591{int(asr.score):>2}MAYBE"
+                            else:
+                                arb_score_tag = f"  \u2591\u2591{int(asr.score):>2}SKIP"
+                        except Exception:
+                            arb_score_tag = ""
                     line = (
                         f"   {a['symbol']:8s}  "
                         f"SHORT {a['short_venue']:<11s} ({a['short_apr']:+6.1f}%)  "
                         f"\u2192  "
                         f"LONG {a['long_venue']:<11s} ({a['long_apr']:+6.1f}%)  "
                         f"net {a['net_apr']:+6.0f}%"
+                        f"{arb_score_tag}"
                     )
                     net_fg = GREEN if abs(a["net_apr"]) >= 50 else AMBER
                     tk.Label(arb_frame, text=line, font=(FONT, 8),
@@ -3892,6 +4057,27 @@ class App(tk.Tk):
             if meta:
                 meta.configure(text=f"  scan failed: {reason[:80]}  ", fg=RED)
         except Exception:
+            pass
+
+    def _funding_repaint_filtered(self):
+        """Re-run _funding_paint with cached data (called on filter change)."""
+        cached = getattr(self, "_funding_cached", None)
+        if cached is None:
+            return
+        rows, arb, stats = cached
+        self._funding_paint(rows, arb, stats)
+
+    def _funding_filter_toggle(self):
+        """Toggle filter bar visibility (bound to F key)."""
+        fbar = getattr(self, "_funding_filter_bar", None)
+        if fbar is None:
+            return
+        try:
+            if fbar.winfo_ismapped():
+                fbar.pack_forget()
+            else:
+                fbar.pack(fill="x", pady=(0, 3))
+        except tk.TclError:
             pass
 
     # ─── TERMINAL (Layer 2) ───────────────────────────────
