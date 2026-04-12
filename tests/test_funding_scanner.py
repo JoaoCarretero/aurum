@@ -87,3 +87,53 @@ def test_is_usdt_base_helper():
     assert _is_usdt_base("ETHUSDC") == "ETH"
     assert _is_usdt_base("USDT") is None     # base == suffix → None
     assert _is_usdt_base("BTC-USD") == "BTC"
+
+
+def test_spot_price_dataclass():
+    from core.funding_scanner import SpotPrice
+    sp = SpotPrice(symbol="BTC", venue="binance", price=50000.0, volume_24h=1e9)
+    assert sp.symbol == "BTC"
+    assert sp.price == 50000.0
+
+
+def test_spot_fetchers_registry():
+    from core.funding_scanner import SPOT_FETCHERS
+    assert "binance" in SPOT_FETCHERS
+    assert "bybit" in SPOT_FETCHERS
+    for name, fn in SPOT_FETCHERS.items():
+        assert callable(fn)
+
+
+def test_basis_pairs_with_synthetic_data():
+    from core.funding_scanner import FundingScanner, FundingOpp, SpotPrice
+    scanner = FundingScanner()
+    scanner._cache = [
+        FundingOpp("BTC", "binance", "CEX", 0.0001, 8.0, 45.6,
+                   "SHORT", 50100.0, 5e9, 3e9, "LOW"),
+    ]
+    scanner._last_scan = 9999999999.0
+    scanner._spot_cache = [
+        SpotPrice("BTC", "binance", 50000.0, 1e9),
+    ]
+    pairs = scanner.basis_pairs(min_basis_bps=0)
+    assert len(pairs) >= 1
+    p = pairs[0]
+    assert p["symbol"] == "BTC"
+    assert "basis_bps" in p
+    assert p["basis_bps"] > 0
+
+
+def test_spot_arb_pairs_with_synthetic_data():
+    from core.funding_scanner import FundingScanner, SpotPrice
+    scanner = FundingScanner()
+    scanner._last_scan = 9999999999.0
+    scanner._spot_cache = [
+        SpotPrice("BTC", "binance", 50000.0, 1e9),
+        SpotPrice("BTC", "bybit", 50050.0, 8e8),
+    ]
+    pairs = scanner.spot_arb_pairs(min_spread_bps=0)
+    assert len(pairs) >= 1
+    p = pairs[0]
+    assert p["symbol"] == "BTC"
+    assert "spread_bps" in p
+    assert p["spread_bps"] > 0

@@ -86,6 +86,15 @@ class FundingOpp:
         return asdict(self)
 
 
+@dataclass
+class SpotPrice:
+    """A spot price observation at one venue."""
+    symbol: str
+    venue: str
+    price: float
+    volume_24h: float
+
+
 # ─── Risk scoring ────────────────────────────────────────────────────────
 def _classify_risk(volume: float, oi: float) -> str:
     if volume < HIGH_RISK_VOL or oi < HIGH_RISK_OI:
@@ -695,6 +704,58 @@ def fetch_apex() -> list[FundingOpp]:
     return out
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Spot price fetchers (Fase D — for basis + spot-spot arb)
+# ═══════════════════════════════════════════════════════════════════════
+
+def fetch_binance_spot() -> list[SpotPrice]:
+    """GET https://api.binance.com/api/v3/ticker/24hr"""
+    resp = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=HTTP_TIMEOUT)
+    resp.raise_for_status()
+    out: list[SpotPrice] = []
+    for t in resp.json():
+        try:
+            base = _is_usdt_base(t.get("symbol") or "")
+            if not base:
+                continue
+            price = float(t.get("lastPrice") or 0)
+            vol = float(t.get("quoteVolume") or 0)
+            if price <= 0:
+                continue
+            out.append(SpotPrice(base, "binance", price, vol))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def fetch_bybit_spot() -> list[SpotPrice]:
+    """GET https://api.bybit.com/v5/market/tickers?category=spot"""
+    resp = requests.get("https://api.bybit.com/v5/market/tickers",
+                        params={"category": "spot"}, timeout=HTTP_TIMEOUT)
+    resp.raise_for_status()
+    tickers = (resp.json().get("result") or {}).get("list") or []
+    out: list[SpotPrice] = []
+    for t in tickers:
+        try:
+            base = _is_usdt_base(t.get("symbol") or "")
+            if not base:
+                continue
+            price = float(t.get("lastPrice") or 0)
+            vol = float(t.get("turnover24h") or 0)
+            if price <= 0:
+                continue
+            out.append(SpotPrice(base, "bybit", price, vol))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+SPOT_FETCHERS = {
+    "binance": fetch_binance_spot,
+    "bybit":   fetch_bybit_spot,
+}
+
+
 # Venue registry (priority ordered — DEX first, then CEX).
 VENUE_FETCHERS = {
     # ── DEX ──────────────────────────────────────────────────────────────
@@ -723,6 +784,7 @@ class FundingScanner:
 
     def __init__(self, cache_ttl: float = CACHE_TTL):
         self._cache: list[FundingOpp] = []
+        self._spot_cache: list[SpotPrice] = []
         self._last_scan: float = 0.0
         self._cache_ttl: float = cache_ttl
         self._last_error: dict[str, str] = {}
@@ -841,6 +903,80 @@ class FundingScanner:
                 pairs.append(best)
 
         pairs.sort(key=lambda p: abs(p["net_apr"]), reverse=True)
+        return pairs
+
+    def scan_spot(self, force: bool = False) -> list[SpotPrice]:
+        """Fetch spot prices from all spot venues."""
+        all_spot: list[SpotPrice] = []
+        with ThreadPoolExecutor(max_workers=len(SPOT_FETCHERS)) as ex:
+            futures = {ex.submit(fn): name for name, fn in SPOT_FETCHERS.items()}
+            for fut in as_completed(futures):
+                try:
+                    all_spot.extend(fut.result())
+                except Exception as e:
+                    log.warning("spot_scan: %s failed — %s", futures[fut], e)
+        self._spot_cache = all_spot
+        return all_spot
+
+    def basis_pairs(self, min_basis_bps: float = 10.0) -> list[dict]:
+        """Spot-perp basis: (perp_mark - spot_price) / spot_price in bps."""
+        perps = self._cache or self.scan()
+        spots = self._spot_cache or self.scan_spot()
+        spot_by_sym: dict[str, list[SpotPrice]] = {}
+        for s in spots:
+            spot_by_sym.setdefault(s.symbol, []).append(s)
+        pairs: list[dict] = []
+        for p in perps:
+            for s in spot_by_sym.get(p.symbol, []):
+                if s.price <= 0:
+                    continue
+                basis_bps = (p.mark_price - s.price) / s.price * 10_000
+                if abs(basis_bps) < min_basis_bps:
+                    continue
+                interval_days = p.interval_h / 24.0
+                basis_apr = abs(basis_bps) / 10_000 / max(interval_days, 1/24) * 365 * 100
+                pairs.append({
+                    "symbol": p.symbol,
+                    "venue_perp": p.venue, "venue_spot": s.venue,
+                    "mark_price": round(p.mark_price, 4),
+                    "spot_price": round(s.price, 4),
+                    "basis_bps": round(basis_bps, 2),
+                    "basis_apr": round(basis_apr, 1),
+                    "volume_perp": p.volume_24h, "volume_spot": s.volume_24h,
+                })
+        pairs.sort(key=lambda x: abs(x["basis_bps"]), reverse=True)
+        return pairs
+
+    def spot_arb_pairs(self, min_spread_bps: float = 5.0) -> list[dict]:
+        """Spot-spot spread: price divergence across spot venues in bps."""
+        spots = self._spot_cache or self.scan_spot()
+        by_sym: dict[str, list[SpotPrice]] = {}
+        for s in spots:
+            by_sym.setdefault(s.symbol, []).append(s)
+        pairs: list[dict] = []
+        for symbol, lst in by_sym.items():
+            if len(lst) < 2:
+                continue
+            for i in range(len(lst)):
+                for j in range(i + 1, len(lst)):
+                    a, b = lst[i], lst[j]
+                    if a.venue == b.venue:
+                        continue
+                    mid = min(a.price, b.price)
+                    if mid <= 0:
+                        continue
+                    spread_bps = abs(a.price - b.price) / mid * 10_000
+                    if spread_bps < min_spread_bps:
+                        continue
+                    hi, lo = (a, b) if a.price >= b.price else (b, a)
+                    pairs.append({
+                        "symbol": symbol,
+                        "venue_a": hi.venue, "venue_b": lo.venue,
+                        "price_a": round(hi.price, 4), "price_b": round(lo.price, 4),
+                        "spread_bps": round(spread_bps, 2),
+                        "volume_a": hi.volume_24h, "volume_b": lo.volume_24h,
+                    })
+        pairs.sort(key=lambda x: x["spread_bps"], reverse=True)
         return pairs
 
     # ─ telemetry ────────────────────────────────────────────────
