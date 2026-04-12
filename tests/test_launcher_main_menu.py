@@ -210,7 +210,7 @@ def test_sub_select_dispatches_to_method(monkeypatch):
         app.destroy()
 
 
-def test_splash_creates_bloomberg_canvas():
+def test_splash_creates_canvas():
     mod = _load_launcher()
     app = mod.App()
     app.withdraw()
@@ -219,21 +219,35 @@ def test_splash_creates_bloomberg_canvas():
         app.update_idletasks()
         assert app._menu_canvas is not None
         items = app._menu_canvas.find_all()
-        assert len(items) > 20, f"expected many canvas items on splash, got {len(items)}"
+        assert len(items) > 15, f"expected >15 items on splash, got {len(items)}"
     finally:
         app.destroy()
 
 
-def test_splash_key_1_dispatches_to_markets(monkeypatch):
+def test_splash_click_routes_to_main(monkeypatch):
     mod = _load_launcher()
     app = mod.App()
     app.withdraw()
     try:
         app._splash()
         called = []
-        monkeypatch.setattr(app, "_markets", lambda: called.append("markets"))
-        app._splash_direct_jump(0)
-        assert called == ["markets"]
+        monkeypatch.setattr(app, "_menu", lambda key: called.append(key))
+        app._splash_on_click()
+        assert called == ["main"]
+    finally:
+        app.destroy()
+
+
+def test_splash_pulse_disarms_on_menu_switch():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._splash()
+        assert app._splash_pulse_after_id is not None
+        app._splash_canvas = None
+        app._splash_pulse_tick()
+        assert app._splash_pulse_after_id is None
     finally:
         app.destroy()
 
@@ -272,12 +286,13 @@ def test_app_has_splash_pulse_state():
     app = mod.App()
     app.withdraw()
     try:
+        # __init__ calls _splash() which arms the pulse and sets the canvas.
         assert hasattr(app, "_splash_cursor_on")
         assert isinstance(app._splash_cursor_on, bool)
         assert hasattr(app, "_splash_pulse_after_id")
-        assert app._splash_pulse_after_id is None
+        assert app._splash_pulse_after_id is not None
         assert hasattr(app, "_splash_canvas")
-        assert app._splash_canvas is None
+        assert app._splash_canvas is not None
     finally:
         app.destroy()
 

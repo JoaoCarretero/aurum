@@ -796,11 +796,6 @@ class App(tk.Tk):
         threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
         self._splash()
-        # HL1 gate state: `_splash_canvas` is written by `_splash()` when the
-        # HL1 rewrite (Task 3) installs the gate canvas; reset it here so that
-        # the default legacy splash doesn't leak a canvas reference into the
-        # pulse-tick state before the real gate is rendered.
-        self._splash_canvas = None
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self._quit)
 
@@ -1374,16 +1369,20 @@ class App(tk.Tk):
         except Exception:
             self._menu_live_after_id = None
 
-    # ─── SPLASH (Layer 0) — Bloomberg 3D ─────────────────
+    # ─── SPLASH (Layer 0) — HL1 Black Mesa gate ──────────
     def _splash(self):
-        self._clr(); self._clear_kb(); self.history.clear()
+        """Half Life 1 institutional gate splash.
+
+        Click anywhere / ENTER / space → main menu. Arrow keys unbound.
+        CD small top-left, AURUM wordmark centered, CRT status block,
+        pulsing CLICK TO PROCEED cursor. Warning stripes top and bottom.
+        """
+        self._clr()
+        self._clear_kb()
+        self.history.clear()
         self.h_path.configure(text="")
         self.h_stat.configure(text="PRONTO", fg=GREEN)
-        self.f_lbl.configure(text="ENTER main · 1-4 direto · Q quit")
-
-        # Activate splash tile geometry before any render helper runs.
-        self._active_tile_slots = self._SPLASH_TILE_SLOTS
-        self._active_cd_center = self._SPLASH_CD
+        self.f_lbl.configure(text="CLICK · ENTER · Q quit")
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(fill="both", expand=True)
@@ -1392,87 +1391,128 @@ class App(tk.Tk):
         self._menu_canvas = canvas
         self._splash_canvas = canvas
 
-        # ── Header band: BANNER wordmark + subtitle ──
-        canvas.create_text(
-            460, 40, text=BANNER,
-            font=(FONT, 11, "bold"), fill=AMBER, anchor="center", justify="center",
-        )
-        canvas.create_text(
-            460, 78,
-            text="S O V E R E I G N   F I N A N C E   T E R M I N A L",
-            font=(FONT, 8, "bold"), fill=AMBER_D, anchor="center",
-        )
+        # ── Warning stripes ──
+        self._draw_warning_stripe(canvas, y=0,   height=20,
+                                  text="▓▒░  ⚠ AUTHORIZED ACCESS ONLY ⚠  ░▒▓")
+        self._draw_warning_stripe(canvas, y=618, height=22,
+                                  text="▓▒░  © 2026 AURUM · O DISCO LÊ A SI MESMO  ░▒▓")
 
-        # ── Thin amber rule below header ──
-        canvas.create_line(220, 96, 700, 96, fill=AMBER_D, width=1)
+        # ── Small CD top-left ──
+        self._active_cd_center = (70, 100)
+        self._draw_cd_center(canvas, r=36)
 
-        # ── Kick off live data fetch on first render ──
-        if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
-            self._menu_live_fetch_async()
+        # ── Clearance stamps top-right ──
+        self._draw_stamp(canvas, cx=680, cy=100, w=110, h=56,
+                         lines=["VAULT", "03"])
+        self._draw_stamp(canvas, cx=810, cy=100, w=130, h=56,
+                         lines=["CLEARED", "LVL-Ω"])
 
-        # ── 2x2 isometric tile grid + CD center + spokes ──
-        self._draw_cd_center(canvas)
-        self._draw_spokes(canvas, self._menu_focused_tile)
-        for idx in range(4):
-            self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
+        # ── AURUM wordmark (reuses BANNER module constant) ──
+        canvas.create_text(460, 210, anchor="center",
+                           text=BANNER, font=(FONT, 11, "bold"),
+                           fill=AMBER, tags="wordmark")
 
-        # ── Bottom rule + footer ──
-        canvas.create_line(220, 600, 700, 600, fill=AMBER_D, width=1)
-        canvas.create_text(
-            460, 620,
-            text="© 2026  AURUM FINANCE  ·  O disco lê a si mesmo",
-            font=(FONT, 7), fill=DIM2, anchor="center",
-        )
+        # ── Subtitle ──
+        canvas.create_text(460, 272, anchor="center",
+                           text="F I N A N C I A L   T E R M I N A L",
+                           font=(FONT, 9, "bold"),
+                           fill=AMBER_D, tags="subtitle")
+        canvas.create_text(460, 288, anchor="center",
+                           text="· · ·  V A U L T - 3  · · ·",
+                           font=(FONT, 7),
+                           fill=DIM, tags="subtitle")
 
-        # ── Arm live refresh loop ──
-        self._menu_live_schedule()
+        # ── Rule above status block ──
+        canvas.create_line(180, 312, 740, 312,
+                           fill=AMBER_D, width=1, tags="rule")
 
-        # ── Key bindings ──
-        self._kb("<Return>", lambda: self._menu("main"))
-        self._kb("<space>",  lambda: self._menu("main"))
-        self.main.bind("<Button-1>", lambda e: self._menu("main"))
-
-        for n in (1, 2, 3, 4):
-            self._kb(f"<Key-{n}>", lambda _i=n - 1: self._splash_direct_jump(_i))
-
-        self._kb("<Right>", lambda: self._splash_focus_delta(+1))
-        self._kb("<Left>",  lambda: self._splash_focus_delta(-1))
-        self._kb("<Down>",  lambda: self._splash_focus_delta(+2))
-        self._kb("<Up>",    lambda: self._splash_focus_delta(-2))
-        self._kb("<Tab>",   lambda: self._splash_focus_delta(+1))
-
+        # ── Status block (6 CRT rows) ──
         try:
-            self._kb("<Escape>", self._quit)
+            st = _conn.status_summary()
+            market_val = st.get("market", "—")
         except Exception:
-            pass
+            market_val = "—"
+        try:
+            keys = self._load_json("keys.json")
+            has_tg = bool(keys.get("telegram", {}).get("bot_token"))
+            has_keys = bool(
+                keys.get("demo", {}).get("api_key")
+                or keys.get("testnet", {}).get("api_key")
+            )
+        except Exception:
+            has_tg = False
+            has_keys = False
 
+        market_cell = "● LIVE" if market_val and market_val != "—" else "○ OFFLINE"
+        market_col = GREEN if market_cell == "● LIVE" else DIM
+        conn_cell = "● BINANCE" if has_keys else "○ OFFLINE"
+        conn_col = GREEN if has_keys else DIM
+        tg_cell = "● ONLINE" if has_tg else "○ OFFLINE"
+        tg_col = GREEN if has_tg else DIM
+
+        rows = [
+            ("SYSTEM STATUS", "NOMINAL",     GREEN),
+            ("MARKET FEED",   market_cell,   market_col),
+            ("CONNECTION",    conn_cell,     conn_col),
+            ("TELEGRAM",      tg_cell,       tg_col),
+            ("KILL-SWITCH",   "ARMED [3/3]", RED),
+            ("CLEARANCE",     "OMEGA",       AMBER_B),
+        ]
+        self._draw_status_block(canvas, x=220, y=334, rows=rows)
+
+        # ── Rule below status block ──
+        canvas.create_line(180, 448, 740, 448,
+                           fill=AMBER_D, width=1, tags="rule")
+
+        # ── Click-to-proceed prompt ──
+        self._splash_cursor_on = True
+        canvas.create_text(460, 488, anchor="center",
+                           text="[ CLICK TO PROCEED ]▊",
+                           font=(FONT, 10, "bold"),
+                           fill=AMBER_B, tags="prompt")
+
+        # ── Bind click / ENTER / space → main menu ──
+        self.main.bind("<Button-1>", lambda e: self._splash_on_click())
+        self._kb("<Return>", self._splash_on_click)
+        self._kb("<space>",  self._splash_on_click)
         self._bind_global_nav()
 
-    def _splash_focus_delta(self, delta: int) -> None:
-        """Cycle focused tile on the splash canvas and repaint."""
-        self._menu_focused_tile = (self._menu_focused_tile + delta) % 4
-        if self._menu_canvas is None:
-            return
-        for idx in range(4):
-            self._draw_isometric_tile(
-                self._menu_canvas, idx, idx == self._menu_focused_tile
-            )
-        self._draw_spokes(self._menu_canvas, self._menu_focused_tile)
+        # ── Arm 500ms cursor pulse ──
+        self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
 
-    def _splash_direct_jump(self, tile_idx: int) -> None:
-        """Jump directly to the first child of MAIN_GROUPS[tile_idx]."""
-        if not (0 <= tile_idx < len(MAIN_GROUPS)):
-            return
-        children = MAIN_GROUPS[tile_idx][3]
-        if not children:
-            return
-        _, method_name = children[0]
-        fn = getattr(self, method_name, None)
-        if callable(fn):
+    def _splash_on_click(self) -> None:
+        """Click / ENTER / space handler — cancel pulse and route to main menu."""
+        if self._splash_pulse_after_id is not None:
             try:
-                fn()
+                self.after_cancel(self._splash_pulse_after_id)
             except Exception:
                 pass
+            self._splash_pulse_after_id = None
+        self._splash_canvas = None
+        self._menu("main")
+
+    def _splash_pulse_tick(self) -> None:
+        """Blink the trailing cursor on the CLICK TO PROCEED prompt every 500ms."""
+        canvas = self._splash_canvas
+        if canvas is None:
+            self._splash_pulse_after_id = None
+            return
+        self._splash_cursor_on = not self._splash_cursor_on
+        new_text = (
+            "[ CLICK TO PROCEED ]▊"
+            if self._splash_cursor_on
+            else "[ CLICK TO PROCEED ] "
+        )
+        new_color = AMBER_B if self._splash_cursor_on else AMBER
+        try:
+            canvas.itemconfig("prompt", text=new_text, fill=new_color)
+        except Exception:
+            self._splash_pulse_after_id = None
+            return
+        try:
+            self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
+        except Exception:
+            self._splash_pulse_after_id = None
 
     def _cd_draw(self):
         """Animate the CD radar on the splash screen."""
