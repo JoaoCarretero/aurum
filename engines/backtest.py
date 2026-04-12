@@ -551,10 +551,11 @@ def export_json(all_trades, eq, mc, cond, ratios, price_data=None):
 if __name__ == "__main__":
     import argparse
     _ap = argparse.ArgumentParser(description="CITADEL v3.6 — AURUM Finance Backtest")
-    _ap.add_argument("--days",     type=int,   default=SCAN_DAYS,  help="Scan period in days")
-    _ap.add_argument("--basket",   type=str,   default="default",  help="Asset basket name")
-    _ap.add_argument("--leverage", type=float, default=LEVERAGE,   help="Leverage multiplier")
-    _ap.add_argument("--no-menu",  action="store_true",            help="Skip post-run interactive menu")
+    _ap.add_argument("--days",        type=int,   default=SCAN_DAYS,  help="Scan period in days")
+    _ap.add_argument("--basket",      type=str,   default="default",  help="Asset basket name")
+    _ap.add_argument("--leverage",    type=float, default=LEVERAGE,   help="Leverage multiplier")
+    _ap.add_argument("--no-menu",     action="store_true",            help="Skip post-run interactive menu")
+    _ap.add_argument("--holdout-pct", type=float, default=20.0,       help="Reserve last N%% of data as pure OOS holdout (0 to disable)")
     _args = _ap.parse_args()
 
     SCAN_DAYS = _args.days
@@ -699,6 +700,32 @@ if __name__ == "__main__":
     macro_series = detect_macro(all_dfs)
     corr = build_corr_matrix(all_dfs)
 
+    # ── OOS Holdout split ──
+    # Last _holdout_pct% of candles per symbol is reserved as pure holdout.
+    # These rows NEVER enter the walk-forward IS period.
+    _holdout_pct = _args.holdout_pct
+    _holdout_enabled = _holdout_pct > 0
+    _train_dfs:   dict[str, pd.DataFrame] = {}
+    _holdout_dfs: dict[str, pd.DataFrame] = {}
+    for _sym, _df in all_dfs.items():
+        if _holdout_enabled:
+            _hstart = int(len(_df) * (1 - _holdout_pct / 100))
+            _train_dfs[_sym]   = _df.iloc[:_hstart].reset_index(drop=True)
+            _holdout_dfs[_sym] = _df.iloc[_hstart:].reset_index(drop=True)
+        else:
+            _train_dfs[_sym]   = _df
+            _holdout_dfs[_sym] = pd.DataFrame()
+
+    if _holdout_enabled:
+        _ex_sym = next(iter(_train_dfs))
+        _ho_candles = len(_holdout_dfs[_ex_sym])
+        _tr_candles = len(_train_dfs[_ex_sym])
+        print(f"\n  HOLDOUT  {_holdout_pct:.0f}%  →  train {_tr_candles:,} candles  |  holdout {_ho_candles:,} candles")
+
+    # Recompute macro/corr on train-only data so holdout is not contaminated
+    _macro_train = detect_macro(_train_dfs) if _holdout_enabled else macro_series
+    _corr_train  = build_corr_matrix(_train_dfs) if _holdout_enabled else corr
+
     # ══════════════════════════════════════════════════════════════
     #  FASE 3 — SCAN (inline progress)
     # ══════════════════════════════════════════════════════════════
@@ -707,13 +734,13 @@ if __name__ == "__main__":
     _scan_syms = [s for s in all_dfs if s in SYMBOLS]
     _scan_done = 0
     for sym in _scan_syms:
-        df = all_dfs[sym]
+        df = _train_dfs[sym]
         _scan_done += 1
         _nt = len(all_trades)
         bar = _progress_bar(_scan_done, len(_scan_syms))
         _write(f"SCANNING  [{bar}] {_scan_done}/{len(_scan_syms)}  {sym:12s}  trades: {_nt}   ")
 
-        trades, vetos = scan_symbol(df, sym, macro_series, corr,
+        trades, vetos = scan_symbol(df, sym, _macro_train, _corr_train,
                                     htf_stack_by_sym.get(sym) if MTF_ENABLED else None)
         all_trades.extend(trades)
         for k, v in vetos.items(): all_vetos[k] += v
@@ -729,6 +756,47 @@ if __name__ == "__main__":
     l_total = len(closed) - w_total
     wr_total = w_total/len(closed)*100
     _writeln(f"✓ {len(closed)} trades · {w_total}W / {l_total}L · WR {wr_total:.1f}%")
+
+    # ══════════════════════════════════════════════════════════════
+    #  FASE 3b — HOLDOUT SCAN (pure OOS — never in IS period)
+    # ══════════════════════════════════════════════════════════════
+    holdout_trades: list = []
+    if _holdout_enabled:
+        _macro_holdout = detect_macro(_holdout_dfs)
+        _corr_holdout  = build_corr_matrix(_holdout_dfs)
+        _ho_syms = [s for s in _holdout_dfs if s in SYMBOLS and len(_holdout_dfs[s]) > 0]
+        _ho_done = 0
+        for sym in _ho_syms:
+            df_ho = _holdout_dfs[sym]
+            _ho_done += 1
+            bar = _progress_bar(_ho_done, len(_ho_syms))
+            _write(f"HOLDOUT   [{bar}] {_ho_done}/{len(_ho_syms)}  {sym:12s}  trades: {len(holdout_trades)}   ")
+            try:
+                ho_t, _ = scan_symbol(df_ho, sym, _macro_holdout, _corr_holdout,
+                                      htf_stack_by_sym.get(sym) if MTF_ENABLED else None)
+                for t in ho_t:
+                    t["holdout"] = True
+                holdout_trades.extend(ho_t)
+            except Exception as _ho_err:
+                log.warning(f"Holdout scan failed for {sym}: {_ho_err}")
+
+        ho_closed = [t for t in holdout_trades if t["result"] in ("WIN", "LOSS")]
+        if ho_closed:
+            ho_w   = sum(1 for t in ho_closed if t["result"] == "WIN")
+            ho_wr  = ho_w / len(ho_closed) * 100
+            ho_pnl = sum(t["pnl"] for t in ho_closed)
+            _writeln(f"✓ HOLDOUT {len(ho_closed)} trades · {ho_w}W / {len(ho_closed)-ho_w}L · WR {ho_wr:.1f}%")
+            print(f"\n  ┌─ HOLDOUT OOS ({_holdout_pct:.0f}% últimos candles) {'─'*22}┐")
+            print(f"  │  Trades : {len(ho_closed):<5d}  W={ho_w}  L={len(ho_closed)-ho_w}{'':>26}│")
+            print(f"  │  WR     : {ho_wr:>5.1f}%{'':>38}│")
+            print(f"  │  PnL    : ${ho_pnl:>+12,.2f}  (IS PnL ${sum(t['pnl'] for t in closed):>+,.0f}){'':>5}│")
+            _wr_delta = ho_wr - wr_total
+            _delta_ico = "✓" if abs(_wr_delta) <= 10 else "⚠"
+            print(f"  │  ΔWR vs IS : {_wr_delta:>+5.1f}pp  {_delta_ico}{'':>33}│")
+            print(f"  └{'─'*52}┘")
+            log.info(f"HOLDOUT: n={len(ho_closed)}  WR={ho_wr:.1f}%  PnL=${ho_pnl:+,.2f}  ΔWR={_wr_delta:+.1f}pp")
+        else:
+            _writeln("HOLDOUT: sem trades gerados no período reservado")
 
     # ══════════════════════════════════════════════════════════════
     #  FASE 4 — RESULTADO COMPACTO
