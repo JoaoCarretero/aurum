@@ -313,3 +313,23 @@ def test_draw_stamp_creates_border_and_text():
         canvas.destroy()
     finally:
         app.destroy()
+
+
+def test_draw_status_block_creates_rows():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        import tkinter as tk
+        canvas = tk.Canvas(app, width=920, height=640, bg="#0a0a0a")
+        rows = [
+            ("SYSTEM STATUS", "NOMINAL", "#00c864"),
+            ("KILL-SWITCH",   "ARMED [3/3]", "#c83232"),
+        ]
+        app._draw_status_block(canvas, x=220, y=320, rows=rows)
+        canvas.update_idletasks()
+        items = canvas.find_all()
+        assert len(items) >= len(rows)
+        canvas.destroy()
+    finally:
+        app.destroy()

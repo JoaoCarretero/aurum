@@ -1185,6 +1185,24 @@ class App(tk.Tk):
                                text=line, font=(FONT, 8, "bold"),
                                fill=AMBER, tags="stamp")
 
+    def _draw_status_block(self, canvas, x: int, y: int, rows: list) -> None:
+        """CRT-style status rows: '> LABEL .......... VALUE' with per-row color.
+
+        rows is a list of (label, value, color_hex) tuples. Dots fill the
+        gap between label and value to a fixed column width so the values
+        align vertically.
+        """
+        total_width = 48
+        line_step = 18
+        for i, (label, value, color) in enumerate(rows):
+            prefix = f"> {label} "
+            value_str = f" {value}"
+            dots = "." * max(2, total_width - len(prefix) - len(value_str))
+            text = f"{prefix}{dots}{value_str}"
+            canvas.create_text(x, y + i * line_step, anchor="w",
+                               text=text, font=(FONT, 9),
+                               fill=color, tags="status")
+
     def _draw_spokes(self, canvas, focused_idx: int) -> None:
         canvas.delete("spokes")
         slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
