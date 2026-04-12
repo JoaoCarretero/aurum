@@ -77,6 +77,8 @@ __all__ = [
     # Arb scoring (Fase B)
     "ARB_SCORE_WEIGHTS", "ARB_SCORE_THRESHOLDS", "ARB_FILTER_DEFAULTS",
     "ARB_VENUE_RELIABILITY", "ARB_POSITION_SIZE_REF",
+    # Frozen engines
+    "FROZEN_ENGINES",
 ]
 
 # ── UNIVERSO ──────────────────────────────────────────────────
@@ -448,3 +450,10 @@ ARB_VENUE_RELIABILITY = {
 }
 
 ARB_POSITION_SIZE_REF = 1000.0
+
+# ── Frozen engines ────────────────────────────────────────────
+# Engines that are code-complete but should NOT be executed until
+# their prerequisites are met. PROMETEU needs 1000+ trades,
+# DARWIN needs performance data from other engines, RENAISSANCE
+# needs statistical validation of harmonic patterns.
+FROZEN_ENGINES = ["PROMETEU", "DARWIN", "RENAISSANCE"]

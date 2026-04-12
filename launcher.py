@@ -4902,9 +4902,17 @@ class App(tk.Tk):
                              bg=BG3, fg=AMBER,
                              activebackground=AMBER, activeforeground=BG,
                              font=(FONT, 8))
+        try:
+            from config.params import FROZEN_ENGINES as _FROZEN
+        except Exception:
+            _FROZEN = []
         for eng_name in sorted(_ENGINES.keys()):
+            _frozen = eng_name.upper() in [f.upper() for f in _FROZEN]
+            _label  = f"{eng_name.upper()} [FROZEN]" if _frozen else eng_name.upper()
+            _fg     = DIM if _frozen else AMBER
             spawn_menu.add_command(
-                label=eng_name.upper(),
+                label=_label,
+                foreground=_fg,
                 command=lambda n=eng_name: _do_spawn(n))
 
         def _popup_spawn(event, m=spawn_menu):
