@@ -236,6 +236,10 @@ def run(quiet: bool = False) -> int:
     if getattr(app, "_eng_tail_stop", None):
         app._eng_tail_stop.set()
 
+    # ── CORE MODULE IMPORTS ──
+    section("CORE imports")
+    call("import core.arb_scoring", lambda: __import__("core.arb_scoring"))
+
     # ── ROUND-TRIP BACK TO SPLASH ──
     section("roundtrip splash")
     call("_splash (roundtrip)", app._splash)

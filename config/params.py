@@ -74,6 +74,9 @@ __all__ = [
     "CHRONOS_HURST_WINDOW", "CHRONOS_HURST_MIN", "CHRONOS_SEASON_MIN_SAMPLES",
     # HMM gate — observation-only until manually enabled
     "HMM_GATE_ENABLED", "HMM_MIN_CONFIDENCE", "HMM_BLOCK_REGIMES",
+    # Arb scoring (Fase B)
+    "ARB_SCORE_WEIGHTS", "ARB_SCORE_THRESHOLDS", "ARB_FILTER_DEFAULTS",
+    "ARB_VENUE_RELIABILITY", "ARB_POSITION_SIZE_REF",
 ]
 
 # ── UNIVERSO ──────────────────────────────────────────────────
@@ -419,3 +422,29 @@ CHOP_S200       = _TFP["chop_s200"]
 # Override PIVOT_N e MAX_HOLD com os valores derivados do TF
 PIVOT_N         = _TFP["pivot_n"]
 MAX_HOLD        = _TFP["max_hold"]
+
+# ── Fase B: Arb scoring ──────────────────────────────────────
+ARB_SCORE_WEIGHTS = {
+    "net_apr": 0.30,
+    "volume": 0.20,
+    "oi": 0.15,
+    "risk": 0.15,
+    "slippage": 0.10,
+    "venue": 0.10,
+}
+ARB_SCORE_THRESHOLDS = {"go": 70, "maybe": 40}
+
+ARB_FILTER_DEFAULTS = {
+    "min_apr": 20.0,
+    "min_volume": 500_000,
+    "min_oi": 0,
+    "risk_max": "HIGH",
+    "grade_min": "SKIP",
+}
+
+ARB_VENUE_RELIABILITY = {
+    "binance": 99, "bybit": 97, "gate": 95, "bitget": 94, "bingx": 92,
+    "hyperliquid": 96, "dydx": 94, "paradex": 90,
+}
+
+ARB_POSITION_SIZE_REF = 1000.0
