@@ -367,36 +367,50 @@ def enrich_with_regime(df: pd.DataFrame,
         model = _build_hmm_backend(n_states=n_states)
         model.fit(X_train)
 
-        X_full = np.column_stack([returns, vol])
-        X_full = np.nan_to_num(X_full, nan=0.0, posinf=0.0, neginf=0.0)
-        proba = model.predict_proba(X_full)
+        # [FIX] Predict ONLY on the training window (start..end) to
+        # eliminate look-ahead bias.  Bars before `start` stay NaN —
+        # they have no causal regime estimate.
+        X_pred = np.column_stack([returns[start:], vol[start:]])
+        X_pred = np.nan_to_num(X_pred, nan=0.0, posinf=0.0, neginf=0.0)
+        proba = model.predict_proba(X_pred)
 
         # Map internal state indices to BEAR/CHOP/BULL by sorting on the
         # first feature (mean return): lowest = BEAR, highest = BULL.
         state_means = np.asarray(model.means_)[:, 0]
         order = np.argsort(state_means)
+
+        # Build full-length probability arrays (NaN before start)
+        prob_bear = np.full(n, np.nan)
+        prob_bull = np.full(n, np.nan)
+        prob_chop = np.full(n, np.nan)
+
         if n_states >= 3:
             bear_idx = int(order[0])
             bull_idx = int(order[-1])
-            # Collapse any extra middle states into CHOP
             chop_idx_set = [int(i) for i in order[1:-1]]
-            df["hmm_prob_bear"] = proba[:, bear_idx]
-            df["hmm_prob_bull"] = proba[:, bull_idx]
-            df["hmm_prob_chop"] = (
+            prob_bear[start:] = proba[:, bear_idx]
+            prob_bull[start:] = proba[:, bull_idx]
+            prob_chop[start:] = (
                 proba[:, chop_idx_set].sum(axis=1) if chop_idx_set else 0.0
             )
         else:
-            # Degenerate case (n_states < 3): still populate the columns.
-            df["hmm_prob_bear"] = proba[:, int(order[0])]
-            df["hmm_prob_bull"] = proba[:, int(order[-1])]
-            df["hmm_prob_chop"] = 0.0
+            prob_bear[start:] = proba[:, int(order[0])]
+            prob_bull[start:] = proba[:, int(order[-1])]
+            prob_chop[start:] = 0.0
+
+        df["hmm_prob_bear"] = prob_bear
+        df["hmm_prob_bull"] = prob_bull
+        df["hmm_prob_chop"] = prob_chop
 
         prob_mat = df[["hmm_prob_bear", "hmm_prob_chop", "hmm_prob_bull"]].values
         label_arr = np.array(["BEAR", "CHOP", "BULL"])
-        winner = prob_mat.argmax(axis=1)
-        df["hmm_regime"] = winner.astype(float)
-        df["hmm_regime_label"] = label_arr[winner]
-        df["hmm_confidence"] = prob_mat.max(axis=1)
+        # For NaN rows, argmax returns 0 — override with NaN after
+        with np.errstate(invalid="ignore"):
+            winner = np.nanargmax(prob_mat, axis=1)
+        nan_mask = np.isnan(prob_mat).all(axis=1)
+        df["hmm_regime"] = np.where(nan_mask, np.nan, winner.astype(float))
+        df["hmm_regime_label"] = np.where(nan_mask, None, label_arr[winner])
+        df["hmm_confidence"] = np.nanmax(prob_mat, axis=1)
 
     except Exception as e:
         log.warning(f"enrich_with_regime failed: {e}")
