@@ -3627,6 +3627,50 @@ class App(tk.Tk):
             else:
                 rows[2]["sub"].configure(
                     text="observation  \u00b7  \u2014  \u00b7  \u2014")
+
+            # ── Semaphore bullets (best score per category) ──────
+            from core.arb_scoring import score_opp, score_batch
+            GREEN_SEM = "#00ff41"
+
+            # Row 0 — CEX-CEX: score the top opp if available
+            if top is not None:
+                top_d = top.to_dict() if hasattr(top, "to_dict") else {
+                    "symbol": getattr(top, "symbol", ""),
+                    "venue": getattr(top, "venue", ""),
+                    "apr": getattr(top, "apr", 0),
+                    "volume_24h": getattr(top, "volume_24h", 0),
+                    "open_interest": getattr(top, "open_interest", 0),
+                    "risk": getattr(top, "risk", "HIGH"),
+                }
+                cex_sc = score_opp(top_d)
+                if cex_sc.grade == "GO":
+                    rows[0]["bullet"].configure(fg=GREEN_SEM)
+                elif cex_sc.grade == "MAYBE":
+                    rows[0]["bullet"].configure(fg=AMBER)
+                else:
+                    rows[0]["bullet"].configure(fg=DIM)
+
+            # Row 1 — DEX-DEX
+            if arb_dd:
+                dd_scores = score_batch(arb_dd)
+                best_dd = max(dd_scores, key=lambda s: s.score)
+                if best_dd.grade == "GO":
+                    rows[1]["bullet"].configure(fg=GREEN_SEM)
+                elif best_dd.grade == "MAYBE":
+                    rows[1]["bullet"].configure(fg=AMBER)
+                else:
+                    rows[1]["bullet"].configure(fg=DIM)
+
+            # Row 2 — CEX-DEX
+            if arb_cd:
+                cd_scores = score_batch(arb_cd)
+                best_cd = max(cd_scores, key=lambda s: s.score)
+                if best_cd.grade == "GO":
+                    rows[2]["bullet"].configure(fg=GREEN_SEM)
+                elif best_cd.grade == "MAYBE":
+                    rows[2]["bullet"].configure(fg=AMBER)
+                else:
+                    rows[2]["bullet"].configure(fg=DIM)
         except Exception:
             pass
 

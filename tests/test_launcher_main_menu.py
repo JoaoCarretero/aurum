@@ -447,3 +447,38 @@ def test_scanner_filter_bar_renders():
     finally:
         app._funding_alive = False
         app.destroy()
+
+
+def test_arbitrage_hub_semaphore_colors_bullets():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._arbitrage_hub()
+        stats = {"dex_online": 3, "cex_online": 5, "total": 100}
+
+        class FakeTop:
+            symbol = "BTC"
+            apr = 80.0
+            venue = "binance"
+        top = FakeTop()
+        arb_dd = [{
+            "symbol": "ETH", "net_apr": 85.0,
+            "short_venue": "dydx", "short_venue_type": "DEX",
+            "long_venue": "hyperliquid", "long_venue_type": "DEX",
+            "short_apr": 50.0, "long_apr": -35.0,
+            "short_rate": 0.0003, "long_rate": -0.0002,
+            "short_interval_h": 8, "long_interval_h": 1,
+            "mark_price": 3200.0,
+            "volume_24h_short": 8_000_000, "volume_24h_long": 5_000_000,
+            "open_interest_short": 3_000_000, "open_interest_long": 2_000_000,
+        }]
+        arb_cd = []
+        app._arb_hub_telem_update(stats, top, arb_dd, arb_cd)
+        app.update_idletasks()
+
+        rows = app._arb_hub_row_widgets
+        bullet_fg = rows[1]["bullet"].cget("fg")
+        assert bullet_fg == "#00ff41", f"expected green bullet, got {bullet_fg}"
+    finally:
+        app.destroy()
