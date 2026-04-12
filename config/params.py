@@ -79,6 +79,8 @@ __all__ = [
     "ARB_VENUE_RELIABILITY", "ARB_POSITION_SIZE_REF",
     # Frozen engines
     "FROZEN_ENGINES",
+    # Ablation
+    "ABLATION_DISABLE",
 ]
 
 # ── UNIVERSO ──────────────────────────────────────────────────
@@ -457,3 +459,8 @@ ARB_POSITION_SIZE_REF = 1000.0
 # DARWIN needs performance data from other engines, RENAISSANCE
 # needs statistical validation of harmonic patterns.
 FROZEN_ENGINES = ["PROMETEU", "DARWIN", "RENAISSANCE"]
+
+# ── Ablation testing ─────────────────────────────────────────
+# Set to a component name to disable it during ablation runs.
+# Valid: "", "struct", "flow", "cascade", "momentum", "pullback"
+ABLATION_DISABLE = ""

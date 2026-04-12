@@ -91,6 +91,13 @@ def score_omega(row, direction: str) -> tuple[float, dict]:
     mo   = float(row["omega_mom_bull"  if bull else "omega_mom_bear"])
     pu   = float(row["omega_pullback"])
     st   = float(row["omega_struct_up" if bull else "omega_struct_down"])
+    # Ablation: override individual components for testing
+    _abl = ABLATION_DISABLE
+    if _abl == "struct":    st  = 0.5
+    if _abl == "flow":      fl  = 0.5
+    if _abl == "cascade":   c_s = max(c_s, 0.5)  # bypass hard veto too
+    if _abl == "momentum":  mo  = 0.5
+    if _abl == "pullback":  pu  = 0.5
     comps = {"struct": round(st,4), "flow": round(fl,4),
               "cascade": round(c_s,4), "momentum": round(mo,4), "pullback": round(pu,4)}
     if c_s == 0.0: return 0.0, comps

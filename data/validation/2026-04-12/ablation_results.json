@@ -1,0 +1,78 @@
+[
+  {
+    "n_trades": 257,
+    "wr": 53.7,
+    "pnl": 453.0,
+    "sharpe": 0.64,
+    "max_dd_pct": 6.56,
+    "roi": 4.53,
+    "wins": 138,
+    "losses": 119,
+    "label": "BASELINE",
+    "ablation": "",
+    "delta_pnl_pct": 0.0
+  },
+  {
+    "n_trades": 0,
+    "wr": 0.0,
+    "pnl": 0.0,
+    "sharpe": 0.0,
+    "max_dd_pct": 0.0,
+    "roi": 0.0,
+    "label": "-struct",
+    "ablation": "struct",
+    "delta_pnl_pct": -100.0
+  },
+  {
+    "n_trades": 3,
+    "wr": 66.7,
+    "pnl": 506.0,
+    "sharpe": 2.144,
+    "max_dd_pct": 0.52,
+    "roi": 5.06,
+    "wins": 2,
+    "losses": 1,
+    "label": "-flow",
+    "ablation": "flow",
+    "delta_pnl_pct": 11.7
+  },
+  {
+    "n_trades": 1828,
+    "wr": 54.2,
+    "pnl": -3189.0,
+    "sharpe": -1.955,
+    "max_dd_pct": 44.46,
+    "roi": -31.89,
+    "wins": 991,
+    "losses": 837,
+    "label": "-cascade",
+    "ablation": "cascade",
+    "delta_pnl_pct": -804.0
+  },
+  {
+    "n_trades": 44,
+    "wr": 61.4,
+    "pnl": 204.0,
+    "sharpe": 0.788,
+    "max_dd_pct": 4.89,
+    "roi": 2.04,
+    "wins": 27,
+    "losses": 17,
+    "label": "-momentum",
+    "ablation": "momentum",
+    "delta_pnl_pct": -55.0
+  },
+  {
+    "n_trades": 88,
+    "wr": 62.5,
+    "pnl": 858.0,
+    "sharpe": 2.103,
+    "max_dd_pct": 3.45,
+    "roi": 8.58,
+    "wins": 55,
+    "losses": 33,
+    "label": "-pullback",
+    "ablation": "pullback",
+    "delta_pnl_pct": 89.4
+  }
+]
