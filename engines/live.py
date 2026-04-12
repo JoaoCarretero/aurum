@@ -59,6 +59,7 @@ from core.audit_trail import AuditTrail, OrderEvent
 from core.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates,
 )
+from core.fs import atomic_write
 from bot.telegram import TelegramNotifier
 
 # Fase 4 — engine version stamped on every audit row. Bump when the
@@ -1964,8 +1965,10 @@ class LiveEngine:
             "n_trades": len(self.closed_trades),
             "total_pnl":round(sum(t["pnl"] for t in self.closed_trades), 2),
         }
-        with open(LIVE_DIR / "state" / "positions.json", "w") as f:
-            json.dump(state, f, indent=2, default=str)
+        atomic_write(
+            LIVE_DIR / "state" / "positions.json",
+            json.dumps(state, indent=2, default=str),
+        )
 
     def _save_report(self):
         if not self.closed_trades: return
@@ -1980,8 +1983,7 @@ class LiveEngine:
             "trades":  self.closed_trades,
         }
         fname = LIVE_DIR / "reports" / f"session_{_LIVE_DATE}.json"
-        with open(fname, "w") as f:
-            json.dump(report, f, indent=2, default=str)
+        atomic_write(fname, json.dumps(report, indent=2, default=str))
         log.info(f"Report → {fname}")
 
     # ── MAIN ──────────────────────────────────────────────────

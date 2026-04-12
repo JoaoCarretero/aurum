@@ -71,3 +71,11 @@ def robust_rmtree(target: Path, retries: int = 3, pause: float = 0.5) -> bool:
         time.sleep(pause)
 
     return not target.exists()
+
+
+def atomic_write(path: Path, data: str) -> None:
+    """Write data atomically via tmp+rename. Original survives mid-write crash."""
+    import os
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(data, encoding='utf-8')
+    os.replace(str(tmp), str(path))
