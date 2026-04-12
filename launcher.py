@@ -3332,10 +3332,12 @@ class App(tk.Tk):
 
     # ═══════════════════════════════════════════════════════════════
     # ARBITRAGE HUB — MP3-style router
-    # Three legs of funding/basis arbitrage, one minimalist menu:
+    # Five legs of funding/basis arbitrage, one minimalist menu:
     #   C  CEX ↔ CEX  → JANE STREET cockpit (execution)
     #   D  DEX ↔ DEX  → funding scanner (observation)
     #   X  CEX ↔ DEX  → funding scanner (observation)
+    #   B  BASIS TRADE → spot-perp basis screen
+    #   S  SPOT ↔ SPOT → cross-venue spot spread screen
     # ═══════════════════════════════════════════════════════════════
     _ARB_HUB_ITEMS = [
         ("C", "CEX  \u2194  CEX",
@@ -3347,21 +3349,28 @@ class App(tk.Tk):
         ("X", "CEX  \u2194  DEX",
          "cex/dex spread  \u2014  biggest apr",
          ("_funding_scanner_screen", "cex-dex")),
+        ("B", "BASIS  TRADE",
+         "spot-perp basis  \u00b7  execution ready",
+         "_arb_basis_screen"),
+        ("S", "SPOT  \u2194  SPOT",
+         "cross-venue spot spread",
+         "_arb_spot_screen"),
     ]
 
     def _arbitrage_hub(self):
-        """HL2 + Bloomberg minimalist hub: 3 clickable rows with live data.
+        """HL2 + Bloomberg minimalist hub: 5 clickable rows with live data.
 
         Rows: CEX-CEX (Jane Street execution), DEX-DEX (scanner),
-        CEX-DEX (scanner). Click or C/D/X keyboard shortcuts. Hover
-        highlights the row. ESC returns to the main menu.
+        CEX-DEX (scanner), BASIS TRADE (spot-perp), SPOT-SPOT (spread).
+        Click or C/D/X/B/S keyboard shortcuts. Hover highlights the row.
+        ESC returns to the main menu.
         """
         self._clr(); self._clear_kb()
         self.history.append("main")
         self.h_path.configure(text="> ARBITRAGE DESK")
         self.h_stat.configure(text="HUB", fg=AMBER_D)
         self.f_lbl.configure(
-            text="click row  |  C D X direct  |  \u2191\u2193 ENTER  |  ESC back"
+            text="click row  |  C D X B S direct  |  \u2191\u2193 ENTER  |  ESC back"
         )
         self._kb("<Escape>", lambda: self._menu("main"))
         self._bind_global_nav()
@@ -3406,6 +3415,8 @@ class App(tk.Tk):
             ("CEX  \u2194  CEX", "JANE ST",    "execution  \u00b7  \u2014"),
             ("DEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
             ("CEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
+            ("BASIS  TRADE", "SPOT\u21c4PERP", "spot-perp basis  \u00b7  \u2014"),
+            ("SPOT  \u2194  SPOT", "2 VENUES", "spot spread  \u00b7  \u2014"),
         ]
 
         for i, (big_label, meta, sub) in enumerate(row_defs):
@@ -3456,6 +3467,8 @@ class App(tk.Tk):
         self._kb("<Key-c>", lambda: self._arb_hub_pick(0))
         self._kb("<Key-d>", lambda: self._arb_hub_pick(1))
         self._kb("<Key-x>", lambda: self._arb_hub_pick(2))
+        self._kb("<Key-b>", lambda: self._arb_hub_pick(3))
+        self._kb("<Key-s>", lambda: self._arb_hub_pick(4))
         self._kb("<Up>",    lambda: self._arb_hub_move(-1))
         self._kb("<Down>",  lambda: self._arb_hub_move(1))
         self._kb("<Return>", lambda: self._arb_hub_pick(self._arb_hub_idx))
@@ -3468,7 +3481,7 @@ class App(tk.Tk):
         footer.pack(fill="x", pady=(24, 0))
         tk.Frame(footer, bg=AMBER_D, height=1, width=220).pack()
         tk.Label(footer,
-                 text="click row  \u00b7  C  D  X  direct  \u00b7  ESC back",
+                 text="click row  \u00b7  C  D  X  B  S  direct  \u00b7  ESC back",
                  font=(FONT, 7), fg=DIM2, bg=BG).pack(pady=(6, 0))
 
         # ── Kick off async scan for live data ──
@@ -3571,12 +3584,14 @@ class App(tk.Tk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _arb_hub_telem_update(self, stats, top, arb_dd, arb_cd):
-        """Populate the 3 hub rows with live data from the scanner.
+        """Populate the 5 hub rows with live data from the scanner.
 
         stats: dict with dex_online, cex_online, total from FundingScanner.stats()
         top:   FundingOpp or None — single best observation across all venues
         arb_dd: list of dex-dex spread pairs from scanner.arb_pairs("dex-dex")
         arb_cd: list of cex-dex spread pairs from scanner.arb_pairs("cex-dex")
+        Rows 3-4 (BASIS TRADE, SPOT-SPOT) are updated separately via
+        scanner.basis_pairs() / scanner.spot_arb_pairs() when available.
         """
         rows = getattr(self, "_arb_hub_row_widgets", None)
         if not rows:
@@ -3673,6 +3688,189 @@ class App(tk.Tk):
                     rows[2]["bullet"].configure(fg=DIM)
         except Exception:
             pass
+
+        # Row 3 — BASIS TRADE (spot-perp)
+        try:
+            if hasattr(self, "_funding_scanner") and self._funding_scanner:
+                bp = self._funding_scanner.basis_pairs(min_basis_bps=5)
+                if bp:
+                    best = bp[0]
+                    rows[3]["sub"].configure(
+                        text=f"spot-perp basis  \u00b7  {best['symbol']} {best['basis_bps']:+.0f}bps  \u00b7  {best['venue_perp']}")
+                    rows[3]["meta"].configure(text=f"{len(bp)} PAIRS")
+        except Exception:
+            pass
+
+        # Row 4 — SPOT ↔ SPOT
+        try:
+            if hasattr(self, "_funding_scanner") and self._funding_scanner:
+                sp = self._funding_scanner.spot_arb_pairs(min_spread_bps=3)
+                if sp:
+                    best = sp[0]
+                    rows[4]["sub"].configure(
+                        text=f"spot spread  \u00b7  {best['symbol']} {best['spread_bps']:.0f}bps  \u00b7  {best['venue_a']}\u21c4{best['venue_b']}")
+                    rows[4]["meta"].configure(text=f"{len(sp)} PAIRS")
+        except Exception:
+            pass
+
+    # ═══════════════════════════════════════════════════════════════
+    # BASIS TRADE SCREEN — spot-perp basis opportunities
+    # ═══════════════════════════════════════════════════════════════
+    def _arb_basis_screen(self):
+        """Spot-perp basis trade screen — shows basis opportunities."""
+        self._clr(); self._clear_kb()
+        self.history.append("_arbitrage_hub")
+        self.h_path.configure(text="> ARBITRAGE > BASIS TRADE")
+        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
+        self.f_lbl.configure(text="R refresh  |  ESC back")
+
+        self._kb("<Escape>", lambda: self._arbitrage_hub())
+        self._kb("<Key-r>", lambda: self._arb_basis_screen())
+        self._bind_global_nav()
+
+        outer = tk.Frame(self.main, bg=BG)
+        outer.pack(fill="both", expand=True, padx=24, pady=12)
+
+        tk.Label(outer, text="B A S I S    T R A D E", font=(FONT, 14, "bold"),
+                 fg=AMBER, bg=BG).pack(anchor="center")
+        tk.Label(outer, text="spot-perp basis  \u00b7  buy spot, short perp",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
+        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(6, 4))
+
+        # Table
+        cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("PERP", 10, "w"),
+                ("SPOT", 10, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
+                ("BASIS", 8, "e"), ("APR", 8, "e")]
+        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
+        for label, w, anchor in cols:
+            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
+                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
+        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+
+        inner = tk.Frame(outer, bg=BG)
+        inner.pack(fill="both", expand=True)
+
+        # Fetch basis pairs in background
+        import threading
+        def _worker():
+            try:
+                from core.funding_scanner import FundingScanner
+                scanner = getattr(self, "_funding_scanner", None)
+                if scanner is None:
+                    scanner = FundingScanner()
+                    self._funding_scanner = scanner
+                scanner.scan()
+                scanner.scan_spot()
+                pairs = scanner.basis_pairs(min_basis_bps=5)[:20]
+                self.after(0, lambda: self._arb_basis_paint(inner, cols, pairs))
+            except Exception as e:
+                self.after(0, lambda: tk.Label(inner,
+                    text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _arb_basis_paint(self, inner, cols, pairs):
+        for w in inner.winfo_children():
+            w.destroy()
+        try:
+            self.h_stat.configure(text=f"{len(pairs)} BASIS", fg=AMBER)
+        except Exception:
+            pass
+        if not pairs:
+            tk.Label(inner, text="  \u2014 no basis opportunities above 5bps \u2014",
+                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
+            return
+        for i, p in enumerate(pairs, 1):
+            bg = BG if i % 2 == 1 else BG2
+            rf = tk.Frame(inner, bg=bg); rf.pack(fill="x")
+            basis_fg = GREEN if abs(p["basis_bps"]) >= 20 else (AMBER if abs(p["basis_bps"]) >= 10 else DIM)
+            cells = [
+                (f"{i:>3}", DIM), (p["symbol"], WHITE),
+                (p["venue_perp"], AMBER_D), (p["venue_spot"], AMBER_D),
+                (f"${p['mark_price']:,.2f}", DIM),
+                (f"${p['spot_price']:,.2f}", DIM),
+                (f"{p['basis_bps']:+.0f}bps", basis_fg),
+                (f"{p['basis_apr']:.0f}%", basis_fg),
+            ]
+            for (txt, fg), (_, w, anchor) in zip(cells, cols):
+                tk.Label(rf, text=txt, font=(FONT, 8), fg=fg, bg=bg,
+                         width=w, anchor=anchor).pack(side="left")
+
+    # ═══════════════════════════════════════════════════════════════
+    # SPOT ↔ SPOT SCREEN — cross-venue spot price divergence
+    # ═══════════════════════════════════════════════════════════════
+    def _arb_spot_screen(self):
+        """Spot-spot spread screen — cross-venue spot price divergence."""
+        self._clr(); self._clear_kb()
+        self.history.append("_arbitrage_hub")
+        self.h_path.configure(text="> ARBITRAGE > SPOT \u2194 SPOT")
+        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
+        self.f_lbl.configure(text="R refresh  |  ESC back")
+
+        self._kb("<Escape>", lambda: self._arbitrage_hub())
+        self._kb("<Key-r>", lambda: self._arb_spot_screen())
+        self._bind_global_nav()
+
+        outer = tk.Frame(self.main, bg=BG)
+        outer.pack(fill="both", expand=True, padx=24, pady=12)
+
+        tk.Label(outer, text="S P O T    S P R E A D", font=(FONT, 14, "bold"),
+                 fg=AMBER, bg=BG).pack(anchor="center")
+        tk.Label(outer, text="cross-venue spot price divergence",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
+        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(6, 4))
+
+        cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("VENUE A", 10, "w"),
+                ("VENUE B", 10, "w"), ("PRICE A", 12, "e"), ("PRICE B", 12, "e"),
+                ("SPREAD", 10, "e")]
+        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
+        for label, w, anchor in cols:
+            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
+                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
+        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+
+        inner = tk.Frame(outer, bg=BG)
+        inner.pack(fill="both", expand=True)
+
+        import threading
+        def _worker():
+            try:
+                from core.funding_scanner import FundingScanner
+                scanner = getattr(self, "_funding_scanner", None)
+                if scanner is None:
+                    scanner = FundingScanner()
+                    self._funding_scanner = scanner
+                scanner.scan_spot()
+                pairs = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
+                self.after(0, lambda: self._arb_spot_paint(inner, cols, pairs))
+            except Exception as e:
+                self.after(0, lambda: tk.Label(inner,
+                    text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _arb_spot_paint(self, inner, cols, pairs):
+        for w in inner.winfo_children():
+            w.destroy()
+        try:
+            self.h_stat.configure(text=f"{len(pairs)} SPREADS", fg=AMBER)
+        except Exception:
+            pass
+        if not pairs:
+            tk.Label(inner, text="  \u2014 no spot spreads above 3bps \u2014",
+                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
+            return
+        for i, p in enumerate(pairs, 1):
+            bg = BG if i % 2 == 1 else BG2
+            rf = tk.Frame(inner, bg=bg); rf.pack(fill="x")
+            spread_fg = GREEN if p["spread_bps"] >= 15 else (AMBER if p["spread_bps"] >= 8 else DIM)
+            cells = [
+                (f"{i:>3}", DIM), (p["symbol"], WHITE),
+                (p["venue_a"], AMBER_D), (p["venue_b"], AMBER_D),
+                (f"${p['price_a']:,.4f}", DIM), (f"${p['price_b']:,.4f}", DIM),
+                (f"{p['spread_bps']:.1f}bps", spread_fg),
+            ]
+            for (txt, fg), (_, w, anchor) in zip(cells, cols):
+                tk.Label(rf, text=txt, font=(FONT, 8), fg=fg, bg=bg,
+                         width=w, anchor=anchor).pack(side="left")
 
     # ═══════════════════════════════════════════════════════════════
     # FUNDING SCANNER SCREEN — shared between DEX-DEX and CEX-DEX modes

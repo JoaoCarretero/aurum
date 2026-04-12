@@ -350,7 +350,7 @@ def test_draw_status_block_creates_rows():
         app.destroy()
 
 
-def test_arbitrage_hub_renders_three_rows():
+def test_arbitrage_hub_renders_five_rows():
     mod = _load_launcher()
     app = mod.App()
     app.withdraw()
@@ -358,7 +358,7 @@ def test_arbitrage_hub_renders_three_rows():
         app._arbitrage_hub()
         app.update_idletasks()
         assert hasattr(app, "_arb_hub_row_widgets")
-        assert len(app._arb_hub_row_widgets) == 3
+        assert len(app._arb_hub_row_widgets) == 5
         for w in app._arb_hub_row_widgets:
             assert "frame" in w
             assert "bullet" in w
