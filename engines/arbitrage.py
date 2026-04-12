@@ -630,7 +630,7 @@ except ValueError:
 
 class ExecutionSimulator:
     @staticmethod
-    def simulate_fill(book:OrderBook,side:str,notional_usd:float)->dict:
+    def simulate_fill(book:OrderBook,side:str,notional_usd:float,profiler:"LatencyProfiler|None"=None)->dict:
         levels=book.asks if side=="BUY" else book.bids
         if not levels:
             return{"avg_price":0,"slippage_bps":float('inf'),"filled_usd":0,"filled_qty":0,"levels_consumed":0,"unfilled_usd":notional_usd}
@@ -647,20 +647,26 @@ class ExecutionSimulator:
         # avg_price unfavorably. BUY → price goes up; SELL → price goes
         # down. This is a floor on the fill cost, not a replacement for
         # the order-book walk above.
-        latency_drift=ARB_LATENCY_BPS/10_000
+        # [Bug 6] Use profiler p95 when available; fall back to fixed constant.
+        latency_bps=ARB_LATENCY_BPS
+        if profiler is not None:
+            p95=profiler.percentile(95)
+            if p95 is not None and p95>0:
+                latency_bps=p95
+        latency_drift=latency_bps/10_000
         if side=="BUY":
             avg_px=avg_px*(1+latency_drift)
         else:
             avg_px=avg_px*(1-latency_drift)
-        slip=book_slip+ARB_LATENCY_BPS
+        slip=book_slip+latency_bps
         return{"avg_price":round(avg_px,8),"slippage_bps":round(slip,2),"filled_usd":round(total_cost,2),
                "filled_qty":round(total_qty,8),"levels_consumed":consumed,"unfilled_usd":round(remaining,2),
-               "latency_bps":ARB_LATENCY_BPS,"book_slippage_bps":round(book_slip,2)}
+               "latency_bps":round(latency_bps,2),"book_slippage_bps":round(book_slip,2)}
 
     @staticmethod
-    def simulate_arb_pair(book_a:OrderBook,book_b:OrderBook,notional_usd:float,side_a:str="SELL",side_b:str="BUY")->dict:
-        fill_a=ExecutionSimulator.simulate_fill(book_a,side_a,notional_usd)
-        fill_b=ExecutionSimulator.simulate_fill(book_b,side_b,notional_usd)
+    def simulate_arb_pair(book_a:OrderBook,book_b:OrderBook,notional_usd:float,side_a:str="SELL",side_b:str="BUY",profiler:"LatencyProfiler|None"=None)->dict:
+        fill_a=ExecutionSimulator.simulate_fill(book_a,side_a,notional_usd,profiler)
+        fill_b=ExecutionSimulator.simulate_fill(book_b,side_b,notional_usd,profiler)
         total_slip=fill_a["slippage_bps"]+fill_b["slippage_bps"]
         worst_fill=max(fill_a["unfilled_usd"],fill_b["unfilled_usd"])
         return{"leg_a":fill_a,"leg_b":fill_b,"total_slippage_bps":round(total_slip,2),
@@ -696,6 +702,13 @@ class LatencyProfiler:
         return{"p50":round(np.percentile(vals,50),1),"p95":round(np.percentile(vals,95),1),"max":round(max(vals),1),"n":len(vals)}
     def is_venue_slow(s,venue:str,threshold_ms:float=2000)->bool:
         st=s.stats(venue,"round_trip");return st["p95"]>threshold_ms if st["n"]>=5 else False
+    def percentile(s,pct:int)->Optional[float]:
+        """Return the pct-th percentile across ALL recorded samples (ms).
+        Used by ExecutionSimulator to derive a dynamic latency markup in bps.
+        Returns None when fewer than 5 samples are available."""
+        all_vals=[sample.ms for dq in s._samples.values() for sample in dq]
+        if len(all_vals)<5:return None
+        return float(np.percentile(all_vals,pct))
 
 class LatencyTimer:
     def __init__(s,profiler:LatencyProfiler,venue:str,phase:str):
@@ -1787,7 +1800,7 @@ class Engine:
 
         slippage_bps=0.0;book_a_depth=notional*2;book_b_depth=notional*2;spread_bps_a=10.0
         if book_a and book_b:
-            sim=ExecutionSimulator.simulate_arb_pair(book_a,book_b,notional)
+            sim=ExecutionSimulator.simulate_arb_pair(book_a,book_b,notional,profiler=s.latency)
             slippage_bps=sim["total_slippage_bps"]
             book_a_depth=book_a.depth_at_pct("ask" if "SELL" in opp.get("edge","") else "bid",0.001)
             book_b_depth=book_b.depth_at_pct("bid",0.001)
