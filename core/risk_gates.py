@@ -51,8 +51,14 @@ Usage
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Literal
+
+log = logging.getLogger(__name__)
+
+# Module-level flag — warn only once per session
+_warned_permissive_defaults: bool = False
 
 
 Severity = Literal["allow", "soft_block", "hard_block"]
@@ -87,6 +93,24 @@ class RiskGateConfig:
     # When consecutive_losses ≥ this, go to soft_block instead of allow
     soft_block_losses: int = 3
 
+    # Per-trade notional cap (% of account equity). Default 10%.
+    max_single_position_pct: float = 10.0
+
+    def is_default(self) -> bool:
+        """Return True if all values are still at factory defaults (no config loaded)."""
+        defaults = RiskGateConfig()
+        return (
+            self.max_daily_dd_pct        == defaults.max_daily_dd_pct
+            and self.max_daily_loss_pct  == defaults.max_daily_loss_pct
+            and self.max_consecutive_losses == defaults.max_consecutive_losses
+            and self.max_gross_notional_pct == defaults.max_gross_notional_pct
+            and self.max_net_exposure_pct   == defaults.max_net_exposure_pct
+            and self.max_concurrent_positions == defaults.max_concurrent_positions
+            and self.freeze_hours_utc    == defaults.freeze_hours_utc
+            and self.soft_block_losses   == defaults.soft_block_losses
+            and self.max_single_position_pct == defaults.max_single_position_pct
+        )
+
 
 # ── State snapshot ────────────────────────────────────────────────────
 
@@ -103,6 +127,7 @@ class RiskState:
     # open_positions items: {"symbol": str, "side": "LONG"|"SHORT",
     #                        "notional": float, "unrealized": float}
     current_hour_utc:     int   = -1
+    proposed_notional:    float = 0.0   # notional of the order being evaluated
 
 
 # ── Decision ──────────────────────────────────────────────────────────
@@ -217,6 +242,20 @@ def gate_freeze_window(state: RiskState, cfg: RiskGateConfig) -> GateDecision:
     return _allow()
 
 
+def gate_single_position(state: RiskState,
+                         cfg: RiskGateConfig) -> GateDecision:
+    """Block if proposed_notional exceeds max_single_position_pct of equity."""
+    if state.account_equity <= 0 or state.proposed_notional <= 0:
+        return _allow()
+    cap = cfg.max_single_position_pct / 100.0 * state.account_equity
+    if state.proposed_notional > cap:
+        pct = state.proposed_notional / state.account_equity * 100.0
+        return _soft("single_position",
+                     f"proposed notional {pct:.1f}% > cap {cfg.max_single_position_pct:.1f}% of equity",
+                     state.proposed_notional, cap)
+    return _allow()
+
+
 # ── Composite check ──────────────────────────────────────────────────
 
 _ALL_GATES = (
@@ -227,6 +266,7 @@ _ALL_GATES = (
     gate_net_exposure,
     gate_concurrent_positions,
     gate_freeze_window,
+    gate_single_position,
 )
 
 
@@ -242,7 +282,13 @@ def check_gates(state: RiskState,
     ``allow`` — a safe no-op that a caller can plug in today without
     changing behavior until they populate a real config.
     """
+    global _warned_permissive_defaults
     cfg = cfg or RiskGateConfig()
+
+    if cfg.is_default() and not _warned_permissive_defaults:
+        log.warning("risk gates using permissive defaults — no config loaded")
+        _warned_permissive_defaults = True
+
     soft_decision: GateDecision | None = None
 
     for gate_fn in _ALL_GATES:
@@ -267,4 +313,5 @@ __all__ = [
     "gate_net_exposure",
     "gate_concurrent_positions",
     "gate_freeze_window",
+    "gate_single_position",
 ]
