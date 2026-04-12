@@ -296,7 +296,14 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             result, duration, exit_p = label_trade(
                 df, idx+1, direction, entry, stop, target)
 
-        if result == "OPEN": continue
+        # Mark-to-market: force-close at last bar's close rather than
+        # silently discarding the trade. label_trade already returns the
+        # last-bar close as exit_p and MAX_HOLD as duration for OPEN.
+        forced_mtm = False
+        if result == "OPEN":
+            forced_mtm = True
+            raw_pnl = (float(exit_p) - entry) if direction == "BULLISH" else (entry - float(exit_p))
+            result   = "WIN" if raw_pnl > 0 else "LOSS"
 
         vol_r = str(row.get("vol_regime", "NORMAL"))
         size  = position_size(account, entry, stop, score,
@@ -380,6 +387,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             "omega_cascade":  comps["cascade"],  "omega_momentum": comps["momentum"],
             "omega_pullback": comps["pullback"],
             "chop_trade":     is_chop_trade,
+            "forced_mtm":     forced_mtm,
             "bb_mid":         chop_info.get("bb_mid", 0.0) if is_chop_trade else 0.0,
             # Normalised trade outcome in R units — required by regime_analysis
             "r_multiple": (
