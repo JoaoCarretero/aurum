@@ -1498,7 +1498,26 @@ class LiveEngine:
             sig["stop"], sig["target"]
         )
 
+        # [Item 6] API error rate gate — track consecutive failures
         if fill["status"] == "FAILED":
+            self._consecutive_api_errors += 1
+            log.debug(f"  API error gate: consecutive={self._consecutive_api_errors}")
+
+            if self._consecutive_api_errors >= 20:
+                log.critical(
+                    f"API error gate: {self._consecutive_api_errors} consecutive failures "
+                    "— triggering kill switch"
+                )
+                asyncio.ensure_future(
+                    self._kill_switch_trigger("api_error_gate_20_consecutive")
+                )
+            elif self._consecutive_api_errors >= 5:
+                log.warning(
+                    f"API error gate: {self._consecutive_api_errors} consecutive failures "
+                    "— pausing order execution 60s"
+                )
+                await asyncio.sleep(60)
+
             # Reject — exchange refused the order. Reason is captured
             # as status text by OrderManager (see place_order).
             self.audit.write(OrderEvent(
@@ -1513,6 +1532,9 @@ class LiveEngine:
                 payload={"mode": mode, "raw": fill},
             ))
             return
+
+        # Order succeeded — reset API error counter
+        self._consecutive_api_errors = 0
 
         real_entry = fill["fill_price"]
 
