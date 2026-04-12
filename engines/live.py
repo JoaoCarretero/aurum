@@ -1967,11 +1967,13 @@ class LiveEngine:
                 await self.telegram.send("\n".join(tg_lines))
 
     async def _ws_listen(self, symbol: str):
-        """WebSocket para 1 símbolo. Auto-reconecta."""
+        """WebSocket para 1 símbolo. Auto-reconecta com exponential backoff."""
         import websockets
         mode_key = "demo" if DEMO_MODE else "testnet" if TESTNET_MODE else "live" if LIVE_MODE else "paper"
         ws_base  = _WS_BASE[mode_key]
         url = f"{ws_base}/ws/{symbol.lower()}@kline_{INTERVAL}"
+        # [Item 3] Per-symbol reconnect attempt counter for backoff
+        _reconnect_attempts = 0
         while self.running:
             try:
                 async with websockets.connect(url, ping_interval=20) as ws:
@@ -1981,6 +1983,8 @@ class LiveEngine:
                         data = json.loads(msg)
                         k = data.get("k", {})
                         if not k.get("x", False): continue  # só candles fechados
+                        # Connection is stable — reset backoff counter
+                        _reconnect_attempts = 0
                         candle = {
                             "time":  datetime.fromtimestamp(k["t"]/1000, tz=timezone.utc),
                             "open":  float(k["o"]), "high":  float(k["h"]),
@@ -1991,8 +1995,11 @@ class LiveEngine:
                         log.info(f"  ┤ {symbol:12s} {ts_str}  close={candle['close']:.4f}  vol={candle['vol']:.0f}")
                         await self.on_candle_close(symbol, candle)
             except Exception as e:
-                log.warning(f"WS {symbol} erro: {e} — reconectando em {RECONNECT_DELAY}s")
-                await asyncio.sleep(RECONNECT_DELAY)
+                # [Item 3] Exponential backoff: 5s, 10s, 20s, … up to 300s
+                delay = min(5 * (2 ** _reconnect_attempts), 300)
+                log.warning(f"WS {symbol} erro: {e} — reconectando em {delay}s (tentativa {_reconnect_attempts + 1})")
+                await asyncio.sleep(delay)
+                _reconnect_attempts += 1
 
     # ── HEARTBEAT ─────────────────────────────────────────────
     def _heartbeat(self):
