@@ -104,9 +104,11 @@ def _omega_risk_mult(score: float) -> float:
     return 0.50
 
 def _wr(score: float) -> float:
-    if score >= 0.65: return 0.60
-    if score >= 0.59: return 0.55
-    return 0.50
+    """Estimated win rate as continuous function of omega score.
+    Maps [SCORE_THRESHOLD, 1.0] → [0.50, 0.65] linearly.
+    Eliminates cliff effects from the old step function."""
+    return max(0.50, min(0.65, 0.50 + (score - SCORE_THRESHOLD) *
+               (0.15 / (1.0 - SCORE_THRESHOLD))))
 
 def _global_risk_mult(macro_bias: str, direction: str) -> float:
     if (macro_bias == "BEAR" and direction == "BEARISH") or \
@@ -120,18 +122,16 @@ def position_size(account, entry, stop, score,
                   macro_bias="CHOP", direction="BEARISH",
                   vol_regime="NORMAL", dd_scale=1.0,
                   is_chop_trade=False, peak_equity=None):
-    """
-    [U1 v3.6] position_size() agora incorpora Ω como multiplicador direto.
+    """Simplified position sizing: Kelly base + 2 multiplicadores.
 
-    Pipeline de multiplicadores (ordem de aplicação):
-      1. Kelly base (score → WR estimada)
-      2. _omega_risk_mult(score) — [U1 NOVO] proporcional ao edge real
-      3. _global_risk_mult()     — alinhamento macro/direção
-      4. VOL_RISK_SCALE          — regime de volatilidade
-      5. RISK_SCALE_BY_REGIME    — regime macro
-      6. dd_scale                — drawdown circuit breaker
-      7. CHOP_SIZE_MULT          — [U3] trades de mean reversion = 40%
-      8. Convex sizing           — (account/peak)^alpha: freia em DD, acelera em HWM
+    v3.7 — reduced from 8 multiplicadores to 3 after ablation test showed
+    the stacked factors created a 7,700x range that was impossible to
+    reason about. New range: ~75x (controllable, debuggable).
+
+    Pipeline:
+      1. Kelly base (continuous _wr from score)
+      2. regime_dd = RISK_SCALE_BY_REGIME × dd_scale  [0.2, 1.0]
+      3. convex = (account/peak)^alpha                 [0.1, 1.5]
     """
     dist = abs(entry - stop)
     if not dist: return 0.0
@@ -141,20 +141,15 @@ def position_size(account, entry, stop, score,
     t       = max(0.0, (score - SCORE_THRESHOLD) / (1.0 - SCORE_THRESHOLD))
     risk    = BASE_RISK + t * (min(kelly, MAX_RISK) - BASE_RISK)
 
-    risk   *= _omega_risk_mult(score)
-    risk   *= _global_risk_mult(macro_bias, direction)
-    risk   *= VOL_RISK_SCALE.get(vol_regime, 1.0)
-    risk   *= RISK_SCALE_BY_REGIME.get(macro_bias, 1.0)
-    risk   *= dd_scale
+    # Factor 1: regime × drawdown (combined)
+    regime_dd = RISK_SCALE_BY_REGIME.get(macro_bias, 1.0) * dd_scale
+    risk *= max(0.2, min(regime_dd, 1.0))
 
-    if is_chop_trade:
-        risk *= CHOP_SIZE_MULT
-
-    # 8. Convex sizing — quebra a proporcionalidade DD/ROI com leverage
+    # Factor 2: convex sizing (equity curve shape)
     if CONVEX_ALPHA > 0.0 and peak_equity and peak_equity > 0:
-        convex_mult = (account / peak_equity) ** CONVEX_ALPHA
-        risk *= max(0.1, min(convex_mult, 1.5))   # clamp [10%, 150%]
+        convex = (account / peak_equity) ** CONVEX_ALPHA
+        risk *= max(0.1, min(convex, 1.5))
 
-    risk = max(BASE_RISK*0.25, min(MAX_RISK * 1.25, risk))
+    risk = max(BASE_RISK*0.25, min(MAX_RISK, risk))
     return round(account * risk / dist, 4)
 
