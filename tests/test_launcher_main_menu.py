@@ -348,3 +348,22 @@ def test_draw_status_block_creates_rows():
         canvas.destroy()
     finally:
         app.destroy()
+
+
+def test_arbitrage_hub_renders_three_rows():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._arbitrage_hub()
+        app.update_idletasks()
+        assert hasattr(app, "_arb_hub_row_widgets")
+        assert len(app._arb_hub_row_widgets) == 3
+        for w in app._arb_hub_row_widgets:
+            assert "frame" in w
+            assert "bullet" in w
+            assert "label" in w
+            assert "meta" in w
+            assert "sub" in w
+    finally:
+        app.destroy()

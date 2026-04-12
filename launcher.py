@@ -3350,78 +3350,109 @@ class App(tk.Tk):
     ]
 
     def _arbitrage_hub(self):
-        """Three-card arbitrage hub. Minimalist MP3-player aesthetic.
+        """HL2 + Bloomberg minimalist hub: 3 clickable rows with live data.
 
-        Top: header + live scanner telemetry (venues online, best APR).
-        Middle: three rows with a ► cursor. Up/Down moves it, Enter picks.
-        Keyboard: C / D / X shortcuts. ESC back to main menu.
-
-        The telemetry row kicks off a non-blocking scan so the user
-        sees real numbers on return visits without blocking Tk.
+        Rows: CEX-CEX (Jane Street execution), DEX-DEX (scanner),
+        CEX-DEX (scanner). Click or C/D/X keyboard shortcuts. Hover
+        highlights the row. ESC returns to the main menu.
         """
         self._clr(); self._clear_kb()
         self.history.append("main")
-        self.h_path.configure(text="> ARBITRAGE")
+        self.h_path.configure(text="> ARBITRAGE DESK")
         self.h_stat.configure(text="HUB", fg=AMBER_D)
         self.f_lbl.configure(
-            text="\u2191\u2193 nav  |  ENTER select  |  C jane  |  D dex\u2194dex  |  X cex\u2194dex  |  ESC back"
+            text="click row  |  C D X direct  |  \u2191\u2193 ENTER  |  ESC back"
         )
         self._kb("<Escape>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True, fill="both")
+        outer = tk.Frame(self.main, bg=BG)
+        outer.pack(fill="both", expand=True)
 
-        # ── Title block (LCD-display style) ──────────────────────
-        tk.Frame(f, bg=BG, height=24).pack()
-        tk.Label(f, text="A  R  B  I  T  R  A  G  E",
-                 font=(FONT, 16, "bold"), fg=AMBER, bg=BG).pack()
-        tk.Label(f, text="funding  \u00b7  basis  \u00b7  spread",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(pady=(2, 6))
-        tk.Frame(f, bg=AMBER_D, height=1, width=440).pack(pady=(0, 4))
+        # ── Header bar (minimal: section label + clock) ──
+        header = tk.Frame(outer, bg=BG, height=40)
+        header.pack(fill="x", padx=40, pady=(14, 0))
+        header.pack_propagate(False)
+        tk.Label(header, text="AURUM  \u00b7  ARBITRAGE DESK",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(side="left")
+        self._arb_hub_clock = tk.Label(header, text="",
+                                        font=(FONT, 8, "bold"),
+                                        fg=DIM, bg=BG)
+        self._arb_hub_clock.pack(side="right")
+        try:
+            self._arb_hub_clock.configure(
+                text=datetime.now().strftime("%H:%M:%S  UTC"))
+        except Exception:
+            pass
 
-        # ── Live telemetry strip (populated by background scan) ──
-        telem_frame = tk.Frame(f, bg=BG)
-        telem_frame.pack(pady=(0, 12))
-        self._arb_hub_telem = tk.Label(
-            telem_frame,
-            text="  scanning venues\u2026  ",
-            font=(FONT, 7), fg=DIM, bg=BG,
-        )
-        self._arb_hub_telem.pack()
+        # ── Title block ──
+        title_frame = tk.Frame(outer, bg=BG)
+        title_frame.pack(fill="x", pady=(40, 0))
+        tk.Label(title_frame, text="A R B I T R A G E",
+                 font=(FONT, 18, "bold"), fg=AMBER, bg=BG).pack()
+        tk.Frame(title_frame, bg=AMBER_D, height=1, width=220).pack(pady=(4, 4))
+        tk.Label(title_frame, text="funding  \u00b7  basis  \u00b7  spread",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack()
 
-        # ── Menu list ───────────────────────────────────────────
-        list_frame = tk.Frame(f, bg=BG); list_frame.pack(pady=(0, 14))
+        # ── Rows area ──
+        rows_frame = tk.Frame(outer, bg=BG)
+        rows_frame.pack(fill="x", pady=(48, 0), padx=80)
 
         self._arb_hub_idx = 0
-        self._arb_hub_rows: list[dict] = []
+        self._arb_hub_row_widgets: list[dict] = []
 
-        for i, (key, name, desc, _target) in enumerate(self._ARB_HUB_ITEMS):
-            row = tk.Frame(list_frame, bg=BG); row.pack(pady=4, anchor="w")
+        # Row definitions — match self._ARB_HUB_ITEMS order
+        row_defs = [
+            ("CEX  \u2194  CEX", "JANE ST",    "execution  \u00b7  \u2014"),
+            ("DEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
+            ("CEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
+        ]
 
-            # cursor cell (► when selected, space otherwise)
-            cur = tk.Label(row, text="  ", font=(FONT, 12, "bold"),
-                           fg=AMBER, bg=BG, width=3)
-            cur.pack(side="left")
+        for i, (big_label, meta, sub) in enumerate(row_defs):
+            row_frame = tk.Frame(rows_frame, bg=BG, cursor="hand2", height=78)
+            row_frame.pack(fill="x", pady=(0, 10))
+            row_frame.pack_propagate(False)
 
-            # keyboard shortcut badge
-            tk.Label(row, text=f" {key} ", font=(FONT, 9, "bold"),
-                     fg=BG, bg=AMBER, width=3).pack(side="left", padx=(0, 8))
+            top_line = tk.Frame(row_frame, bg=BG)
+            top_line.pack(fill="x", pady=(10, 0))
 
-            # two-line cell: big title + dim description
-            text_cell = tk.Frame(row, bg=BG)
-            text_cell.pack(side="left")
-            nlbl = tk.Label(text_cell, text=name, font=(FONT, 13, "bold"),
-                            fg=WHITE, bg=BG, anchor="w")
-            nlbl.pack(anchor="w")
-            dlbl = tk.Label(text_cell, text=desc, font=(FONT, 8),
-                            fg=DIM, bg=BG, anchor="w")
-            dlbl.pack(anchor="w")
+            bullet_lbl = tk.Label(top_line, text="\u25cf",
+                                  font=(FONT, 14, "bold"),
+                                  fg=AMBER, bg=BG, width=3, anchor="center")
+            bullet_lbl.pack(side="left")
 
-            self._arb_hub_rows.append(
-                {"cursor": cur, "name": nlbl, "desc": dlbl}
-            )
+            label_lbl = tk.Label(top_line, text=big_label,
+                                 font=(FONT, 14, "bold"),
+                                 fg=WHITE, bg=BG, anchor="w")
+            label_lbl.pack(side="left", padx=(4, 0))
 
-        # keyboard shortcuts
+            meta_lbl = tk.Label(top_line, text=meta,
+                                font=(FONT, 10, "bold"),
+                                fg=AMBER, bg=BG, anchor="e")
+            meta_lbl.pack(side="right", padx=(0, 12))
+
+            sub_lbl = tk.Label(row_frame, text=sub,
+                               font=(FONT, 8), fg=DIM, bg=BG, anchor="w")
+            sub_lbl.pack(fill="x", padx=(48, 12), pady=(6, 0))
+
+            widgets = {
+                "frame":  row_frame,
+                "top":    top_line,
+                "bullet": bullet_lbl,
+                "label":  label_lbl,
+                "meta":   meta_lbl,
+                "sub":    sub_lbl,
+            }
+            self._arb_hub_row_widgets.append(widgets)
+
+            # Bind hover + click on frame AND all child labels
+            targets = (row_frame, top_line, bullet_lbl, label_lbl, meta_lbl, sub_lbl)
+            for t in targets:
+                t.bind("<Enter>",    lambda _e, _i=i: self._arb_hub_hover_enter(_i))
+                t.bind("<Leave>",    lambda _e, _i=i: self._arb_hub_hover_leave(_i))
+                t.bind("<Button-1>", lambda _e, _i=i: self._arb_hub_pick(_i))
+
+        # ── Keyboard shortcuts (preserved) ──
         self._kb("<Key-c>", lambda: self._arb_hub_pick(0))
         self._kb("<Key-d>", lambda: self._arb_hub_pick(1))
         self._kb("<Key-x>", lambda: self._arb_hub_pick(2))
@@ -3432,14 +3463,16 @@ class App(tk.Tk):
 
         self._arb_hub_repaint()
 
-        # ── Background scan for live telemetry ──────────────────
-        self._arb_hub_scan_async()
-
-        # ── Footer hint ─────────────────────────────────────────
-        tk.Frame(f, bg=AMBER_D, height=1, width=440).pack(pady=(8, 0))
-        tk.Label(f, text="\u25ba  every hour hyperliquid pays funding\u2014"
-                         "8\u00d7 faster than cex",
+        # ── Footer hint ──
+        footer = tk.Frame(outer, bg=BG)
+        footer.pack(fill="x", pady=(24, 0))
+        tk.Frame(footer, bg=AMBER_D, height=1, width=220).pack()
+        tk.Label(footer,
+                 text="click row  \u00b7  C  D  X  direct  \u00b7  ESC back",
                  font=(FONT, 7), fg=DIM2, bg=BG).pack(pady=(6, 0))
+
+        # ── Kick off async scan for live data ──
+        self._arb_hub_scan_async()
 
     def _arb_hub_move(self, delta: int):
         if not getattr(self, "_arb_hub_rows", None):
@@ -3448,16 +3481,38 @@ class App(tk.Tk):
         self._arb_hub_repaint()
 
     def _arb_hub_repaint(self):
-        rows = getattr(self, "_arb_hub_rows", None) or []
-        for i, row in enumerate(rows):
+        """Repaint all 3 rows based on self._arb_hub_idx (keyboard cursor)."""
+        rows = getattr(self, "_arb_hub_row_widgets", None) or []
+        for i, w in enumerate(rows):
             if i == self._arb_hub_idx:
-                row["cursor"].configure(text=" \u25ba")
-                row["name"].configure(fg=AMBER)
-                row["desc"].configure(fg=AMBER_D)
+                w["frame"].configure(bg=BG3)
+                w["top"].configure(bg=BG3)
+                w["bullet"].configure(fg=AMBER_B, bg=BG3)
+                w["label"].configure(fg=AMBER, bg=BG3)
+                w["meta"].configure(fg=AMBER_B, bg=BG3)
+                w["sub"].configure(fg=AMBER_D, bg=BG3)
             else:
-                row["cursor"].configure(text="  ")
-                row["name"].configure(fg=WHITE)
-                row["desc"].configure(fg=DIM)
+                w["frame"].configure(bg=BG)
+                w["top"].configure(bg=BG)
+                w["bullet"].configure(fg=AMBER, bg=BG)
+                w["label"].configure(fg=WHITE, bg=BG)
+                w["meta"].configure(fg=AMBER, bg=BG)
+                w["sub"].configure(fg=DIM, bg=BG)
+
+    def _arb_hub_hover_enter(self, idx: int) -> None:
+        """Mouse hover enters row idx — same visual as keyboard focus."""
+        if not (0 <= idx < len(getattr(self, "_arb_hub_row_widgets", []))):
+            return
+        self._arb_hub_idx = idx
+        self._arb_hub_repaint()
+
+    def _arb_hub_hover_leave(self, idx: int) -> None:
+        """Mouse hover leaves row idx — no-op.
+
+        Cursor stays on last-hovered row (Bloomberg-style). If the user
+        enters another row, that row's <Enter> fires and repaints.
+        """
+        pass
 
     def _arb_hub_pick(self, idx: int):
         if idx < 0 or idx >= len(self._ARB_HUB_ITEMS):
