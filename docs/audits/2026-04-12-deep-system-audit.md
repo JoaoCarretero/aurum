@@ -51,11 +51,10 @@ O potencial é real. A base de código é limpa, modular, bem documentada em por
 - **Impacto:** Toda métrica de regime no backtest está contaminada. Live diverge do backtest porque o HMM live só vê dados passados.
 - **Fix:** Treinar rolling: para cada bar `t`, treinar apenas em `[t-lookback : t]` e prever apenas `t`. Ou desabilitar HMM no backtest até implementar rolling.
 
-### 3.2 — Fórmula Kelly Errada
+### ~~3.2 — Fórmula Kelly Errada~~ → FALSO POSITIVO
 - **Arquivo:** `core/portfolio.py:140`
-- **Problema:** `kelly = max(0, (wr*TARGET_RR - (1-wr)) / TARGET_RR)`. A divisão por `TARGET_RR` está incorreta. Kelly correto é `(wr - (1-wr)/RR)`.
-- **Impacto:** Position size é sistematicamente deflacionado. Com WR=55% e RR=2.0: fórmula atual dá 0.275, correto seria 0.325 — 18% menor que deveria.
-- **Fix:** `kelly = max(0, wr - (1 - wr) / TARGET_RR) * KELLY_FRAC`
+- **Verificação:** `(wr*RR - (1-wr)) / RR` expande para `wr - (1-wr)/RR`. São algebricamente idênticas.
+- **Status:** Fórmula está correta. Audit errou na expansão algébrica. Teste de validação adicionado.
 
 ### 3.3 — Trades OPEN Excluídos das Estatísticas
 - **Arquivo:** `engines/backtest.py:scan_symbol` (line ~299)
