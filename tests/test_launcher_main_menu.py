@@ -280,3 +280,19 @@ def test_app_has_splash_pulse_state():
         assert app._splash_canvas is None
     finally:
         app.destroy()
+
+
+def test_draw_warning_stripe_creates_rect_and_text():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        import tkinter as tk
+        canvas = tk.Canvas(app, width=920, height=640, bg="#0a0a0a")
+        app._draw_warning_stripe(canvas, y=0, height=20, text="TEST WARNING")
+        canvas.update_idletasks()
+        items = canvas.find_all()
+        assert len(items) >= 2, f"expected >=2 items, got {len(items)}"
+        canvas.destroy()
+    finally:
+        app.destroy()

@@ -1160,6 +1160,15 @@ class App(tk.Tk):
         canvas.create_text(cx, cy + r + 10, text="φ = 1.618",
                            font=(FONT, 7), fill=DIM2, tags="cd")
 
+    def _draw_warning_stripe(self, canvas, y: int, height: int, text: str) -> None:
+        """Solid yellow bar with dark text — HL1 hazard stripe."""
+        w = 920
+        canvas.create_rectangle(0, y, w, y + height, fill="#ffd700",
+                                outline="#ffd700", tags="warning")
+        canvas.create_text(w // 2, y + height // 2,
+                           text=text, font=(FONT, 7, "bold"),
+                           fill="#1a1a00", tags="warning")
+
     def _draw_spokes(self, canvas, focused_idx: int) -> None:
         canvas.delete("spokes")
         slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
