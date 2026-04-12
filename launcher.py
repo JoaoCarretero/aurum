@@ -1169,6 +1169,22 @@ class App(tk.Tk):
                            text=text, font=(FONT, 7, "bold"),
                            fill="#1a1a00", tags="warning")
 
+    def _draw_stamp(self, canvas, cx: int, cy: int, w: int, h: int, lines: list) -> None:
+        """Dashed rectangular stamp with N centered text lines — HL1 clearance tags."""
+        x1, y1 = cx - w // 2, cy - h // 2
+        x2, y2 = cx + w // 2, cy + h // 2
+        canvas.create_rectangle(x1, y1, x2, y2,
+                                outline=AMBER, width=1,
+                                dash=(2, 3), tags="stamp")
+        n = len(lines)
+        if n == 0:
+            return
+        line_h = h // (n + 1)
+        for i, line in enumerate(lines):
+            canvas.create_text(cx, y1 + line_h * (i + 1),
+                               text=line, font=(FONT, 8, "bold"),
+                               fill=AMBER, tags="stamp")
+
     def _draw_spokes(self, canvas, focused_idx: int) -> None:
         canvas.delete("spokes")
         slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS

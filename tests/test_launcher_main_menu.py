@@ -296,3 +296,20 @@ def test_draw_warning_stripe_creates_rect_and_text():
         canvas.destroy()
     finally:
         app.destroy()
+
+
+def test_draw_stamp_creates_border_and_text():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        import tkinter as tk
+        canvas = tk.Canvas(app, width=920, height=640, bg="#0a0a0a")
+        app._draw_stamp(canvas, cx=300, cy=100, w=100, h=50,
+                        lines=["VAULT", "03"])
+        canvas.update_idletasks()
+        items = canvas.find_all()
+        assert len(items) >= 3, f"expected >=3 items, got {len(items)}"
+        canvas.destroy()
+    finally:
+        app.destroy()
