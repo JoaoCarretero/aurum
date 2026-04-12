@@ -1472,10 +1472,21 @@ class App(tk.Tk):
                            fill=AMBER_B, tags="prompt")
 
         # ── Bind click / ENTER / space → main menu ──
-        self.main.bind("<Button-1>", lambda e: self._splash_on_click())
+        # Click must bind directly on the canvas — Tk mouse events do NOT
+        # bubble from child to parent, so self.main.bind alone misses clicks
+        # that land inside the canvas (i.e. everywhere on the splash).
+        click_handler = lambda e: self._splash_on_click()
+        canvas.bind("<Button-1>", click_handler)
+        self.main.bind("<Button-1>", click_handler)
         self._kb("<Return>", self._splash_on_click)
         self._kb("<space>",  self._splash_on_click)
         self._bind_global_nav()
+        # Give the root window focus so ENTER/space keybinds fire reliably
+        # even before the user clicks anywhere.
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
         # ── Arm 500ms cursor pulse ──
         self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
