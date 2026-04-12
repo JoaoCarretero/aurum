@@ -367,3 +367,67 @@ def test_arbitrage_hub_renders_three_rows():
             assert "sub" in w
     finally:
         app.destroy()
+
+
+def test_arbitrage_hub_pick_dispatches_to_alchemy(monkeypatch):
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._arbitrage_hub()
+        called = []
+        monkeypatch.setattr(app, "_alchemy_enter",
+                            lambda: called.append("alchemy"))
+        app._arb_hub_pick(0)  # row 0 = CEX-CEX → _alchemy_enter
+        assert called == ["alchemy"]
+    finally:
+        app.destroy()
+
+
+def test_arbitrage_hub_telem_update_populates_sub_lines():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._arbitrage_hub()
+        # Synthetic scan result
+        class FakeTop:
+            symbol = "BTC"
+            apr = 42.3
+            venue = "binance"
+        stats = {"dex_online": 3, "cex_online": 5, "total": 1042}
+        top = FakeTop()
+        arb_dd = [{"symbol": "ETH", "net_apr": 18.7, "short_venue": "dydx", "long_venue": "hyperliquid"}]
+        arb_cd = [{"symbol": "SOL", "net_apr": 95.2, "short_venue": "bybit", "long_venue": "paradex"}]
+        app._arb_hub_telem_update(stats, top, arb_dd, arb_cd)
+        app.update_idletasks()
+
+        rows = app._arb_hub_row_widgets
+        # Row 0 = CEX-CEX — meta stays "JANE ST", sub shows execution + top
+        assert "JANE ST" in rows[0]["meta"].cget("text")
+        # Row 1 = DEX-DEX — meta shows venue count
+        assert "3" in rows[1]["meta"].cget("text")
+        # Row 2 = CEX-DEX — meta shows total venues
+        assert "8" in rows[2]["meta"].cget("text")
+        # Sub-lines updated with best APR
+        assert "18" in rows[1]["sub"].cget("text") or "19" in rows[1]["sub"].cget("text")
+        assert "95" in rows[2]["sub"].cget("text") or "96" in rows[2]["sub"].cget("text")
+    finally:
+        app.destroy()
+
+
+def test_arbitrage_hub_hover_enter_moves_cursor():
+    mod = _load_launcher()
+    app = mod.App()
+    app.withdraw()
+    try:
+        app._arbitrage_hub()
+        app.update_idletasks()
+        assert app._arb_hub_idx == 0
+        app._arb_hub_hover_enter(2)
+        app.update_idletasks()
+        assert app._arb_hub_idx == 2
+        assert app._arb_hub_row_widgets[2]["label"].cget("fg") == mod.AMBER
+        assert app._arb_hub_row_widgets[0]["label"].cget("fg") == mod.WHITE
+    finally:
+        app.destroy()

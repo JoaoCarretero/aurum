@@ -3475,9 +3475,10 @@ class App(tk.Tk):
         self._arb_hub_scan_async()
 
     def _arb_hub_move(self, delta: int):
-        if not getattr(self, "_arb_hub_rows", None):
+        rows = getattr(self, "_arb_hub_row_widgets", None)
+        if not rows:
             return
-        self._arb_hub_idx = (self._arb_hub_idx + delta) % len(self._arb_hub_rows)
+        self._arb_hub_idx = (self._arb_hub_idx + delta) % len(rows)
         self._arb_hub_repaint()
 
     def _arb_hub_repaint(self):
@@ -3536,8 +3537,10 @@ class App(tk.Tk):
         try:
             from core.funding_scanner import FundingScanner
         except Exception as e:
-            self._arb_hub_telem.configure(
-                text=f"  scanner unavailable: {e}  ", fg=RED)
+            rows = getattr(self, "_arb_hub_row_widgets", None)
+            if rows:
+                rows[0]["sub"].configure(
+                    text=f"scanner unavailable: {str(e)[:40]}", fg=RED)
             return
         scanner = getattr(self, "_funding_scanner", None)
         if scanner is None:
@@ -3555,39 +3558,75 @@ class App(tk.Tk):
                 self.after(0, lambda: self._arb_hub_telem_update(
                     stats, top, arb_dd, arb_cd))
             except Exception as e:
-                self.after(0, lambda: self._arb_hub_telem.configure(
-                    text=f"  scan failed: {e}  ", fg=RED))
+                def _fail(err=e):
+                    rs = getattr(self, "_arb_hub_row_widgets", None)
+                    if rs:
+                        try:
+                            rs[0]["sub"].configure(
+                                text=f"scan failed: {str(err)[:40]}", fg=RED)
+                        except Exception:
+                            pass
+                self.after(0, _fail)
 
         threading.Thread(target=_worker, daemon=True).start()
 
     def _arb_hub_telem_update(self, stats, top, arb_dd, arb_cd):
-        if not hasattr(self, "_arb_hub_telem"):
+        """Populate the 3 hub rows with live data from the scanner.
+
+        stats: dict with dex_online, cex_online, total from FundingScanner.stats()
+        top:   FundingOpp or None — single best observation across all venues
+        arb_dd: list of dex-dex spread pairs from scanner.arb_pairs("dex-dex")
+        arb_cd: list of cex-dex spread pairs from scanner.arb_pairs("cex-dex")
+        """
+        rows = getattr(self, "_arb_hub_row_widgets", None)
+        if not rows:
             return
         try:
             dex_on = stats.get("dex_online", 0)
             cex_on = stats.get("cex_online", 0)
-            total  = stats.get("total", 0)
-            parts = [
-                f"\u25cf {dex_on} dex",
-                f"\u25cf {cex_on} cex",
-                f"{total} perps",
-            ]
-            if top is not None:
-                parts.append(
-                    f"top {top.symbol} {top.apr:+.0f}% @ {top.venue}"
-                )
+
+            # Row 0 — CEX ↔ CEX (Jane Street execution)
+            top_s = "\u2014"
+            if top is not None and getattr(top, "apr", None) is not None:
+                try:
+                    top_s = f"top {float(top.apr):+.1f}%"
+                except Exception:
+                    top_s = "\u2014"
+            rows[0]["meta"].configure(text="JANE ST")
+            rows[0]["sub"].configure(
+                text=f"execution  \u00b7  {top_s}  \u00b7  24 pairs")
+
+            # Row 1 — DEX ↔ DEX
+            rows[1]["meta"].configure(text=f"{dex_on} VENUES")
             if arb_dd:
                 a = arb_dd[0]
-                parts.append(
-                    f"dex\u2194dex best {a['symbol']} {a['net_apr']:+.0f}%"
-                )
+                try:
+                    best_s = f"best {float(a.get('net_apr', 0)):+.1f}%"
+                    venue_s = str(a.get("long_venue") or a.get("short_venue") or "\u2014")
+                except Exception:
+                    best_s = "\u2014"
+                    venue_s = "\u2014"
+                rows[1]["sub"].configure(
+                    text=f"observation  \u00b7  {best_s}  \u00b7  {venue_s}")
+            else:
+                rows[1]["sub"].configure(
+                    text="observation  \u00b7  \u2014  \u00b7  \u2014")
+
+            # Row 2 — CEX ↔ DEX
+            rows[2]["meta"].configure(text=f"{dex_on + cex_on} VENUES")
             if arb_cd:
                 a = arb_cd[0]
-                parts.append(
-                    f"cex\u2194dex best {a['symbol']} {a['net_apr']:+.0f}%"
-                )
-            text = "   \u00b7   ".join(parts)
-            self._arb_hub_telem.configure(text="  " + text + "  ", fg=AMBER_D)
+                try:
+                    best_s = f"best {float(a.get('net_apr', 0)):+.1f}%"
+                    venue_s = str(a.get("long_venue") or a.get("short_venue") or "\u2014")
+                except Exception:
+                    best_s = "\u2014"
+                    venue_s = "\u2014"
+                rows[2]["sub"].configure(
+                    text=f"observation  \u00b7  {best_s}  \u00b7  {venue_s}")
+            else:
+                rows[2]["sub"].configure(
+                    text="observation  \u00b7  \u2014  \u00b7  \u2014")
         except Exception:
             pass
 
