@@ -13,6 +13,8 @@ Pipeline:
   5. Entry quando sentiment + técnico concordam
 """
 import sys
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import math
 import logging
 import numpy as np
@@ -131,11 +133,23 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
 
     # Build OI signal if available
     oi_signal_df = None
+    _oi_available = False
     if oi_df is not None and len(oi_df) >= 10:
         try:
             oi_signal_df = oi_delta_signal(oi_df, df, window=THOTH_OI_WINDOW)
+            _oi_available = True
         except Exception:
             pass
+
+    # Renormalize weights when OI is unavailable so composite score
+    # can still reach [-1, 1] range using funding + LS only.
+    if _oi_available:
+        _w_f, _w_oi, _w_ls = THOTH_WEIGHT_FUNDING, THOTH_WEIGHT_OI, THOTH_WEIGHT_LS
+    else:
+        _total = THOTH_WEIGHT_FUNDING + THOTH_WEIGHT_LS
+        _w_f  = THOTH_WEIGHT_FUNDING / _total if _total > 0 else 0.5
+        _w_oi = 0.0
+        _w_ls = THOTH_WEIGHT_LS / _total if _total > 0 else 0.5
 
     # (exit_idx, symbol, size, entry) — size/entry needed for L6 cap
     open_pos: list[tuple[int, str, float, float]] = []
@@ -234,20 +248,20 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         # Composite sentiment
         sent_score = composite_sentiment(
             f_z, oi_sig, ls_sig,
-            THOTH_WEIGHT_FUNDING, THOTH_WEIGHT_OI, THOTH_WEIGHT_LS
+            _w_f, _w_oi, _w_ls
         )
 
         # Direction from sentiment
         direction = None
         struct = _str[idx]
 
-        if sent_score > 0.3:
+        if sent_score > 0.2:
             # bullish sentiment — confirm with struct or macro
             if struct == "UP" or macro_b == "BULL":
                 direction = "BULLISH"
             elif struct != "DOWN":
                 direction = "BULLISH"  # neutral struct is ok
-        elif sent_score < -0.3:
+        elif sent_score < -0.2:
             # bearish sentiment — confirm with struct or macro
             if struct == "DOWN" or macro_b == "BEAR":
                 direction = "BEARISH"
@@ -471,38 +485,57 @@ def export_json(all_trades, eq, mc, ratios):
 # ══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import argparse
+    _ap = argparse.ArgumentParser(description="BRIDGEWATER — macro sentiment")
+    _ap.add_argument("--days", type=int, default=None)
+    _ap.add_argument("--basket", type=str, default=None)
+    _ap.add_argument("--no-menu", action="store_true")
+    _args = _ap.parse_args()
+
     print(f"\n{SEP}")
     print(f"  THOTH  ·  Sentiment Quantificado")
     print(f"  {SEP}")
 
-    _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
-    if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
-        SCAN_DAYS = int(_days_in)
+    if _args.days:
+        SCAN_DAYS = _args.days
+    elif not _args.no_menu:
+        _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
+        if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
+            SCAN_DAYS = int(_days_in)
     N_CANDLES = SCAN_DAYS * 24 * 4
 
-    SYMBOLS = select_symbols(SYMBOLS)
+    if _args.basket:
+        from config.params import BASKETS
+        SYMBOLS = BASKETS.get(_args.basket, SYMBOLS)
+    elif not _args.no_menu:
+        SYMBOLS = select_symbols(SYMBOLS)
 
-    _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
-    if _lev_in:
-        try:
-            _lev_val = float(_lev_in.replace("x", ""))
-            if 0.1 <= _lev_val <= 125:
-                LEVERAGE = _lev_val
-        except ValueError:
-            pass
+    if not _args.no_menu:
+        _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
+        if _lev_in:
+            try:
+                _lev_val = float(_lev_in.replace("x", ""))
+                if 0.1 <= _lev_val <= 125:
+                    LEVERAGE = _lev_val
+            except ValueError:
+                pass
 
     print(f"\n{SEP}")
     print(f"  THOTH  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  {RUN_DIR}/")
     print(SEP)
-    safe_input("  enter para iniciar... ")
+    if not _args.no_menu:
+        safe_input("  enter para iniciar... ")
 
     log.info(f"THOTH v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH OHLCV ──
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
-    all_dfs = fetch_all(SYMBOLS, INTERVAL, N_CANDLES)
+    _fetch_syms = list(SYMBOLS)
+    if MACRO_SYMBOL not in _fetch_syms:
+        _fetch_syms.insert(0, MACRO_SYMBOL)
+    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -552,14 +585,87 @@ if __name__ == "__main__":
     print(f"  MaxDD     {mdd_pct:.1f}%")
     print(f"  Final     ${eq[-1]:,.0f}")
 
+    total_pnl = sum(pnl_list)
     mc = monte_carlo(pnl_list)
     wf = walk_forward(closed)
-
-    export_json(all_trades, eq, mc, ratios)
 
     if all_vetos:
         print(f"\n{SEP}\n  VETOS\n{SEP}")
         for k, v in sorted(all_vetos.items(), key=lambda x: -x[1])[:10]:
             print(f"  {v:>6d}  {k}")
+
+    # ── BY SYMBOL ──
+    by_sym: dict[str, list] = defaultdict(list)
+    for t in all_trades:
+        by_sym[t["symbol"]].append(t)
+
+    # ── WALK-FORWARD BY REGIME ──
+    from analysis.walkforward import walk_forward_by_regime
+    wf_regime = walk_forward_by_regime(all_trades)
+
+    # ── OVERFIT AUDIT ──
+    try:
+        from analysis.overfit_audit import run_audit, print_audit_box
+        audit_results = run_audit(all_trades)
+        print_audit_box(audit_results)
+    except Exception:
+        audit_results = None
+
+    # ── CONDITIONAL ──
+    try:
+        from analysis.stats import conditional_backtest
+        cond = conditional_backtest(all_trades)
+    except Exception:
+        cond = {}
+
+    # ══════════════════════════════════════════════════════════════
+    #  PERSISTÊNCIA — alinhado com CITADEL
+    # ══════════════════════════════════════════════════════════════
+    from core.run_manager import snapshot_config, save_run_artifacts, append_to_index
+
+    roi = ratios["ret"]
+    _config = snapshot_config()
+    _summary = {
+        "n_trades": len(closed),
+        "win_rate": round(wr, 2),
+        "pnl": round(total_pnl, 2),
+        "total_pnl": round(total_pnl, 2),
+        "roi_pct": round(roi, 2),
+        "roi": round(roi, 2),
+        "sharpe": ratios.get("sharpe"),
+        "sortino": ratios.get("sortino"),
+        "calmar": ratios.get("calmar"),
+        "max_dd_pct": round(mdd_pct, 2),
+        "max_dd": round(mdd_pct, 2),
+        "final_equity": round(eq[-1], 2),
+        "n_symbols": len(SYMBOLS),
+        "n_candles": N_CANDLES,
+        "account_size": ACCOUNT_SIZE,
+        "leverage": LEVERAGE,
+        "interval": INTERVAL,
+        "period_days": SCAN_DAYS,
+        "engine": "thoth",
+    }
+
+    save_run_artifacts(
+        RUN_DIR, _config, all_trades, eq, _summary,
+        overfit_results=audit_results,
+    )
+    append_to_index(RUN_DIR, _summary, _config, audit_results)
+
+    # ── HTML Report ──
+    try:
+        from analysis.report_html import generate_report
+        generate_report(
+            all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
+            by_sym, all_vetos, str(RUN_DIR), config_dict=_config,
+            audit_results=audit_results,
+        )
+        print(f"  HTML → {RUN_DIR / 'report.html'}")
+    except Exception as _e:
+        log.warning(f"HTML report failed: {_e}")
+
+    # ── JSON export (legacy + DB) ──
+    export_json(all_trades, eq, mc, ratios)
 
     print(f"\n{SEP}\n  output  ·  {RUN_DIR}/\n{SEP}\n")

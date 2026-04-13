@@ -357,12 +357,12 @@ NEWTON_ZSCORE_EXIT     = 0.0       # z-score cruza 0 para sair
 NEWTON_ZSCORE_STOP     = 3.5       # |z-score| > N para stop
 NEWTON_COINT_PVALUE    = 0.05      # p-value máximo para cointegração válida
 NEWTON_HALFLIFE_MIN    = 5         # half-life mínimo (candles)
-NEWTON_HALFLIFE_MAX    = 50        # half-life máximo (candles)
+NEWTON_HALFLIFE_MAX    = 500       # half-life máximo (candles) — ~5d em 15m
 NEWTON_SPREAD_WINDOW   = 90        # rolling window para z-score do spread
 NEWTON_RECALC_EVERY    = 120       # recalcular cointegração a cada N candles
 NEWTON_MAX_HOLD        = 96        # max candles por trade (2× o normal)
 NEWTON_SIZE_MULT       = 0.50      # position size relativo ao normal (pairs = menos risco)
-NEWTON_MIN_PAIRS       = 3         # mínimo de pares cointegrados para operar
+NEWTON_MIN_PAIRS       = 2         # mínimo de pares cointegrados para operar
 
 # ── MERCURIO — Order Flow / Microstructure ────────────────────
 MERCURIO_CVD_WINDOW     = 20       # janela para CVD divergence
@@ -384,7 +384,7 @@ THOTH_LS_CONTRARIAN_LOW = 0.5      # ratio < N = crowd short demais
 THOTH_WEIGHT_FUNDING    = 0.40     # peso funding no composite score
 THOTH_WEIGHT_OI         = 0.30     # peso OI no composite score
 THOTH_WEIGHT_LS         = 0.30     # peso LS ratio no composite score
-THOTH_MIN_SCORE         = 0.55     # score mínimo para entrada
+THOTH_MIN_SCORE         = 0.30     # score mínimo para entrada
 THOTH_SIZE_MULT         = 0.50     # position size multiplier
 
 # ── DARWIN — Adaptive Strategy Evolution ─────────────────────

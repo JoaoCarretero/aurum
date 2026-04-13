@@ -56,7 +56,7 @@ def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200) -> p
     try:
         import requests
         _rate_limit()
-        url = "https://futures.binance.com/futures/data/openInterestHist"
+        url = "https://fapi.binance.com/futures/data/openInterestHist"
         resp = requests.get(url, params={
             "symbol": symbol, "period": period, "limit": limit
         }, timeout=10)

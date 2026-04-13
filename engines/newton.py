@@ -12,6 +12,8 @@ Pipeline:
   4. Entry: |z| > 2.0, Exit: z cruza 0, Stop: |z| > 3.5
 """
 import sys
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import math
 import logging
 import numpy as np
@@ -253,10 +255,7 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
         # macro
         macro_b = "CHOP"
         if macro_bias_series is not None:
-            ts = pd.Timestamp(times[idx])
-            loc = macro_bias_series.index.get_indexer([ts], method="ffill")[0]
-            if loc >= 0:
-                macro_b = macro_bias_series.iloc[loc]
+            macro_b = macro_bias_series.iloc[min(idx, len(macro_bias_series) - 1)]
 
         peak_equity = max(peak_equity, account)
         current_dd = (peak_equity - account) / peak_equity if peak_equity > 0 else 0.0
@@ -695,6 +694,13 @@ def export_json(all_trades, eq, mc, ratios, pairs):
 # ══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import argparse
+    _ap = argparse.ArgumentParser(description="DE SHAW — pairs cointegration")
+    _ap.add_argument("--days", type=int, default=None)
+    _ap.add_argument("--basket", type=str, default=None)
+    _ap.add_argument("--no-menu", action="store_true")
+    _args = _ap.parse_args()
+
     print(f"\n{SEP}")
     print(f"  NEWTON  ·  Statistical Mean Reversion")
     print(f"  {SEP}")
@@ -703,35 +709,47 @@ if __name__ == "__main__":
         print("  statsmodels nao instalado — pip install statsmodels")
         sys.exit(1)
 
-    _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
-    if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
-        SCAN_DAYS = int(_days_in)
+    if _args.days:
+        SCAN_DAYS = _args.days
+    elif not _args.no_menu:
+        _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
+        if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
+            SCAN_DAYS = int(_days_in)
     _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2, "1h": 1, "2h": 0.5, "4h": 0.25}
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_mult.get(INTERVAL, 4))
 
-    SYMBOLS = select_symbols(SYMBOLS)
+    if _args.basket:
+        from config.params import BASKETS
+        SYMBOLS = BASKETS.get(_args.basket, SYMBOLS)
+    elif not _args.no_menu:
+        SYMBOLS = select_symbols(SYMBOLS)
 
-    _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
-    if _lev_in:
-        try:
-            _lev_val = float(_lev_in.replace("x", ""))
-            if 0.1 <= _lev_val <= 125:
-                LEVERAGE = _lev_val
-        except ValueError:
-            pass
+    if not _args.no_menu:
+        _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
+        if _lev_in:
+            try:
+                _lev_val = float(_lev_in.replace("x", ""))
+                if 0.1 <= _lev_val <= 125:
+                    LEVERAGE = _lev_val
+            except ValueError:
+                pass
 
     print(f"\n{SEP}")
     print(f"  NEWTON  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x  ·  z-entry {NEWTON_ZSCORE_ENTRY}  ·  z-stop {NEWTON_ZSCORE_STOP}")
     print(f"  {RUN_DIR}/")
     print(SEP)
-    safe_input("  enter para iniciar... ")
+    if not _args.no_menu:
+        safe_input("  enter para iniciar... ")
 
     log.info(f"NEWTON v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH DATA ──
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
-    all_dfs = fetch_all(SYMBOLS, INTERVAL, N_CANDLES)
+    _fetch_syms = list(SYMBOLS)
+    if MACRO_SYMBOL not in _fetch_syms:
+        _fetch_syms.insert(0, MACRO_SYMBOL)
+    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -822,13 +840,84 @@ if __name__ == "__main__":
     # ── VEREDITO ──
     print_veredito(all_trades, eq, mdd_pct, mc, wf, ratios)
 
-    # ── EXPORT ──
-    export_json(all_trades, eq, mc, ratios, pairs)
-
     # ── VETOS ──
     if all_vetos:
         print(f"\n{SEP}\n  VETOS\n{SEP}")
         for k, v in sorted(all_vetos.items(), key=lambda x: -x[1]):
             print(f"  {v:>6d}  {k}")
+
+    # ── BY SYMBOL ──
+    by_sym = defaultdict(list)
+    for t in all_trades:
+        by_sym[t["symbol"]].append(t)
+
+    # ── WALK-FORWARD BY REGIME ──
+    wf_regime = walk_forward_by_regime(all_trades)
+
+    # ── OVERFIT AUDIT ──
+    try:
+        from analysis.overfit_audit import run_audit, print_audit_box
+        audit_results = run_audit(all_trades)
+        print_audit_box(audit_results)
+    except Exception:
+        audit_results = None
+
+    # ── CONDITIONAL ──
+    try:
+        from analysis.stats import conditional_backtest
+        cond = conditional_backtest(all_trades)
+    except Exception:
+        cond = {}
+
+    # ══════════════════════════════════════════════════════════════
+    #  PERSISTÊNCIA — alinhado com CITADEL
+    # ══════════════════════════════════════════════════════════════
+    from core.run_manager import snapshot_config, save_run_artifacts, append_to_index
+
+    roi = ratios["ret"]
+    _config = snapshot_config()
+    _summary = {
+        "n_trades": len(closed),
+        "win_rate": round(wr, 2),
+        "pnl": round(total_pnl, 2),
+        "total_pnl": round(total_pnl, 2),
+        "roi_pct": round(roi, 2),
+        "roi": round(roi, 2),
+        "sharpe": ratios.get("sharpe"),
+        "sortino": ratios.get("sortino"),
+        "calmar": ratios.get("calmar"),
+        "max_dd_pct": round(mdd_pct, 2),
+        "max_dd": round(mdd_pct, 2),
+        "final_equity": round(eq[-1], 2),
+        "n_symbols": len(SYMBOLS),
+        "n_candles": N_CANDLES,
+        "account_size": ACCOUNT_SIZE,
+        "leverage": LEVERAGE,
+        "interval": INTERVAL,
+        "period_days": SCAN_DAYS,
+        "engine": "newton",
+        "n_pairs": len(pairs),
+    }
+
+    save_run_artifacts(
+        RUN_DIR, _config, all_trades, eq, _summary,
+        overfit_results=audit_results,
+    )
+    append_to_index(RUN_DIR, _summary, _config, audit_results)
+
+    # ── HTML Report ──
+    try:
+        from analysis.report_html import generate_report
+        generate_report(
+            all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
+            by_sym, all_vetos, str(RUN_DIR), config_dict=_config,
+            audit_results=audit_results,
+        )
+        print(f"  HTML → {RUN_DIR / 'report.html'}")
+    except Exception as _e:
+        log.warning(f"HTML report failed: {_e}")
+
+    # ── JSON export (legacy + DB) ──
+    export_json(all_trades, eq, mc, ratios, pairs)
 
     print(f"\n{SEP}\n  output  ·  {RUN_DIR}/\n{SEP}\n")
