@@ -59,6 +59,7 @@ from core.audit_trail import AuditTrail, OrderEvent
 from core.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates,
 )
+from core.fixture_capture import write_capture
 from core.fs import atomic_write
 from bot.telegram import TelegramNotifier
 
@@ -184,6 +185,17 @@ TG_DASH_EVERY       = 10           # envia dashboard ao Telegram a cada N ticks 
 
 # Corr matrix throttle
 CORR_REFRESH_CANDLES = 4           # recalcula corr a cada N candles BTC
+
+# Phase C authentic-input capture
+PHASE_C_CAPTURE_SURFACES = {
+    s.strip() for s in os.environ.get("AURUM_PHASE_C_CAPTURE_SURFACES", "").split(",")
+    if s.strip()
+}
+try:
+    PHASE_C_CAPTURE_MAX_PER_SURFACE = int(os.environ.get("AURUM_PHASE_C_CAPTURE_MAX_PER_SURFACE", "0"))
+except ValueError:
+    PHASE_C_CAPTURE_MAX_PER_SURFACE = 0
+PHASE_C_CAPTURE_ENABLED = bool(PHASE_C_CAPTURE_SURFACES) and PHASE_C_CAPTURE_MAX_PER_SURFACE > 0
 
 # Dirs
 _LIVE_DATE = datetime.now().strftime("%Y-%m-%d")
@@ -899,6 +911,7 @@ class LiveEngine:
         log.info(f"LiveEngine init — {_mode_lbl} mode — {LIVE_RUN_ID}")
         self.telegram = TelegramNotifier(self)
         self._tg_tick = 0
+        self._phase_c_capture_counts: dict[str, int] = defaultdict(int)
 
     # ── SEED ──────────────────────────────────────────────────
     async def seed(self):
@@ -1782,6 +1795,7 @@ class LiveEngine:
             self.positions, self.htf_dfs.get(symbol),
             account=self.account, peak_equity=self.peak_equity,
         )
+        self._capture_check_signal_case(symbol, result_tuple)
         if result_tuple:
             size, score, direction, entry_price, stop, target, rr, macro_b, vol_r, corr_mult, struct, is_chop = result_tuple
             sig = self.signal_e.build_signal_dict(
@@ -1798,6 +1812,116 @@ class LiveEngine:
         # 5. Heartbeat
         if time.time() - self._last_hb > HEARTBEAT_EVERY:
             self._heartbeat()
+
+    def _capture_enabled(self, surface: str) -> bool:
+        if not PHASE_C_CAPTURE_ENABLED:
+            return False
+        if surface not in PHASE_C_CAPTURE_SURFACES:
+            return False
+        return self._phase_c_capture_counts.get(surface, 0) < PHASE_C_CAPTURE_MAX_PER_SURFACE
+
+    @staticmethod
+    def _series_snapshot(series) -> list[dict]:
+        if series is None:
+            return []
+        out = []
+        try:
+            items = series.items()
+        except Exception:
+            return out
+        for idx, value in items:
+            out.append({"index": str(idx), "value": value})
+        return out
+
+    @staticmethod
+    def _df_snapshot(df: Optional[pd.DataFrame]) -> list[dict]:
+        if df is None:
+            return []
+        try:
+            return df.to_dict("records")
+        except Exception:
+            return []
+
+    @staticmethod
+    def _position_snapshot(positions: list) -> list[dict]:
+        out = []
+        for p in positions:
+            out.append({
+                "symbol": getattr(p, "symbol", ""),
+                "direction": getattr(p, "direction", ""),
+                "entry": getattr(p, "entry", 0.0),
+                "stop": getattr(p, "stop", 0.0),
+                "target": getattr(p, "target", 0.0),
+                "size": getattr(p, "size", 0.0),
+                "score": getattr(p, "score", 0.0),
+                "macro_bias": getattr(p, "macro_bias", ""),
+                "signal_ts": getattr(p, "signal_ts", ""),
+                "order_id": getattr(p, "order_id", None),
+            })
+        return out
+
+    @staticmethod
+    def _htf_snapshot(htf_bundle) -> dict:
+        if not isinstance(htf_bundle, dict):
+            return {}
+        out = {}
+        for tf, df in htf_bundle.items():
+            out[str(tf)] = LiveEngine._df_snapshot(df)
+        return out
+
+    @staticmethod
+    def _check_signal_result_snapshot(result_tuple):
+        if not result_tuple:
+            return None
+        keys = [
+            "size", "score", "direction", "entry_price", "stop", "target",
+            "rr", "macro_b", "vol_r", "corr_mult", "struct", "is_chop",
+        ]
+        return dict(zip(keys, result_tuple))
+
+    def _capture_check_signal_case(self, symbol: str, result_tuple) -> None:
+        surface = "live_check_signal"
+        if not self._capture_enabled(surface):
+            return
+        try:
+            df = self.buffer.to_df(symbol)
+            if df is None:
+                return
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            payload = {
+                "symbol": symbol,
+                "run_id": LIVE_RUN_ID,
+                "capture_ts": datetime.now(timezone.utc).isoformat(),
+                "inputs": {
+                    "candle_window": self._df_snapshot(df),
+                    "macro_series": self._series_snapshot(self.macro_series),
+                    "corr": dict(self.corr or {}),
+                    "open_positions": self._position_snapshot(self.positions),
+                    "htf_dfs": self._htf_snapshot(self.htf_dfs.get(symbol)),
+                    "account": self.account,
+                    "peak_equity": self.peak_equity,
+                },
+                "observed": {
+                    "result_tuple": self._check_signal_result_snapshot(result_tuple),
+                    "last_veto": self.signal_e.last_veto.get(symbol),
+                },
+            }
+            fixture_name = f"{LIVE_RUN_ID}_{symbol}_{ts}"
+            write_capture(
+                surface=surface,
+                fixture_name=fixture_name,
+                payload=payload,
+                source={
+                    "engine": "live",
+                    "mode": self.orders._mode(),
+                    "caller": "LiveEngine.on_candle_close",
+                },
+                notes="Authentic SignalEngine.check_signal caller snapshot",
+            )
+            self._phase_c_capture_counts[surface] += 1
+            log.info(f"Phase C capture saved: {surface} {fixture_name}")
+        except Exception as e:
+            log.debug(f"Phase C capture failed ({surface}): {e}")
 
     # ── DASHBOARD ─────────────────────────────────────────────
     def _symbol_state(self, symbol: str) -> dict:

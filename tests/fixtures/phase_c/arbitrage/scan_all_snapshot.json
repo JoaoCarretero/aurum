@@ -1,0 +1,69 @@
+{
+  "active": [
+    "binance",
+    "bybit",
+    "gate"
+  ],
+  "opportunities": [
+    {
+      "sym": "ETHUSDT",
+      "type": "PERP_PERP",
+      "v_a": "gate",
+      "v_b": "bybit",
+      "fr_a": 0.0012,
+      "fr_b": -0.001,
+      "spread": 0.0022,
+      "px_spread": 0.00396,
+      "apr": 48.18,
+      "lev_apr": 96.36,
+      "omega": 558.6,
+      "edge": "SHORT@gate LONG@bybit",
+      "vol": 7000000
+    },
+    {
+      "sym": "ETHUSDT",
+      "type": "SPOT_PERP",
+      "v_a": "gate",
+      "v_b": "binance",
+      "fr_a": 0.0012,
+      "fr_b": 0.0008,
+      "spread": 0.0012,
+      "px_spread": 0.0,
+      "apr": 122.275,
+      "lev_apr": 244.55,
+      "omega": 292.08,
+      "edge": "SHORT perp@gate + BUY spot@binance",
+      "vol": 7000000
+    },
+    {
+      "sym": "ETHUSDT",
+      "type": "PRICE_ARB",
+      "v_a": "binance",
+      "v_b": "gate",
+      "fr_a": 0.0008,
+      "fr_b": 0.0012,
+      "spread": 0.0,
+      "px_spread": 0.01,
+      "apr": 292.0,
+      "lev_apr": 584.0,
+      "omega": 264.5751,
+      "edge": "BUY@binance $100.0000 → SELL@gate $101.0000",
+      "vol": 7000000
+    },
+    {
+      "sym": "ETHUSDT",
+      "type": "INTERNAL",
+      "v_a": "binance",
+      "v_b": "binance",
+      "fr_a": 0.0008,
+      "fr_b": 0.0,
+      "spread": 0.0008,
+      "px_spread": 0.0,
+      "apr": 80.3,
+      "lev_apr": 160.6,
+      "omega": 193.9,
+      "edge": "SHORT perp + BUY spot @ binance",
+      "vol": 10000000
+    }
+  ]
+}

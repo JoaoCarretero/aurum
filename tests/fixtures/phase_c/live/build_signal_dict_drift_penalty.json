@@ -1,0 +1,16 @@
+{
+  "symbol": "BTCUSDT",
+  "direction": "BULLISH",
+  "entry": 43210.12345678,
+  "stop": 42890.0,
+  "target": 43850.5,
+  "size": 987.6542,
+  "score": 0.6123,
+  "rr": 2.1,
+  "macro": "BULL",
+  "vol_regime": "NORMAL",
+  "corr_mult": 0.85,
+  "struct": "UP",
+  "is_chop": false,
+  "signal_ts": "2026-04-13T12:00:00+00:00"
+}

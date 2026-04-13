@@ -22,6 +22,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
+from core.failure_policy import BEST_EFFORT, DEGRADE_AND_LOG
+from core.health import runtime_health
+from core.transport import RequestSpec, TransportClient
+
 if TYPE_CHECKING:
     from engines.live import LiveEngine
 
@@ -44,6 +48,7 @@ def _load_telegram_config() -> tuple[str, str]:
         chat  = str(tg.get("chat_id", ""))
         return token, chat
     except Exception:
+        runtime_health.record("telegram.config_load_failure")
         return "", ""
 
 
@@ -71,15 +76,27 @@ class TelegramNotifier:
 
     async def _post(self, method: str, data: dict) -> dict:
         """POST assíncrono via thread pool (evita instalar aiohttp)."""
-        import requests as req
         loop = asyncio.get_event_loop()
         try:
+            client = TransportClient()
             resp = await loop.run_in_executor(
-                None, lambda: req.post(self._url(method), json=data, timeout=10)
+                None,
+                lambda: client.request(
+                    RequestSpec(
+                        method="POST",
+                        url=self._url(method),
+                        json=data,
+                        timeout=10,
+                    )
+                ),
             )
             return resp.json()
         except Exception as e:
-            log.debug(f"Telegram API error ({method}): {e}")
+            runtime_health.record("telegram.api_post_failure")
+            log.log(
+                logging.DEBUG if BEST_EFFORT.log_level == "debug" else logging.WARNING,
+                f"Telegram API error ({method}): {e}",
+            )
             return {}
 
     # ── SEND ──────────────────────────────────────────────────
@@ -330,7 +347,11 @@ class TelegramNotifier:
                         await self.send(f"Comando desconhecido: {cmd}\n\nUsa /help para ver comandos.")
 
             except Exception as e:
-                log.debug(f"Telegram poll error: {e}")
+                runtime_health.record("telegram.poll_failure")
+                log.log(
+                    logging.WARNING if DEGRADE_AND_LOG.log_level == "warning" else logging.DEBUG,
+                    f"Telegram poll error: {e}",
+                )
                 await asyncio.sleep(5)
 
             await asyncio.sleep(_POLL_INTERVAL)

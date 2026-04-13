@@ -24,6 +24,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from core.persistence import atomic_write_json
+
 # ---------------------------------------------------------------------------
 # Project root — one level up from core/
 # ---------------------------------------------------------------------------
@@ -155,34 +157,27 @@ def save_run_artifacts(run_dir, config, trades, equity, summary,
                        overfit_results=None, diagnostics=None):
     """Save all JSON artifacts to the run directory."""
     run_dir = Path(run_dir)
-    _json_opts = dict(ensure_ascii=False, indent=2, default=str)
 
     # config.json
-    with open(run_dir / "config.json", "w", encoding="utf-8") as f:
-        json.dump(config, f, **_json_opts)
+    atomic_write_json(run_dir / "config.json", config)
 
     # trades.json — filter non-serializable fields
     clean_trades = _clean_trades(trades)
-    with open(run_dir / "trades.json", "w", encoding="utf-8") as f:
-        json.dump(clean_trades, f, **_json_opts)
+    atomic_write_json(run_dir / "trades.json", clean_trades)
 
     # equity.json
-    with open(run_dir / "equity.json", "w", encoding="utf-8") as f:
-        json.dump(equity, f, **_json_opts)
+    atomic_write_json(run_dir / "equity.json", equity)
 
     # summary.json
-    with open(run_dir / "summary.json", "w", encoding="utf-8") as f:
-        json.dump(summary, f, **_json_opts)
+    atomic_write_json(run_dir / "summary.json", summary)
 
     # overfit.json (optional)
     if overfit_results is not None:
-        with open(run_dir / "overfit.json", "w", encoding="utf-8") as f:
-            json.dump(overfit_results, f, **_json_opts)
+        atomic_write_json(run_dir / "overfit.json", overfit_results)
 
     # diagnostics (optional, save alongside)
     if diagnostics is not None:
-        with open(run_dir / "diagnostics.json", "w", encoding="utf-8") as f:
-            json.dump(diagnostics, f, **_json_opts)
+        atomic_write_json(run_dir / "diagnostics.json", diagnostics)
 
 
 def _clean_trades(trades) -> list:
@@ -259,11 +254,8 @@ def append_to_index(run_dir, summary, config, overfit_results=None):
 
     # Write back — simple file-lock pattern (atomic-ish on Windows)
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = INDEX_PATH.with_suffix(".tmp")
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(index, f, ensure_ascii=False, indent=2, default=str)
-        tmp.replace(INDEX_PATH)
+        atomic_write_json(INDEX_PATH, index)
     except OSError:
         # Fallback: write directly
         with open(INDEX_PATH, "w", encoding="utf-8") as f:

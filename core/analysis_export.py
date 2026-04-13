@@ -32,6 +32,11 @@ from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
 
+from config.runtime import snapshot as config_snapshot
+from core.health import runtime_health
+from core.persistence import atomic_write_text
+from core.versioned_state import with_schema_version
+
 log = logging.getLogger("analysis_export")
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,6 +48,7 @@ TRADES_PER_RUN_MAX = 500          # latest run only
 TRADES_PER_OLDER_RUN_MAX = 20     # older runs carry just a sample
 LOG_TAIL_LINES = 100
 AURUM_VERSION = "4.0"
+ANALYSIS_EXPORT_SCHEMA_VERSION = "analysis_export.v1"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -75,6 +81,7 @@ def _engine_from_run_id(run_id: str) -> str:
 # ══════════════════════════════════════════════════════════════
 def _collect_meta(root: Path) -> dict:
     return {
+        "schema_version": ANALYSIS_EXPORT_SCHEMA_VERSION,
         "exported_at": datetime.now().isoformat(timespec="seconds"),
         "aurum_version": AURUM_VERSION,
         "python_version": platform.python_version(),
@@ -88,26 +95,27 @@ def _collect_config() -> dict:
     is wrapped so a missing symbol does not sink the export."""
     out: dict = {}
     try:
-        from config import params as _p
-    except Exception:
+        snap = config_snapshot().as_dict()
+        out["account_size"] = snap["risk"]["account_size"]
+        out["leverage"] = snap["risk"]["leverage"]
+        out["base_risk"] = snap["risk"]["base_risk"]
+        out["max_risk"] = snap["risk"]["max_risk"]
+        out["kelly_frac"] = snap["risk"]["kelly_frac"]
+        out["slippage"] = snap["market_costs"]["slippage"]
+        out["spread"] = snap["market_costs"]["spread"]
+        out["commission"] = snap["market_costs"]["commission"]
+        out["funding_per_8h"] = snap["market_costs"]["funding_per_8h"]
+        out["entry_tf"] = snap["entry"]["entry_tf"]
+        out["max_open_positions"] = snap["risk"]["max_open_positions"]
+        out["score_threshold"] = snap["entry"]["score_threshold"]
+        out["corr_threshold"] = snap["risk"]["corr_threshold"]
+        out["stop_atr_m"] = snap["entry"]["stop_atr_m"]
+        out["target_rr"] = snap["entry"]["target_rr"]
+        out["symbols"] = snap["symbols"]
         return out
-
-    keys = [
-        "ACCOUNT_SIZE", "LEVERAGE", "BASE_RISK", "MAX_RISK", "KELLY_FRAC",
-        "SLIPPAGE", "SPREAD", "COMMISSION", "FUNDING_PER_8H", "ENTRY_TF",
-        "MAX_OPEN_POSITIONS", "SCORE_THRESHOLD", "CORR_THRESHOLD",
-        "STOP_ATR_M", "TARGET_RR",
-    ]
-    for k in keys:
-        try:
-            out[k.lower()] = getattr(_p, k)
-        except Exception:
-            out[k.lower()] = None
-    try:
-        out["symbols"] = list(getattr(_p, "SYMBOLS", []))
     except Exception:
-        out["symbols"] = []
-    return out
+        runtime_health.record("analysis_export.config_snapshot_failure")
+        return out
 
 
 # ══════════════════════════════════════════════════════════════
@@ -424,12 +432,14 @@ def _build_analysis(latest_run: dict | None) -> dict:
 # ══════════════════════════════════════════════════════════════
 def _collect_system_state(root: Path) -> dict:
     state: dict = {
+        "schema_version": "system_state.v1",
         "smoke_test": None,
         "kill_switch": None,
         "connections": None,
         "last_session_log": None,
         "pending_phases": [],
         "risk_gates_config": _safe_read_json(root / "config" / "risk_gates.json"),
+        "runtime_health": runtime_health.diagnostic_payload(),
     }
     # Last session log file by name.
     sessions = root / "docs" / "sessions"
@@ -518,13 +528,14 @@ def export_analysis(output_path: str | Path | None = None,
         "system_state": _collect_system_state(root_path),
         "comparison": _build_comparison(runs),
     }
+    payload = with_schema_version(payload, ANALYSIS_EXPORT_SCHEMA_VERSION)
 
     if output_path is not None:
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
+        atomic_write_text(
+            out_path,
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
         )
 
     return payload

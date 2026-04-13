@@ -1,0 +1,74 @@
+{
+  "schema_version": "phase_c_capture_manifest.v1",
+  "generated_at": "2026-04-13T12:10:00+00:00",
+  "generated_by": "phase_c_batch_2",
+  "entries": [
+    {
+      "surface": "backtest_artifacts",
+      "status": "locked",
+      "test_file": "tests/test_phase_c_backtest_characterization.py",
+      "fixtures": [
+        "tests/fixtures/phase_c/backtest/citadel_2026-04-10_1122_snapshot.json"
+      ],
+      "notes": "Locks recorded backtest summary, trades projection, equity length, and veto counts from the report artifact."
+    },
+    {
+      "surface": "live_build_signal_dict",
+      "status": "locked",
+      "test_file": "tests/test_phase_c_live_characterization.py",
+      "fixtures": [
+        "tests/fixtures/phase_c/live/build_signal_dict_base.json",
+        "tests/fixtures/phase_c/live/build_signal_dict_drift_penalty.json"
+      ],
+      "notes": "Locks normal output, drift penalty path, and symbol-rank veto behavior."
+    },
+    {
+      "surface": "live_startup_reconcile",
+      "status": "locked_partial",
+      "test_file": "tests/test_phase_c_live_characterization.py",
+      "fixtures": [
+        "tests/fixtures/phase_c/live/broker_positions_empty.json",
+        "tests/fixtures/phase_c/live/broker_positions_btc_only.json"
+      ],
+      "notes": "Locks startup mismatch semantics against recorded empty local state; broker side is minimal fixture input because authentic broker snapshots are not stored in-repo."
+    },
+    {
+      "surface": "arbitrage_omega_score_scan_all",
+      "status": "locked",
+      "test_file": "tests/test_phase_c_arbitrage_characterization.py",
+      "fixtures": [
+        "tests/fixtures/phase_c/arbitrage/omega_score_snapshot.json",
+        "tests/fixtures/phase_c/arbitrage/scan_all_snapshot.json"
+      ],
+      "notes": "Locks ranking and opportunity construction for the scanner and standalone omega scoring cases."
+    },
+    {
+      "surface": "backtest_scan_symbol",
+      "status": "capture_required",
+      "test_file": null,
+      "fixtures": [],
+      "notes": "Needs authentic per-symbol candle payloads with time/open/high/low/close/vol/tbb and associated macro/corr/HTF inputs."
+    },
+    {
+      "surface": "live_check_signal",
+      "status": "capturable",
+      "test_file": null,
+      "fixtures": [],
+      "notes": "Support-only caller instrumentation now exists in LiveEngine.on_candle_close; authentic fixtures will be written on the next opt-in live run."
+    },
+    {
+      "surface": "live_reconciliation_loop",
+      "status": "capture_required",
+      "test_file": null,
+      "fixtures": [],
+      "notes": "Needs repeated authentic broker snapshots, expected local position state, and drift escalation streak context."
+    },
+    {
+      "surface": "arbitrage_open_close",
+      "status": "capture_required",
+      "test_file": null,
+      "fixtures": [],
+      "notes": "Needs authentic opportunity payloads, venue prices, execution fills, audit trail rows, and resulting position/account transitions."
+    }
+  ]
+}

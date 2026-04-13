@@ -1,0 +1,62 @@
+{
+  "run_id": "citadel_2026-04-10_1122",
+  "engine": "citadel",
+  "summary": {
+    "n_trades": 173,
+    "win_rate": 62.43,
+    "pnl": 1832.23,
+    "total_pnl": 1832.23,
+    "roi_pct": 18.32,
+    "roi": 18.32,
+    "sharpe": 2.899,
+    "sortino": 4.378,
+    "calmar": 4.09,
+    "max_dd_pct": 4.48,
+    "max_dd": 4.48,
+    "final_equity": 11832.23,
+    "n_symbols": 11,
+    "n_candles": 8640,
+    "account_size": 10000.0,
+    "leverage": 1.0,
+    "interval": "15m",
+    "period_days": 90
+  },
+  "trade_count": 173,
+  "wins": 108,
+  "losses": 65,
+  "equity_points": 174,
+  "first_trade": {
+    "symbol": "SUIUSDT",
+    "timestamp": "2026-01-13 18:30:00",
+    "direction": "BULLISH",
+    "entry": 1.82544747,
+    "stop": 1.8029,
+    "target": 1.8706,
+    "exit_p": 1.854126,
+    "result": "WIN",
+    "pnl": 59.6,
+    "size": 2238.634,
+    "score": 0.5741
+  },
+  "last_trade": {
+    "symbol": "SUIUSDT",
+    "timestamp": "2026-04-06 14:15:00",
+    "direction": "BULLISH",
+    "entry": 0.90347096,
+    "stop": 0.8942,
+    "target": 0.922,
+    "exit_p": 0.8942,
+    "result": "LOSS",
+    "pnl": -56.64,
+    "size": 5521.4374,
+    "score": 0.5562
+  },
+  "veto_counts": {
+    "score_baixo": 15701,
+    "macro_bull_veto_short": 8749,
+    "macro_bear_veto_long": 8609,
+    "vol_extreme": 3167,
+    "mercado_lento": 2719,
+    "streak_cooldown": 110
+  }
+}

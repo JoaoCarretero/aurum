@@ -16,6 +16,9 @@ import tkinter as tk
 from tkinter import messagebox
 
 from code_viewer import CodeViewer
+from core.health import runtime_health
+from core.persistence import atomic_write_json
+from core.transport import RequestSpec, TransportClient
 
 # ═══════════════════════════════════════════════════════════
 # BLOOMBERG PALETTE — amber on black, minimal color
@@ -77,16 +80,21 @@ def _vps_cmd(cmd: str, timeout: int = 10) -> str | None:
 _TD = {}
 _TL = threading.Lock()
 def _fetch():
-    import requests
+    client = TransportClient()
     while True:
         try:
-            r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=8)
+            r = client.request(RequestSpec(
+                method="GET",
+                url="https://fapi.binance.com/fapi/v1/ticker/24hr",
+                timeout=8,
+            ))
             if r.status_code == 200:
                 d = {t["symbol"]: t for t in r.json()}
                 with _TL:
                     for s in ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"]:
                         if s in d: _TD[s] = {"p": float(d[s]["lastPrice"]), "c": float(d[s]["priceChangePercent"])}
-        except: pass
+        except Exception:
+            runtime_health.record("launcher.ticker_fetch_failure")
         time.sleep(12)
 
 def _ticker_str():
@@ -5554,12 +5562,17 @@ class App(tk.Tk):
         if p.exists():
             try:
                 with open(p, "r", encoding="utf-8") as f: return json.load(f)
-            except: pass
+            except Exception:
+                runtime_health.record("launcher.config_load_failure")
         return {}
 
     def _save_json(self, name, data):
         p = ROOT / "config" / name; p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w", encoding="utf-8") as f: json.dump(data, f, indent=4)
+        try:
+            atomic_write_json(p, data, indent=4)
+        except OSError:
+            runtime_health.record("launcher.config_save_failure")
+            with open(p, "w", encoding="utf-8") as f: json.dump(data, f, indent=4)
 
     def _cfg_keys(self):
         def load():
@@ -7663,13 +7676,7 @@ class App(tk.Tk):
                         before = len(idx)
                         idx = [r for r in idx if r.get("run_id") != run_id]
                         if len(idx) != before:
-                            # Atomic write: temp file + os.replace so a
-                            # crash mid-write can't corrupt the index.
-                            tmp = idx_path.with_suffix(".json.tmp")
-                            tmp.write_text(
-                                json.dumps(idx, indent=2, ensure_ascii=False) + "\n",
-                                encoding="utf-8")
-                            os.replace(tmp, idx_path)
+                            atomic_write_json(idx_path, idx, indent=2)
                             index_removed = True
                 except (json.JSONDecodeError, OSError) as e:
                     messagebox.showerror(
