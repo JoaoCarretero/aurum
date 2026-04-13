@@ -30,6 +30,10 @@ def _parse_mode():
     p=argparse.ArgumentParser(add_help=False)
     p.add_argument("--mode",choices=["paper","demo","testnet","live"],default=None)
     p.add_argument("--run-id",default=None,help="override auto-generated run id")
+    p.add_argument("--simulate-historical", action="store_true",
+                   help="write a one-shot scanner report from the current public funding snapshot")
+    p.add_argument("--sim-capital", type=float, default=1000.0,
+                   help="capital basis for estimated monthly income in --simulate-historical mode")
     args,_=p.parse_known_args()
     return args
 
@@ -1347,6 +1351,76 @@ def print_dashboard(opps,active,regime=None,latency=None,hedge_mon=None):
         print(f"  └{'─'*59}┘")
     print(f"\n  {'═'*W}\n")
 
+
+async def simulate_historical_report(capital: float = 1000.0) -> Path:
+    """Generate a finite scanner report from the current public funding snapshot."""
+    venues = build_venues()
+    opps, active = await scan_all(venues)
+    profitable = [o for o in opps if float(o.get("apr", 0.0)) > 0]
+    avg_apr = statistics.mean(float(o.get("apr", 0.0)) for o in opps) if opps else 0.0
+    est_monthly = capital * max(avg_apr, 0.0) / 100.0 / 12.0
+
+    venue_aprs: dict[str, list[float]] = {}
+    for opp in opps:
+        apr = float(opp.get("apr", 0.0))
+        for venue in (opp.get("v_a"), opp.get("v_b")):
+            if venue:
+                venue_aprs.setdefault(str(venue), []).append(apr)
+
+    venue_rank = sorted(
+        (
+            {
+                "venue": venue,
+                "avg_apr": round(statistics.mean(values), 2),
+                "n": len(values),
+            }
+            for venue, values in venue_aprs.items()
+        ),
+        key=lambda row: row["avg_apr"],
+    )
+    best_venue = venue_rank[-1] if venue_rank else None
+    worst_venue = venue_rank[0] if venue_rank else None
+
+    top_opps = [
+        {
+            "sym": o.get("sym"),
+            "type": o.get("type"),
+            "v_a": o.get("v_a"),
+            "v_b": o.get("v_b"),
+            "apr": round(float(o.get("apr", 0.0)), 2),
+            "spread": round(float(o.get("spread", 0.0)), 6),
+            "omega": round(float(o.get("omega", 0.0)), 2),
+            "px_spread": round(float(o.get("px_spread", 0.0)), 6),
+        }
+        for o in sorted(opps, key=lambda x: float(x.get("apr", 0.0)), reverse=True)[:20]
+    ]
+
+    payload = {
+        "engine": "JANE_STREET",
+        "version": ARB_ENGINE_VERSION,
+        "mode": "simulate_historical",
+        "snapshot_proxy": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "run_id": RUN_ID,
+        "capital_basis": capital,
+        "total_opportunities": len(opps),
+        "profitable_count": len(profitable),
+        "avg_apr": round(avg_apr, 2),
+        "estimated_monthly_income": round(est_monthly, 2),
+        "active_venues": [v.name for v in active],
+        "best_venue": best_venue,
+        "worst_venue": worst_venue,
+        "top_opportunities": top_opps,
+        "notes": (
+            "Snapshot-based scanner report generated from current public funding "
+            "data. This is not a trade backtest and does not simulate fills."
+        ),
+    }
+    out = DIR / "reports" / "simulate_historical.json"
+    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\n  simulate-historical → {out}\n")
+    return out
+
 class Position:
     def __init__(s,sym,type_,v_a,v_b,qty,size_usd,spread,edge,entry_px_a=0,entry_px_b=0):
         s.symbol=sym;s.type=type_;s.v_a=v_a;s.v_b=v_b
@@ -2293,6 +2367,10 @@ def _menu():
     return{"1":"scan","2":"paper","3":"demo","4":"live","0":"exit"}.get(safe_input("\n  > ").strip(),"exit")
 
 if __name__=="__main__":
+    if _ARGS.simulate_historical:
+        asyncio.run(simulate_historical_report(_ARGS.sim_capital))
+        sys.exit(0)
+
     _run_mode=ARB_MODE
     if _ARGS.mode is None:
         _run_mode=_menu()
