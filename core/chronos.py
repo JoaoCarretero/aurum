@@ -343,6 +343,7 @@ def enrich_with_regime(df: pd.DataFrame,
 
     min_warmup = max(n_states * 20, 80)
     if len(df) < min_warmup:
+        log.warning(f"HMM skipped: {len(df)} bars < {min_warmup} min warmup")
         return df
 
     try:
@@ -404,13 +405,14 @@ def enrich_with_regime(df: pd.DataFrame,
 
         prob_mat = df[["hmm_prob_bear", "hmm_prob_chop", "hmm_prob_bull"]].values
         label_arr = np.array(["BEAR", "CHOP", "BULL"])
-        # For NaN rows, argmax returns 0 — override with NaN after
-        with np.errstate(invalid="ignore"):
-            winner = np.nanargmax(prob_mat, axis=1)
         nan_mask = np.isnan(prob_mat).all(axis=1)
+        # Fill all-NaN rows with zeros so nanargmax doesn't raise ValueError;
+        # the nan_mask overrides these rows to NaN/None afterwards.
+        safe_mat = np.where(nan_mask[:, None], 0.0, prob_mat)
+        winner = np.nanargmax(safe_mat, axis=1)
+        df["hmm_confidence"] = np.where(nan_mask, np.nan, np.nanmax(safe_mat, axis=1))
         df["hmm_regime"] = np.where(nan_mask, np.nan, winner.astype(float))
         df["hmm_regime_label"] = np.where(nan_mask, None, label_arr[winner])
-        df["hmm_confidence"] = np.nanmax(prob_mat, axis=1)
 
     except Exception as e:
         log.warning(f"enrich_with_regime failed: {e}")

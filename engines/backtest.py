@@ -604,7 +604,8 @@ if __name__ == "__main__":
     if len(SYMBOLS) > 5: _sym_list += f", ... (+{len(SYMBOLS)-5})"
 
     print(f"\n  ╔{'═'*_BW}╗")
-    print(_bl("CITADEL v3.6 · AZOTH Engine · AURUM Finance"))
+    _abl_label = f" [ABLATION: -{ABLATION_DISABLE}]" if ABLATION_DISABLE else ""
+    print(_bl(f"CITADEL v3.6 · AZOTH Engine · AURUM Finance{_abl_label}"))
     print(_bh())
     print(_bl(f"UNIVERSO       {len(SYMBOLS)} ativos (basket: {_basket_name})"))
     print(_bl(f"PERÍODO        {SCAN_DAYS} dias · {N_CANDLES:,} candles/ativo"))
@@ -1006,6 +1007,18 @@ if __name__ == "__main__":
 
     # ── Append ao index global ──
     append_to_index(RUN_DIR, _summary, _config, audit_results)
+
+    # ── HTML Report ──
+    try:
+        from analysis.report_html import generate_report
+        generate_report(
+            all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
+            by_sym, all_vetos, str(RUN_DIR), config_dict=_config,
+            price_data=_price_data, audit_results=audit_results,
+        )
+        print(f"  HTML → {RUN_DIR / 'report.html'}")
+    except Exception as _e:
+        log.warning(f"HTML report generation failed: {_e}")
 
     # ── Auto-persist to DB (backwards compat) ──
     try:
