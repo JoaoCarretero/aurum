@@ -100,6 +100,32 @@ def htf_agrees(htf_ctx: dict, symbol: str, idx: int,
     return True
 
 
+def htf_contrarian(htf_ctx: dict, symbol: str, idx: int,
+                   direction: str) -> bool:
+    """Contrarian HTF filter: ALLOW trades that go AGAINST the HTF trend.
+
+    Logic: if HTF is stretched in one direction, a contrarian reversal
+    trade in the opposite direction is MORE likely to succeed.
+
+    Rules:
+    - BULLISH trade: HTF must be DOWN or NEUTRAL (buying into weakness)
+    - BEARISH trade: HTF must be UP or NEUTRAL (selling into strength)
+    - If no HTF data: pass
+    """
+    df = htf_ctx.get(symbol)
+    if df is None or idx >= len(df):
+        return True
+
+    htf_struct = str(df["htf_struct"].iloc[idx])
+
+    # Contrarian: allow trades AGAINST the HTF trend
+    if direction == "BULLISH" and htf_struct == "UP":
+        return False  # don't buy into strength — that's trend-following
+    if direction == "BEARISH" and htf_struct == "DOWN":
+        return False  # don't sell into weakness — that's trend-following
+    return True
+
+
 def htf_macro(htf_ctx: dict, symbol: str, idx: int) -> str:
     """Get the HTF macro regime for a symbol at a given index."""
     df = htf_ctx.get(symbol)
