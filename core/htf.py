@@ -28,8 +28,9 @@ HTF_INTERVAL = "4h"
 def prepare_htf(df_htf: pd.DataFrame, htf_interval: str = "4h") -> pd.DataFrame:
     # Indicators/signals use module-level copies from `from config.params import *`,
     # so we must patch the consumer modules directly for HTF-specific params.
-    import core.indicators as _ind
-    import core.signals as _sig
+    import sys
+    _ind = sys.modules["core.indicators"]
+    _sig = sys.modules["core.signals"]
     _saved = (_ind.SLOPE_N, _ind.PIVOT_N, _sig.CHOP_S21, _sig.CHOP_S200, _sig.MIN_STOP_PCT)
     _p = _tf_params(htf_interval)
     _ind.SLOPE_N = _p["slope_n"]; _ind.PIVOT_N = _p["pivot_n"]
