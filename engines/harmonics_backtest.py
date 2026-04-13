@@ -19,9 +19,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from analysis.stats import calc_ratios, equity_stats
-from config.params import ACCOUNT_SIZE, BASKETS, INTERVAL, LEVERAGE, SCAN_DAYS, SYMBOLS
+from config.params import ACCOUNT_SIZE, BASKETS, INTERVAL, LEVERAGE, MACRO_SYMBOL, SCAN_DAYS, SYMBOLS
 from core import build_corr_matrix, detect_macro, fetch_all, validate
 from core.harmonics import scan_hermes
+from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
 
 
 RUN_ID = datetime.now().strftime("%Y-%m-%d_%H%M")
@@ -40,13 +41,35 @@ _fh.setFormatter(_fmt)
 log.addHandler(_sh)
 log.addHandler(_fh)
 
-SEP = "─" * 80
+SEP = "-" * 80
 
 
-def export_json(all_trades: list[dict], ratios: dict, equity: list[float], vetos: dict[str, int], basket: str, days: int) -> Path:
+def closed_trade_stats(all_trades: list[dict]) -> tuple[list[dict], int, int, int, float]:
     closed = [t for t in all_trades if t.get("result") in ("WIN", "LOSS")]
-    win_rate = (sum(1 for t in closed if t["result"] == "WIN") / len(closed) * 100) if closed else 0.0
+    win_count = sum(1 for t in closed if t.get("result") == "WIN")
+    loss_count = sum(1 for t in closed if t.get("result") == "LOSS")
+    flat_count = len(closed) - win_count - loss_count
+    win_rate = (win_count / len(closed) * 100.0) if closed else 0.0
+    return closed, win_count, loss_count, flat_count, win_rate
+
+
+def export_json(
+    all_trades: list[dict],
+    ratios: dict,
+    equity: list[float],
+    vetos: dict[str, int],
+    basket: str,
+    days: int,
+    summary: dict,
+    config: dict,
+) -> Path:
+    closed, win_count, loss_count, flat_count, win_rate = closed_trade_stats(all_trades)
     max_dd_pct = equity_stats([t["pnl"] for t in closed], ACCOUNT_SIZE)[2] if closed else 0.0
+    positive_pnl_count = sum(1 for t in closed if float(t.get("pnl", 0.0) or 0.0) > 0.0)
+    non_positive_win_count = sum(
+        1 for t in closed
+        if t.get("result") == "WIN" and float(t.get("pnl", 0.0) or 0.0) <= 0.0
+    )
     payload = {
         "engine": "RENAISSANCE",
         "version": "1.0",
@@ -59,7 +82,12 @@ def export_json(all_trades: list[dict], ratios: dict, equity: list[float], vetos
         "account_size": ACCOUNT_SIZE,
         "leverage": LEVERAGE,
         "n_trades": len(closed),
+        "win_count": win_count,
+        "loss_count": loss_count,
+        "flat_count": flat_count,
         "win_rate": round(win_rate, 2),
+        "positive_pnl_count": positive_pnl_count,
+        "non_positive_win_count": non_positive_win_count,
         "roi": round(ratios.get("ret", 0.0), 2),
         "sharpe": ratios.get("sharpe"),
         "sortino": ratios.get("sortino"),
@@ -76,6 +104,8 @@ def export_json(all_trades: list[dict], ratios: dict, equity: list[float], vetos
     }
     out = RUN_DIR / "reports" / f"renaissance_{INTERVAL}_v1.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    save_run_artifacts(RUN_DIR, config, all_trades, equity, summary)
+    append_to_index(RUN_DIR, summary, config)
     return out
 
 
@@ -89,12 +119,15 @@ def main() -> int:
     n_candles = args.days * 24 * 4
 
     print(f"\n{SEP}")
-    print(f"  RENAISSANCE  ·  {args.days}d  ·  {len(symbols)} ativos  ·  {INTERVAL}")
-    print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
+    print(f"  RENAISSANCE  |  {args.days}d  |  {len(symbols)} ativos  |  {INTERVAL}")
+    print(f"  ${ACCOUNT_SIZE:,.0f}  |  {LEVERAGE}x")
     print(f"  {RUN_DIR}/")
     print(SEP)
 
-    all_dfs = fetch_all(symbols, interval=INTERVAL, n_candles=n_candles, futures=True)
+    _fetch_syms = list(symbols)
+    if MACRO_SYMBOL not in _fetch_syms:
+        _fetch_syms.insert(0, MACRO_SYMBOL)
+    all_dfs = fetch_all(_fetch_syms, interval=INTERVAL, n_candles=n_candles, futures=True)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -115,7 +148,7 @@ def main() -> int:
             all_vetos[key] += value
 
     all_trades.sort(key=lambda t: t.get("timestamp"))
-    closed = [t for t in all_trades if t.get("result") in ("WIN", "LOSS")]
+    closed, win_count, loss_count, flat_count, win_rate = closed_trade_stats(all_trades)
     pnl_list = [float(t.get("pnl", 0.0)) for t in closed]
     equity, _, max_dd_pct, _ = equity_stats(pnl_list, ACCOUNT_SIZE)
     ratios = calc_ratios(pnl_list, ACCOUNT_SIZE, n_days=args.days) if pnl_list else {
@@ -125,22 +158,59 @@ def main() -> int:
         "ret": 0.0,
     }
 
-    win_rate = (sum(1 for t in closed if t["result"] == "WIN") / len(closed) * 100) if closed else 0.0
     final_equity = equity[-1] if equity else ACCOUNT_SIZE
     pnl = final_equity - ACCOUNT_SIZE
-    out = export_json(all_trades, ratios, equity, dict(all_vetos), args.basket, args.days)
+    non_positive_win_count = sum(
+        1 for t in closed
+        if t.get("result") == "WIN" and float(t.get("pnl", 0.0) or 0.0) <= 0.0
+    )
+    config = snapshot_config()
+    config.update({
+        "ENGINE": "RENAISSANCE",
+        "RUN_ID": RUN_ID,
+        "RUN_DIR": str(RUN_DIR),
+        "BASKET_EFFECTIVE": args.basket,
+        "SELECTED_SYMBOLS": symbols,
+        "SCAN_DAYS_EFFECTIVE": args.days,
+        "N_CANDLES_EFFECTIVE": n_candles,
+    })
+    summary = {
+        "engine": "RENAISSANCE",
+        "run_id": RUN_ID,
+        "interval": INTERVAL,
+        "period_days": args.days,
+        "basket": args.basket,
+        "n_symbols": len(symbols),
+        "n_candles": n_candles,
+        "account_size": ACCOUNT_SIZE,
+        "leverage": LEVERAGE,
+        "n_trades": len(closed),
+        "win_rate": round(win_rate, 2),
+        "pnl": round(pnl, 2),
+        "total_pnl": round(pnl, 2),
+        "roi_pct": round(ratios.get("ret", 0.0), 2),
+        "roi": round(ratios.get("ret", 0.0), 2),
+        "sharpe": ratios.get("sharpe"),
+        "sortino": ratios.get("sortino"),
+        "max_dd_pct": round(max_dd_pct, 2),
+        "max_dd": round(max_dd_pct, 2),
+        "final_equity": round(final_equity, 2),
+        "non_positive_win_count": non_positive_win_count,
+    }
+    out = export_json(all_trades, ratios, equity, dict(all_vetos), args.basket, args.days, summary, config)
 
     print(f"\n{SEP}\n  METRICAS\n{SEP}")
     print(f"  Trades    {len(closed)}")
+    print(f"  W/L/F     {win_count}/{loss_count}/{flat_count}")
     print(f"  WR        {win_rate:.1f}%")
     print(f"  ROI       {ratios.get('ret', 0.0):+.2f}%")
-    print(f"  Sharpe    {ratios.get('sharpe') if ratios.get('sharpe') is not None else '—'}")
-    print(f"  Sortino   {ratios.get('sortino') if ratios.get('sortino') is not None else '—'}")
+    print(f"  Sharpe    {ratios.get('sharpe') if ratios.get('sharpe') is not None else '-'}")
+    print(f"  Sortino   {ratios.get('sortino') if ratios.get('sortino') is not None else '-'}")
     print(f"  MaxDD     {max_dd_pct:.1f}%")
     print(f"  Final     ${final_equity:,.2f}")
     print(f"  PnL       ${pnl:+,.2f}")
     print(f"  json      {out}")
-    print(f"\n{SEP}\n  output  ·  {RUN_DIR}/\n{SEP}\n")
+    print(f"\n{SEP}\n  output  |  {RUN_DIR}/\n{SEP}\n")
     return 0
 
 

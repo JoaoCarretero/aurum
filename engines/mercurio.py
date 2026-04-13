@@ -12,6 +12,7 @@ Pipeline:
   4. Liquidation Proxy (spikes de volume + ATR)
   5. Entry: divergence + imbalance + structure alignment
 """
+import argparse
 import sys
 import math
 import logging
@@ -41,6 +42,7 @@ from core import (
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
+from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
 
 log = logging.getLogger("JUMP")  # JUMP (formerly MERCURIO) — Order flow engine
 log.setLevel(logging.INFO)
@@ -404,7 +406,7 @@ def print_veredito(all_trades, eq, mdd_pct, mc, wf, ratios):
     log.info(f"Veredito: {passou}/7  ROI={ratios['ret']:.2f}%  WR={wr:.1f}%  MaxDD={mdd_pct:.1f}%")
 
 
-def export_json(all_trades, eq, mc, ratios):
+def export_json(all_trades, eq, mc, ratios, summary, config):
     import json
     closed = [t for t in all_trades if t["result"] in ("WIN", "LOSS")]
     wr = sum(1 for t in closed if t["result"] == "WIN") / max(len(closed), 1) * 100
@@ -420,6 +422,7 @@ def export_json(all_trades, eq, mc, ratios):
         "leverage": LEVERAGE,
         "n_trades": len(closed),
         "win_rate": round(wr, 2),
+        "max_dd_pct": summary.get("max_dd_pct"),
         "roi": round(ratios["ret"], 2),
         "sharpe": ratios["sharpe"],
         "sortino": ratios.get("sortino"),
@@ -434,6 +437,9 @@ def export_json(all_trades, eq, mc, ratios):
     print(f"  json  ·  {out}")
     log.info(f"JSON → {out}")
 
+    save_run_artifacts(RUN_DIR, config, all_trades, eq, summary)
+    append_to_index(RUN_DIR, summary, config)
+
     try:
         from core.db import register_run
         register_run(
@@ -446,6 +452,7 @@ def export_json(all_trades, eq, mc, ratios):
         )
     except Exception as e:
         log.warning(f"DB register failed: {e}")
+    return out
 
 
 # ══════════════════════════════════════════════════════════════
@@ -453,38 +460,52 @@ def export_json(all_trades, eq, mc, ratios):
 # ══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--days", type=int, default=None)
+    parser.add_argument("--no-menu", action="store_true")
+    args, _ = parser.parse_known_args()
+
     print(f"\n{SEP}")
     print(f"  MERCURIO  ·  Order Flow Analysis")
     print(f"  {SEP}")
 
-    _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
-    if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
-        SCAN_DAYS = int(_days_in)
+    if args.days is not None and 7 <= int(args.days) <= 1500:
+        SCAN_DAYS = int(args.days)
+    elif not args.no_menu:
+        _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
+        if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
+            SCAN_DAYS = int(_days_in)
     N_CANDLES = SCAN_DAYS * 24 * 4
 
-    SYMBOLS = select_symbols(SYMBOLS)
+    if not args.no_menu:
+        SYMBOLS = select_symbols(SYMBOLS)
 
-    _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
-    if _lev_in:
-        try:
-            _lev_val = float(_lev_in.replace("x", ""))
-            if 0.1 <= _lev_val <= 125:
-                LEVERAGE = _lev_val
-        except ValueError:
-            pass
+    if not args.no_menu:
+        _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
+        if _lev_in:
+            try:
+                _lev_val = float(_lev_in.replace("x", ""))
+                if 0.1 <= _lev_val <= 125:
+                    LEVERAGE = _lev_val
+            except ValueError:
+                pass
 
     print(f"\n{SEP}")
     print(f"  MERCURIO  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  {RUN_DIR}/")
     print(SEP)
-    safe_input("  enter para iniciar... ")
+    if not args.no_menu:
+        safe_input("  enter para iniciar... ")
 
     log.info(f"MERCURIO v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH DATA ──
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
-    all_dfs = fetch_all(SYMBOLS, INTERVAL, N_CANDLES)
+    _fetch_syms = list(SYMBOLS)
+    if MACRO_SYMBOL not in _fetch_syms:
+        _fetch_syms.insert(0, MACRO_SYMBOL)
+    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -548,7 +569,38 @@ if __name__ == "__main__":
                   f"fora {w['test']['wr']:.1f}%  D {delta:+.1f}%  {ok}")
 
     print_veredito(all_trades, eq, mdd_pct, mc, wf, ratios)
-    export_json(all_trades, eq, mc, ratios)
+    config = snapshot_config()
+    config.update({
+        "ENGINE": "MERCURIO",
+        "RUN_ID": RUN_ID,
+        "RUN_DIR": str(RUN_DIR),
+        "CLI_NO_MENU": bool(args.no_menu),
+        "SELECTED_SYMBOLS": list(SYMBOLS),
+        "SCAN_DAYS_EFFECTIVE": SCAN_DAYS,
+        "N_CANDLES_EFFECTIVE": N_CANDLES,
+    })
+    summary = {
+        "engine": "MERCURIO",
+        "run_id": RUN_ID,
+        "interval": INTERVAL,
+        "period_days": SCAN_DAYS,
+        "n_symbols": len(SYMBOLS),
+        "n_candles": N_CANDLES,
+        "account_size": ACCOUNT_SIZE,
+        "leverage": LEVERAGE,
+        "n_trades": len(closed),
+        "win_rate": round(wr, 2),
+        "pnl": round(sum(pnl_list), 2),
+        "total_pnl": round(sum(pnl_list), 2),
+        "roi_pct": round(ratios["ret"], 2),
+        "roi": round(ratios["ret"], 2),
+        "sharpe": ratios.get("sharpe"),
+        "sortino": ratios.get("sortino"),
+        "max_dd_pct": round(mdd_pct, 2),
+        "max_dd": round(mdd_pct, 2),
+        "final_equity": round(eq[-1], 2) if eq else ACCOUNT_SIZE,
+    }
+    export_json(all_trades, eq, mc, ratios, summary, config)
 
     if all_vetos:
         print(f"\n{SEP}\n  VETOS\n{SEP}")
