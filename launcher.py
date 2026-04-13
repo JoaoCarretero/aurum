@@ -188,6 +188,7 @@ SUB_MENUS = {
         ("DE SHAW",      "engines/newton.py",         "Statistical arb — pairs cointegration + mean reversion"),
         ("MILLENNIUM",   "engines/multistrategy.py",  "Multi-strategy pod — ensemble orchestrator"),
         ("TWO SIGMA",    "engines/prometeu.py",       "ML meta-ensemble — LightGBM walk-forward"),
+        ("RENAISSANCE",  "engines/harmonics_backtest.py", "Harmonic patterns — Bayesian + entropy + Hurst"),
     ],
     "live": [
         ("PAPER",        "engines/live.py",           "Execução simulada — sem ordens reais"),
@@ -215,6 +216,13 @@ BANNER = """\
 # ═══════════════════════════════════════════════════════════
 # STRATEGY BRIEFINGS — philosophy + logic before execution
 # ═══════════════════════════════════════════════════════════
+BANNER_PREMIUM = """\
+A U R U M
+F I N A N C E
+"""
+
+SYSTEM_TAGLINE = "INSTITUTIONAL QUANT TERMINAL"
+
 BRIEFINGS = {
     "CITADEL": {
         "philosophy": "Mercados são fractais — auto-similares em todas as escalas, como a geometria de Mandelbrot. O mesmo padrão que se forma no 15m ecoa no 4h e no diário. CITADEL lê esta invariância de escala, detectando estrutura de tendência em múltiplos timeframes e entrando apenas quando a confluência matemática converge. É a segunda lei da termodinâmica aplicada: momentum tende a persistir até que uma força contrária (regime change) dissipe a energia.",
@@ -288,6 +296,19 @@ BRIEFINGS = {
         "edge": "Adapta alocação proativamente, não reativamente.",
         "risk": "Overfitting de ML. Requer dados de treino diversos para generalizar.",
     },
+}
+
+BRIEFINGS["RENAISSANCE"] = {
+    "philosophy": "Os mesmos padrões geométricos que governam a Natureza — proporções de Fibonacci, simetrias de Gartley, borboletas de Pesavento — repetem-se nos mercados. Não por misticismo, mas porque refletem a psicologia fractal de multidões: medo e ganância criam pontos de retração previsíveis. RENAISSANCE detecta estes padrões harmónicos com confirmação Bayesiana e mede a qualidade estatística via entropia de Shannon e expoente de Hurst. Padrões com alta simetria e baixa entropia têm maior probabilidade de completar.",
+    "logic": [
+        "Detectar swing pivots via threshold de ATR (zigzag adaptativo)",
+        "Classificar padrões harmónicos: Gartley, Butterfly, Bat, Crab, Cypher",
+        "Validar proporções de Fibonacci nos legs (XA, AB, BC, CD)",
+        "Pontuar qualidade: simetria geométrica + entropia + Hurst exponent",
+        "Entry na zona D (completion zone) com stop além do ponto X",
+    ],
+    "edge": "Reversões de alta precisão em pontos de completação harmónica. WR 85%+.",
+    "risk": "Poucos sinais por período. Depende de volatilidade para gerar padrões.",
 }
 
 BRIEFINGS["PAPER"] = BRIEFINGS["DEMO"] = BRIEFINGS["TESTNET"] = BRIEFINGS["LIVE"] = {
@@ -1099,47 +1120,6 @@ class App(tk.Tk):
         w, h = self._TILE_W, self._TILE_H
         return (cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2)
 
-    def _draw_isometric_tile(self, canvas, idx: int, focused: bool) -> None:
-        label, key_num, color, _children = MAIN_GROUPS[idx]
-        x1, y1, x2, y2 = self._tile_rect(idx)
-        d = self._TILE_DEPTH
-        face_color = color if focused else self._dim_color(color, TILE_DIM_FACTOR)
-        text_color = AMBER_B if focused else WHITE
-        tag = f"tile{idx}"
-
-        canvas.delete(tag)
-
-        canvas.create_polygon(
-            x1, y1, x2, y1, x2 + d, y1 - d, x1 + d, y1 - d,
-            outline=face_color, fill=BG, width=1, tags=tag,
-        )
-        canvas.create_polygon(
-            x2, y1, x2 + d, y1 - d, x2 + d, y2 - d, x2, y2,
-            outline=face_color, fill=BG, width=1, tags=tag,
-        )
-        canvas.create_rectangle(x1, y1, x2, y2,
-                                outline=face_color, width=2 if focused else 1, tags=tag)
-
-        canvas.create_rectangle(
-            x1, y1, x2, y1 + 18,
-            outline=face_color, fill=face_color if focused else BG3, width=0, tags=tag,
-        )
-        canvas.create_text(
-            x1 + 10, y1 + 9, anchor="w",
-            text=f" {label}  [{key_num}]",
-            font=(FONT, 9, "bold"),
-            fill=BG if focused else face_color, tags=tag,
-        )
-
-        live_key = label.lower()
-        live = self._menu_live.get(live_key, {}) if hasattr(self, "_menu_live") else {}
-        for i, line_key in enumerate(("line1", "line2", "line3", "line4")):
-            text = live.get(line_key, "—")
-            canvas.create_text(
-                x1 + 14, y1 + 36 + i * 18, anchor="w",
-                text=text, font=(FONT, 9), fill=text_color, tags=tag,
-            )
-
     def _draw_cd_center(self, canvas, r=None) -> None:
         center = getattr(self, "_active_cd_center", None) or (self._CD_CX, self._CD_CY)
         cx, cy = center
@@ -1206,6 +1186,177 @@ class App(tk.Tk):
                                text=text, font=(FONT, 9),
                                fill=color, tags="status")
 
+    def _draw_panel(self, canvas, x1: int, y1: int, x2: int, y2: int,
+                    title: str = "", accent: str = AMBER, tag: str = "panel") -> None:
+        canvas.create_rectangle(x1, y1, x2, y2, outline=BORDER, fill=PANEL, width=1, tags=tag)
+        canvas.create_line(x1, y1, x2, y1, fill=accent, width=2, tags=tag)
+        canvas.create_line(x1, y2, x2, y2, fill=DIM2, width=1, tags=tag)
+        if title:
+            canvas.create_rectangle(x1 + 14, y1 - 10, x1 + 168, y1 + 12,
+                                    outline=accent, fill=BG, width=1, tags=tag)
+            canvas.create_text(x1 + 22, y1 + 1, anchor="w",
+                               text=title, font=(FONT, 8, "bold"),
+                               fill=accent, tags=tag)
+
+    def _draw_kv_rows(self, canvas, x: int, y: int, rows: list[tuple[str, str, str]],
+                      value_x: int = 290, line_h: int = 18, tag: str = "kv") -> None:
+        for i, (label, value, color) in enumerate(rows):
+            yy = y + i * line_h
+            canvas.create_text(x, yy, anchor="w", text=label, font=(FONT, 8),
+                               fill=DIM, tags=tag)
+            canvas.create_text(value_x, yy, anchor="w", text=value, font=(FONT, 8, "bold"),
+                               fill=color, tags=tag)
+
+    def _ui_page_shell(self, title: str, subtitle: str = "",
+                       pad_x: int = 28, pad_y: int = 18,
+                       content_width: int | None = None) -> tuple[tk.Frame, tk.Frame]:
+        outer = tk.Frame(self.main, bg=BG)
+        outer.pack(fill="both", expand=True, padx=pad_x, pady=pad_y)
+
+        head = tk.Frame(outer, bg=BG)
+        head.pack(fill="x", pady=(0, 12))
+        tk.Label(head, text=title, font=(FONT, 14, "bold"),
+                 fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+        if subtitle:
+            tk.Label(head, text=subtitle, font=(FONT, 8),
+                     fg=DIM, bg=BG, anchor="w").pack(anchor="w", pady=(3, 0))
+        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
+
+        body = tk.Frame(outer, bg=BG)
+        if content_width is not None:
+            body.pack(fill="both", expand=True)
+            canvas = tk.Canvas(body, bg=BG, highlightthickness=0)
+            sb = tk.Scrollbar(body, orient="vertical", command=canvas.yview)
+            inner = tk.Frame(canvas, bg=BG, width=content_width)
+            inner.bind("<Configure>", lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")))
+            canvas.create_window((0, 0), window=inner, anchor="nw",
+                                 width=content_width)
+            canvas.configure(yscrollcommand=sb.set)
+            canvas.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y")
+            def _on_wheel(event):
+                canvas.yview_scroll(-1 * (event.delta // 120), "units")
+            def _enter_canvas(event):
+                canvas.bind_all("<MouseWheel>", _on_wheel)
+            def _leave_canvas(event):
+                try: canvas.unbind_all("<MouseWheel>")
+                except Exception: pass
+            canvas.bind("<Enter>", _enter_canvas)
+            canvas.bind("<Leave>", _leave_canvas)
+            canvas.bind("<Destroy>", _leave_canvas)
+            return outer, inner
+
+        body.pack(fill="both", expand=True)
+        return outer, body
+
+    def _ui_panel_frame(self, parent, title: str = "", subtitle: str = "") -> tk.Frame:
+        panel = tk.Frame(parent, bg=BG)
+        panel.pack(fill="x", pady=(0, 12))
+
+        if title or subtitle:
+            hdr = tk.Frame(panel, bg=BG)
+            hdr.pack(fill="x", pady=(2, 8))
+            if title:
+                tk.Label(hdr, text=title, font=(FONT, 8, "bold"),
+                         fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
+            if subtitle:
+                tk.Label(hdr, text=subtitle, font=(FONT, 8),
+                         fg=DIM, bg=BG, anchor="w").pack(anchor="w", pady=(2, 0))
+            tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
+
+        return panel
+
+    def _ui_section(self, parent, title: str, note: str | None = None,
+                    badge: str | None = None) -> tk.Frame:
+        wrap = tk.Frame(parent, bg=BG)
+        wrap.pack(fill="x", pady=(0, 10))
+
+        head = tk.Frame(wrap, bg=BG)
+        head.pack(fill="x", pady=(0, 4))
+        tk.Label(head, text=title, font=(FONT, 8, "bold"),
+                 fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
+        if badge:
+            tk.Label(head, text=f" {badge} ", font=(FONT, 7, "bold"),
+                     fg=BG, bg=AMBER_D, padx=3).pack(side="left", padx=8)
+        if note:
+            tk.Label(head, text=note, font=(FONT, 7),
+                     fg=DIM, bg=BG, anchor="e").pack(side="right")
+        tk.Frame(wrap, bg=DIM2, height=1).pack(fill="x", pady=(0, 6))
+        return wrap
+
+    def _ui_action_row(self, parent, key_label: str, title: str, desc: str,
+                       command=None, available: bool = True,
+                       tag: str | None = None, tag_fg: str | None = None,
+                       tag_bg: str | None = None, title_width: int = 20,
+                       key_bg: str | None = None) -> tuple[tk.Frame, tk.Label, tk.Label]:
+        row = tk.Frame(parent, bg=BG, cursor="hand2" if command else "arrow")
+        row.pack(fill="x", pady=1)
+
+        key = tk.Label(row, text=f" {key_label} ", font=(FONT, 8, "bold"),
+                       fg=BG if available else WHITE,
+                       bg=key_bg or (AMBER if available else DIM2),
+                       width=3)
+        key.pack(side="left")
+
+        title_l = tk.Label(row, text=f"  {title}", font=(FONT, 9, "bold"),
+                           fg=WHITE if available else DIM, bg=BG3,
+                           anchor="w", padx=6, pady=4, width=title_width)
+        title_l.pack(side="left")
+
+        desc_l = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3,
+                          anchor="w", padx=6, pady=4)
+        desc_l.pack(side="left", fill="x", expand=True)
+
+        if tag:
+            tk.Label(row, text=f" {tag} ", font=(FONT, 7, "bold" if available else "normal"),
+                     fg=tag_fg or (BG if available else DIM),
+                     bg=tag_bg or (GREEN if available else BG2),
+                     padx=4).pack(side="right", padx=4)
+
+        if command:
+            def _enter(_e=None):
+                title_l.configure(fg=AMBER if available else DIM)
+            def _leave(_e=None):
+                title_l.configure(fg=WHITE if available else DIM)
+                row.configure(bg=BG)
+            for w in (row, key, title_l, desc_l):
+                w.bind("<Button-1>", lambda e, c=command: c())
+                w.bind("<Enter>", _enter)
+                w.bind("<Leave>", _leave)
+
+        return row, title_l, desc_l
+
+    def _ui_kv_grid(self, parent, rows: list[tuple[str, str, str]]) -> None:
+        grid = tk.Frame(parent, bg=BG)
+        grid.pack(fill="x", pady=(0, 8))
+        for label, value, color in rows:
+            row = tk.Frame(grid, bg=BG)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=label, font=(FONT, 8), fg=DIM, bg=BG,
+                     width=16, anchor="w").pack(side="left")
+            tk.Label(row, text=value, font=(FONT, 8, "bold"), fg=color, bg=BG,
+                     anchor="w").pack(side="left")
+
+    def _ui_note(self, parent, text: str, fg: str = DIM) -> None:
+        tk.Label(parent, text=text, font=(FONT, 8),
+                 fg=fg, bg=BG, anchor="w", justify="left").pack(fill="x", pady=(0, 6))
+
+    def _ui_back_row(self, parent, command, label: str = "RETURN") -> None:
+        wrap = tk.Frame(parent, bg=BG)
+        wrap.pack(fill="x", pady=(2, 0))
+        self._ui_action_row(
+            wrap,
+            "0",
+            label,
+            "Return to previous routing screen",
+            command=command,
+            available=False,
+            tag=None,
+            title_width=20,
+            key_bg=DIM2,
+        )
+
     def _draw_spokes(self, canvas, focused_idx: int) -> None:
         canvas.delete("spokes")
         slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
@@ -1230,43 +1381,6 @@ class App(tk.Tk):
         for idx in range(4):
             self._draw_isometric_tile(self._menu_canvas, idx, idx == self._menu_focused_tile)
 
-    def _menu_main_bloomberg(self) -> None:
-        self._clr()
-        self._clear_kb()
-        self.history.clear()
-        self._active_tile_slots = self._TILE_SLOTS
-        self._active_cd_center = (self._CD_CX, self._CD_CY)
-        self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
-        self.h_path.configure(text="> PRINCIPAL  ·  O DISCO LÊ A SI MESMO")
-        self.f_lbl.configure(text="1-4 direto · ← ↑ ↓ → nav · ENTER · ESC sai")
-
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=540)
-        canvas.pack(fill="both", expand=True)
-        self._menu_canvas = canvas
-
-        if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
-            self._menu_live_fetch_async()
-
-        self._draw_cd_center(canvas)
-        self._draw_spokes(canvas, self._menu_focused_tile)
-        for idx in range(4):
-            self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
-
-        for n in (1, 2, 3, 4):
-            self._kb(f"<Key-{n}>",
-                     lambda _n=n - 1: (self._menu_tile_focus(_n), self._menu_tile_expand(_n)))
-        self._kb("<Right>",     lambda: self._menu_tile_focus_delta(+1))
-        self._kb("<Left>",      lambda: self._menu_tile_focus_delta(-1))
-        self._kb("<Down>",      lambda: self._menu_tile_focus_delta(+2))
-        self._kb("<Up>",        lambda: self._menu_tile_focus_delta(-2))
-        self._kb("<Tab>",       lambda: self._menu_tile_focus_delta(+1))
-        self._kb("<Return>",    lambda: self._menu_tile_expand(self._menu_focused_tile))
-        self._kb("<Escape>",    self._splash)
-        self._bind_global_nav()
-        self._menu_live_schedule()
-
     def _menu_tile_focus(self, idx: int) -> None:
         if not (0 <= idx <= 3):
             return
@@ -1280,66 +1394,6 @@ class App(tk.Tk):
 
     def _menu_tile_focus_delta(self, delta: int) -> None:
         self._menu_tile_focus((self._menu_focused_tile + delta) % 4)
-
-    def _menu_tile_expand(self, idx: int) -> None:
-        """Expand tile idx in-place: fade others, grow focused tile, draw sub-menu."""
-        if not (0 <= idx <= 3):
-            return
-        if self._menu_canvas is None:
-            return
-        self._menu_expanded_tile = idx
-        self._menu_sub_focus = 0
-
-        canvas = self._menu_canvas
-        for i in range(4):
-            if i == idx:
-                continue
-            canvas.delete(f"tile{i}")
-        canvas.delete("cd")
-        canvas.delete("spokes")
-
-        label, key_num, color, children = MAIN_GROUPS[idx]
-        canvas.delete(f"tile{idx}")
-        x1, y1, x2, y2 = 80, 60, 840, 480
-        canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2, tags=f"tile{idx}")
-        canvas.create_rectangle(x1, y1, x2, y1 + 26,
-                                outline=color, fill=color, width=0, tags=f"tile{idx}")
-        canvas.create_text(x1 + 16, y1 + 13, anchor="w",
-                           text=f" {label}  [{key_num}]",
-                           font=(FONT, 11, "bold"), fill=BG, tags=f"tile{idx}")
-
-        self._menu_sub_render(idx)
-
-        self._clear_kb()
-        for i, (_clabel, _method) in enumerate(children):
-            n = i + 1
-            self._kb(f"<Key-{n}>",
-                     lambda _i=i, _tile=idx: self._menu_sub_select(_tile, _i))
-        self._kb("<Down>",   lambda: self._menu_sub_focus_delta(+1))
-        self._kb("<Up>",     lambda: self._menu_sub_focus_delta(-1))
-        self._kb("<Return>", lambda _tile=idx: self._menu_sub_select(_tile, self._menu_sub_focus))
-        self._kb("<Escape>", self._menu_tile_collapse)
-        self._kb("<Key-0>",  self._menu_tile_collapse)
-        self._bind_global_nav()
-        self.f_lbl.configure(text="1-N selecionar · ↑↓ nav · ENTER · ESC voltar")
-
-    def _menu_sub_render(self, idx: int) -> None:
-        if self._menu_canvas is None:
-            return
-        canvas = self._menu_canvas
-        canvas.delete("submenu")
-        _label, _key, color, children = MAIN_GROUPS[idx]
-        for i, (child_label, _method) in enumerate(children):
-            y = 120 + i * 42
-            focused = i == self._menu_sub_focus
-            fg = AMBER_B if focused else WHITE
-            bg = color if focused else BG3
-            canvas.create_rectangle(140, y - 16, 780, y + 16,
-                                    outline=color, fill=bg, width=1, tags="submenu")
-            canvas.create_text(160, y, anchor="w",
-                               text=f"  › {i+1}  {child_label}",
-                               font=(FONT, 11, "bold"),
-                               fill=(BG if focused else fg), tags="submenu")
 
     def _menu_sub_focus_delta(self, delta: int) -> None:
         if self._menu_expanded_tile is None:
@@ -1378,127 +1432,6 @@ class App(tk.Tk):
             self._menu_live_after_id = None
 
     # ─── SPLASH (Layer 0) — HL1 Black Mesa gate ──────────
-    def _splash(self):
-        """Half Life 1 institutional gate splash.
-
-        Click anywhere / ENTER / space → main menu. Arrow keys unbound.
-        CD small top-left, AURUM wordmark centered, CRT status block,
-        pulsing CLICK TO PROCEED cursor. Warning stripes top and bottom.
-        """
-        self._clr()
-        self._clear_kb()
-        self.history.clear()
-        self.h_path.configure(text="")
-        self.h_stat.configure(text="PRONTO", fg=GREEN)
-        self.f_lbl.configure(text="CLICK · ENTER · Q quit")
-
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=640)
-        canvas.pack(fill="both", expand=True)
-        self._menu_canvas = canvas
-        self._splash_canvas = canvas
-
-        # ── Warning stripes ──
-        self._draw_warning_stripe(canvas, y=0,   height=20,
-                                  text="▓▒░  ⚠ AUTHORIZED ACCESS ONLY ⚠  ░▒▓")
-        self._draw_warning_stripe(canvas, y=618, height=22,
-                                  text="▓▒░  © 2026 AURUM · O DISCO LÊ A SI MESMO  ░▒▓")
-
-        # ── Small CD top-left ──
-        self._active_cd_center = (70, 100)
-        self._draw_cd_center(canvas, r=36)
-
-        # ── Clearance stamps top-right ──
-        self._draw_stamp(canvas, cx=680, cy=100, w=110, h=56,
-                         lines=["VAULT", "03"])
-        self._draw_stamp(canvas, cx=810, cy=100, w=130, h=56,
-                         lines=["CLEARED", "LVL-Ω"])
-
-        # ── AURUM wordmark (reuses BANNER module constant) ──
-        canvas.create_text(460, 210, anchor="center",
-                           text=BANNER, font=(FONT, 11, "bold"),
-                           fill=AMBER, tags="wordmark")
-
-        # ── Subtitle ──
-        canvas.create_text(460, 272, anchor="center",
-                           text="F I N A N C I A L   T E R M I N A L",
-                           font=(FONT, 9, "bold"),
-                           fill=AMBER_D, tags="subtitle")
-        canvas.create_text(460, 288, anchor="center",
-                           text="· · ·  V A U L T - 3  · · ·",
-                           font=(FONT, 7),
-                           fill=DIM, tags="subtitle")
-
-        # ── Rule above status block ──
-        canvas.create_line(180, 312, 740, 312,
-                           fill=AMBER_D, width=1, tags="rule")
-
-        # ── Status block (6 CRT rows) ──
-        try:
-            st = _conn.status_summary()
-            market_val = st.get("market", "—")
-        except Exception:
-            market_val = "—"
-        try:
-            keys = self._load_json("keys.json")
-            has_tg = bool(keys.get("telegram", {}).get("bot_token"))
-            has_keys = bool(
-                keys.get("demo", {}).get("api_key")
-                or keys.get("testnet", {}).get("api_key")
-            )
-        except Exception:
-            has_tg = False
-            has_keys = False
-
-        market_cell = "● LIVE" if market_val and market_val != "—" else "○ OFFLINE"
-        market_col = GREEN if market_cell == "● LIVE" else DIM
-        conn_cell = "● BINANCE" if has_keys else "○ OFFLINE"
-        conn_col = GREEN if has_keys else DIM
-        tg_cell = "● ONLINE" if has_tg else "○ OFFLINE"
-        tg_col = GREEN if has_tg else DIM
-
-        rows = [
-            ("SYSTEM STATUS", "NOMINAL",     GREEN),
-            ("MARKET FEED",   market_cell,   market_col),
-            ("CONNECTION",    conn_cell,     conn_col),
-            ("TELEGRAM",      tg_cell,       tg_col),
-            ("KILL-SWITCH",   "ARMED [3/3]", RED),
-            ("CLEARANCE",     "OMEGA",       AMBER_B),
-        ]
-        self._draw_status_block(canvas, x=220, y=334, rows=rows)
-
-        # ── Rule below status block ──
-        canvas.create_line(180, 448, 740, 448,
-                           fill=AMBER_D, width=1, tags="rule")
-
-        # ── Click-to-proceed prompt ──
-        self._splash_cursor_on = True
-        canvas.create_text(460, 488, anchor="center",
-                           text="[ CLICK TO PROCEED ]▊",
-                           font=(FONT, 10, "bold"),
-                           fill=AMBER_B, tags="prompt")
-
-        # ── Bind click / ENTER / space → main menu ──
-        # Click must bind directly on the canvas — Tk mouse events do NOT
-        # bubble from child to parent, so self.main.bind alone misses clicks
-        # that land inside the canvas (i.e. everywhere on the splash).
-        click_handler = lambda e: self._splash_on_click()
-        canvas.bind("<Button-1>", click_handler)
-        self.main.bind("<Button-1>", click_handler)
-        self._kb("<Return>", self._splash_on_click)
-        self._kb("<space>",  self._splash_on_click)
-        self._bind_global_nav()
-        # Give the root window focus so ENTER/space keybinds fire reliably
-        # even before the user clicks anywhere.
-        try:
-            self.focus_set()
-        except Exception:
-            pass
-
-        # ── Arm 500ms cursor pulse ──
-        self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
-
     def _splash_on_click(self) -> None:
         """Click / ENTER / space handler — cancel pulse and route to main menu."""
         if self._splash_pulse_after_id is not None:
@@ -1509,29 +1442,6 @@ class App(tk.Tk):
             self._splash_pulse_after_id = None
         self._splash_canvas = None
         self._menu("main")
-
-    def _splash_pulse_tick(self) -> None:
-        """Blink the trailing cursor on the CLICK TO PROCEED prompt every 500ms."""
-        canvas = self._splash_canvas
-        if canvas is None:
-            self._splash_pulse_after_id = None
-            return
-        self._splash_cursor_on = not self._splash_cursor_on
-        new_text = (
-            "[ CLICK TO PROCEED ]▊"
-            if self._splash_cursor_on
-            else "[ CLICK TO PROCEED ] "
-        )
-        new_color = AMBER_B if self._splash_cursor_on else AMBER
-        try:
-            canvas.itemconfig("prompt", text=new_text, fill=new_color)
-        except Exception:
-            self._splash_pulse_after_id = None
-            return
-        try:
-            self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
-        except Exception:
-            self._splash_pulse_after_id = None
 
     def _cd_draw(self):
         """Animate the CD radar on the splash screen."""
@@ -1595,6 +1505,296 @@ class App(tk.Tk):
                        font=(FONT, 7), fill=DIM2, anchor="center")
 
         self.after(33, self._cd_draw)  # ~30 fps
+
+    def _splash(self):
+        """Premium institutional landing screen."""
+        self._clr()
+        self._clear_kb()
+        self.history.clear()
+        self.h_path.configure(text="")
+        self.h_stat.configure(text="READY", fg=AMBER_B)
+        self.f_lbl.configure(text="ENTER proceed  |  CLICK proceed  |  Q quit")
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True)
+        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=640)
+        canvas.pack(fill="both", expand=True)
+        self._menu_canvas = canvas
+        self._splash_canvas = canvas
+
+        canvas.create_line(48, 48, 872, 48, fill=AMBER_D, width=1)
+        canvas.create_line(48, 596, 872, 596, fill=DIM2, width=1)
+
+        self._active_cd_center = (86, 96)
+        self._draw_cd_center(canvas, r=30)
+
+        canvas.create_text(460, 162, anchor="center", text=BANNER_PREMIUM,
+                           font=(FONT, 18, "bold"), fill=AMBER, tags="wordmark")
+        canvas.create_text(460, 208, anchor="center", text=SYSTEM_TAGLINE,
+                           font=(FONT, 9, "bold"), fill=AMBER_D, tags="subtitle")
+        canvas.create_text(460, 226, anchor="center",
+                           text="BLACK / GOLD / NEUTRAL  |  OPERATOR ENTRY",
+                           font=(FONT, 7), fill=DIM, tags="subtitle")
+
+        try:
+            st = _conn.status_summary()
+            market_val = st.get("market", "-")
+        except Exception:
+            market_val = "-"
+        try:
+            keys = self._load_json("keys.json")
+            has_tg = bool(keys.get("telegram", {}).get("bot_token"))
+            has_keys = bool(keys.get("demo", {}).get("api_key") or keys.get("testnet", {}).get("api_key"))
+        except Exception:
+            has_tg = False
+            has_keys = False
+
+        market_cell = "LIVE" if market_val and market_val != "-" else "OFFLINE"
+        market_col = GREEN if market_cell == "LIVE" else DIM
+        conn_cell = "BINANCE READY" if has_keys else "OFFLINE"
+        conn_col = GREEN if has_keys else DIM
+        tg_cell = "ONLINE" if has_tg else "OFFLINE"
+        tg_col = GREEN if has_tg else DIM
+
+        self._draw_panel(canvas, 140, 286, 780, 404, title="SESSION OVERVIEW", accent=AMBER, tag="splash")
+        self._draw_kv_rows(canvas, 168, 320, [
+            ("ENGINE", "AURUM CORE", WHITE),
+            ("MODE", "OPERATOR CONSOLE", AMBER_B),
+            ("ACCOUNT", "PAPER / MULTI-ACCOUNT", WHITE),
+            ("ENVIRONMENT", "LOCAL", WHITE),
+        ], value_x=316, tag="splash")
+        self._draw_kv_rows(canvas, 472, 320, [
+            ("MARKET FEED", market_cell, market_col),
+            ("CONNECTION", conn_cell, conn_col),
+            ("TELEGRAM", tg_cell, tg_col),
+            ("RISK", "KILL-SWITCH ARMED", RED),
+        ], value_x=640, tag="splash")
+        canvas.create_line(452, 312, 452, 390, fill=DIM2, width=1, tags="splash")
+
+        canvas.create_text(460, 462, anchor="center",
+                           text="ENTER  |  ACCESS MAIN DESK",
+                           font=(FONT, 11, "bold"), fill=AMBER_B, tags="prompt")
+        canvas.create_text(460, 486, anchor="center",
+                           text="Review system state before routing to execution, research or control",
+                           font=(FONT, 7), fill=DIM, tags="prompt")
+
+        self._splash_cursor_on = True
+        canvas.create_text(460, 526, anchor="center",
+                           text="[ ENTER TO ACCESS DESK ]_",
+                           font=(FONT, 10, "bold"), fill=AMBER_B, tags="prompt2")
+
+        click_handler = lambda e: self._splash_on_click()
+        canvas.bind("<Button-1>", click_handler)
+        self.main.bind("<Button-1>", click_handler)
+        self._kb("<Return>", self._splash_on_click)
+        self._kb("<space>", self._splash_on_click)
+        self._bind_global_nav()
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+        self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
+
+    def _splash_pulse_tick(self):
+        canvas = self._splash_canvas
+        if canvas is None:
+            self._splash_pulse_after_id = None
+            return
+        self._splash_cursor_on = not self._splash_cursor_on
+        new_text = "[ ENTER TO ACCESS DESK ]_" if self._splash_cursor_on else "[ ENTER TO ACCESS DESK ] "
+        new_color = AMBER_B if self._splash_cursor_on else AMBER
+        try:
+            canvas.itemconfig("prompt2", text=new_text, fill=new_color)
+        except Exception:
+            self._splash_pulse_after_id = None
+            return
+        try:
+            self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
+        except Exception:
+            self._splash_pulse_after_id = None
+
+    def _menu_main_bloomberg(self) -> None:
+        self._clr()
+        self._clear_kb()
+        self.history.clear()
+        self._active_tile_slots = self._TILE_SLOTS
+        self._active_cd_center = (self._CD_CX, self._CD_CY)
+        self.h_stat.configure(text="DESK SELECT", fg=AMBER_B)
+        self.h_path.configure(text="> MAIN  |  DESK ROUTER")
+        self.f_lbl.configure(text="1-4 open desk  |  arrows navigate  |  enter select  |  esc landing")
+
+        f = tk.Frame(self.main, bg=BG)
+        f.pack(fill="both", expand=True)
+        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=540)
+        canvas.pack(fill="both", expand=True)
+        self._menu_canvas = canvas
+
+        if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
+            self._menu_live_fetch_async()
+
+        self._draw_panel(canvas, 52, 34, 868, 86, title="AURUM DESK", accent=AMBER, tag="menu")
+        canvas.create_text(78, 61, anchor="w", text="PRIMARY ROUTING",
+                           font=(FONT, 13, "bold"), fill=AMBER, tags="menu")
+        canvas.create_text(78, 78, anchor="w",
+                           text="Select a desk before entering strategy, research, market or control workflows",
+                           font=(FONT, 8), fill=DIM, tags="menu")
+
+        self._draw_cd_center(canvas)
+        self._draw_spokes(canvas, self._menu_focused_tile)
+        for idx in range(4):
+            self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
+
+        self._draw_panel(canvas, 52, 452, 868, 512, title="SYSTEM CONTEXT", accent=AMBER_D, tag="menu")
+        try:
+            market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNSET")
+        except Exception:
+            market_label = "UNSET"
+        self._draw_kv_rows(canvas, 78, 482, [
+            ("ENGINE", "DESK ROUTER", WHITE),
+            ("MODE", "OPERATOR", WHITE),
+            ("ACCOUNT", "PAPER", WHITE),
+            ("MARKET", market_label.upper(), AMBER_B),
+        ], value_x=218, tag="menu")
+        self._draw_kv_rows(canvas, 468, 482, [
+            ("BASKET", "DEFAULT", WHITE),
+            ("TIMEFRAME", "15M", WHITE),
+            ("ENVIRONMENT", "LOCAL", WHITE),
+            ("RISK", "KILL-SWITCH ARMED", RED),
+        ], value_x=630, tag="menu")
+
+        def _canvas_click(event):
+            ex, ey = event.x, event.y
+            for idx in range(4):
+                x1, y1, x2, y2 = self._tile_rect(idx)
+                if x1 <= ex <= x2 and y1 <= ey <= y2:
+                    self._menu_tile_focus(idx)
+                    self._menu_tile_expand(idx)
+                    return
+        canvas.bind("<Button-1>", _canvas_click)
+
+        for n in (1, 2, 3, 4):
+            self._kb(f"<Key-{n}>", lambda _n=n - 1: (self._menu_tile_focus(_n), self._menu_tile_expand(_n)))
+        self._kb("<Right>", lambda: self._menu_tile_focus_delta(+1))
+        self._kb("<Left>", lambda: self._menu_tile_focus_delta(-1))
+        self._kb("<Down>", lambda: self._menu_tile_focus_delta(+2))
+        self._kb("<Up>", lambda: self._menu_tile_focus_delta(-2))
+        self._kb("<Tab>", lambda: self._menu_tile_focus_delta(+1))
+        self._kb("<Return>", lambda: self._menu_tile_expand(self._menu_focused_tile))
+        self._kb("<Escape>", self._splash)
+        self._bind_global_nav()
+        self._menu_live_schedule()
+
+    def _menu_tile_expand(self, idx: int) -> None:
+        if not (0 <= idx <= 3) or self._menu_canvas is None:
+            return
+        self._menu_expanded_tile = idx
+        self._menu_sub_focus = 0
+
+        canvas = self._menu_canvas
+        for i in range(4):
+            if i != idx:
+                canvas.delete(f"tile{i}")
+        canvas.delete("cd")
+        canvas.delete("spokes")
+        canvas.delete("menu")
+
+        label, key_num, color, children = MAIN_GROUPS[idx]
+        x1, y1, x2, y2 = 80, 56, 840, 486
+        canvas.delete(f"tile{idx}")
+        self._draw_panel(canvas, x1, y1, x2, y2, title=f"{label} DESK", accent=color, tag=f"tile{idx}")
+        canvas.create_text(110, 92, anchor="w", text=f"{label}  |  SELECT DESTINATION",
+                           font=(FONT, 12, "bold"), fill=color, tags=f"tile{idx}")
+        canvas.create_text(110, 112, anchor="w",
+                           text="Use number keys or arrows to route the operator flow",
+                           font=(FONT, 8), fill=DIM, tags=f"tile{idx}")
+
+        self._menu_sub_render(idx)
+
+        def _sub_click(event, _idx=idx):
+            ex, ey = event.x, event.y
+            _children = MAIN_GROUPS[_idx][3]
+            start_y = 178
+            row_h = 58
+            for i in range(len(_children)):
+                y1 = start_y + i * row_h
+                y2 = y1 + 40
+                if 122 <= ex <= 798 and y1 <= ey <= y2:
+                    self._menu_sub_select(_idx, i)
+                    return
+        canvas.bind("<Button-1>", _sub_click)
+
+        self._clear_kb()
+        for i, (_clabel, _method) in enumerate(children):
+            n = i + 1
+            self._kb(f"<Key-{n}>", lambda _i=i, _tile=idx: self._menu_sub_select(_tile, _i))
+        self._kb("<Down>", lambda: self._menu_sub_focus_delta(+1))
+        self._kb("<Up>", lambda: self._menu_sub_focus_delta(-1))
+        self._kb("<Return>", lambda _tile=idx: self._menu_sub_select(_tile, self._menu_sub_focus))
+        self._kb("<Escape>", self._menu_tile_collapse)
+        self._kb("<Key-0>", self._menu_tile_collapse)
+        self._bind_global_nav()
+        self.f_lbl.configure(text="1-N select path  |  click item  |  enter confirm  |  esc back")
+
+    def _menu_sub_render(self, idx: int) -> None:
+        if self._menu_canvas is None:
+            return
+        canvas = self._menu_canvas
+        canvas.delete("submenu")
+        _label, _key, color, children = MAIN_GROUPS[idx]
+        start_y = 178
+        row_h = 58
+        for i, (child_label, _method) in enumerate(children):
+            y1 = start_y + i * row_h
+            y2 = y1 + 40
+            focused = i == self._menu_sub_focus
+            fill = BG2 if focused else PANEL
+            outline = color if focused else BORDER
+            text_color = AMBER_B if focused else WHITE
+            canvas.create_rectangle(122, y1, 798, y2, outline=outline, fill=fill,
+                                    width=2 if focused else 1, tags="submenu")
+            canvas.create_text(154, y1 + 20, text=f"{i+1:02d}", anchor="center",
+                               font=(FONT, 11, "bold"), fill=(color if focused else DIM), tags="submenu")
+            canvas.create_text(198, y1 + 14, anchor="w", text=child_label,
+                               font=(FONT, 11, "bold"), fill=text_color, tags="submenu")
+            canvas.create_text(198, y1 + 28, anchor="w",
+                               text="ENTER to open",
+                               font=(FONT, 7), fill=DIM, tags="submenu")
+
+    def _draw_isometric_tile(self, canvas, idx: int, focused: bool) -> None:
+        label, key_num, color, _children = MAIN_GROUPS[idx]
+        x1, y1, x2, y2 = self._tile_rect(idx)
+        d = self._TILE_DEPTH
+        face_color = color if focused else self._dim_color(color, TILE_DIM_FACTOR)
+        panel_fill = BG2 if focused else PANEL
+        text_color = WHITE if focused else "#a8a8a8"
+        sub_color = AMBER_B if focused else DIM
+        tag = f"tile{idx}"
+
+        canvas.delete(tag)
+        canvas.create_polygon(
+            x1, y1, x2, y1, x2 + d, y1 - d, x1 + d, y1 - d,
+            outline=face_color, fill=BG, width=1, tags=tag,
+        )
+        canvas.create_polygon(
+            x2, y1, x2 + d, y1 - d, x2 + d, y2 - d, x2, y2,
+            outline=face_color, fill=BG, width=1, tags=tag,
+        )
+        canvas.create_rectangle(x1, y1, x2, y2, outline=face_color,
+                                fill=panel_fill, width=2 if focused else 1, tags=tag)
+        canvas.create_rectangle(x1, y1, x2, y1 + 20, outline=face_color,
+                                fill=face_color if focused else BG3, width=0, tags=tag)
+        canvas.create_text(x1 + 10, y1 + 10, anchor="w",
+                           text=f" {key_num}  {label}",
+                           font=(FONT, 9, "bold"),
+                           fill=(BG if focused else WHITE), tags=tag)
+        live_key = label.lower()
+        live = self._menu_live.get(live_key, {}) if hasattr(self, "_menu_live") else {}
+        for i, line_key in enumerate(("line1", "line2", "line3", "line4")):
+            yy = y1 + 36 + i * 18
+            text = live.get(line_key, "-")
+            canvas.create_text(x1 + 12, yy, anchor="w", text=text,
+                               font=(FONT, 8, "bold" if i == 0 and focused else "normal"),
+                               fill=text_color if i < 2 else sub_color, tags=tag)
 
     def _bind_global_nav(self):
         """Bind global navigation keys available on all screens."""
@@ -1821,16 +2021,15 @@ class App(tk.Tk):
         brief = BRIEFINGS.get(name, {})
         v2    = BRIEFINGS_V2.get(name, None)
 
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True, padx=30, pady=16)
-
-        # Header
+        _outer, f = self._ui_page_shell(
+            name,
+            desc,
+            content_width=920,
+        )
         hdr = tk.Frame(f, bg=BG)
-        hdr.pack(fill="x", pady=(0, 12))
-        tk.Label(hdr, text=f" {name} ", font=(FONT, 10, "bold"), fg=BG, bg=AMBER).pack(side="left")
-        tk.Label(hdr, text=f"  {desc}", font=(FONT, 9), fg=DIM, bg=BG).pack(side="left", padx=6)
-
-        tk.Frame(f, bg=AMBER_D, height=1).pack(fill="x", pady=(0, 14))
+        hdr.pack(fill="x", pady=(0, 8))
+        tk.Label(hdr, text="BRIEFING", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="left")
+        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
 
         # Philosophy (italic feel with dimmer color)
         if brief.get("philosophy"):
@@ -1993,10 +2192,11 @@ class App(tk.Tk):
         self._cfg_plots = "s"
         self._cfg_leverage = ""
 
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True, padx=30, pady=16)
-
-        tk.Label(f, text=f"{name} — CONFIG BACKTEST", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 14))
+        _outer, f = self._ui_page_shell(
+            f"{name} · BACKTEST CONFIG",
+            "Configure run horizon, basket and execution options before launch",
+            content_width=920,
+        )
 
         # ── PERIOD ──
         tk.Label(f, text="PERÍODO", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
@@ -2048,14 +2248,15 @@ class App(tk.Tk):
             btn.bind("<Button-1>", lambda e, v=val: self._select_basket(v))
 
         # Preview bar — shows selected assets
-        self._bsk_preview_f = tk.Frame(f, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+        self._bsk_preview_f = tk.Frame(f, bg=BG)
         self._bsk_preview_f.pack(fill="x", pady=(6, 14))
         self._bsk_preview_count = tk.Label(self._bsk_preview_f, text="", font=(FONT, 7, "bold"),
-                                            fg=AMBER, bg=BG2, padx=6)
+                                            fg=AMBER_D, bg=BG, padx=6)
         self._bsk_preview_count.pack(side="left", pady=4)
         self._bsk_preview_lbl = tk.Label(self._bsk_preview_f, text="", font=(FONT, 7),
-                                          fg=DIM, bg=BG2, anchor="w", padx=4)
+                                          fg=DIM, bg=BG, anchor="w", padx=4)
         self._bsk_preview_lbl.pack(side="left", fill="x", expand=True, pady=4)
+        tk.Frame(self._bsk_preview_f, bg=DIM2, height=1).pack(fill="x", side="bottom")
 
         # Show default basket on load
         self._select_basket("")
@@ -2147,10 +2348,11 @@ class App(tk.Tk):
 
         self._live_mode = modes[0][1]  # default to first
 
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True, padx=30, pady=16)
-
-        tk.Label(f, text=f"{name} — SELECIONAR MODO", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 14))
+        _outer, f = self._ui_page_shell(
+            f"{name} · MODE SELECT",
+            "Select execution environment before starting the engine",
+            content_width=920,
+        )
 
         self._mode_btns = []
         for label, val, hint in modes:
@@ -2315,16 +2517,16 @@ class App(tk.Tk):
                  font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="right")
 
         # Tab strip
-        strip = tk.Frame(root, bg=BG2, height=28); strip.pack(fill="x")
+        strip = tk.Frame(root, bg=BG, height=30); strip.pack(fill="x")
         strip.pack_propagate(False)
         for tab_id, label in [("overview", "1 OVERVIEW"), ("trades", "2 TRADES")]:
             btn = tk.Label(strip, text=f" {label} ", font=(FONT, 9, "bold"),
-                           fg=DIM, bg=BG3, padx=14, pady=4, cursor="hand2")
-            btn.pack(side="left", padx=(2, 0), pady=2)
+                           fg=DIM, bg=BG, padx=14, pady=5, cursor="hand2")
+            btn.pack(side="left", padx=(0, 10), pady=1)
             btn.bind("<Button-1>", lambda e, t=tab_id: self._results_render_tab(t))
             self._results_tab_btns[tab_id] = btn
 
-        tk.Frame(root, bg=AMBER_D, height=1).pack(fill="x")
+        tk.Frame(root, bg=DIM2, height=1).pack(fill="x")
         self._results_body = tk.Frame(root, bg=BG)
         self._results_body.pack(fill="both", expand=True)
 
@@ -2339,9 +2541,9 @@ class App(tk.Tk):
         self._results_tab = tab
         for tab_id, btn in self._results_tab_btns.items():
             if tab_id == tab:
-                btn.configure(bg=AMBER, fg=BG)
+                btn.configure(bg=BG, fg=AMBER)
             else:
-                btn.configure(bg=BG3, fg=DIM)
+                btn.configure(bg=BG, fg=DIM)
         if tab == "overview":
             self._results_build_overview(self._results_body)
         else:
@@ -2400,8 +2602,7 @@ class App(tk.Tk):
         if eq and len(eq) > 2:
             tk.Label(sf, text="CURVA DE EQUITY", font=(FONT, 8, "bold"),
                      fg=AMBER_D, bg=BG).pack(anchor="w", padx=pad, pady=(8, 4))
-            eq_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=1,
-                                  highlightbackground=BORDER, height=120)
+            eq_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=120)
             eq_canvas.pack(fill="x", padx=pad, pady=(0, 8))
 
             def draw_equity(event=None):
@@ -2513,7 +2714,7 @@ class App(tk.Tk):
         side.pack_propagate(False)
         self._results_build_list(side)
 
-        tk.Frame(top_row, bg=BORDER, width=1).pack(side="left", fill="y")
+        tk.Frame(top_row, bg=DIM2, width=1).pack(side="left", fill="y")
 
         # Right: chart + data panel
         right = tk.Frame(top_row, bg=BG)
@@ -2523,26 +2724,25 @@ class App(tk.Tk):
         self._results_chart_frame.pack(fill="x", pady=(0, 8))
         self._results_chart_frame.pack_propagate(False)
 
-        self._results_data_panel = tk.Frame(right, bg=PANEL,
-            highlightbackground=BORDER, highlightthickness=1)
+        self._results_data_panel = tk.Frame(right, bg=PANEL)
         self._results_data_panel.pack(fill="both", expand=True)
 
         # Bottom nav bar
         tk.Frame(outer, bg=BORDER, height=1).pack(fill="x")
-        nav = tk.Frame(outer, bg=BG2, height=28); nav.pack(fill="x")
+        nav = tk.Frame(outer, bg=BG, height=28); nav.pack(fill="x")
         nav.pack_propagate(False)
 
         prev_btn = tk.Label(nav, text="  ◄ prev  ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG2, cursor="hand2", padx=8, pady=6)
+                            fg=AMBER, bg=BG, cursor="hand2", padx=8, pady=6)
         prev_btn.pack(side="left", padx=4)
         prev_btn.bind("<Button-1>", lambda e: self._results_prev_trade())
 
         self._results_counter = tk.Label(nav, text="", font=(FONT, 8),
-                                         fg=DIM, bg=BG2)
+                                         fg=DIM, bg=BG)
         self._results_counter.pack(side="left", padx=8)
 
         next_btn = tk.Label(nav, text="  next ►  ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG2, cursor="hand2", padx=8, pady=6)
+                            fg=AMBER, bg=BG, cursor="hand2", padx=8, pady=6)
         next_btn.pack(side="left", padx=4)
         next_btn.bind("<Button-1>", lambda e: self._results_next_trade())
 
@@ -3131,37 +3331,46 @@ class App(tk.Tk):
     # ─── MARKETS (Layer 2) ───────────────────────────────
     def _markets(self):
         self._clr(); self._clear_kb()
-        self.h_path.configure(text="> MARKETS"); self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  ENTER manter actual  |  H hub")
+        self.h_path.configure(text="> MARKETS"); self.h_stat.configure(text="SELECT", fg=AMBER_D)
+        self.f_lbl.configure(text="ESC return  |  ENTER keep current  |  H hub")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._kb("<Return>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text="MARKETS", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 6))
-        tk.Label(f, text="Seleccionar mercado activo", font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 16))
+        _outer, body = self._ui_page_shell(
+            "MARKETS",
+            "Select active market routing and environment context",
+        )
 
-        market_keys = list(MARKETS.keys())
         for i, (mk, info) in enumerate(MARKETS.items()):
             num = i + 1
-            row = tk.Frame(f, bg=BG, cursor="hand2"); row.pack(fill="x", padx=60, pady=1)
             is_active = mk == _conn.active_market
             avail = info["available"]
-
-            tk.Label(row, text=f" {num} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER if avail else DIM2, width=3).pack(side="left")
-            nl = tk.Label(row, text=f"  {info['label']}", font=(FONT, 10, "bold"),
-                          fg=AMBER if is_active else (WHITE if avail else DIM), bg=BG3,
-                          anchor="w", padx=6, pady=4, width=18)
+            row = tk.Frame(body, bg=BG, cursor="hand2")
+            row.pack(fill="x", pady=1)
+            tk.Label(
+                row, text=f" {num} ", font=(FONT, 9, "bold"),
+                fg=BG, bg=AMBER if avail else DIM2, width=3
+            ).pack(side="left")
+            nl = tk.Label(
+                row, text=f"  {info['label']}", font=(FONT, 10, "bold"),
+                fg=AMBER if is_active else (WHITE if avail else DIM),
+                bg=BG3, anchor="w", padx=6, pady=4, width=18
+            )
             nl.pack(side="left")
-            dl = tk.Label(row, text=info["desc"], font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
+            dl = tk.Label(
+                row, text=info["desc"], font=(FONT, 8), fg=DIM,
+                bg=BG3, anchor="w", padx=6, pady=4
+            )
             dl.pack(side="left", fill="x", expand=True)
 
-            # Status indicator
             if is_active:
-                tk.Label(row, text=" ACTIVE ", font=(FONT, 7, "bold"), fg=BG, bg=GREEN, padx=4).pack(side="right", padx=4)
+                tk.Label(row, text=" ACTIVE ", font=(FONT, 7, "bold"),
+                         fg=BG, bg=GREEN, padx=4).pack(side="right", padx=4)
             elif not avail:
-                tk.Label(row, text=" COMING SOON ", font=(FONT, 7), fg=DIM, bg=BG2, padx=4).pack(side="right", padx=4)
+                tk.Label(row, text=" COMING SOON ", font=(FONT, 7),
+                         fg=DIM, bg=BG2, padx=4).pack(side="right", padx=4)
 
             if avail:
                 def sel_market(event=None, k=mk):
@@ -3173,31 +3382,40 @@ class App(tk.Tk):
                 for w in [row, nl, dl]:
                     w.bind("<Button-1>", sel_market)
                     w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=nl, a=is_active, av=avail: n.configure(fg=AMBER if a else WHITE))
+                    w.bind("<Leave>", lambda e, n=nl, a=is_active: n.configure(fg=AMBER if a else WHITE))
                 self._kb(f"<Key-{num}>", sel_market)
             else:
                 def show_coming(event=None, label=info["label"]):
-                    self.h_stat.configure(text=f"{label} — COMING SOON", fg=AMBER_D)
+                    self.h_stat.configure(text=f"{label} | COMING SOON", fg=AMBER_D)
                 for w in [row, nl, dl]:
                     w.bind("<Button-1>", show_coming)
                 self._kb(f"<Key-{num}>", show_coming)
 
-        tk.Frame(f, bg=BG, height=12).pack()
-        tk.Label(f, text=f"Mercado activo: {MARKETS.get(_conn.active_market, {}).get('label', '?')}",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack()
-        tk.Label(f, text="[enter] manter actual    [0] voltar", font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+        tk.Frame(body, bg=BG, height=12).pack()
+        current_label = MARKETS.get(_conn.active_market, {}).get("label", "?")
+        tk.Label(body, text=f"Current market: {current_label}",
+                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(anchor="w")
+        tk.Label(body, text="[enter] keep current    [0] return",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=(4, 0))
 
     # ─── CONNECTIONS (Layer 2) ────────────────────────────
     def _connections(self):
         self._clr(); self._clear_kb()
-        self.h_path.configure(text="> CONNECTIONS"); self.h_stat.configure(text="MANAGE", fg=GREEN)
-        self.f_lbl.configure(text="ESC voltar  |  número para selecionar  |  H hub")
+        self.h_path.configure(text="> CONNECTIONS"); self.h_stat.configure(text="ROUTING", fg=GREEN)
+        self.f_lbl.configure(text="ESC return  |  number select  |  H hub")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=12)
-        tk.Label(f, text="CONNECTIONS", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 12))
+        _outer, body = self._ui_page_shell(
+            "CONNECTIONS",
+            "Exchange, broker, data-provider and notification endpoints",
+        )
+        panel = self._ui_panel_frame(
+            body,
+            "ACCESS MATRIX",
+            "Configured services and setup entry points",
+        )
 
         sections = [
             ("CRYPTO EXCHANGES", [
@@ -3227,38 +3445,32 @@ class App(tk.Tk):
         ]
 
         # Scrollable
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
+        canvas = tk.Canvas(panel, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
         sf = tk.Frame(canvas, bg=BG)
         sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=sf, anchor="nw")
         canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True); sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
+        sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
 
         for section_name, items in sections:
-            tk.Label(sf, text=section_name, font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", pady=(8, 2))
-            tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", pady=(0, 4))
+            sec = self._ui_section(sf, section_name)
 
             for key_label, provider, desc in items:
-                row = tk.Frame(sf, bg=BG, cursor="hand2"); row.pack(fill="x", pady=1)
                 conn = _conn.get(provider)
                 is_conn = conn.get("connected", False)
                 is_public = conn.get("public", False)
 
-                tk.Label(row, text=f" {key_label} ", font=(FONT, 8, "bold"), fg=BG, bg=AMBER_D, width=3).pack(side="left")
-                nl = tk.Label(row, text=f"  {desc}", font=(FONT, 9), fg=WHITE, bg=BG3, anchor="w", padx=6, pady=3)
-                nl.pack(side="left", fill="x", expand=True)
-
                 if is_conn:
-                    icon = "\u2713 public API" if is_public else "\u25cf CONNECTED"
-                    ic = GREEN
+                    tag = "PUBLIC API" if is_public else "CONNECTED"
+                    tag_fg = BG
+                    tag_bg = GREEN
                 else:
-                    icon = "\u25cb not connected"
-                    ic = DIM
-
-                tk.Label(row, text=f" {icon} ", font=(FONT, 7), fg=ic, bg=BG3, padx=6).pack(side="right")
-
+                    tag = "OFFLINE"
+                    tag_fg = DIM
+                    tag_bg = BG2
                 # Click handler — only binance_futures and telegram are actionable
                 if provider == "binance_futures":
                     cmd = lambda: self._cfg_keys()
@@ -3269,23 +3481,14 @@ class App(tk.Tk):
                         self.h_stat.configure(text=f"{d} — setup coming soon", fg=AMBER_D)
                     cmd = _coming
 
-                for w in [row, nl]:
-                    w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=nl: n.configure(fg=WHITE))
-                    w.bind("<Button-1>", lambda e, c=cmd: c())
+                self._ui_action_row(
+                    sec, key_label, provider.upper(), desc,
+                    command=cmd,
+                    tag=tag, tag_fg=tag_fg, tag_bg=tag_bg, title_width=20,
+                )
 
         # Visible BACK row at the bottom of the scrollable list
-        tk.Frame(sf, bg=BG, height=12).pack()
-        brow = tk.Frame(sf, bg=BG, cursor="hand2"); brow.pack(fill="x", pady=1)
-        tk.Label(brow, text=" 0 ", font=(FONT, 9, "bold"),
-                 fg=WHITE, bg=DIM2, width=3).pack(side="left")
-        bl = tk.Label(brow, text="  VOLTAR", font=(FONT, 10),
-                      fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
-        bl.pack(side="left", fill="x", expand=True)
-        for w in [brow, bl]:
-            w.bind("<Button-1>", lambda e: self._menu("main"))
-            w.bind("<Enter>", lambda e, l=bl: l.configure(fg=AMBER))
-            w.bind("<Leave>", lambda e, l=bl: l.configure(fg=DIM))
+        self._ui_back_row(sf, lambda: self._menu("main"))
 
     # ─── ARBITRAGE (Layer 2) ──────────────────────────────
     def _alchemy_enter(self):
@@ -3383,17 +3586,19 @@ class App(tk.Tk):
         self._kb("<Escape>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True)
+        _outer, outer = self._ui_page_shell(
+            "ARBITRAGE DESK",
+            "Funding, basis and spread routing across execution and scanner modes",
+        )
 
         # ── Header bar (minimal: section label + clock) ──
-        header = tk.Frame(outer, bg=BG, height=40)
-        header.pack(fill="x", padx=40, pady=(14, 0))
+        header = tk.Frame(outer, bg=BG, height=24)
+        header.pack(fill="x", pady=(0, 6))
         header.pack_propagate(False)
-        tk.Label(header, text="AURUM  \u00b7  ARBITRAGE DESK",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(side="left")
+        tk.Label(header, text="ROUTER",
+                 font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="left")
         self._arb_hub_clock = tk.Label(header, text="",
-                                        font=(FONT, 8, "bold"),
+                                        font=(FONT, 8),
                                         fg=DIM, bg=BG)
         self._arb_hub_clock.pack(side="right")
         try:
@@ -3412,47 +3617,63 @@ class App(tk.Tk):
                  font=(FONT, 8), fg=DIM, bg=BG).pack()
 
         # ── Rows area ──
+        summary = tk.Frame(outer, bg=BG)
+        summary.pack(fill="x", pady=(0, 10))
+        self._arb_hub_sum_cex = tk.Label(summary, text="CEX  OFFLINE", font=(FONT, 8, "bold"),
+                                         fg=AMBER_D, bg=BG, anchor="w")
+        self._arb_hub_sum_cex.pack(side="left")
+        self._arb_hub_sum_dex = tk.Label(summary, text="DEX  OFFLINE", font=(FONT, 8),
+                                         fg=DIM, bg=BG, anchor="w")
+        self._arb_hub_sum_dex.pack(side="left", padx=(20, 0))
+        self._arb_hub_sum_best = tk.Label(summary, text="TOP APR  WAITING", font=(FONT, 8),
+                                          fg=DIM, bg=BG, anchor="w")
+        self._arb_hub_sum_best.pack(side="left", padx=(20, 0))
+        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
+
         rows_frame = tk.Frame(outer, bg=BG)
-        rows_frame.pack(fill="x", pady=(48, 0), padx=80)
+        rows_frame.pack(fill="x", pady=(8, 0), padx=28)
 
         self._arb_hub_idx = 0
         self._arb_hub_row_widgets: list[dict] = []
 
         # Row definitions — match self._ARB_HUB_ITEMS order
+        exec_sec = self._ui_section(rows_frame, "EXECUTION", note="operator-routed")
+        scan_sec = self._ui_section(rows_frame, "SCANNERS", note="observation and research")
         row_defs = [
-            ("CEX  \u2194  CEX", "JANE ST",    "execution  \u00b7  \u2014"),
-            ("DEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
-            ("CEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
-            ("BASIS  TRADE", "SPOT\u21c4PERP", "spot-perp basis  \u00b7  \u2014"),
-            ("SPOT  \u2194  SPOT", "2 VENUES", "spot spread  \u00b7  \u2014"),
+            (exec_sec, "CEX  \u2194  CEX", "JANE ST",    "execution  \u00b7  \u2014"),
+            (scan_sec, "DEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
+            (scan_sec, "CEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
+            (scan_sec, "BASIS TRADE", "SPOT\u21c4PERP", "spot-perp basis  \u00b7  \u2014"),
+            (scan_sec, "SPOT  \u2194  SPOT", "2 VENUES", "spot spread  \u00b7  \u2014"),
         ]
 
-        for i, (big_label, meta, sub) in enumerate(row_defs):
-            row_frame = tk.Frame(rows_frame, bg=BG, cursor="hand2", height=78)
-            row_frame.pack(fill="x", pady=(0, 10))
+        for i, (parent, big_label, meta, sub) in enumerate(row_defs):
+            row_frame = tk.Frame(parent, bg=BG, cursor="hand2", height=62)
+            row_frame.pack(fill="x", pady=(0, 6))
             row_frame.pack_propagate(False)
 
             top_line = tk.Frame(row_frame, bg=BG)
-            top_line.pack(fill="x", pady=(10, 0))
+            top_line.pack(fill="x", pady=(8, 0))
 
-            bullet_lbl = tk.Label(top_line, text="\u25cf",
-                                  font=(FONT, 14, "bold"),
-                                  fg=AMBER, bg=BG, width=3, anchor="center")
+            bullet_lbl = tk.Label(top_line, text=str(i + 1),
+                                  font=(FONT, 8, "bold"),
+                                  fg=AMBER_D, bg=BG, width=3, anchor="w")
             bullet_lbl.pack(side="left")
 
             label_lbl = tk.Label(top_line, text=big_label,
-                                 font=(FONT, 14, "bold"),
+                                 font=(FONT, 11, "bold"),
                                  fg=WHITE, bg=BG, anchor="w")
-            label_lbl.pack(side="left", padx=(4, 0))
+            label_lbl.pack(side="left", padx=(2, 0))
 
             meta_lbl = tk.Label(top_line, text=meta,
-                                font=(FONT, 10, "bold"),
-                                fg=AMBER, bg=BG, anchor="e")
-            meta_lbl.pack(side="right", padx=(0, 12))
+                                font=(FONT, 8, "bold"),
+                                fg=AMBER_D, bg=BG, anchor="e")
+            meta_lbl.pack(side="right", padx=(0, 8))
 
             sub_lbl = tk.Label(row_frame, text=sub,
                                font=(FONT, 8), fg=DIM, bg=BG, anchor="w")
-            sub_lbl.pack(fill="x", padx=(48, 12), pady=(6, 0))
+            sub_lbl.pack(fill="x", padx=(28, 8), pady=(4, 0))
+            tk.Frame(row_frame, bg=DIM2, height=1).pack(fill="x", side="bottom", pady=(6, 0))
 
             widgets = {
                 "frame":  row_frame,
@@ -3486,11 +3707,10 @@ class App(tk.Tk):
 
         # ── Footer hint ──
         footer = tk.Frame(outer, bg=BG)
-        footer.pack(fill="x", pady=(24, 0))
-        tk.Frame(footer, bg=AMBER_D, height=1, width=220).pack()
+        footer.pack(fill="x", pady=(12, 0))
         tk.Label(footer,
-                 text="click row  \u00b7  C  D  X  B  S  direct  \u00b7  ESC back",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(pady=(6, 0))
+                 text="execution and scanner routes  \u00b7  C D X B S direct  \u00b7  ESC back",
+                 font=(FONT, 7), fg=DIM2, bg=BG).pack(anchor="w", pady=(6, 0))
 
         # ── Kick off async scan for live data ──
         self._arb_hub_scan_async()
@@ -3509,16 +3729,16 @@ class App(tk.Tk):
             if i == self._arb_hub_idx:
                 w["frame"].configure(bg=BG3)
                 w["top"].configure(bg=BG3)
-                w["bullet"].configure(fg=AMBER_B, bg=BG3)
+                w["bullet"].configure(fg=AMBER, bg=BG3)
                 w["label"].configure(fg=AMBER, bg=BG3)
-                w["meta"].configure(fg=AMBER_B, bg=BG3)
+                w["meta"].configure(fg=AMBER, bg=BG3)
                 w["sub"].configure(fg=AMBER_D, bg=BG3)
             else:
                 w["frame"].configure(bg=BG)
                 w["top"].configure(bg=BG)
-                w["bullet"].configure(fg=AMBER, bg=BG)
+                w["bullet"].configure(fg=AMBER_D, bg=BG)
                 w["label"].configure(fg=WHITE, bg=BG)
-                w["meta"].configure(fg=AMBER, bg=BG)
+                w["meta"].configure(fg=AMBER_D, bg=BG)
                 w["sub"].configure(fg=DIM, bg=BG)
 
     def _arb_hub_hover_enter(self, idx: int) -> None:
@@ -3607,6 +3827,10 @@ class App(tk.Tk):
         try:
             dex_on = stats.get("dex_online", 0)
             cex_on = stats.get("cex_online", 0)
+            if hasattr(self, "_arb_hub_sum_cex"):
+                self._arb_hub_sum_cex.configure(text=f"CEX  {cex_on}")
+            if hasattr(self, "_arb_hub_sum_dex"):
+                self._arb_hub_sum_dex.configure(text=f"DEX  {dex_on}")
 
             # Row 0 — CEX ↔ CEX (Jane Street execution)
             top_s = "\u2014"
@@ -3615,6 +3839,8 @@ class App(tk.Tk):
                     top_s = f"top {float(top.apr):+.1f}%"
                 except Exception:
                     top_s = "\u2014"
+            if hasattr(self, "_arb_hub_sum_best"):
+                self._arb_hub_sum_best.configure(text=f"TOP APR  {top_s}")
             rows[0]["meta"].configure(text="JANE ST")
             rows[0]["sub"].configure(
                 text=f"execution  \u00b7  {top_s}  \u00b7  24 pairs")
@@ -4339,9 +4565,8 @@ class App(tk.Tk):
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text="TERMINAL", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 6))
-        tk.Label(f, text="Data, charts & research", font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 16))
+        _outer, body = self._ui_page_shell("TERMINAL", "Data, charts and research routing")
+        panel = self._ui_panel_frame(body, "RESEARCH ROUTER", "Available and planned market intelligence modules")
 
         sections = [
             ("MARKET DATA", [
@@ -4368,21 +4593,10 @@ class App(tk.Tk):
         ]
 
         for section_name, items in sections:
-            tk.Label(f, text=section_name, font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", padx=60, pady=(8, 2))
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", padx=60, pady=(0, 3))
+            sec = self._ui_section(panel, section_name)
 
             for key_label, name, desc, available in items:
-                row = tk.Frame(f, bg=BG, cursor="hand2"); row.pack(fill="x", padx=60, pady=1)
-                tk.Label(row, text=f" {key_label} ", font=(FONT, 8, "bold"), fg=BG,
-                         bg=AMBER if available else DIM2, width=3).pack(side="left")
-                nl = tk.Label(row, text=f"  {name}", font=(FONT, 9, "bold"),
-                              fg=WHITE if available else DIM, bg=BG3, anchor="w", padx=6, pady=3, width=22)
-                nl.pack(side="left")
-                dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=3)
-                dl.pack(side="left", fill="x", expand=True)
-
-                if not available:
-                    tk.Label(row, text="COMING SOON", font=(FONT, 7), fg=DIM, bg=BG2, padx=4).pack(side="right", padx=4)
+                tag = None if available else "COMING SOON"
 
                 if name == "Reports & Logs":
                     cmd = lambda: self._data()
@@ -4393,19 +4607,13 @@ class App(tk.Tk):
                 else:
                     cmd = lambda n=name: self.h_stat.configure(text=f"{n} — COMING SOON", fg=DIM)
 
-                for w in [row, nl, dl]:
-                    w.bind("<Button-1>", lambda e, c=cmd: c())
-                    if available:
-                        w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
-                        w.bind("<Leave>", lambda e, n=nl: n.configure(fg=WHITE))
+                self._ui_action_row(
+                    sec, key_label, name, desc,
+                    command=cmd,
+                    available=available, tag=tag, tag_fg=DIM, tag_bg=BG2, title_width=22,
+                )
 
-        tk.Frame(f, bg=BG, height=14).pack()
-        back_btn = tk.Label(f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
-                            cursor="hand2", padx=12, pady=4)
-        back_btn.pack(pady=(4, 0))
-        back_btn.bind("<Button-1>", lambda e: self._menu("main"))
-        back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=AMBER))
-        back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
+        self._ui_back_row(panel, lambda: self._menu("main"))
 
     # ─── DATA CENTER (hub) ─────────────────────────────────
     def _data_center(self):
@@ -4429,66 +4637,67 @@ class App(tk.Tk):
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text="DATA CENTER", font=(FONT, 14, "bold"),
-                 fg=AMBER, bg=BG).pack(pady=(0, 6))
-        tk.Label(f, text="backtests · engine logs · reports · export",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 22))
+        _outer, body = self._ui_page_shell(
+            "DATA CENTER",
+            "Backtests, engine logs, reports and export surfaces",
+        )
+        panel = self._ui_panel_frame(body, "DATA ROUTING", "Primary storage and review workflows")
 
         # Quick counts for each card so the user sees signal, not just titles.
         bt_count = self._data_count_backtests()
         eng_running, eng_total = self._data_count_procs()
         rep_count = self._data_count_reports()
+        summary = tk.Frame(panel, bg=BG)
+        summary.pack(fill="x", pady=(0, 10))
+        tk.Label(summary, text=f"RUNS  {bt_count}", font=(FONT, 8, "bold"),
+                 fg=AMBER_D, bg=BG).pack(side="left")
+        tk.Label(summary, text=f"ENGINES  {eng_running}/{eng_total}", font=(FONT, 8),
+                 fg=DIM, bg=BG).pack(side="left", padx=(18, 0))
+        tk.Label(summary, text=f"FILES  {rep_count}", font=(FONT, 8),
+                 fg=DIM, bg=BG).pack(side="left", padx=(18, 0))
+        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
+        self._ui_note(
+            panel,
+            "Use DATA as the review desk: validated runs first, raw artifacts second, export only when sending outside the terminal.",
+            fg=DIM,
+        )
 
-        cards = [
-            ("B", "BACKTESTS", "standalone list · metrics · delete",
-             f"{bt_count} runs on disk",
-             lambda: self._data_backtests()),
-            ("E", "ENGINE LOGS", "running + recent engines · live log tail",
-             f"{eng_running} running · {eng_total} total",
-             lambda: self._data_engines()),
-            ("R", "REPORTS", "raw JSON / log file browser",
-             f"{rep_count} files indexed",
-             lambda: self._data()),
-            ("X", "EXPORT ANALYSIS", "gerar snapshot para análise externa",
-             "< 2 MB JSON",
-             lambda: self._export_analysis()),
+        sections = [
+            ("PRIMARY ROUTES", [
+                ("B", "BACKTESTS", "validated runs, metrics and run-level inspection",
+                 f"{bt_count} runs on disk", lambda: self._data_backtests()),
+                ("E", "ENGINE LOGS", "running and recent engines with live tail",
+                 f"{eng_running} running · {eng_total} total", lambda: self._data_engines()),
+            ]),
+            ("ARTIFACTS", [
+                ("R", "REPORT INDEX", "raw JSON and persisted report artifact browser",
+                 f"{rep_count} files indexed", lambda: self._data()),
+            ]),
+            ("EXTERNAL REVIEW", [
+                ("X", "EXPORT ANALYSIS", "single-file snapshot for external analysis workflows",
+                 "< 2 MB JSON", lambda: self._export_analysis()),
+            ]),
         ]
 
-        for key_label, name, desc, stat, cmd in cards:
-            row = tk.Frame(f, bg=BG, cursor="hand2")
-            row.pack(fill="x", padx=80, pady=3)
+        for section_name, items in sections:
+            sec = self._ui_section(panel, section_name)
+            for key_label, name, desc, stat, cmd in items:
+                row, name_lbl, desc_lbl = self._ui_action_row(
+                    sec, key_label, name, desc,
+                    command=cmd,
+                    title_width=20,
+                    tag=stat,
+                    tag_fg=AMBER_D,
+                    tag_bg=BG,
+                )
+                for w in (row, name_lbl, desc_lbl):
+                    w.bind("<Enter>", lambda e, n=name_lbl: n.configure(fg=AMBER))
+                    w.bind("<Leave>", lambda e, n=name_lbl: n.configure(fg=WHITE))
 
-            tk.Label(row, text=f" {key_label} ", font=(FONT, 10, "bold"),
-                     fg=BG, bg=AMBER, width=3).pack(side="left")
+                key_bind = f"<Key-{key_label.lower()}>"
+                self._kb(key_bind, cmd)
 
-            txt_frame = tk.Frame(row, bg=BG3)
-            txt_frame.pack(side="left", fill="x", expand=True, padx=(0, 0))
-            name_lbl = tk.Label(txt_frame, text=f"  {name}", font=(FONT, 11, "bold"),
-                                fg=WHITE, bg=BG3, anchor="w")
-            name_lbl.pack(fill="x", padx=6, pady=(5, 0))
-            desc_lbl = tk.Label(txt_frame, text=f"  {desc}", font=(FONT, 8),
-                                fg=DIM, bg=BG3, anchor="w")
-            desc_lbl.pack(fill="x", padx=6)
-            stat_lbl = tk.Label(txt_frame, text=f"  {stat}", font=(FONT, 7),
-                                fg=AMBER_D, bg=BG3, anchor="w")
-            stat_lbl.pack(fill="x", padx=6, pady=(0, 5))
-
-            for w in (row, txt_frame, name_lbl, desc_lbl, stat_lbl):
-                w.bind("<Button-1>", lambda e, c=cmd: c())
-                w.bind("<Enter>", lambda e, n=name_lbl: n.configure(fg=AMBER))
-                w.bind("<Leave>", lambda e, n=name_lbl: n.configure(fg=WHITE))
-
-            key_bind = f"<Key-{key_label.lower()}>"
-            self._kb(key_bind, cmd)
-
-        tk.Frame(f, bg=BG, height=22).pack()
-        back_btn = tk.Label(f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM,
-                            bg=BG3, cursor="hand2", padx=12, pady=4)
-        back_btn.pack()
-        back_btn.bind("<Button-1>", lambda e: self._menu("main"))
-        back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=AMBER))
-        back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
+        self._ui_back_row(panel, lambda: self._menu("main"))
 
     # ── Counts used by the DATA CENTER cards ──────────────────
     def _data_count_backtests(self) -> int:
@@ -4631,19 +4840,15 @@ class App(tk.Tk):
         # instance attr when it's used outside the dashboard build path.
         self._dash_widgets = getattr(self, "_dash_widgets", {})
 
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True, padx=16, pady=12)
-
-        # Header
+        _outer, outer = self._ui_page_shell(
+            "BACKTEST RUNS",
+            "Indexed historical runs reconciled against data/index.json",
+        )
         hdr = tk.Frame(outer, bg=BG); hdr.pack(fill="x")
-        tk.Label(hdr, text="BACKTEST RUNS", font=(FONT, 12, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(hdr, text="  ·  reconciled against data/index.json",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=4)
         count_l = tk.Label(hdr, text="", font=(FONT, 8), fg=DIM, bg=BG)
         count_l.pack(side="right")
         self._dash_widgets[("bt_count",)] = count_l
-        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(4, 10))
+        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(4, 10))
 
         split = tk.Frame(outer, bg=BG)
         split.pack(fill="both", expand=True)
@@ -4690,15 +4895,14 @@ class App(tk.Tk):
         self._dash_widgets[("bt_canvas",)] = canvas
 
         # ── RIGHT: detail panel ──
-        right = tk.Frame(split, bg=PANEL,
-                         highlightbackground=BORDER, highlightthickness=1,
-                         width=340)
+        right = tk.Frame(split, bg=PANEL, width=340)
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
 
-        tk.Label(right, text=" [ DETAILS ] ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER, padx=6, pady=2).pack(anchor="nw",
-                                                        padx=6, pady=(6, 2))
+        tk.Label(right, text="DETAILS", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw",
+                                                        padx=10, pady=(10, 4))
+        tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 6))
 
         # Scrollable inner area — metric blocks (PERFORMANCE/TRADES/CONFIG)
         # can overflow the panel height on smaller windows. Wrapping the
@@ -4749,7 +4953,7 @@ class App(tk.Tk):
         bottom = tk.Frame(outer, bg=BG); bottom.pack(fill="x")
 
         back_btn = tk.Label(bottom, text="  VOLTAR  ",
-                            font=(FONT, 9), fg=DIM, bg=BG3,
+                            font=(FONT, 9), fg=DIM, bg=BG,
                             cursor="hand2", padx=10, pady=3)
         back_btn.pack(side="left")
         back_btn.bind("<Button-1>", lambda e: self._data_center())
@@ -4757,7 +4961,7 @@ class App(tk.Tk):
         back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
 
         eng_btn = tk.Label(bottom, text="  ENGINE LOGS  ",
-                           font=(FONT, 9, "bold"), fg=AMBER_D, bg=BG3,
+                           font=(FONT, 9, "bold"), fg=AMBER_D, bg=BG,
                            cursor="hand2", padx=10, pady=3)
         eng_btn.pack(side="left", padx=(6, 0))
         eng_btn.bind("<Button-1>", lambda e: self._data_engines())
@@ -4815,14 +5019,10 @@ class App(tk.Tk):
         self._eng_log_queue: queue.Queue = queue.Queue()
         self._eng_after_id: str | None = None
 
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True, padx=16, pady=12)
-
-        tk.Label(outer, text="ENGINE LOGS", font=(FONT, 12, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="w")
-        tk.Label(outer, text="running + recent engines · live log tail · identity-verified stop",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", pady=(0, 10))
-        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(0, 8))
+        _outer, outer = self._ui_page_shell(
+            "ENGINE LOGS",
+            "Running and recent engines with live log tail and verified stop control",
+        )
 
         split = tk.Frame(outer, bg=BG)
         split.pack(fill="both", expand=True)
@@ -4832,8 +5032,8 @@ class App(tk.Tk):
         left.pack(side="left", fill="y", padx=(0, 8))
         left.pack_propagate(False)
 
-        tk.Label(left, text=" [ PROCS ] ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER, padx=4).pack(anchor="w", pady=(0, 4))
+        tk.Label(left, text="PROCS", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", pady=(0, 4))
 
         hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
         for label, width in [("STATE", 7), ("ENGINE", 10), ("PID", 7),
@@ -4948,23 +5148,23 @@ class App(tk.Tk):
             b.bind("<Button-1>", lambda e, c=cmd: c())
 
         # ── RIGHT: log tail viewer ───────────────────────────
-        right = tk.Frame(split, bg=PANEL,
-                         highlightbackground=BORDER, highlightthickness=1)
+        right = tk.Frame(split, bg=PANEL)
         right.pack(side="right", fill="both", expand=True)
 
-        tk.Label(right, text=" [ LOG TAIL ] ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER, padx=4).pack(anchor="nw", padx=6, pady=(6, 2))
+        tk.Label(right, text="LOG TAIL", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw", padx=8, pady=(8, 2))
+        tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=8, pady=(0, 4))
 
         self._eng_log_header = tk.Label(
             right, text=" — select a proc to stream its log — ",
             font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w")
-        self._eng_log_header.pack(fill="x", padx=6)
+        self._eng_log_header.pack(fill="x", padx=8)
 
         self._eng_log_text = tk.Text(
             right, wrap="none", bg=BG, fg=WHITE, font=(FONT, 8),
             insertbackground=WHITE, padx=6, pady=6,
             borderwidth=0, highlightthickness=0)
-        self._eng_log_text.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+        self._eng_log_text.pack(fill="both", expand=True, padx=8, pady=(2, 8))
         self._eng_log_text.config(state="disabled")
 
         # Initial list render + auto-refresh tick
@@ -5173,97 +5373,106 @@ class App(tk.Tk):
         self._clr(); self._clear_kb()
         market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
         self.h_path.configure(text=f"> STRATEGIES"); self.h_stat.configure(text=market_label, fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  H hub  |  M markets  |  Q quit")
+        self.f_lbl.configure(text="ESC voltar  |  1-4 tabs  |  item key to open  |  H hub")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text=f"STRATEGIES — {market_label}",
-                 font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 4))
+        _outer, body = self._ui_page_shell(
+            "STRATEGIES",
+            f"Execution and research engines routed for {market_label}",
+        )
+        panel = self._ui_panel_frame(body, "ENGINE ROUTER", "Backtest, testnet, live and meta-engine entry points")
+        summary = tk.Frame(panel, bg=BG)
+        summary.pack(fill="x", pady=(0, 8))
+        tk.Label(summary, text=f"MARKET  {market_label}", font=(FONT, 8, "bold"),
+                 fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
+        tk.Label(summary, text="LANES 4   ROUTES 4   ENGINES 11",
+                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(side="left", padx=(16, 0))
+        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
 
-        # Tesla 3·6·9 subtitle. The repo geometry naturally matches:
-        #   3 tiers      → backtest / live / meta
-        #   6 strategies → CITADEL, JUMP, BRIDGEWATER, DE SHAW, MILLENNIUM, TWO SIGMA
-        #   9 engines    → 6 backtest files + live.py + arbitrage.py + darwin.py
-        # "If you only knew the magnificence of the 3, 6, and 9,
-        #  then you would have a key to the universe." — Nikola Tesla
-        tesla = tk.Frame(f, bg=BG); tesla.pack(pady=(0, 2))
-        tk.Label(tesla, text=" TESLA ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER, padx=4).pack(side="left")
-        tk.Label(tesla, text="  3 tiers", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(tesla, text="·", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=6)
-        tk.Label(tesla, text="6 strategies", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(tesla, text="·", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=6)
-        tk.Label(tesla, text="9 engines", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-
-        tk.Label(f, text="selecionar engine — ENTER confirma  ·  ESC volta",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(pady=(2, 14))
-
-        sections = [
-            ("BACKTEST",     SUB_MENUS.get("backtest", []), "backtest", 6),
-            ("LIVE / PAPER", SUB_MENUS.get("live", []),     "live",     5),
-            ("META",         SUB_MENUS.get("tools", []),    "tools",    3),
+        live_items = SUB_MENUS.get("live", [])
+        self._strategies_sections = [
+            ("BACKTEST", SUB_MENUS.get("backtest", []), "backtest"),
+            ("TESTNET", [item for item in live_items if item[0] in {"PAPER", "DEMO", "TESTNET"}], "live"),
+            ("LIVE", [item for item in live_items if item[0] in {"LIVE", "JANE STREET"}], "live"),
+            ("META", SUB_MENUS.get("tools", []), "tools"),
         ]
+        self._strategies_tab_btns = {}
 
-        num = 1
-        for section_name, items, parent_key, tesla_count in sections:
-            if not items:
-                continue
-            # Section header row: name + count badge
-            shead = tk.Frame(f, bg=BG); shead.pack(fill="x", padx=60, pady=(8, 2))
-            tk.Label(shead, text=section_name, font=(FONT, 8, "bold"),
-                     fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
-            tk.Label(shead, text=f" [ {len(items)} ] ",
-                     font=(FONT, 7, "bold"), fg=BG, bg=AMBER_D,
-                     padx=3).pack(side="left", padx=6)
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", padx=60, pady=(0, 3))
+        strip = tk.Frame(panel, bg=BG, height=30)
+        strip.pack(fill="x", pady=(0, 6))
+        strip.pack_propagate(False)
+        for idx, (tab_id, _items, _parent_key) in enumerate(self._strategies_sections, start=1):
+            btn = tk.Label(
+                strip, text=f" {idx} {tab_id} ",
+                font=(FONT, 9, "bold"),
+                fg=DIM, bg=BG, padx=10, pady=5, cursor="hand2",
+            )
+            btn.pack(side="left", padx=(0, 10), pady=1)
+            btn.bind("<Button-1>", lambda e, t=tab_id: self._strategies_render_tab(t))
+            self._strategies_tab_btns[tab_id] = btn
+            self._kb(f"<Key-{idx}>", lambda t=tab_id: self._strategies_render_tab(t))
 
-            for name, script, desc in items:
-                # Label: 1-9, then a-z for items 10+. Mirror that in the keybind.
-                if num <= 9:
-                    key_label = str(num)
-                    key_bind  = f"<Key-{num}>"
+        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
+        self._strategies_inner = tk.Frame(panel, bg=BG)
+        self._strategies_inner.pack(fill="both", expand=True)
+        self._strategies_render_tab("BACKTEST")
+
+        self._ui_back_row(panel, lambda: self._menu("main"))
+
+    def _strategies_render_tab(self, tab):
+        if not hasattr(self, "_strategies_inner") or self._strategies_inner is None:
+            return
+
+        self._clear_kb()
+        self._kb("<Escape>", lambda: self._menu("main"))
+        self._kb("<Key-0>", lambda: self._menu("main"))
+        self._bind_global_nav()
+
+        for idx, (tab_id, _items, _parent_key) in enumerate(getattr(self, "_strategies_sections", []), start=1):
+            self._kb(f"<Key-{idx}>", lambda t=tab_id: self._strategies_render_tab(t))
+
+        for tab_id, btn in getattr(self, "_strategies_tab_btns", {}).items():
+            btn.configure(fg=AMBER if tab_id == tab else DIM, bg=BG)
+
+        for w in self._strategies_inner.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+        items = []
+        parent_key = "backtest"
+        for section_name, section_items, section_parent in getattr(self, "_strategies_sections", []):
+            if section_name == tab:
+                items = section_items
+                parent_key = section_parent
+                break
+
+        sec = self._ui_section(self._strategies_inner, tab, note=f"{len(items)} routes")
+        for num, (name, script, desc) in enumerate(items, start=1):
+            if num <= 9:
+                key_label = str(num)
+                key_bind = f"<Key-{num}>"
+            else:
+                letter_idx = num - 10
+                if letter_idx < 26:
+                    key_label = chr(ord("a") + letter_idx)
+                    key_bind = f"<Key-{key_label}>"
                 else:
-                    letter_idx = num - 10
-                    if letter_idx < 26:
-                        key_label = chr(ord("a") + letter_idx)
-                        key_bind  = f"<Key-{key_label}>"
-                    else:
-                        key_label = " "  # out of keys — mouse only
-                        key_bind  = None
+                    key_label = " "
+                    key_bind = None
 
-                row = tk.Frame(f, bg=BG, cursor="hand2"); row.pack(fill="x", padx=60, pady=1)
-                tk.Label(row, text=f" {key_label} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER, width=3).pack(side="left")
-                nl = tk.Label(row, text=f"  {name}", font=(FONT, 10, "bold"), fg=WHITE, bg=BG3,
-                              anchor="w", padx=6, pady=4, width=14)
-                nl.pack(side="left")
-                dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
-                dl.pack(side="left", fill="x", expand=True)
+            cmd = lambda n=name, s=script, d=desc, k=parent_key: self._brief(n, s, d, k)
+            row, nl, dl = self._ui_action_row(
+                sec, key_label, name, desc,
+                command=cmd,
+                title_width=16,
+            )
 
-                cmd = lambda n=name, s=script, d=desc, k=parent_key: self._brief(n, s, d, k)
-                for w in [row, nl, dl]:
-                    w.bind("<Enter>", lambda e, r=row, n=nl: (r.configure(bg=BG3), n.configure(fg=AMBER)))
-                    w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
-                    w.bind("<Button-1>", lambda e, c=cmd: c())
-
-                if key_bind:
-                    self._kb(key_bind, cmd)
-                num += 1
-
-        # Back row
-        tk.Frame(f, bg=BG, height=10).pack()
-        brow = tk.Frame(f, bg=BG, cursor="hand2"); brow.pack(fill="x", padx=60, pady=1)
-        tk.Label(brow, text=" 0 ", font=(FONT, 9, "bold"), fg=WHITE, bg=DIM2, width=3).pack(side="left")
-        bl = tk.Label(brow, text="  VOLTAR", font=(FONT, 10), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
-        bl.pack(side="left", fill="x", expand=True)
-        for w in [brow, bl]:
-            w.bind("<Button-1>", lambda e: self._menu("main"))
+            if key_bind:
+                self._kb(key_bind, cmd)
 
     # ─── RISK (Layer 2) ──────────────────────────────────
     def _risk_menu(self):
@@ -5274,9 +5483,8 @@ class App(tk.Tk):
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text="RISK CONSOLE", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 6))
-        tk.Label(f, text="Portfolio & risk management", font=(FONT, 8), fg=DIM, bg=BG).pack(pady=(0, 16))
+        _outer, body = self._ui_page_shell("RISK CONSOLE", "Portfolio and risk management surfaces")
+        panel = self._ui_panel_frame(body, "RISK ROUTER", "Current and planned monitoring modules")
 
         sections = [
             ("PORTFOLIO", [
@@ -5299,19 +5507,17 @@ class App(tk.Tk):
         ]
 
         for section_name, items in sections:
-            tk.Label(f, text=section_name, font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", padx=60, pady=(8, 2))
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", padx=60, pady=(0, 3))
+            sec = self._ui_section(panel, section_name)
 
             for key_label, name, desc in items:
-                row = tk.Frame(f, bg=BG); row.pack(fill="x", padx=60, pady=1)
-                tk.Label(row, text=f" {key_label} ", font=(FONT, 8, "bold"), fg=BG, bg=DIM2, width=3).pack(side="left")
-                tk.Label(row, text=f"  {name}", font=(FONT, 9), fg=DIM, bg=BG3, anchor="w", padx=6, pady=3, width=22).pack(side="left")
-                tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=3).pack(side="left", fill="x", expand=True)
-                tk.Label(row, text="COMING SOON", font=(FONT, 7), fg=DIM, bg=BG2, padx=4).pack(side="right", padx=4)
+                self._ui_action_row(
+                    sec, key_label, name, desc,
+                    available=False, tag="COMING SOON", tag_fg=DIM, tag_bg=BG2, title_width=22,
+                )
 
-        tk.Frame(f, bg=BG, height=12).pack()
-        tk.Label(f, text="Risk console modules are in development.", font=(FONT, 8), fg=DIM, bg=BG).pack()
-        tk.Label(f, text="Backtest stress tests are available in STRATEGIES > MILLENNIUM.", font=(FONT, 8), fg=AMBER_D, bg=BG).pack(pady=4)
+        self._ui_note(panel, "Risk console modules are in development.", fg=DIM)
+        self._ui_note(panel, "Backtest stress tests remain available in STRATEGIES > MILLENNIUM.", fg=AMBER_D)
+        self._ui_back_row(panel, lambda: self._menu("main"))
 
     # ─── SPECIAL SCREENS ─────────────────────────────────
     def _special(self, key):
@@ -5322,11 +5528,11 @@ class App(tk.Tk):
     def _data(self):
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> DATA"); self.h_stat.configure(text="BROWSE", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC back  |  click to open file")
+        self.f_lbl.configure(text="ESC back  |  click to open file  |  latest 200 indexed artifacts")
         self._kb("<Escape>", lambda: self._menu("main"))
 
-        f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True, padx=16, pady=12)
-        tk.Label(f, text="DATA & REPORTS", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(anchor="w", pady=(0,8))
+        _outer, body = self._ui_page_shell("DATA & REPORTS", "Indexed JSON and report artifacts across the data tree")
+        panel = self._ui_panel_frame(body, "ARTIFACT INDEX", "Recent persisted files across runs and legacy engine directories")
 
         # Walk every known data tree and tag each file with the section it
         # came from. Previous filter `"reports" in str(r) or "darwin" in str(r)`
@@ -5358,13 +5564,46 @@ class App(tk.Tk):
                     _collect(dated / "reports", "LEGACY")
             reports.sort(key=lambda rs: rs[1].st_mtime, reverse=True)
 
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
+        counts: dict[str, int] = {}
+        for _r, _st, section in reports:
+            counts[section] = counts.get(section, 0) + 1
+
+        meta = tk.Frame(panel, bg=BG)
+        meta.pack(fill="x", pady=(0, 8))
+        tk.Label(meta, text=f"TOTAL  {len(reports)}", font=(FONT, 8, "bold"),
+                 fg=AMBER_D, bg=BG).pack(side="left")
+        for sec_name in ("RUNS", "ARBITRAGE", "DARWIN", "LEGACY"):
+            n = counts.get(sec_name, 0)
+            if n:
+                tk.Label(meta, text=f"{sec_name}  {n}", font=(FONT, 8),
+                         fg=DIM, bg=BG).pack(side="left", padx=(16, 0))
+        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
+        self._ui_note(
+            panel,
+            "Artifact index is chronological. Open BACKTESTS for validated run review; use this screen for raw persisted files.",
+            fg=DIM,
+        )
+
+        routes = self._ui_section(panel, "ROUTES", note="review and drill-down")
+        self._ui_action_row(
+            routes, "B", "BACKTESTS", "Open validated run browser with metrics and detail panel",
+            command=self._data_backtests, tag="PRIMARY", tag_fg=AMBER_D, tag_bg=BG, title_width=18,
+        )
+        self._ui_action_row(
+            routes, "E", "ENGINE LOGS", "Open running-engine log tail and process inspection",
+            command=self._data_engines, tag="OPERATIONS", tag_fg=AMBER_D, tag_bg=BG, title_width=18,
+        )
+        self._kb("<Key-b>", self._data_backtests)
+        self._kb("<Key-e>", self._data_engines)
+
+        canvas = tk.Canvas(panel, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
         sf = tk.Frame(canvas, bg=BG)
         sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0,0), window=sf, anchor="nw")
         canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True); sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
+        sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
 
         tk.Label(sf, text=f"  {'SECTION':<10} {'FILE':<60} {'DATE':<15} {'SIZE':>8}",
                  font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x")
@@ -5405,6 +5644,7 @@ class App(tk.Tk):
             size_lbl = tk.Label(row, text=f" {sz:>8}",
                                 font=(FONT, 7), fg=DIM, bg=BG, anchor="e")
             size_lbl.pack(side="left")
+            tk.Frame(row, bg=DIM2, height=1).pack(side="bottom", fill="x")
 
             labels = (sec_lbl, name_lbl, date_lbl, size_lbl)
 
@@ -5426,6 +5666,8 @@ class App(tk.Tk):
                 w.bind("<Leave>", _leave)
                 w.bind("<Button-1>", lambda e, p=r: self._open_file(p))
 
+        self._ui_back_row(panel, lambda: self._menu("main"))
+
     def _procs(self):
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> PROCS"); self.h_stat.configure(text="MANAGE", fg=GREEN)
@@ -5433,8 +5675,8 @@ class App(tk.Tk):
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-r>", self._procs)
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text="PROCESSES", font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(pady=(0,12))
+        _outer, body = self._ui_page_shell("PROCESSES", "Running engine processes and control actions", content_width=820)
+        panel = self._ui_panel_frame(body, "PROCESS CONTROL", "Live engines currently registered in the local process index")
         try:
             from core.proc import list_procs, stop_proc
             ps = [p for p in list_procs() if p.get("alive")]
@@ -5442,7 +5684,7 @@ class App(tk.Tk):
             ps = []
             stop_proc = None  # type: ignore
         if not ps:
-            tk.Label(f, text="No engines running.", font=(FONT, 9), fg=DIM, bg=BG).pack(pady=8)
+            self._ui_note(panel, "No engines running.", fg=DIM)
 
         def _safe_stop(pid):
             """stop_proc can raise on dead PIDs or permission errors — catch
@@ -5456,11 +5698,12 @@ class App(tk.Tk):
             self.after(200, self._procs)
 
         for p in ps:
-            row = tk.Frame(f, bg=BG3); row.pack(fill="x", padx=60, pady=2)
+            row = tk.Frame(panel, bg=BG3); row.pack(fill="x", padx=14, pady=2)
             tk.Label(row, text=f" {p.get('engine','?').upper()} ", font=(FONT, 8, "bold"), fg=BG, bg=GREEN).pack(side="left")
-            tk.Label(row, text=f"  PID {p.get('pid','?')}", font=(FONT, 9), fg=WHITE, bg=BG3, padx=6, pady=3).pack(side="left")
+            tk.Label(row, text=f"  PID {p.get('pid','?')}", font=(FONT, 9), fg=WHITE, bg=BG3, padx=6, pady=4).pack(side="left")
             tk.Button(row, text="STOP", font=(FONT, 7, "bold"), fg=RED, bg=BG3, border=0, cursor="hand2",
                       command=lambda pid=p.get("pid"): _safe_stop(pid)).pack(side="right", padx=4, pady=2)
+        self._ui_back_row(panel, lambda: self._menu("main"))
 
     def _config(self):
         self._clr(); self._clear_kb()
@@ -5470,8 +5713,8 @@ class App(tk.Tk):
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text="SETTINGS", font=(FONT, 14, "bold"), fg=AMBER, bg=BG).pack(pady=(0, 16))
+        _outer, body = self._ui_page_shell("SETTINGS", "Configuration surfaces for credentials, deploy and operator defaults")
+        panel = self._ui_panel_frame(body, "CONFIGURATION ROUTER", "Editable and planned configuration modules")
 
         cfgs = [
             ("API KEYS",           "Exchange & broker credentials",      self._cfg_keys,  True),
@@ -5484,31 +5727,17 @@ class App(tk.Tk):
             ("BACKUP / RESTORE",   "Export/import all settings",         None,            False),
         ]
         for i, (name, desc, cmd, available) in enumerate(cfgs):
-            row = tk.Frame(f, bg=BG, cursor="hand2" if available else "arrow"); row.pack(fill="x", padx=60, pady=1)
-            tk.Label(row, text=f" {i+1} ", font=(FONT, 9, "bold"), fg=BG,
-                     bg=AMBER if available else DIM2, width=3).pack(side="left")
-            nl = tk.Label(row, text=f"  {name}", font=(FONT, 10, "bold"),
-                          fg=WHITE if available else DIM, bg=BG3, anchor="w", padx=6, pady=4, width=20)
-            nl.pack(side="left")
-            dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
-            dl.pack(side="left", fill="x", expand=True)
-
-            if not available:
-                tk.Label(row, text="COMING SOON", font=(FONT, 7), fg=DIM, bg=BG2, padx=4).pack(side="right", padx=4)
-
+            self._ui_action_row(
+                panel, str(i + 1), name, desc,
+                command=cmd if available else None,
+                available=available,
+                tag=None if available else "COMING SOON",
+                tag_fg=DIM, tag_bg=BG2, title_width=20,
+            )
             if cmd and available:
-                for w in [row, nl, dl]:
-                    w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=nl: n.configure(fg=WHITE))
-                    w.bind("<Button-1>", lambda e, c=cmd: c())
                 self._kb(f"<Key-{i+1}>", cmd)
 
-        tk.Frame(f, bg=BG, height=10).pack()
-        brow = tk.Frame(f, bg=BG, cursor="hand2"); brow.pack(fill="x", padx=60, pady=1)
-        tk.Label(brow, text=" 0 ", font=(FONT, 9, "bold"), fg=WHITE, bg=DIM2, width=3).pack(side="left")
-        bl = tk.Label(brow, text="  VOLTAR", font=(FONT, 10), fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
-        bl.pack(side="left", fill="x", expand=True)
-        for w in [brow, bl]: w.bind("<Button-1>", lambda e: self._menu("main"))
+        self._ui_back_row(panel, lambda: self._menu("main"))
         # <Key-0> is already bound at the top of _config; no rebind here.
 
     # ─── CONFIG EDITORS ──────────────────────────────────
@@ -5519,13 +5748,13 @@ class App(tk.Tk):
         self.f_lbl.configure(text="ESC back  |  CTRL+S save")
         self._kb("<Escape>", back)
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        tk.Label(f, text=title, font=(FONT, 13, "bold"), fg=AMBER, bg=BG).pack(pady=(0,16))
+        _outer, body = self._ui_page_shell(title, "Edit and persist configuration values", content_width=860)
+        panel = self._ui_panel_frame(body, "CONFIG EDITOR", "Fields are persisted immediately on save")
 
         data = load_fn()
         entries = {}
         for key, label, hint, masked in fields:
-            row = tk.Frame(f, bg=BG); row.pack(fill="x", padx=50, pady=2)
+            row = tk.Frame(panel, bg=BG); row.pack(fill="x", pady=2)
             tk.Label(row, text=label, font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, width=16, anchor="w").pack(side="left")
             e = tk.Entry(row, bg=BG3, fg=WHITE, font=(FONT, 9), insertbackground=AMBER, border=0,
                          highlightthickness=1, highlightcolor=AMBER_D, highlightbackground=BORDER, width=48)
@@ -5536,8 +5765,8 @@ class App(tk.Tk):
             if hint: tk.Label(row, text=hint, font=(FONT, 7), fg=DIM2, bg=BG).pack(side="right", padx=4)
             entries[key] = e
 
-        tk.Frame(f, bg=BG, height=14).pack()
-        br = tk.Frame(f, bg=BG); br.pack()
+        tk.Frame(panel, bg=BG, height=14).pack()
+        br = tk.Frame(panel, bg=BG); br.pack(anchor="w")
 
         def save():
             vals = {k: e.get().strip() for k, e in entries.items()}
@@ -5556,6 +5785,7 @@ class App(tk.Tk):
         cn = tk.Label(br, text="  CANCEL  ", font=(FONT, 10), fg=DIM, bg=BG3, cursor="hand2", padx=12, pady=3)
         cn.pack(side="left", padx=4); cn.bind("<Button-1>", lambda e: back())
         self._kb("<Control-s>", save)
+        self._ui_note(panel, "CTRL+S saves immediately to the local configuration store.", fg=DIM)
 
     def _load_json(self, name):
         p = ROOT / "config" / name
@@ -5851,9 +6081,11 @@ class App(tk.Tk):
 
     # ── DASHBOARD: MAIN COLUMN ────────────────────────────
     def _dash_section_header(self, parent, text):
-        tk.Label(parent, text=f"─── {text} ".ljust(60, "─"),
-                 font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(fill="x")
-        tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", pady=(0, 3))
+        head = tk.Frame(parent, bg=BG)
+        head.pack(fill="x", pady=(0, 3))
+        tk.Label(head, text=text, font=(FONT, 8, "bold"),
+                 fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
+        tk.Frame(head, bg=DIM2, height=1).pack(side="left", fill="x", expand=True, padx=(8, 0), pady=(6, 0))
 
     def _dash_build_market_tab(self, parent):
         inner = tk.Frame(parent, bg=BG); inner.pack(fill="both", expand=True, padx=14, pady=10)
@@ -6173,7 +6405,7 @@ class App(tk.Tk):
 
     def _dash_build_tabs(self, parent):
         """Build the tab strip + an empty body_inner the tabs render into."""
-        strip = tk.Frame(parent, bg=BG2, height=28); strip.pack(fill="x")
+        strip = tk.Frame(parent, bg=BG, height=30); strip.pack(fill="x")
         strip.pack_propagate(False)
 
         tabs = [
@@ -6189,13 +6421,13 @@ class App(tk.Tk):
             btn = tk.Label(
                 strip, text=f" {key} {label} ",
                 font=(FONT, 9, "bold"),
-                fg=DIM, bg=BG3, padx=10, pady=4, cursor="hand2",
+                fg=DIM, bg=BG, padx=10, pady=5, cursor="hand2",
             )
-            btn.pack(side="left", padx=(2, 0), pady=2)
+            btn.pack(side="left", padx=(0, 10), pady=1)
             btn.bind("<Button-1>", lambda e, t=tab_id: self._dash_render_tab(t))
             self._dash_tab_btns[tab_id] = btn
 
-        tk.Frame(parent, bg=AMBER_D, height=1).pack(fill="x")
+        tk.Frame(parent, bg=DIM2, height=1).pack(fill="x")
         self._dash_inner = tk.Frame(parent, bg=BG)
         self._dash_inner.pack(fill="both", expand=True)
 
@@ -6219,9 +6451,9 @@ class App(tk.Tk):
         # Repaint tab buttons
         for tab_id, btn in self._dash_tab_btns.items():
             if tab_id == tab:
-                btn.configure(bg=AMBER, fg=BG)
+                btn.configure(bg=BG, fg=AMBER)
             else:
-                btn.configure(bg=BG3, fg=DIM)
+                btn.configure(bg=BG, fg=DIM)
 
         # Reset widget registry per tab so apply() never writes into stale handles
         self._dash_widgets = {}
@@ -8394,19 +8626,11 @@ class App(tk.Tk):
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-
-        # Mini banner
-        banner = (
-            "          ╭───────────────────╮\n"
-            "          │  A U R U M        │\n"
-            "          │  COMMAND CENTER   │\n"
-            "          │  ─────────────── │\n"
-            "          │  φ = 1.618        │\n"
-            "          ╰───────────────────╯"
+        _outer, body = self._ui_page_shell(
+            "COMMAND CENTER",
+            "Administrative routing for local site, deploy and system control",
         )
-        tk.Label(f, text=banner, font=(FONT, 8), fg=AMBER_D, bg=BG,
-                 justify="left").pack(pady=(8, 14))
+        panel = self._ui_panel_frame(body, "CONTROL SURFACES", "Operational and infrastructure workflows")
 
         sr = self._get_site_runner()
         site_running = sr.is_running()
@@ -8426,28 +8650,22 @@ class App(tk.Tk):
              lambda: self._command_coming_soon("SYSTEM"),    None),
         ]
 
+        self._ui_note(
+            panel,
+            "Local site control is active. Remaining surfaces stay documented until implementation is wired.",
+            fg=DIM,
+        )
+
         for i, (name, desc, available, cmd, tag) in enumerate(items):
             num = i + 1
-            row = tk.Frame(f, bg=BG, cursor="hand2"); row.pack(fill="x", padx=60, pady=1)
-
-            tk.Label(row, text=f" {num} ", font=(FONT, 9, "bold"),
-                     fg=BG, bg=AMBER if available else DIM2, width=3).pack(side="left")
-
-            nl = tk.Label(row, text=f"  {name}", font=(FONT, 10, "bold"),
-                          fg=WHITE if available else DIM, bg=BG3,
-                          anchor="w", padx=6, pady=4, width=18)
-            nl.pack(side="left")
-
-            dl = tk.Label(row, text=desc, font=(FONT, 8), fg=DIM, bg=BG3,
-                          anchor="w", padx=6, pady=4)
-            dl.pack(side="left", fill="x", expand=True)
-
-            if tag:
-                tk.Label(row, text=f" {tag} ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=GREEN, padx=4).pack(side="right", padx=4)
-            elif not available:
-                tk.Label(row, text=" COMING SOON ", font=(FONT, 7),
-                         fg=DIM, bg=BG2, padx=4).pack(side="right", padx=4)
+            row, nl, dl = self._ui_action_row(
+                panel, str(num), name, desc,
+                available=available,
+                tag=tag or ("COMING SOON" if not available else None),
+                tag_fg=BG if tag else DIM,
+                tag_bg=GREEN if tag else BG2,
+                title_width=18,
+            )
 
             for w in [row, nl, dl]:
                 w.bind("<Button-1>", lambda e, c=cmd: c())
@@ -8456,16 +8674,7 @@ class App(tk.Tk):
                     w.bind("<Leave>", lambda e, n=nl: n.configure(fg=WHITE))
             self._kb(f"<Key-{num}>", cmd)
 
-        # Back row
-        tk.Frame(f, bg=BG, height=10).pack()
-        brow = tk.Frame(f, bg=BG, cursor="hand2"); brow.pack(fill="x", padx=60, pady=1)
-        tk.Label(brow, text=" 0 ", font=(FONT, 9, "bold"),
-                 fg=WHITE, bg=DIM2, width=3).pack(side="left")
-        bl = tk.Label(brow, text="  VOLTAR", font=(FONT, 10),
-                      fg=DIM, bg=BG3, anchor="w", padx=6, pady=4)
-        bl.pack(side="left", fill="x", expand=True)
-        for w in [brow, bl]:
-            w.bind("<Button-1>", lambda e: self._menu("main"))
+        self._ui_back_row(panel, lambda: self._menu("main"))
 
     def _command_coming_soon(self, name):
         self._clr(); self._clear_kb()
@@ -8478,26 +8687,11 @@ class App(tk.Tk):
 
         roadmap = COMMAND_ROADMAPS.get(name, ["Coming soon"])
 
-        f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-        box = tk.Frame(f, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1)
-        box.pack(pady=24, padx=80, ipadx=24, ipady=18)
-
-        tk.Label(box, text="COMING SOON", font=(FONT, 14, "bold"),
-                 fg=AMBER, bg=PANEL).pack(pady=(0, 10))
-        tk.Frame(box, bg=AMBER_D, height=1, width=240).pack(pady=(0, 14))
-
-        tk.Label(box, text=f"{name} pipeline:", font=(FONT, 9),
-                 fg=DIM, bg=PANEL, anchor="w").pack(fill="x", pady=(0, 6))
+        _outer, body = self._ui_page_shell(name, "Roadmap placeholder for command-center pipeline")
+        box = self._ui_panel_frame(body, "ROADMAP", f"{name} implementation plan")
         for item in roadmap:
-            tk.Label(box, text=f"  □ {item}", font=(FONT, 9),
-                     fg=DIM, bg=PANEL, anchor="w").pack(fill="x")
-
-        tk.Frame(box, bg=PANEL, height=14).pack()
-        btn = tk.Label(box, text=" VOLTAR ", font=(FONT, 9, "bold"),
-                       fg=BG, bg=AMBER, cursor="hand2", padx=14, pady=4)
-        btn.pack()
-        btn.bind("<Button-1>", lambda e: self._command_center())
+            self._ui_note(box, f"[ ] {item}", fg=DIM)
+        self._ui_back_row(box, lambda: self._command_center())
 
     # ── COMMAND CENTER · SITE LOCAL ──────────────────────
     def _site_local(self):
@@ -8517,16 +8711,12 @@ class App(tk.Tk):
     def _site_config_screen(self, sr):
         self.h_stat.configure(text="● STOPPED", fg=RED)
 
-        f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True, padx=30, pady=16)
-        tk.Label(f, text="SITE LOCAL", font=(FONT, 14, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="w", pady=(0, 12))
-
-        # CONFIG box
-        box = tk.Frame(f, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-        box.pack(fill="x", pady=(0, 16))
-        tk.Label(box, text=" CONFIG ", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL).pack(anchor="w", padx=12, pady=(8, 4))
-        tk.Frame(box, bg=DIM2, height=1).pack(fill="x", padx=12)
+        _outer, body = self._ui_page_shell(
+            "SITE LOCAL",
+            "Local site runner configuration and launch controls",
+            content_width=860,
+        )
+        box = self._ui_panel_frame(body, "SITE RUNNER", "Resolved local app command and operator settings")
 
         framework_d, command_d = sr.resolved_command()
         info = [
@@ -8537,17 +8727,15 @@ class App(tk.Tk):
             ("Auto-open",   "yes" if sr.config.get("auto_open_browser") else "no"),
         ]
         for label, value in info:
-            row = tk.Frame(box, bg=PANEL); row.pack(fill="x", padx=12, pady=2)
+            row = tk.Frame(box, bg=BG); row.pack(fill="x", pady=2)
             tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                     fg=DIM, bg=PANEL, width=14, anchor="w").pack(side="left")
+                     fg=DIM, bg=BG, width=14, anchor="w").pack(side="left")
             tk.Label(row, text=value, font=(FONT, 9),
-                     fg=WHITE, bg=PANEL, anchor="w").pack(side="left", padx=4)
+                     fg=WHITE, bg=BG, anchor="w").pack(side="left", padx=4)
 
-        tk.Label(box, text="● STOPPED", font=(FONT, 9, "bold"),
-                 fg=RED, bg=PANEL).pack(anchor="w", padx=12, pady=(8, 12))
+        self._ui_note(box, "Status: stopped", fg=RED)
 
-        # Buttons row
-        bf = tk.Frame(f, bg=BG); bf.pack(fill="x", pady=(0, 8))
+        bf = tk.Frame(box, bg=BG); bf.pack(fill="x", pady=(8, 4))
         def mkbtn(text, color, fg, cmd):
             btn = tk.Label(bf, text=text, font=(FONT, 10, "bold"),
                            fg=fg, bg=color, cursor="hand2", padx=14, pady=5)
@@ -8561,38 +8749,33 @@ class App(tk.Tk):
         mkbtn(" VOLTAR ",       BG3,   DIM,   self._command_center)
 
         if not sr.config.get("project_dir"):
-            tk.Label(f, text=" ⚠  Configura PROJECT_DIR antes de fazer START.",
-                     font=(FONT, 8), fg=AMBER_D, bg=BG, anchor="w"
-                     ).pack(anchor="w", pady=(8, 0))
+            self._ui_note(box, "Warning: configure PROJECT_DIR before START.", fg=AMBER_D)
 
     def _site_running_screen(self, sr):
         self.h_stat.configure(text="● RUNNING", fg=GREEN)
         framework, command = sr.resolved_command()
         port = sr.config.get("port", 3000)
 
-        f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True)
-
-        # Top status bar
-        top = tk.Frame(f, bg=BG2); top.pack(fill="x")
-        tk.Label(top, text=" SITE LOCAL ", font=(FONT, 8, "bold"),
-                 fg=BG, bg=AMBER).pack(side="left", padx=6, pady=4)
-        tk.Label(top,
-                 text=f"● RUNNING   {framework}   port {port}",
-                 font=(FONT, 8, "bold"), fg=GREEN, bg=BG2, padx=8
-                 ).pack(side="left", pady=4)
+        _outer, body = self._ui_page_shell(
+            "SITE LOCAL",
+            "Local runner status, console stream and browser routing",
+        )
+        top = self._ui_panel_frame(body, "SITE RUNNER", f"Running on {framework}  ·  port {port}")
+        meta = tk.Frame(top, bg=BG)
+        meta.pack(fill="x", pady=(0, 8))
+        tk.Label(meta, text="Status: running", font=(FONT, 8, "bold"),
+                 fg=GREEN, bg=BG).pack(side="left")
         self._site_uptime_lbl = tk.Label(
-            top, text=f"PID {sr.proc.pid if sr.proc else '?'}   uptime {sr.uptime()}",
-            font=(FONT, 7), fg=DIM, bg=BG2)
-        self._site_uptime_lbl.pack(side="left", padx=8)
-        url_lbl = tk.Label(top, text=sr.url(), font=(FONT, 7),
-                           fg=AMBER_D, bg=BG2, cursor="hand2")
+            meta, text=f"PID {sr.proc.pid if sr.proc else '?'}   uptime {sr.uptime()}",
+            font=(FONT, 7), fg=DIM, bg=BG)
+        self._site_uptime_lbl.pack(side="left", padx=12)
+        url_lbl = tk.Label(meta, text=sr.url(), font=(FONT, 7),
+                           fg=AMBER_D, bg=BG, cursor="hand2")
         url_lbl.pack(side="right", padx=8)
         url_lbl.bind("<Button-1>", lambda e: self._site_open_browser())
 
-        tk.Frame(f, bg=AMBER_D, height=1).pack(fill="x")
-
-        # Console
-        cf = tk.Frame(f, bg=PANEL); cf.pack(fill="both", expand=True)
+        cf = tk.Frame(body, bg=PANEL)
+        cf.pack(fill="both", expand=True)
         sb = tk.Scrollbar(cf, bg=BG, troughcolor=BG, highlightthickness=0, bd=0)
         sb.pack(side="right", fill="y")
         self.site_con = tk.Text(cf, bg=PANEL, fg=WHITE, font=(FONT, 9), wrap="word",
@@ -8607,12 +8790,11 @@ class App(tk.Tk):
         self.site_con.tag_configure("d", foreground=DIM)
         self.site_con.tag_configure("w", foreground=WHITE)
 
-        # Buttons row
-        tk.Frame(f, bg=AMBER, height=1).pack(fill="x")
-        bf = tk.Frame(f, bg=BG2); bf.pack(fill="x")
+        bf = tk.Frame(body, bg=BG)
+        bf.pack(fill="x", pady=(8, 0))
         def mkbtn(text, fg, cmd):
             btn = tk.Label(bf, text=text, font=(FONT, 9, "bold"),
-                           fg=fg, bg=BG2, cursor="hand2", padx=10, pady=5)
+                           fg=fg, bg=BG, cursor="hand2", padx=10, pady=5)
             btn.pack(side="left", padx=2, pady=2)
             btn.bind("<Button-1>", lambda e: cmd())
         mkbtn(" STOP ",         RED,   self._site_stop)
