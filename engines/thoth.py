@@ -255,13 +255,14 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         direction = None
         struct = _str[idx]
 
-        if sent_score > 0.2:
+        _dir_thresh = THOTH_DIRECTION_THRESHOLD
+        if sent_score > _dir_thresh:
             # bullish sentiment — confirm with struct or macro
             if struct == "UP" or macro_b == "BULL":
                 direction = "BULLISH"
             elif struct != "DOWN":
                 direction = "BULLISH"  # neutral struct is ok
-        elif sent_score < -0.2:
+        elif sent_score < -_dir_thresh:
             # bearish sentiment — confirm with struct or macro
             if struct == "DOWN" or macro_b == "BEAR":
                 direction = "BEARISH"

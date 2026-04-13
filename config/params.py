@@ -63,7 +63,7 @@ __all__ = [
     "THOTH_FUNDING_WINDOW", "THOTH_FUNDING_ENTRY",
     "THOTH_OI_WINDOW", "THOTH_LS_CONTRARIAN", "THOTH_LS_CONTRARIAN_LOW",
     "THOTH_WEIGHT_FUNDING", "THOTH_WEIGHT_OI", "THOTH_WEIGHT_LS",
-    "THOTH_MIN_SCORE", "THOTH_SIZE_MULT",
+    "THOTH_MIN_SCORE", "THOTH_DIRECTION_THRESHOLD", "THOTH_SIZE_MULT",
     # Darwin
     "DARWIN_EVAL_WINDOW", "DARWIN_MUTATION_CYCLE", "DARWIN_MUTATION_RANGE",
     "DARWIN_MUTATION_MIN_IMPR", "DARWIN_KILL_WINDOWS",
@@ -385,6 +385,7 @@ THOTH_WEIGHT_FUNDING    = 0.40     # peso funding no composite score
 THOTH_WEIGHT_OI         = 0.30     # peso OI no composite score
 THOTH_WEIGHT_LS         = 0.30     # peso LS ratio no composite score
 THOTH_MIN_SCORE         = 0.30     # score mínimo para entrada
+THOTH_DIRECTION_THRESHOLD = 0.20   # |sent_score| > N para gerar direção
 THOTH_SIZE_MULT         = 0.50     # position size multiplier
 
 # ── DARWIN — Adaptive Strategy Evolution ─────────────────────
