@@ -2061,7 +2061,8 @@ class App(tk.Tk):
                     w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
                     w.bind("<Button-1>", lambda e, c=cmd: c())
 
-                self._kb(f"<Key-{num}>", cmd)
+                if num < 10:  # Tk only supports single-digit <Key-N> bindings
+                    self._kb(f"<Key-{num}>", cmd)
 
         # ─── SUBMENUS: clean list ─────────────────────────
         else:
@@ -2111,7 +2112,8 @@ class App(tk.Tk):
                     w.bind("<Leave>", lambda e, r=row, n=nl: (r.configure(bg=BG), n.configure(fg=WHITE)))
                     w.bind("<Button-1>", lambda e, c=cmd: c())
 
-                self._kb(f"<Key-{num}>", cmd)
+                if num < 10:  # Tk only supports single-digit <Key-N> bindings
+                    self._kb(f"<Key-{num}>", cmd)
 
             # Back row
             tk.Frame(f, bg=BG, height=10).pack()
