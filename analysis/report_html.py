@@ -567,8 +567,14 @@ def _build_wf_table(wf: list) -> str:
 def _build_veto_section(all_vetos: dict) -> str:
     if not all_vetos:
         return '<p style="color:#9ca3af;">No veto filters triggered.</p>'
-    total = sum(all_vetos.values()) or 1
-    sorted_vetos = sorted(all_vetos.items(), key=lambda x: x[1], reverse=True)
+    # Coalesce parametric vetos like "agg_cap(15344>9940)" into a single bucket
+    import re as _re_v
+    _coalesced: dict[str, int] = {}
+    for k, v in all_vetos.items():
+        base = _re_v.sub(r"\([^)]*\)", "", str(k)).strip() or str(k)
+        _coalesced[base] = _coalesced.get(base, 0) + v
+    total = sum(_coalesced.values()) or 1
+    sorted_vetos = sorted(_coalesced.items(), key=lambda x: x[1], reverse=True)
     rows = []
     for reason, count in sorted_vetos:
         pct = count / total * 100

@@ -603,8 +603,45 @@ if __name__ == "__main__":
     export_json(all_trades, eq, mc, ratios, summary, config)
 
     if all_vetos:
+        # Coalesce parametric vetos
+        import re as _re_v
+        _coalesced: dict[str, int] = {}
+        for k, v in all_vetos.items():
+            base = _re_v.sub(r"\([^)]*\)", "", str(k)).strip() or str(k)
+            _coalesced[base] = _coalesced.get(base, 0) + v
         print(f"\n{SEP}\n  VETOS\n{SEP}")
-        for k, v in sorted(all_vetos.items(), key=lambda x: -x[1]):
+        for k, v in sorted(_coalesced.items(), key=lambda x: -x[1])[:10]:
             print(f"  {v:>6d}  {k}")
+
+    # ── INSTITUTIONAL PLOTS ──
+    try:
+        from analysis.plots import save_institutional_plots
+        plot_files = save_institutional_plots(
+            RUN_DIR, eq, all_trades, mc=mc, wf=wf,
+            ratios=ratios, mdd_pct=mdd_pct,
+            engine_name="JUMP", interval=INTERVAL,
+        )
+        if plot_files:
+            print(f"\n  charts → {len(plot_files)} PNGs em {RUN_DIR}/charts/")
+    except Exception as _e:
+        log.warning(f"Plots failed: {_e}")
+
+    # ── HTML Report ──
+    try:
+        from analysis.report_html import generate_report
+        # mercurio has simpler shape — pass empties for missing fields
+        cond = {}
+        wf_regime = {}
+        from collections import defaultdict as _dd
+        by_sym = _dd(list)
+        for t in all_trades:
+            by_sym[t.get("symbol", "?")].append(t)
+        generate_report(
+            all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
+            by_sym, all_vetos, str(RUN_DIR), config_dict=config,
+        )
+        print(f"  HTML → {RUN_DIR / 'report.html'}")
+    except Exception as _e:
+        log.warning(f"HTML report failed: {_e}")
 
     print(f"\n{SEP}\n  output  ·  {RUN_DIR}/\n{SEP}\n")

@@ -905,6 +905,19 @@ if __name__ == "__main__":
     )
     append_to_index(RUN_DIR, _summary, _config, audit_results)
 
+    # ── INSTITUTIONAL PLOTS ──
+    try:
+        from analysis.plots import save_institutional_plots
+        plot_files = save_institutional_plots(
+            RUN_DIR, eq, all_trades, mc=mc, wf=wf,
+            ratios=ratios, mdd_pct=mdd_pct,
+            engine_name="DE SHAW", interval=INTERVAL,
+        )
+        if plot_files:
+            print(f"  charts → {len(plot_files)} PNGs em {RUN_DIR}/charts/")
+    except Exception as _e:
+        log.warning(f"Plots failed: {_e}")
+
     # ── HTML Report ──
     try:
         from analysis.report_html import generate_report
