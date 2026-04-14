@@ -191,7 +191,8 @@ def _is_alive(pid: int, expected: dict | None = None) -> bool:
     return True
 
 
-def spawn(engine: str, stdin_lines: list[str] | None = None) -> dict | None:
+def spawn(engine: str, stdin_lines: list[str] | None = None,
+          cli_args: list[str] | None = None) -> dict | None:
     cfg = ENGINES.get(engine)
     if not cfg:
         return None
@@ -209,6 +210,8 @@ def spawn(engine: str, stdin_lines: list[str] | None = None) -> dict | None:
     log_file = log_dir / f"{engine}_{ts}.log"
 
     cmd = [sys.executable, "-u", cfg["script"]]
+    if cli_args:
+        cmd.extend(cli_args)
 
     stdin_data = None
     stdin_pipe = None

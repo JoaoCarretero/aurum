@@ -1015,19 +1015,6 @@ if __name__ == "__main__":
     # ── Append ao index global ──
     append_to_index(RUN_DIR, _summary, _config, audit_results)
 
-    # ── INSTITUTIONAL PLOTS ──
-    try:
-        save_institutional_plots = lambda *args, **kwargs: []
-        plot_files = save_institutional_plots(
-            RUN_DIR, eq, all_trades, mc=mc, wf=wf,
-            ratios=ratios, mdd_pct=mdd_pct,
-            engine_name="CITADEL", interval=INTERVAL,
-        )
-        if plot_files:
-            print(f"\n  charts → {len(plot_files)} PNGs em {RUN_DIR}/charts/")
-    except Exception as _e:
-        log.warning(f"Plots failed: {_e}")
-
     # ── HTML Report ──
     try:
         from analysis.report_html import generate_report

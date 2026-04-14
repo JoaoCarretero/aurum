@@ -3510,7 +3510,8 @@ class App(tk.Tk):
                     self._p(f"FAILED: background mapping not found for {script}\n", "r")
                     return
                 from core.proc import spawn
-                info = spawn(proc_key, stdin_lines=auto_inputs or None)
+                info = spawn(proc_key, stdin_lines=auto_inputs or None,
+                             cli_args=cli_args or None)
                 if not info:
                     self._p(f"FAILED: {name} already running in background or could not start\n", "r")
                     self._p("Open TERMINAL > ENGINE LOGS to inspect existing managed runs.\n", "d")
