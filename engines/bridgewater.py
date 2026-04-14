@@ -553,10 +553,10 @@ if __name__ == "__main__":
     _tf_per_hour = 60 / _TF_MINUTES.get(INTERVAL, 15)
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_per_hour)
 
-    BASKET_NAME = _args.basket or "default"
-    if _args.basket:
-        from config.params import BASKETS
-        SYMBOLS = BASKETS.get(_args.basket, SYMBOLS)
+    BASKET_NAME = _args.basket or ENGINE_BASKETS.get("BRIDGEWATER", "default")
+    from config.params import BASKETS
+    if BASKET_NAME in BASKETS:
+        SYMBOLS = BASKETS[BASKET_NAME]
     elif not _args.no_menu:
         SYMBOLS = select_symbols(SYMBOLS)
 

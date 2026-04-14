@@ -16,6 +16,8 @@ from pathlib import Path as _Path
 # ── Config ────────────────────────────────────────────────────
 from config.params import *
 from config.params import _tf_params, _TF_MINUTES
+# Calibrated TF (longrun battery 2026-04-14: 15m default = sweet spot)
+INTERVAL = ENGINE_INTERVALS.get("CITADEL", INTERVAL)
 
 # ── Core modules ──────────────────────────────────────────────
 from core.data import fetch, fetch_all, validate
@@ -561,9 +563,9 @@ if __name__ == "__main__":
 
     SCAN_DAYS = _args.days
     LEVERAGE = _args.leverage
-    BASKET_NAME = _args.basket if _args.basket in BASKETS else "default"
-    if _args.basket in BASKETS:
-        SYMBOLS = BASKETS[_args.basket]
+    BASKET_NAME = _args.basket or ENGINE_BASKETS.get("CITADEL", "default")
+    if BASKET_NAME in BASKETS:
+        SYMBOLS = BASKETS[BASKET_NAME]
 
     N_CANDLES = SCAN_DAYS * 24 * 4
     HTF_N_CANDLES_MAP = {
@@ -601,7 +603,7 @@ if __name__ == "__main__":
     def _bl(txt): return f"  ║  {txt:{_BW-4}s}║"
     def _bh():    return f"  ╠{'═'*_BW}╣"
 
-    _basket_name = _args.basket
+    _basket_name = BASKET_NAME
     _sym_list = ", ".join(s.replace("USDT","") for s in SYMBOLS[:5])
     if len(SYMBOLS) > 5: _sym_list += f", ... (+{len(SYMBOLS)-5})"
 

@@ -19,7 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from analysis.stats import calc_ratios, equity_stats
-from config.params import ACCOUNT_SIZE, BASKETS, INTERVAL, LEVERAGE, MACRO_SYMBOL, SCAN_DAYS, SYMBOLS
+from config.params import ACCOUNT_SIZE, BASKETS, ENGINE_BASKETS, ENGINE_INTERVALS, INTERVAL, LEVERAGE, MACRO_SYMBOL, SCAN_DAYS, SYMBOLS
+# Calibrated TF (longrun battery 2026-04-14: 15m bluechip = 6/6 overfit PASS)
+INTERVAL = ENGINE_INTERVALS.get("RENAISSANCE", INTERVAL)
 from core import build_corr_matrix, detect_macro, fetch_all, validate
 from core.harmonics import scan_hermes
 from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
@@ -114,14 +116,16 @@ def main() -> int:
     global LEVERAGE
     parser = argparse.ArgumentParser(description="RENAISSANCE harmonics standalone backtest")
     parser.add_argument("--days", type=int, default=SCAN_DAYS)
-    parser.add_argument("--basket", default="default")
+    parser.add_argument("--basket", default=None)
     parser.add_argument("--leverage", type=float, default=LEVERAGE)
     parser.add_argument("--no-menu", action="store_true")
     args, _ = parser.parse_known_args()
     LEVERAGE = float(args.leverage)
 
+    args.basket = args.basket or ENGINE_BASKETS.get("RENAISSANCE", "default")
     symbols = list(BASKETS.get(args.basket, SYMBOLS))
-    n_candles = args.days * 24 * 4
+    _tf_mult = {"1m":60,"3m":20,"5m":12,"15m":4,"30m":2,"1h":1,"2h":0.5,"4h":0.25}
+    n_candles = int(args.days * 24 * _tf_mult.get(INTERVAL, 4))
 
     print(f"\n{SEP}")
     print(f"  RENAISSANCE  |  {args.days}d  |  {len(symbols)} ativos  |  {INTERVAL}")

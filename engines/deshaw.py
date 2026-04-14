@@ -26,6 +26,8 @@ from itertools import combinations
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
+# Calibrated TF (longrun battery 2026-04-14: 1h >> 15m/4h)
+INTERVAL = ENGINE_INTERVALS.get("DESHAW", INTERVAL)
 from core.chronos import enrich_with_regime
 from core import (
     fetch_all, validate, indicators, swing_structure,
@@ -721,10 +723,10 @@ if __name__ == "__main__":
     _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2, "1h": 1, "2h": 0.5, "4h": 0.25}
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_mult.get(INTERVAL, 4))
 
-    BASKET_NAME = _args.basket or "default"
-    if _args.basket:
-        from config.params import BASKETS
-        SYMBOLS = BASKETS.get(_args.basket, SYMBOLS)
+    BASKET_NAME = _args.basket or ENGINE_BASKETS.get("DESHAW", "default")
+    from config.params import BASKETS
+    if BASKET_NAME in BASKETS:
+        SYMBOLS = BASKETS[BASKET_NAME]
     elif not _args.no_menu:
         SYMBOLS = select_symbols(SYMBOLS)
 
