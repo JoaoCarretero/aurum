@@ -21,6 +21,7 @@ from pathlib import Path
 
 from config.macro_params import (
     MACRO_DATA_DIR,
+    MACRO_SCHED_BOTS_SEC,
     MACRO_SCHED_MACRO_SEC,
     MACRO_SCHED_NEWS_SEC,
     MACRO_SCHED_REGIME_SEC,
@@ -297,6 +298,31 @@ def job_thesis():
         return {"error": str(e)}
 
 
+def job_run_bots():
+    """Run registered bot watchers (HL whale, SOL sniper, ...).
+
+    Each bot decides internally if it's ready to emit (watchlists/keys).
+    Bots with status=planned yield nothing — zero network cost.
+    """
+    from macro_brain.bots import ALL_BOTS
+    agg = {"inserted": 0, "errors": 0, "per_bot": {}}
+    for cls in ALL_BOTS:
+        try:
+            bot = cls()
+            # Skip bots still in 'planned' (no fetch() body yet)
+            if bot.describe().status == "planned":
+                continue
+            r = bot.run()
+            agg["inserted"] += r.get("inserted", 0)
+            agg["errors"] += r.get("errors", 0)
+            agg["per_bot"][bot.slug] = r
+        except Exception as e:
+            log.warning(f"bot {cls.__name__} failed: {e}")
+            agg["errors"] += 1
+    _record_run("bots", result=agg)
+    return agg
+
+
 def job_position_review():
     """Abre pending theses + review open positions (MTM + invalidation)."""
     try:
@@ -340,6 +366,7 @@ def run_once(force: bool = False):
         ("calendar",    job_ingest_calendar,    MACRO_SCHED_MACRO_SEC),  # daily
         ("news",        job_ingest_news,        MACRO_SCHED_NEWS_SEC),   # 15min
         ("macro",       job_ingest_macro,       MACRO_SCHED_MACRO_SEC),  # daily (FRED)
+        ("bots",        job_run_bots,           MACRO_SCHED_BOTS_SEC),   # 5min
         ("regime",      job_regime,             MACRO_SCHED_REGIME_SEC), # 4h
         ("thesis",      job_thesis,             MACRO_SCHED_THESIS_SEC), # daily
         ("review",      job_position_review,    MACRO_SCHED_REVIEW_SEC), # hourly

@@ -115,6 +115,23 @@ CREATE TABLE IF NOT EXISTS pnl_ledger (
     account_equity  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pnl_ts ON pnl_ledger(ts);
+
+CREATE TABLE IF NOT EXISTS whale_snapshots (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT NOT NULL,
+    venue      TEXT NOT NULL,
+    address    TEXT NOT NULL,
+    asset      TEXT NOT NULL,
+    side       TEXT NOT NULL,
+    size_usd   REAL NOT NULL,
+    leverage   REAL,
+    entry_px   REAL,
+    mark_px    REAL,
+    raw_json   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_whale_addr_asset
+    ON whale_snapshots(venue, address, asset, ts);
+CREATE INDEX IF NOT EXISTS idx_whale_ts ON whale_snapshots(ts);
 """
 
 
@@ -212,6 +229,35 @@ def latest_macro(metric: str, n: int = 1) -> list[dict]:
             (metric, n),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── WHALE SNAPSHOTS (bot watchers) ───────────────────────────
+
+def insert_whale_snapshot(
+    venue: str, address: str, asset: str, side: str, size_usd: float,
+    leverage: float | None = None, entry_px: float | None = None,
+    mark_px: float | None = None, raw: dict | None = None,
+) -> None:
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO whale_snapshots (ts, venue, address, asset, side, "
+            "size_usd, leverage, entry_px, mark_px, raw_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (_now(), venue, address, asset, side, size_usd,
+             leverage, entry_px, mark_px, json.dumps(raw or {})),
+        )
+
+
+def latest_whale_snapshot(
+    venue: str, address: str, asset: str,
+) -> dict | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM whale_snapshots WHERE venue = ? AND address = ? "
+            "AND asset = ? ORDER BY ts DESC LIMIT 1",
+            (venue, address, asset),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def macro_series(metric: str, since: str | None = None) -> list[dict]:

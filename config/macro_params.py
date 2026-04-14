@@ -33,6 +33,19 @@ MACRO_SCHED_MACRO_SEC = 24 * 60 * 60    # daily
 MACRO_SCHED_REGIME_SEC = 4 * 60 * 60    # 4h
 MACRO_SCHED_THESIS_SEC = 24 * 60 * 60   # daily
 MACRO_SCHED_REVIEW_SEC = 60 * 60        # hourly
+MACRO_SCHED_BOTS_SEC = 5 * 60           # 5min — watchers (whales, liquidations)
+
+# ── BOT WATCHERS ─────────────────────────────────────────────
+# Addresses públicas pra monitorar via clearinghouseState (Hyperliquid).
+# Editar aqui (ou via env AURUM_HL_WHALES) pra popular a watchlist.
+# Vazio = bot fica status=scaffolded mas não emite nada.
+_hl_env = os.environ.get("AURUM_HL_WHALES", "").strip()
+HL_WHALE_WATCH_ADDRESSES: list[str] = (
+    [a.strip() for a in _hl_env.split(",") if a.strip().startswith("0x")]
+    if _hl_env else []
+)
+# Threshold pra emitir evento: mudança de posição >= X USD entre snapshots
+HL_WHALE_MIN_DELTA_USD = 250_000.0
 
 # ── DATA SOURCES ─────────────────────────────────────────────
 # Keys resolution (prioridade):
