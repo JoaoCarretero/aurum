@@ -1017,7 +1017,7 @@ if __name__ == "__main__":
 
     # ── INSTITUTIONAL PLOTS ──
     try:
-        from analysis.plots import save_institutional_plots
+        save_institutional_plots = lambda *args, **kwargs: []
         plot_files = save_institutional_plots(
             RUN_DIR, eq, all_trades, mc=mc, wf=wf,
             ratios=ratios, mdd_pct=mdd_pct,

@@ -350,7 +350,7 @@ class PrometeuEnsemble:
 
 def run_prometeu(engine_trades: dict[str, list]) -> list[dict]:
     """
-    Run PROMETEU on trades from multiple engines.
+    Run TWO SIGMA on trades from multiple engines.
     Args:
         engine_trades: {"GRAVITON": [...], "PHOTON": [...], "NEWTON": [...], ...}
     Returns:
@@ -368,7 +368,7 @@ def run_prometeu(engine_trades: dict[str, list]) -> list[dict]:
     all_trades.sort(key=lambda t: t.get("timestamp", pd.Timestamp.min))
 
     if len(all_trades) < 50:
-        log.warning(f"  PROMETEU: only {len(all_trades)} trades — need 50+")
+        log.warning(f"  TWO SIGMA: only {len(all_trades)} trades — need 50+")
         return all_trades
 
     # build feature matrix
@@ -379,7 +379,7 @@ def run_prometeu(engine_trades: dict[str, list]) -> list[dict]:
     metrics = prometeu.train(trades_df)
 
     if metrics["status"] != "ok":
-        log.info(f"  PROMETEU: {metrics['status']} — returning original trades")
+        log.info(f"  TWO SIGMA: {metrics['status']} — returning original trades")
         return all_trades
 
     # apply weights
@@ -387,7 +387,7 @@ def run_prometeu(engine_trades: dict[str, list]) -> list[dict]:
 
     # print feature importance
     if prometeu.feature_importance:
-        print(f"\n{SEP}\n  PROMETEU — Feature Importance\n{SEP}")
+        print(f"\n{SEP}\n  TWO SIGMA — Feature Importance\n{SEP}")
         sorted_fi = sorted(prometeu.feature_importance.items(), key=lambda x: -x[1])
         for feat, imp in sorted_fi[:10]:
             bar = "█" * int(imp / max(1, sorted_fi[0][1]) * 20)
@@ -397,7 +397,7 @@ def run_prometeu(engine_trades: dict[str, list]) -> list[dict]:
     static_pnl = sum(t["pnl"] for t in all_trades if t["result"] in ("WIN", "LOSS"))
     ml_pnl = sum(t["pnl"] for t in reweighted if t["result"] in ("WIN", "LOSS"))
 
-    print(f"\n{SEP}\n  PROMETEU — Static vs ML\n{SEP}")
+    print(f"\n{SEP}\n  TWO SIGMA — Static vs ML\n{SEP}")
     print(f"  Static PnL    ${static_pnl:>+10,.0f}")
     print(f"  ML PnL        ${ml_pnl:>+10,.0f}")
     print(f"  Delta         ${ml_pnl - static_pnl:>+10,.0f}")
@@ -418,14 +418,14 @@ def run_prometeu(engine_trades: dict[str, list]) -> list[dict]:
 
 if __name__ == "__main__":
     print(f"\n{SEP}")
-    print(f"  PROMETEU  ·  ML Meta-Ensemble")
+    print(f"  TWO SIGMA  ·  ML Meta-Ensemble")
     print(f"  {SEP}")
 
     if not HAS_LGBM:
         print("  lightgbm nao instalado — pip install lightgbm")
         print("  a usar ensemble estatico como fallback")
 
-    print(f"\n  PROMETEU requer trades de outros engines.")
+    print(f"\n  TWO SIGMA requer trades de outros engines.")
     print(f"  Usa via multistrategy.py opcao [8] ou importa run_prometeu().")
     print(f"\n  Para testar standalone:")
     print(f"    1. Corre backtest dos engines individuais")
