@@ -222,6 +222,212 @@ def plot_montecarlo(mc, real_eq, run_dir=None):
     plt.savefig(fname, dpi=100, bbox_inches="tight", facecolor=BG)
     plt.close(); print(f"  Monte Carlo → {fname}")
 
+# ══════════════════════════════════════════════════════════════
+#  INSTITUTIONAL PLOT SUITE — universal (works for any engine)
+# ══════════════════════════════════════════════════════════════
+
+def _institutional_style(ax, title="", xlabel="", ylabel=""):
+    BG_I, GRID_I, TEXT_I, TITLE_I, BORDER_I = "#0D1117", "#1B2028", "#8B949E", "#C9D1D9", "#1B2028"
+    ax.set_facecolor(BG_I)
+    fig = ax.get_figure()
+    fig.set_facecolor(BG_I)
+    for sp in ax.spines.values():
+        sp.set_edgecolor(BORDER_I)
+    ax.tick_params(colors=TEXT_I, labelsize=8)
+    ax.grid(color=GRID_I, linestyle="--", alpha=0.3, linewidth=0.5)
+    if title:  ax.set_title(title, color=TITLE_I, fontsize=11, fontweight="bold",
+                            loc="left", pad=8, fontfamily="monospace")
+    if xlabel: ax.set_xlabel(xlabel, color=TEXT_I, fontsize=8)
+    if ylabel: ax.set_ylabel(ylabel, color=TEXT_I, fontsize=8)
+
+
+def save_institutional_plots(run_dir, eq, trades, mc=None, wf=None,
+                              ratios=None, mdd_pct=0.0, engine_name="AURUM",
+                              interval=None):
+    """Save 4 PNGs in {run_dir}/charts/: equity, drawdown, montecarlo, walkforward.
+
+    Universal — works for any engine. Requires only:
+      - eq: equity curve (list of floats, starts at ACCOUNT_SIZE)
+      - trades: list of dicts with 'result' and 'pnl'
+      - mc: monte_carlo() output (optional)
+      - wf: walk_forward() output (optional)
+    """
+    from pathlib import Path
+    BG_I  = "#0D1117"
+    BLUE  = "#58A6FF"
+    GREEN = "#3FB950"
+    RED   = "#F85149"
+    GOLD  = "#E3B341"
+    GRAY  = "#6E7681"
+    TEXT  = "#8B949E"
+    BORDER= "#1B2028"
+
+    charts_dir = Path(run_dir) / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    tf_tag = f"_{interval}" if interval else ""
+    saved = []
+
+    # ── 1. EQUITY CURVE + DRAWDOWN ──
+    if eq and len(eq) > 1:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8),
+                                       gridspec_kw={"height_ratios": [3, 1]},
+                                       facecolor=BG_I)
+        _institutional_style(ax1, title=f"EQUITY CURVE  ·  {engine_name}",
+                             ylabel="Capital (USD)")
+        x = list(range(len(eq)))
+        peak = eq[0]; hwm = []
+        for v in eq:
+            peak = max(peak, v); hwm.append(peak)
+        ax1.fill_between(x, ACCOUNT_SIZE, eq,
+                         where=[v >= ACCOUNT_SIZE for v in eq], color=GREEN, alpha=0.08)
+        ax1.fill_between(x, ACCOUNT_SIZE, eq,
+                         where=[v <  ACCOUNT_SIZE for v in eq], color=RED,   alpha=0.12)
+        ax1.plot(x, eq,  color=GOLD,  linewidth=1.6, zorder=4, label="Real")
+        ax1.plot(x, hwm, color=GREEN, linewidth=0.7, linestyle="--", alpha=0.6, label="HWM")
+        ax1.axhline(ACCOUNT_SIZE, color=GRAY, linewidth=0.7, linestyle=":", alpha=0.5)
+        ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v,_: f"${v:,.0f}"))
+        if ratios:
+            roi = (eq[-1] - ACCOUNT_SIZE) / ACCOUNT_SIZE * 100
+            info = (f"ROI {roi:+.2f}%   Sharpe {ratios.get('sharpe','—')}   "
+                    f"Sortino {ratios.get('sortino','—')}   MaxDD {mdd_pct:.1f}%   "
+                    f"Final ${eq[-1]:,.0f}")
+            ax1.text(0.01, 0.98, info, transform=ax1.transAxes, color=TEXT, fontsize=8,
+                     va="top", fontfamily="monospace",
+                     bbox=dict(boxstyle="round,pad=0.4", facecolor=BG_I,
+                               edgecolor=BORDER, alpha=0.9))
+        ax1.legend(facecolor=BG_I, labelcolor=TEXT, fontsize=7, edgecolor=BORDER, loc="lower right")
+
+        # Drawdown pane
+        _institutional_style(ax2, title="DRAWDOWN", xlabel="Trade #", ylabel="DD %")
+        dd_series = [(v - p) / p * 100 if p else 0 for p, v in zip(hwm, eq)]
+        ax2.fill_between(x, 0, dd_series, color=RED, alpha=0.20)
+        ax2.plot(x, dd_series, color=RED, linewidth=0.8)
+        for lvl in (-5, -10, -15, -20, -25):
+            ax2.axhline(lvl, color=GRAY, linewidth=0.4, linestyle="--", alpha=0.35)
+        ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v,_: f"{v:.0f}%"))
+
+        plt.tight_layout()
+        fname = str(charts_dir / f"equity{tf_tag}.png")
+        plt.savefig(fname, dpi=110, bbox_inches="tight", facecolor=BG_I)
+        plt.close(fig)
+        saved.append(fname)
+
+    # ── 2. MONTE CARLO ──
+    if mc and mc.get("paths") and eq:
+        fig, (axm1, axm2) = plt.subplots(2, 1, figsize=(14, 8),
+                                         gridspec_kw={"height_ratios": [3, 2]},
+                                         facecolor=BG_I)
+        _institutional_style(axm1, title=f"MONTE CARLO  ·  {len(mc['paths'])} simulações  ·  block={MC_BLOCK}",
+                             ylabel="Capital (USD)")
+        max_len = max(len(p) for p in mc["paths"])
+        padded = np.full((len(mc["paths"]), max_len), np.nan)
+        for i, p in enumerate(mc["paths"]):
+            padded[i, :len(p)] = p
+        p5  = np.nanpercentile(padded,  5, axis=0)
+        p25 = np.nanpercentile(padded, 25, axis=0)
+        p50 = np.nanpercentile(padded, 50, axis=0)
+        p75 = np.nanpercentile(padded, 75, axis=0)
+        p95 = np.nanpercentile(padded, 95, axis=0)
+        xp = list(range(max_len))
+        axm1.fill_between(xp, p5, p95, color=BLUE, alpha=0.08)
+        axm1.fill_between(xp, p25, p75, color=BLUE, alpha=0.14)
+        axm1.plot(xp, p50, color=GOLD, linewidth=0.9, alpha=0.75, label="P50")
+        axm1.plot(xp, p5,  color=RED,  linewidth=0.7, linestyle=":", alpha=0.7, label=f"P5 ${mc['p5']:,.0f}")
+        axm1.plot(xp, p95, color=GREEN, linewidth=0.7, linestyle=":", alpha=0.7, label=f"P95 ${mc['p95']:,.0f}")
+        axm1.plot(range(len(eq)), eq, color="#FFFFFF", linewidth=2.0, zorder=6, label="Real")
+        axm1.axhline(ACCOUNT_SIZE, color=GRAY, linewidth=0.6, linestyle="--", alpha=0.5)
+        axm1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v,_: f"${v:,.0f}"))
+        axm1.legend(facecolor=BG_I, labelcolor=TEXT, fontsize=7, edgecolor=BORDER, loc="upper left")
+
+        _institutional_style(axm2, title="DISTRIBUIÇÃO DE EQUITY FINAL",
+                             xlabel="Capital final ($)", ylabel="Frequência")
+        finals = mc["finals"]
+        n_h, bins_h, patches_h = axm2.hist(finals, bins=40, edgecolor=BG_I, linewidth=0.5)
+        for patch, left in zip(patches_h, bins_h[:-1]):
+            patch.set_facecolor(GREEN if left >= ACCOUNT_SIZE else RED)
+            patch.set_alpha(0.75)
+        axm2.axvline(eq[-1],       color="#FFFFFF", linewidth=1.6, label=f"Real ${eq[-1]:,.0f}")
+        axm2.axvline(mc["p5"],     color=RED,       linewidth=1.0, linestyle="--", label=f"VaR P5 ${mc['p5']:,.0f}")
+        axm2.axvline(mc["median"], color=GOLD,      linewidth=1.0, linestyle="--", label=f"Median ${mc['median']:,.0f}")
+        info_mc = (f"Positivos: {mc.get('pct_pos',0):.1f}%\n"
+                   f"Median PnL: ${mc['median']-ACCOUNT_SIZE:+,.0f}\n"
+                   f"P5 VaR: ${mc['p5']-ACCOUNT_SIZE:+,.0f}\n"
+                   f"RoR: {mc.get('ror',0):.1f}%")
+        axm2.text(0.02, 0.95, info_mc, transform=axm2.transAxes, color=TEXT, fontsize=8,
+                  va="top", fontfamily="monospace",
+                  bbox=dict(boxstyle="round,pad=0.4", facecolor=BG_I, edgecolor=BORDER, alpha=0.9))
+        axm2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v,_: f"${v:,.0f}"))
+        axm2.tick_params(axis="x", rotation=30)
+        axm2.legend(facecolor=BG_I, labelcolor=TEXT, fontsize=7, edgecolor=BORDER)
+
+        plt.tight_layout()
+        fname = str(charts_dir / f"montecarlo{tf_tag}.png")
+        plt.savefig(fname, dpi=110, bbox_inches="tight", facecolor=BG_I)
+        plt.close(fig)
+        saved.append(fname)
+
+    # ── 3. WALK-FORWARD ──
+    if wf and len(wf) > 0:
+        fig, axw = plt.subplots(figsize=(14, 6), facecolor=BG_I)
+        _institutional_style(axw, title="WALK-FORWARD  ·  Treino vs Out-of-Sample",
+                             xlabel="Janela", ylabel="Win Rate %")
+        wf_x  = [w["w"] for w in wf]
+        wf_tr = [w["train"]["wr"] for w in wf]
+        wf_te = [w["test"]["wr"]  for w in wf]
+        ok    = sum(1 for w in wf if abs(w["test"]["wr"] - w["train"]["wr"]) <= 15)
+        axw.plot(wf_x, wf_tr, color=BLUE,  linewidth=1.5, marker="o", markersize=4, label="Treino")
+        axw.plot(wf_x, wf_te, color=GREEN, linewidth=1.8, marker="o", markersize=4, label="Out-of-Sample")
+        axw.fill_between(wf_x, [t-15 for t in wf_tr], [t+15 for t in wf_tr],
+                         alpha=0.08, color=BLUE, label="±15% banda")
+        axw.axhline(50, color=GRAY, linewidth=0.7, linestyle="--", alpha=0.5)
+        axw.set_ylim(0, 105)
+        axw.text(0.02, 0.97, f"Estabilidade: {ok}/{len(wf)} janelas ({ok/len(wf)*100:.0f}%)",
+                 transform=axw.transAxes, color=TEXT, fontsize=9, va="top",
+                 fontfamily="monospace",
+                 bbox=dict(boxstyle="round,pad=0.4", facecolor=BG_I, edgecolor=BORDER, alpha=0.9))
+        axw.legend(facecolor=BG_I, labelcolor=TEXT, fontsize=8, edgecolor=BORDER, loc="lower right")
+
+        plt.tight_layout()
+        fname = str(charts_dir / f"walkforward{tf_tag}.png")
+        plt.savefig(fname, dpi=110, bbox_inches="tight", facecolor=BG_I)
+        plt.close(fig)
+        saved.append(fname)
+
+    # ── 4. PNL DISTRIBUTION ──
+    closed = [t for t in trades if t.get("result") in ("WIN", "LOSS")]
+    if closed:
+        pnls = [t["pnl"] for t in closed]
+        fig, axp = plt.subplots(figsize=(14, 6), facecolor=BG_I)
+        _institutional_style(axp, title=f"PnL DISTRIBUTION  ·  {len(closed)} trades",
+                             xlabel="PnL por trade ($)", ylabel="Frequência")
+        n_h, bins_h, patches_h = axp.hist(pnls, bins=40, edgecolor=BG_I, linewidth=0.5)
+        for patch, left in zip(patches_h, bins_h[:-1]):
+            patch.set_facecolor(GREEN if left >= 0 else RED)
+            patch.set_alpha(0.80)
+        axp.axvline(0, color="#FFFFFF", linewidth=1.0, alpha=0.6, label="Breakeven")
+        mean_p = float(np.mean(pnls)); median_p = float(np.median(pnls)); std_p = float(np.std(pnls))
+        axp.axvline(mean_p, color=GOLD, linewidth=1.3, linestyle="--",
+                    label=f"Mean ${mean_p:+,.1f}")
+        info_p = (f"Mean:   ${mean_p:+,.1f}\n"
+                  f"Median: ${median_p:+,.1f}\n"
+                  f"Std:    ${std_p:,.1f}\n"
+                  f"Wins:   {sum(1 for t in closed if t['result']=='WIN')}\n"
+                  f"Losses: {sum(1 for t in closed if t['result']=='LOSS')}")
+        axp.text(0.98, 0.95, info_p, transform=axp.transAxes, color=TEXT, fontsize=9,
+                 va="top", ha="right", fontfamily="monospace",
+                 bbox=dict(boxstyle="round,pad=0.4", facecolor=BG_I, edgecolor=BORDER, alpha=0.9))
+        axp.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v,_: f"${v:,.0f}"))
+        axp.legend(facecolor=BG_I, labelcolor=TEXT, fontsize=8, edgecolor=BORDER, loc="upper left")
+
+        plt.tight_layout()
+        fname = str(charts_dir / f"pnl_distribution{tf_tag}.png")
+        plt.savefig(fname, dpi=110, bbox_inches="tight", facecolor=BG_I)
+        plt.close(fig)
+        saved.append(fname)
+
+    return saved
+
+
 def plot_trades(df, trades, symbol, run_dir=None):
     closed = [t for t in trades if t["result"] in ("WIN","LOSS")]
     if not closed: return

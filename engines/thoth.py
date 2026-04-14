@@ -105,6 +105,69 @@ def collect_sentiment(symbols: list) -> dict:
     return sentiment
 
 
+def _align_series_to_candles(
+    candle_times: pd.Series,
+    series: pd.Series | None,
+    default: float = 0.0,
+) -> np.ndarray:
+    """Align a series to candle timestamps once to avoid per-bar lookups."""
+    aligned = np.full(len(candle_times), default, dtype=float)
+    if series is None or len(series) == 0:
+        return aligned
+
+    if not (
+        hasattr(series.index, "dtype")
+        and pd.api.types.is_datetime64_any_dtype(series.index)
+    ):
+        values = pd.to_numeric(series, errors="coerce").fillna(default).to_numpy(dtype=float)
+        n = min(len(values), len(aligned))
+        aligned[:n] = values[:n]
+        if n and n < len(aligned):
+            aligned[n:] = values[n - 1]
+        return aligned
+
+    values = pd.to_numeric(series, errors="coerce").fillna(default).to_numpy(dtype=float)
+    idx_ns = series.index.view("int64")
+    candle_ns = pd.to_datetime(candle_times).view("int64")
+    pos = np.searchsorted(idx_ns, candle_ns, side="right") - 1
+    valid = pos >= 0
+    if valid.any():
+        aligned[valid] = values[pos[valid]]
+        first_valid = int(np.flatnonzero(valid)[0])
+        if first_valid > 0:
+            aligned[:first_valid] = values[0]
+    else:
+        aligned[:] = values[0]
+    return aligned
+
+
+def _align_oi_signal_to_candles(
+    candle_times: pd.Series,
+    oi_signal_df: pd.DataFrame | None,
+) -> np.ndarray:
+    """Align OI signal to candles with a single asof merge."""
+    aligned = np.zeros(len(candle_times), dtype=float)
+    if oi_signal_df is None or oi_signal_df.empty:
+        return aligned
+
+    oi = oi_signal_df[["time", "oi_signal"]].dropna(subset=["time"]).copy()
+    if oi.empty:
+        return aligned
+    oi["time"] = pd.to_datetime(oi["time"])
+    oi = oi.sort_values("time")
+    candles = pd.DataFrame({"time": pd.to_datetime(candle_times)})
+    merged = pd.merge_asof(
+        candles,
+        oi,
+        on="time",
+        direction="backward",
+        allow_exact_matches=True,
+    )
+    if merged["oi_signal"].isna().any():
+        merged["oi_signal"] = merged["oi_signal"].bfill()
+    return pd.to_numeric(merged["oi_signal"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+
+
 # ══════════════════════════════════════════════════════════════
 #  SCAN ENGINE
 # ══════════════════════════════════════════════════════════════
@@ -175,6 +238,10 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     _hmm_pb  = df["hmm_prob_bull"].values
     _hmm_pbr = df["hmm_prob_bear"].values
     _hmm_pc  = df["hmm_prob_chop"].values
+    _times = pd.to_datetime(df["time"])
+    _f_z_aligned = _align_series_to_candles(_times, funding_z_series)
+    _ls_aligned = _align_series_to_candles(_times, ls_signal_series)
+    _oi_aligned = _align_oi_signal_to_candles(_times, oi_signal_df)
 
     peak_equity        = ACCOUNT_SIZE
     consecutive_losses = 0
@@ -219,33 +286,9 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
 
         # ── SENTIMENT SIGNAL ──
         # Get latest sentiment values (match by time or use latest available)
-        candle_time = df["time"].iloc[idx]
-
-        # Funding z-score (aligned to current bar to avoid look-ahead bias)
-        f_z = 0.0
-        if funding_z_series is not None and len(funding_z_series) > 0:
-            if hasattr(funding_z_series.index, 'dtype') and pd.api.types.is_datetime64_any_dtype(funding_z_series.index):
-                mask = funding_z_series.index <= candle_time
-                f_z = float(funding_z_series.loc[mask].iloc[-1]) if mask.any() else float(funding_z_series.iloc[0])
-            else:
-                f_z = float(funding_z_series.iloc[min(idx, len(funding_z_series) - 1)])
-
-        # OI signal
-        oi_sig = 0.0
-        if oi_signal_df is not None and len(oi_signal_df) > 0:
-            # find closest time
-            time_diffs = (oi_signal_df["time"] - candle_time).abs()
-            closest_idx = time_diffs.idxmin()
-            oi_sig = float(oi_signal_df["oi_signal"].loc[closest_idx])
-
-        # LS signal (aligned to current bar to avoid look-ahead bias)
-        ls_sig = 0.0
-        if ls_signal_series is not None and len(ls_signal_series) > 0:
-            if hasattr(ls_signal_series.index, 'dtype') and pd.api.types.is_datetime64_any_dtype(ls_signal_series.index):
-                mask = ls_signal_series.index <= candle_time
-                ls_sig = float(ls_signal_series.loc[mask].iloc[-1]) if mask.any() else float(ls_signal_series.iloc[0])
-            else:
-                ls_sig = float(ls_signal_series.iloc[min(idx, len(ls_signal_series) - 1)])
+        f_z = float(_f_z_aligned[idx])
+        oi_sig = float(_oi_aligned[idx])
+        ls_sig = float(_ls_aligned[idx])
 
         # Composite sentiment
         sent_score = composite_sentiment(
@@ -349,7 +392,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             "timestamp":  df["time"].iloc[idx],
             "idx":        idx,
             "entry_idx":  idx + 1,
-            "strategy":   "THOTH",
+            "strategy":   "BRIDGEWATER",
             "direction":  direction,
             "trade_type": "SENTIMENT",
             "struct":     struct,
@@ -414,7 +457,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
 
 def print_header():
     print(f"\n{SEP}")
-    print(f"  THOTH v1.0  ·  {RUN_ID}")
+    print(f"  BRIDGEWATER v1.0  ·  {RUN_ID}")
     print(f"  {len(SYMBOLS)} ativos  ·  {INTERVAL}  ·  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  funding w={THOTH_WEIGHT_FUNDING}  oi w={THOTH_WEIGHT_OI}  ls w={THOTH_WEIGHT_LS}")
     print(f"  {RUN_DIR}/")
@@ -446,7 +489,7 @@ def export_json(all_trades, eq, mc, ratios):
     wr = sum(1 for t in closed if t["result"] == "WIN") / max(len(closed), 1) * 100
 
     data = {
-        "engine": "THOTH",
+        "engine": "BRIDGEWATER",
         "version": "1.0",
         "run_id": RUN_ID,
         "timestamp": datetime.now().isoformat(),
@@ -465,20 +508,13 @@ def export_json(all_trades, eq, mc, ratios):
                     for k, v in t.items()} for t in closed],
     }
 
-    out = RUN_DIR / "reports" / f"thoth_{INTERVAL}_v1.json"
+    out = RUN_DIR / "reports" / f"bridgewater_{INTERVAL}_v1.json"
     out.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     print(f"  json  ·  {out}")
 
     try:
-        from core.db import register_run
-        register_run(
-            run_id=RUN_ID, engine="thoth", json_path=str(out),
-            roi=ratios["ret"], sharpe=ratios.get("sharpe"),
-            sortino=ratios.get("sortino"), win_rate=wr,
-            n_trades=len(closed), final_equity=eq[-1] if eq else ACCOUNT_SIZE,
-            account_size=ACCOUNT_SIZE, interval=INTERVAL,
-            n_symbols=len(SYMBOLS), version="1.0",
-        )
+        from core.db import save_run
+        save_run("thoth", str(out))
     except Exception as e:
         log.warning(f"DB register failed: {e}")
 
@@ -489,14 +525,22 @@ def export_json(all_trades, eq, mc, ratios):
 
 if __name__ == "__main__":
     import argparse
-    _ap = argparse.ArgumentParser(description="BRIDGEWATER — macro sentiment")
-    _ap.add_argument("--days", type=int, default=None)
-    _ap.add_argument("--basket", type=str, default=None)
+    _ap = argparse.ArgumentParser(
+        description="BRIDGEWATER - macro sentiment backtest",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    _ap.add_argument("--days", type=int, default=None, help="Lookback window in days.")
+    _ap.add_argument("--basket", type=str, default=None, help="Universe preset from BASKETS.")
+    _ap.add_argument("--interval", type=str, default=INTERVAL, help="Execution timeframe override for this run.")
+    _ap.add_argument("--leverage", type=float, default=None, help="Leverage override for this run.")
     _ap.add_argument("--no-menu", action="store_true")
     _args = _ap.parse_args()
 
+    if _args.interval:
+        INTERVAL = _args.interval
+
     print(f"\n{SEP}")
-    print(f"  THOTH  ·  Sentiment Quantificado")
+    print(f"  BRIDGEWATER  ·  Macro Sentiment Contrarian")
     print(f"  {SEP}")
 
     if _args.days:
@@ -515,7 +559,10 @@ if __name__ == "__main__":
     elif not _args.no_menu:
         SYMBOLS = select_symbols(SYMBOLS)
 
-    if not _args.no_menu:
+    if _args.leverage is not None:
+        if 0.1 <= _args.leverage <= 125:
+            LEVERAGE = _args.leverage
+    elif not _args.no_menu:
         _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
         if _lev_in:
             try:
@@ -526,14 +573,14 @@ if __name__ == "__main__":
                 pass
 
     print(f"\n{SEP}")
-    print(f"  THOTH  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
+    print(f"  BRIDGEWATER  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  {RUN_DIR}/")
     print(SEP)
     if not _args.no_menu:
         safe_input("  enter para iniciar... ")
 
-    log.info(f"THOTH v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
+    log.info(f"BRIDGEWATER v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH OHLCV ──
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
@@ -551,7 +598,7 @@ if __name__ == "__main__":
 
     # ── FETCH SENTIMENT ──
     print(f"\n{SEP}\n  SENTIMENT DATA\n{SEP}")
-    sentiment_data = collect_sentiment(list(all_dfs.keys()))
+    sentiment_data = collect_sentiment([s for s in SYMBOLS if s in all_dfs])
 
     print_header()
 
@@ -561,7 +608,7 @@ if __name__ == "__main__":
     all_vetos = defaultdict(int)
 
     for sym, df in all_dfs.items():
-        trades, vetos = scan_thoth(df.copy(), sym, macro_bias, corr,
+        trades, vetos = scan_thoth(df, sym, macro_bias, corr,
                                    sentiment_data=sentiment_data)
         all_trades.extend(trades)
         for k, v in vetos.items():
@@ -595,8 +642,14 @@ if __name__ == "__main__":
     wf = walk_forward(closed)
 
     if all_vetos:
+        # Coalesce parametric vetos like "agg_cap(15344>9940)" into a single bucket
+        import re as _re
+        _coalesced: dict[str, int] = defaultdict(int)
+        for k, v in all_vetos.items():
+            base = _re.sub(r"\([^)]*\)", "", str(k)).strip() or str(k)
+            _coalesced[base] += v
         print(f"\n{SEP}\n  VETOS\n{SEP}")
-        for k, v in sorted(all_vetos.items(), key=lambda x: -x[1])[:10]:
+        for k, v in sorted(_coalesced.items(), key=lambda x: -x[1])[:10]:
             print(f"  {v:>6d}  {k}")
 
     # ── BY SYMBOL ──
@@ -657,6 +710,19 @@ if __name__ == "__main__":
         overfit_results=audit_results,
     )
     append_to_index(RUN_DIR, _summary, _config, audit_results)
+
+    # ── INSTITUTIONAL PLOTS ──
+    try:
+        from analysis.plots import save_institutional_plots
+        plot_files = save_institutional_plots(
+            RUN_DIR, eq, all_trades, mc=mc, wf=wf,
+            ratios=ratios, mdd_pct=mdd_pct,
+            engine_name="BRIDGEWATER", interval=INTERVAL,
+        )
+        if plot_files:
+            print(f"\n  charts → {len(plot_files)} PNGs em {RUN_DIR}/charts/")
+    except Exception as _e:
+        log.warning(f"Plots failed: {_e}")
 
     # ── HTML Report ──
     try:

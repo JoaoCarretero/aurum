@@ -939,11 +939,16 @@ if __name__ == "__main__":
             print(f"  │ {_cl:11s}  WR {_cd['wr']:>4.0f}%  n={_cd['n']:<3d}  "
                   f"exp ${_cd['exp']:>+.2f}{'':>14s}│")
 
-    # Top 5 veto filters
+    # Top 5 veto filters (parametric vetos coalesced)
     _veto_total = sum(all_vetos.values()) if all_vetos else 0
     if _veto_total:
+        import re as _re_v
+        _coalesced_vetos: dict[str, int] = defaultdict(int)
+        for _vk, _vv in all_vetos.items():
+            _vbase = _re_v.sub(r"\([^)]*\)", "", str(_vk)).strip() or str(_vk)
+            _coalesced_vetos[_vbase] += _vv
         print(f"  │ TOP VETO FILTERS {'─'*34}│")
-        _sorted_vetos = sorted(all_vetos.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        _sorted_vetos = sorted(_coalesced_vetos.items(), key=lambda kv: kv[1], reverse=True)[:5]
         for _name, _count in _sorted_vetos:
             _pct = _count / _veto_total * 100
             _bar_w = max(1, int(_pct / 5))   # 20-slot bar (5% per slot)
@@ -1008,6 +1013,19 @@ if __name__ == "__main__":
 
     # ── Append ao index global ──
     append_to_index(RUN_DIR, _summary, _config, audit_results)
+
+    # ── INSTITUTIONAL PLOTS ──
+    try:
+        from analysis.plots import save_institutional_plots
+        plot_files = save_institutional_plots(
+            RUN_DIR, eq, all_trades, mc=mc, wf=wf,
+            ratios=ratios, mdd_pct=mdd_pct,
+            engine_name="CITADEL", interval=INTERVAL,
+        )
+        if plot_files:
+            print(f"\n  charts → {len(plot_files)} PNGs em {RUN_DIR}/charts/")
+    except Exception as _e:
+        log.warning(f"Plots failed: {_e}")
 
     # ── HTML Report ──
     try:
