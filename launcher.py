@@ -8265,6 +8265,18 @@ class App(tk.Tk):
         idx_path = ROOT / "data" / "index.json"
         runs_by_id: dict[str, dict] = {}
 
+        # engine slug → actual data dir (for post-rename paths)
+        _SLUG_TO_DIR = {
+            "citadel":     ROOT / "data" / "runs",
+            "bridgewater": ROOT / "data" / "bridgewater",
+            "jump":        ROOT / "data" / "jump",
+            "deshaw":      ROOT / "data" / "deshaw",
+            "renaissance": ROOT / "data" / "renaissance",
+            "millennium":  ROOT / "data" / "millennium",
+            "twosigma":    ROOT / "data" / "twosigma",
+            "aqr":         ROOT / "data" / "aqr",
+        }
+
         if idx_path.exists():
             try:
                 rows = json.loads(idx_path.read_text(encoding="utf-8"))
@@ -8275,7 +8287,18 @@ class App(tk.Tk):
                         run_id = str(row.get("run_id") or "").strip()
                         if not run_id:
                             continue
-                        run_dir = ROOT / "data" / "runs" / run_id
+                        # Resolve run_dir via engine slug — run_ids are now
+                        # prefixed (e.g. "bridgewater_2026-04-14_1029")
+                        engine_slug = str(row.get("engine") or "").lower()
+                        base_dir = _SLUG_TO_DIR.get(engine_slug, ROOT / "data" / "runs")
+                        # Strip engine prefix from run_id to get folder name
+                        folder = run_id
+                        if engine_slug and folder.startswith(f"{engine_slug}_"):
+                            folder = folder[len(engine_slug) + 1:]
+                        run_dir = base_dir / folder
+                        # Citadel keeps the prefixed form as folder name
+                        if engine_slug == "citadel" and not run_dir.exists():
+                            run_dir = base_dir / run_id
                         entry = dict(row)
                         entry.setdefault("run_dir", str(run_dir))
                         entry.setdefault("summary_path", str(run_dir / "summary.json"))

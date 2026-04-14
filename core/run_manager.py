@@ -214,9 +214,37 @@ def _clean_trades(trades) -> list:
 # ── 5. append_to_index ─────────────────────────────────────────────────────
 
 def append_to_index(run_dir, summary, config, overfit_results=None):
-    """Append this run to data/index.json (creates the file if needed)."""
+    """Append this run to data/index.json (creates the file if needed).
+
+    Infers engine identity from (in order): summary["engine"] → parent dir
+    name → run_id prefix. Writes run_id with engine prefix to avoid the
+    launcher listing duplicates (engine-dir-scanned vs index-recorded).
+    """
     run_dir = Path(run_dir)
-    run_id = run_dir.name
+    raw_id = run_dir.name
+
+    # Resolve engine (institutional name → slug)
+    s = summary if isinstance(summary, dict) else {}
+    _inst = str(s.get("engine") or "").strip()
+    _parent = run_dir.parent.name.lower()
+    _ENG_TO_SLUG = {
+        "CITADEL": "citadel", "BRIDGEWATER": "bridgewater",
+        "JUMP": "jump", "DE SHAW": "deshaw", "RENAISSANCE": "renaissance",
+        "MILLENNIUM": "millennium", "TWO SIGMA": "twosigma",
+        "AQR": "aqr", "JANE STREET": "janestreet",
+    }
+    _PARENT_TO_SLUG = {
+        "bridgewater": "bridgewater", "jump": "jump", "deshaw": "deshaw",
+        "renaissance": "renaissance", "millennium": "millennium",
+        "twosigma": "twosigma", "aqr": "aqr", "janestreet": "janestreet",
+        "runs": "citadel",  # data/runs/ is CITADEL's
+    }
+    engine_slug = (_ENG_TO_SLUG.get(_inst.upper())
+                   or _PARENT_TO_SLUG.get(_parent)
+                   or raw_id.rsplit("_", 2)[0] if "_" in raw_id else "unknown")
+
+    # Prefix run_id with engine slug so launcher dedup works
+    run_id = raw_id if raw_id.startswith(f"{engine_slug}_") else f"{engine_slug}_{raw_id}"
 
     # Load existing index
     index = _load_index()
@@ -226,10 +254,9 @@ def append_to_index(run_dir, summary, config, overfit_results=None):
     config_hash = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
 
     # Build entry — pull fields from summary with safe gets
-    s = summary if isinstance(summary, dict) else {}
     entry = {
         "run_id":       run_id,
-        "engine":       run_id.rsplit("_", 2)[0] if "_" in run_id else run_id,
+        "engine":       engine_slug,
         "timestamp":    datetime.now().isoformat(),
         "interval":     s.get("interval") or config.get("INTERVAL") or config.get("ENTRY_TF"),
         "period_days":  s.get("period_days") or config.get("SCAN_DAYS"),

@@ -124,7 +124,8 @@
       "Bash(cmd.exe //c 'rd /S /Q __TRACKED_VAR__')",
       "Bash(cmd.exe //c \"takeown /F tmp1k1gzpi5 /R /D Y\")",
       "Bash(rm -rf data/2026-04-09)",
-      "Bash(du -sh data/)"
+      "Bash(du -sh data/)",
+      "Bash(tasklist)"
     ]
   }
 }
