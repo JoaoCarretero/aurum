@@ -157,6 +157,7 @@ MAIN_MENU = [
     ("DATA",           "data",        "Backtests · engine logs · reports"),
     ("STRATEGIES",     "strategies",  "Backtest & live engines"),
     ("ARBITRAGE",      "alchemy",     "CEX·CEX execution + DEX·DEX / CEX·DEX scanner"),
+    ("MACRO BRAIN",    "macro_brain", "Autonomous CIO · regime → thesis → paper positions"),
     ("RISK",           "risk",        "Portfolio & risk console"),
     ("COMMAND CENTER", "command",     "Site, servers, admin panel"),
     ("SETTINGS",       "settings",    "Config, keys, Telegram"),
@@ -1923,7 +1924,7 @@ class App(tk.Tk):
     # ─── MENU ────────────────────────────────────────────
     def _menu(self, key):
         # Route to specialized screens
-        if key in ("markets", "connections", "terminal", "risk", "settings", "alchemy", "data"):
+        if key in ("markets", "connections", "terminal", "risk", "settings", "alchemy", "data", "macro_brain"):
             {
                 "markets": self._markets,
                 "connections": self._connections,
@@ -1932,6 +1933,7 @@ class App(tk.Tk):
                 "settings": self._config,
                 "alchemy": self._arbitrage_hub,
                 "data": self._data_center,
+                "macro_brain": self._macro_brain_menu,
             }[key]()
             return
         if key == "strategies":
