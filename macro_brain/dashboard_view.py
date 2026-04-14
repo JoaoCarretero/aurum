@@ -170,6 +170,42 @@ def _two_col(parent) -> tuple[tk.Frame, tk.Frame]:
     return left, right
 
 
+def _render_bot_slots(parent, network: str, outline: str, accent_bg: str):
+    """Render bot watcher slots from macro_brain.bots registry.
+
+    Reads BotDescriptor from each registered bot; shows status dot +
+    label + tagline. Falls back silently if bots module fails to import.
+    """
+    try:
+        from macro_brain.bots import list_descriptors
+        descs = [d for d in list_descriptors() if d.network == network]
+    except Exception:
+        descs = []
+    if not descs:
+        return
+
+    status_tone = {
+        "planned":    ("·", DIM),
+        "scaffolded": ("◦", "#ffaa00"),
+        "live":       ("●", "#00ff88"),
+        "degraded":   ("!", "#ff5555"),
+    }
+
+    slot_row = tk.Frame(parent, bg=BG); slot_row.pack(fill="x", pady=2)
+    for d in descs:
+        slot = tk.Frame(slot_row, bg=PANEL, highlightbackground=outline,
+                        highlightthickness=1, padx=8, pady=4)
+        slot.pack(side="left", padx=2, fill="both", expand=True)
+        tk.Label(slot, text=f"  {d.label}  ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=accent_bg, padx=2).pack(anchor="w")
+        dot, dot_color = status_tone.get(d.status, ("·", DIM))
+        sub = tk.Frame(slot, bg=PANEL); sub.pack(anchor="w", fill="x", padx=2)
+        tk.Label(sub, text=dot, font=(FONT, 7, "bold"),
+                 fg=dot_color, bg=PANEL).pack(side="left")
+        tk.Label(sub, text=f" {d.tagline} ({d.status})",
+                 font=(FONT, 7), fg=DIM, bg=PANEL).pack(side="left")
+
+
 # ── TAB RENDERERS ────────────────────────────────────────────
 
 def _render_markets_tab(parent):
@@ -865,20 +901,8 @@ def _render_crypto_tab(parent):
         ("SOL_SPOT",           "SOL PRICE",    "${:.2f}"),
         ("DEFI_SOLANA_TVL",    "SOL DEFI TVL", "${:,.0f}"),
     ], spark_color="#9945ff")
-    # Bot slots (future)
-    slot_row = tk.Frame(parent, bg=BG); slot_row.pack(fill="x", pady=2)
-    for label, desc in [
-        ("SNIPER BOT",          "new token launches (soon)"),
-        ("INSIDER WALLET",      "follow large traders (soon)"),
-        ("MEV DETECTOR",        "sandwich attacks (soon)"),
-    ]:
-        slot = tk.Frame(slot_row, bg=PANEL, highlightbackground="#5a2f88",
-                        highlightthickness=1, padx=8, pady=4)
-        slot.pack(side="left", padx=2, fill="both", expand=True)
-        tk.Label(slot, text=f"  {label}  ", font=(FONT, 7, "bold"),
-                 fg=BG, bg="#9945ff", padx=2).pack(anchor="w")
-        tk.Label(slot, text=desc, font=(FONT, 7), fg=DIM,
-                 bg=PANEL).pack(anchor="w", padx=2)
+    _render_bot_slots(parent, network="SOL",
+                      outline="#5a2f88", accent_bg="#9945ff")
 
     # HYPERLIQUID
     _section(parent, "[ HYPE ] HYPERLIQUID · PERPS · FUNDING",
@@ -898,20 +922,8 @@ def _render_crypto_tab(parent):
         ("HL_HYPE_PRICE",   "HYPE TOKEN",   "${:.2f}"),
         ("HL_HYPE_OI_USD",  "HYPE OI",      "${:,.0f}"),
     ], spark_color="#00ffaa")
-    # Bot slots
-    slot_row2 = tk.Frame(parent, bg=BG); slot_row2.pack(fill="x", pady=2)
-    for label, desc in [
-        ("LIQUIDATION BOT", "liquidation cascades (soon)"),
-        ("WHALE TRACKER",   "top positions > $10M (soon)"),
-        ("FUNDING ARB",     "neutralizes funding (soon)"),
-    ]:
-        slot = tk.Frame(slot_row2, bg=PANEL, highlightbackground="#007755",
-                        highlightthickness=1, padx=8, pady=4)
-        slot.pack(side="left", padx=2, fill="both", expand=True)
-        tk.Label(slot, text=f"  {label}  ", font=(FONT, 7, "bold"),
-                 fg=BG, bg="#00ffaa", padx=2).pack(anchor="w")
-        tk.Label(slot, text=desc, font=(FONT, 7), fg=DIM,
-                 bg=PANEL).pack(anchor="w", padx=2)
+    _render_bot_slots(parent, network="HYPE",
+                      outline="#007755", accent_bg="#00ffaa")
 
     # CROSS-CHAIN DEFI TVL
     _section(parent, "CROSS-CHAIN DEFI · TVL PER NETWORK",
