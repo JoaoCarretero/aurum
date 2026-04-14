@@ -220,7 +220,7 @@ CASCADE_MIN                 = 1
 
 # ── OMEGA & SCORE ─────────────────────────────────────────────
 REGIME_MIN_STRENGTH = 0.25
-SCORE_THRESHOLD     = 0.53
+SCORE_THRESHOLD     = 0.53    # 0.55 seria ótimo (Sharpe 4.49 grid) mas fica na beira do cliff 0.56 (overfit FAIL); 0.53 é a zona estável
 OMEGA_MIN_COMPONENT = 0.15
 OMEGA_WEIGHTS       = {
     "struct": 0.25, "flow": 0.25,
@@ -232,7 +232,7 @@ OMEGA_WEIGHTS_FOREX = {
     "struct": 0.35, "flow": 0.00,
     "cascade": 0.30, "momentum": 0.20, "pullback": 0.15,
 }
-STOP_ATR_M          = 2.5
+STOP_ATR_M          = 2.8    # grid 2026-04-14 · stops mais largos + SCORE 0.55 → Sharpe 4.49
 TARGET_RR           = 3.0
 RR_MIN              = 1.5
 MAX_HOLD            = 48
