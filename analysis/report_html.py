@@ -349,31 +349,81 @@ def _section(title: str, content: str, id_: str = "") -> str:
 </section>'''
 
 
-def _build_header(run_dir: Path, config_dict: dict | None) -> str:
+def _build_header(run_dir: Path, config_dict: dict | None,
+                  engine_name: str = "AURUM") -> str:
+    """Header inteligente: usa engine institucional + timestamp explícito do run.
+
+    engine_name vem do summary["engine"] (BRIDGEWATER, CITADEL, JUMP, etc).
+    run_dir.name dá o RUN_ID (ex: 2026-04-14_1018 ou citadel_2026-04-14_1018).
+    Timestamp do run é parseado do RUN_ID quando possível, com fallback pra
+    file mtime; "Generated" footer mostra hora atual.
+    """
+    import re as _re
     run_id = run_dir.name if run_dir else "unknown"
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Parse timestamp do RUN_ID (formato YYYY-MM-DD_HHMM ou _HHMMSS)
+    m = _re.search(r"(\d{4}-\d{2}-\d{2})[_T](\d{2})(\d{2})(\d{2})?", run_id)
+    if m:
+        date_part, h, mn, s = m.group(1), m.group(2), m.group(3), m.group(4) or "00"
+        run_ts = f"{date_part} {h}:{mn}:{s}"
+    elif run_dir and run_dir.exists():
+        # Fallback: file modification time
+        ts = datetime.fromtimestamp(run_dir.stat().st_mtime)
+        run_ts = ts.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        run_ts = now
+
+    # Filtro: só mostrar params relevantes (skip noise like ARB_*, ABLATION)
     cfg_summary = ""
     if config_dict:
+        priority_keys = [
+            "ENGINE", "RUN_ID", "INTERVAL", "ENTRY_TF", "SCAN_DAYS",
+            "BASKET_EFFECTIVE", "SCAN_DAYS_EFFECTIVE", "N_CANDLES",
+            "ACCOUNT_SIZE", "LEVERAGE", "BASE_RISK", "MAX_RISK",
+            "STOP_ATR_M", "TARGET_RR", "MAX_HOLD",
+        ]
         items = []
-        for k, v in list(config_dict.items())[:8]:
-            items.append(f'<span style="color:{_GRAY};">{k}:</span> '
-                         f'<span style="color:{_WHITE};">{v}</span>')
-        cfg_summary = " &nbsp;|&nbsp; ".join(items)
-    else:
+        for k in priority_keys:
+            if k in config_dict:
+                v = config_dict[k]
+                # Format numeric values nicely
+                if isinstance(v, float):
+                    v_str = f"{v:.4g}"
+                elif isinstance(v, (int, str)):
+                    v_str = str(v)[:30]
+                else:
+                    continue
+                items.append(f'<span style="color:{_GRAY};">{k}:</span> '
+                             f'<span style="color:{_WHITE};">{v_str}</span>')
+                if len(items) >= 6:
+                    break
+        cfg_summary = " &nbsp;·&nbsp; ".join(items)
+    if not cfg_summary:
         cfg_summary = (f'<span style="color:{_GRAY};">interval:</span> '
-                       f'<span style="color:{_WHITE};">{INTERVAL}</span> &nbsp;|&nbsp; '
+                       f'<span style="color:{_WHITE};">{INTERVAL}</span> &nbsp;·&nbsp; '
                        f'<span style="color:{_GRAY};">account:</span> '
                        f'<span style="color:{_WHITE};">{_fmt_money(ACCOUNT_SIZE)}</span>')
 
-    return f'''<header style="text-align:center;padding:32px 0 16px 0;border-bottom:1px solid {_BORDER};
-               margin-bottom:32px;">
-  <h1 style="font-size:28px;color:{_GOLD};margin:0 0 4px 0;letter-spacing:4px;">
-    CITADEL v3.6 &middot; AURUM Finance
+    return f'''<header style="text-align:center;padding:24px 0 16px 0;
+               border-bottom:1px solid {_BORDER};margin-bottom:24px;">
+  <h1 style="font-size:32px;color:{_GOLD};margin:0 0 6px 0;letter-spacing:6px;
+             font-weight:700;">
+    {engine_name} &middot; AURUM
   </h1>
-  <div style="font-size:13px;color:{_GRAY};margin-bottom:8px;">
-    Run <span style="color:{_WHITE};">{run_id}</span> &nbsp;|&nbsp; {now}
+  <div style="font-size:11px;color:{_GRAY};letter-spacing:2px;
+              text-transform:uppercase;margin-bottom:14px;">
+    Backtest Report
   </div>
-  <div style="font-size:11px;line-height:1.6;">{cfg_summary}</div>
+  <div style="font-size:13px;color:{_WHITE};margin-bottom:6px;
+              font-family:'SF Mono','Cascadia Code','Consolas',monospace;">
+    <span style="color:{_GRAY};">RUN</span>
+    <span style="color:{_GOLD};font-weight:600;"> {run_id} </span>
+    &nbsp;·&nbsp;
+    <span style="color:{_GRAY};">EXECUTED</span>
+    <span style="color:{_WHITE};"> {run_ts} </span>
+  </div>
+  <div style="font-size:11px;line-height:1.8;margin-top:12px;">{cfg_summary}</div>
 </header>'''
 
 
@@ -902,7 +952,7 @@ def _render_single_trade_svg(window, trade: dict,
     # Watermark
     parts.append(
         f'<text x="{w - pad_r - 4}" y="{h - 8}" text-anchor="end" '
-        f'font-size="8" fill="{_TI_GRID}">AURUM · CITADEL v3.6</text>')
+        f'font-size="8" fill="{_TI_GRID}">AURUM</text>')
 
     return (f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
             f'style="width:100%;display:block;">' + "".join(parts) + '</svg>')
@@ -1263,17 +1313,34 @@ def _build_trade_inspector(prerendered: list[dict]) -> str:
 
 def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
                     by_sym, all_vetos, run_dir, config_dict=None,
-                    price_data=None, audit_results=None) -> str:
-    """
-    Generate a self-contained HTML report and write to run_dir/reports/report.html.
-    Returns the output file path as a string.
+                    price_data=None, audit_results=None,
+                    engine_name: str | None = None) -> str:
+    """Self-contained HTML at run_dir/report.html.
+
+    engine_name overrides config_dict.get("ENGINE") for header. If neither
+    is set, falls back to inferring from run_dir name (e.g. "citadel_..."
+    → "CITADEL", or last folder segment uppercased).
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     out_path = run_dir / "report.html"
 
+    # Resolve engine name with precedence: explicit kwarg > config["ENGINE"] > path inference
+    if not engine_name:
+        engine_name = (config_dict or {}).get("ENGINE")
+    if not engine_name:
+        # Try to infer from run_dir parent name (data/<engine>/<run_id>)
+        parent_name = run_dir.parent.name.lower()
+        _ENGINE_FROM_DIR = {
+            "bridgewater": "BRIDGEWATER", "jump": "JUMP", "deshaw": "DE SHAW",
+            "renaissance": "RENAISSANCE", "millennium": "MILLENNIUM",
+            "twosigma": "TWO SIGMA", "aqr": "AQR", "janestreet": "JANE STREET",
+            "runs": "CITADEL",  # citadel writes to data/runs/
+        }
+        engine_name = _ENGINE_FROM_DIR.get(parent_name, parent_name.upper() or "AURUM")
+
     # ── Build all sections ──
-    header = _build_header(run_dir, config_dict)
+    header = _build_header(run_dir, config_dict, engine_name=engine_name)
     result_box = _build_result_box(all_trades, eq, ratios, mdd_pct)
     equity_svg = _svg_equity(eq)
     symbol_table = _build_symbol_table(by_sym, all_trades)
@@ -1337,7 +1404,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>CITADEL v3.6 — Backtest Report</title>
+<title>{engine_name} — AURUM Backtest Report</title>
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{
@@ -1396,7 +1463,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
 
 <footer style="text-align:center;padding:24px 0;border-top:1px solid {_BORDER};
                margin-top:32px;font-size:11px;color:{_GRAY};">
-  AURUM Finance &middot; CITADEL v3.6 &middot; Generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+  AURUM Finance &middot; {engine_name} &middot; Generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 </footer>
 
 </div>

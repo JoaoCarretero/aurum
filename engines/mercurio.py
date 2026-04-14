@@ -632,6 +632,7 @@ if __name__ == "__main__":
         generate_report(
             all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
             by_sym, all_vetos, str(RUN_DIR), config_dict=config,
+            engine_name="JUMP",
         )
         print(f"  HTML → {RUN_DIR / 'report.html'}")
     except Exception as _e:

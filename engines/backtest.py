@@ -1022,6 +1022,7 @@ if __name__ == "__main__":
             all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
             by_sym, all_vetos, str(RUN_DIR), config_dict=_config,
             price_data=_price_data, audit_results=audit_results,
+            engine_name="CITADEL",
         )
         print(f"  HTML → {RUN_DIR / 'report.html'}")
     except Exception as _e:

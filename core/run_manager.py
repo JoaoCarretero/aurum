@@ -92,7 +92,8 @@ def create_run_dir(engine_name: str = "citadel") -> tuple[str, Path]:
     run_dir = RUNS_DIR / run_id
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "charts").mkdir(exist_ok=True)
+    # NOTE: charts/ subdir não é mais usado — métricas renderizadas
+    # internamente no launcher dashboard via tk.Canvas.
 
     return run_id, run_dir
 

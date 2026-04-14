@@ -110,6 +110,7 @@ def export_json(
 
 
 def main() -> int:
+    global LEVERAGE
     parser = argparse.ArgumentParser(description="RENAISSANCE harmonics standalone backtest")
     parser.add_argument("--days", type=int, default=SCAN_DAYS)
     parser.add_argument("--basket", default="default")
@@ -234,6 +235,7 @@ def main() -> int:
             all_trades, equity, mc_obj, cond, ratios, max_dd_pct,
             wf_obj, wf_regime,
             by_sym, dict(all_vetos), str(RUN_DIR), config_dict=config,
+            engine_name="RENAISSANCE",
         )
         print(f"  HTML      {RUN_DIR / 'report.html'}")
     except Exception as _e:
