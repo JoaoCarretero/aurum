@@ -55,7 +55,9 @@ def _run_engine(key: str, days: int, basket: str, export_dir: Path) -> dict:
     log_path = export_dir / f"{key}.stdout.log"
 
     cmd = [sys.executable, str(ROOT / script),
-           "--days", str(days), "--basket", basket, "--no-menu"]
+           "--days", str(days), "--no-menu"]
+    if basket != "calibrated":
+        cmd.extend(["--basket", basket])
     t0 = datetime.now()
     print(f"  [{t0.strftime('%H:%M:%S')}] {key.upper():<12} launching: {' '.join(cmd[1:])}")
 
@@ -87,7 +89,8 @@ def _run_engine(key: str, days: int, basket: str, export_dir: Path) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="AURUM Longrun Battery")
     ap.add_argument("--days", type=int, default=360)
-    ap.add_argument("--basket", default="bluechip")
+    ap.add_argument("--basket", default="calibrated",
+                    help="'calibrated' (default, usa ENGINE_BASKETS por engine) ou nome específico (bluechip, default, etc)")
     ap.add_argument("--engines", default="citadel,renaissance,deshaw,jump,bridgewater")
     ap.add_argument("--parallel", type=int, default=1,
                     help="workers paralelos (1=sequencial, 5=tudo ao mesmo tempo)")

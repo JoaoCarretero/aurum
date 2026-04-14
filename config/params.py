@@ -260,9 +260,11 @@ BULL_LONG_MIN_PULLBACK_ATR = 0.15
 # longa (360d+, bluechip/default, 6 overfit tests robustness).
 # Ver docs/longrun_battery_report_2026-04-14.md.
 ENGINE_INTERVALS: dict[str, str] = {
-    "BRIDGEWATER": "1h",   # Sharpe 5.06 @ 1h vs -1.95 @ 15m (master battery 2026-04-13)
+    "CITADEL":     "15m",  # Sharpe +1.38 @ 15m default (360d, longrun 2026-04-14)
+    "RENAISSANCE": "15m",  # Sharpe +5.65 @ 15m bluechip (6/6 overfit PASS, longrun 2026-04-14)
     "DESHAW":      "1h",   # Sharpe +2.65 @ 1h vs -0.10 @ 15m (longrun 2026-04-14 bluechip)
     "JUMP":        "1h",   # Sharpe +2.06 @ 1h/720d (6/6 overfit PASS) vs -2.95 @ 15m
+    "BRIDGEWATER": "1h",   # Sharpe 5.06 @ 1h vs -1.95 @ 15m (master battery 2026-04-13)
 }
 # Basket calibrado por engine (universe onde o edge é mais robusto).
 # Default fallback = SYMBOLS (11 altcoins). Key engines below have specific tuning.
