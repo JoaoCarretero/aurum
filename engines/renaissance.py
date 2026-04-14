@@ -62,6 +62,7 @@ def export_json(
     days: int,
     summary: dict,
     config: dict,
+    audit_results: dict | None = None,
 ) -> Path:
     closed, win_count, loss_count, flat_count, win_rate = closed_trade_stats(all_trades)
     max_dd_pct = equity_stats([t["pnl"] for t in closed], ACCOUNT_SIZE)[2] if closed else 0.0
@@ -104,8 +105,8 @@ def export_json(
     }
     out = RUN_DIR / "reports" / f"renaissance_{INTERVAL}_v1.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-    save_run_artifacts(RUN_DIR, config, all_trades, equity, summary)
-    append_to_index(RUN_DIR, summary, config)
+    save_run_artifacts(RUN_DIR, config, all_trades, equity, summary, overfit_results=audit_results)
+    append_to_index(RUN_DIR, summary, config, audit_results)
     return out
 
 
@@ -201,7 +202,15 @@ def main() -> int:
         "final_equity": round(final_equity, 2),
         "non_positive_win_count": non_positive_win_count,
     }
-    out = export_json(all_trades, ratios, equity, dict(all_vetos), args.basket, args.days, summary, config)
+    try:
+        from analysis.overfit_audit import run_audit, print_audit_box
+        audit_results = run_audit(all_trades)
+        print_audit_box(audit_results)
+    except Exception as _e:
+        log.warning(f"overfit audit failed: {_e}")
+        audit_results = None
+
+    out = export_json(all_trades, ratios, equity, dict(all_vetos), args.basket, args.days, summary, config, audit_results=audit_results)
 
     print(f"\n{SEP}\n  METRICAS\n{SEP}")
     print(f"  Trades    {len(closed)}")

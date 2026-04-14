@@ -81,8 +81,8 @@ __all__ = [
     "FROZEN_ENGINES",
     # Ablation
     "ABLATION_DISABLE",
-    # Per-engine winning configs (from master battery 2026-04-13)
-    "ENGINE_INTERVALS", "ENGINE_RISK_SCALE_BY_REGIME",
+    # Per-engine winning configs (from longrun battery 2026-04-14)
+    "ENGINE_INTERVALS", "ENGINE_RISK_SCALE_BY_REGIME", "ENGINE_BASKETS",
 ]
 
 # ── UNIVERSO ──────────────────────────────────────────────────
@@ -255,11 +255,23 @@ RISK_SCALE_BY_REGIME: dict[str, float] = {
 BULL_LONG_MIN_PULLBACK_ATR = 0.15
 
 # ── PER-ENGINE WINNING CONFIGS ─────────────────────────────────
-# Configs vencedoras da master battery 2026-04-13.
-# Cada engine pode sobrescrever o default global com seu melhor regime.
-# Expansão: acrescentar chaves conforme novas baterias validarem edges.
+# Configs vencedoras consolidadas.
+# ENGINE_INTERVALS + ENGINE_BASKETS = sweet-spot por engine validado por bateria
+# longa (360d+, bluechip/default, 6 overfit tests robustness).
+# Ver docs/longrun_battery_report_2026-04-14.md.
 ENGINE_INTERVALS: dict[str, str] = {
-    "BRIDGEWATER": "1h",   # Sharpe 5.06 @ 1h vs -1.95 @ 15m (90d default)
+    "BRIDGEWATER": "1h",   # Sharpe 5.06 @ 1h vs -1.95 @ 15m (master battery 2026-04-13)
+    "DESHAW":      "1h",   # Sharpe +2.65 @ 1h vs -0.10 @ 15m (longrun 2026-04-14 bluechip)
+    "JUMP":        "1h",   # Sharpe +2.06 @ 1h/720d (6/6 overfit PASS) vs -2.95 @ 15m
+}
+# Basket calibrado por engine (universe onde o edge é mais robusto).
+# Default fallback = SYMBOLS (11 altcoins). Key engines below have specific tuning.
+ENGINE_BASKETS: dict[str, str] = {
+    "CITADEL":     "default",   # Sharpe +1.38 default vs -0.35 bluechip (360d 15m)
+    "RENAISSANCE": "bluechip",  # Sharpe +5.65, 6/6 overfit PASS (360d 15m)
+    "DESHAW":      "bluechip",  # Sharpe +2.65 (360d 1h, 3P 3W 0F overfit)
+    "JUMP":        "bluechip",  # Sharpe +2.06 (720d 1h, 6/6 overfit PASS)
+    "BRIDGEWATER": "bluechip",  # Sharpe +0.87 (360d 1h)
 }
 ENGINE_RISK_SCALE_BY_REGIME: dict[str, dict[str, float]] = {
     # CITADEL regime-adaptive: Sharpe 4.43 vs 0.39 com default (180d)

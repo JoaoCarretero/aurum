@@ -1,7 +1,7 @@
 """
 AURUM Longrun Battery — 1 teste longo por engine, basket bluechip.
 
-Runs (sequencial):
+Runs:
   CITADEL      → data/runs/citadel_<ts>/
   RENAISSANCE  → data/renaissance/<ts>/
   DE SHAW      → data/deshaw/<ts>/
@@ -14,15 +14,18 @@ Output:
     <engine>.stdout.log — stdout/stderr completo de cada engine
 
 Uso:
-  python tools/longrun_battery.py                # default: 360d bluechip, 5 engines
-  python tools/longrun_battery.py --smoke        # smoke: 30d, só citadel
-  python tools/longrun_battery.py --days 180     # override days
-  python tools/longrun_battery.py --engines citadel,jump   # subset
+  python tools/longrun_battery.py                    # default: 360d bluechip, sequencial
+  python tools/longrun_battery.py --parallel 5       # paralelo (5 workers)
+  python tools/longrun_battery.py --smoke            # smoke: 30d, só citadel
+  python tools/longrun_battery.py --days 180
+  python tools/longrun_battery.py --engines citadel,jump
 """
 import sys
 import json
 import argparse
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 
@@ -86,6 +89,8 @@ def main():
     ap.add_argument("--days", type=int, default=360)
     ap.add_argument("--basket", default="bluechip")
     ap.add_argument("--engines", default="citadel,renaissance,deshaw,jump,bridgewater")
+    ap.add_argument("--parallel", type=int, default=1,
+                    help="workers paralelos (1=sequencial, 5=tudo ao mesmo tempo)")
     ap.add_argument("--smoke", action="store_true", help="override: days=30, engines=citadel")
     args = ap.parse_args()
 
@@ -99,45 +104,63 @@ def main():
         print(f"unknown engines: {unknown}. valid: {list(ENGINES)}")
         sys.exit(2)
 
+    workers = max(1, min(args.parallel, len(engine_list)))
     ts = datetime.now().strftime("%Y-%m-%d_%H%M")
     export_dir = ROOT / "data" / "exports" / f"longrun_battery_{ts}"
     export_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n  LONGRUN BATTERY  —  {len(engine_list)} engines  ·  {args.days}d  ·  basket={args.basket}")
+    mode = "sequencial" if workers == 1 else f"paralelo ({workers} workers)"
+    print(f"\n  LONGRUN BATTERY  —  {len(engine_list)} engines  ·  {args.days}d  ·  basket={args.basket}  ·  {mode}")
     print(f"  export dir: {export_dir}")
     print(f"  {'─'*70}")
 
-    results = []
+    results: list[dict] = []
+    results_lock = threading.Lock()
     t_start = datetime.now()
-    for key in engine_list:
+
+    def _write_manifest(final: bool = False):
+        with results_lock:
+            manifest = {
+                "ts": ts,
+                "days": args.days,
+                "basket": args.basket,
+                "parallel_workers": workers,
+                "engines_requested": engine_list,
+                "started_at": t_start.isoformat(timespec="seconds"),
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "results": list(results),
+            }
+            if final:
+                t_end = datetime.now()
+                manifest["finished_at"] = t_end.isoformat(timespec="seconds")
+                manifest["total_elapsed_sec"] = round((t_end - t_start).total_seconds(), 1)
+            (export_dir / "manifest.json").write_text(
+                json.dumps(manifest, indent=2), encoding="utf-8"
+            )
+            return manifest
+
+    def _runner(key: str) -> dict:
         try:
             r = _run_engine(key, args.days, args.basket, export_dir)
         except Exception as e:
             r = {"engine": key, "status": "crashed", "error": str(e),
                  "started_at": datetime.now().isoformat(timespec="seconds")}
             print(f"  CRASHED {key}: {e}")
-        results.append(r)
+        with results_lock:
+            results.append(r)
+        _write_manifest()
+        return r
 
-        # write manifest incrementally so partial runs are recoverable
-        manifest = {
-            "ts": ts,
-            "days": args.days,
-            "basket": args.basket,
-            "engines_requested": engine_list,
-            "started_at": t_start.isoformat(timespec="seconds"),
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "results": results,
-        }
-        (export_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
-        )
+    if workers == 1:
+        for key in engine_list:
+            _runner(key)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_runner, k): k for k in engine_list}
+            for fut in as_completed(futures):
+                fut.result()
 
-    t_end = datetime.now()
-    manifest["finished_at"] = t_end.isoformat(timespec="seconds")
-    manifest["total_elapsed_sec"] = round((t_end - t_start).total_seconds(), 1)
-    (export_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
-    )
+    manifest = _write_manifest(final=True)
 
     print(f"\n  {'─'*70}")
     ok = sum(1 for r in results if r.get("status") == "ok")

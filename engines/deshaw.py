@@ -698,6 +698,7 @@ if __name__ == "__main__":
     _ap = argparse.ArgumentParser(description="DE SHAW — pairs cointegration")
     _ap.add_argument("--days", type=int, default=None)
     _ap.add_argument("--basket", type=str, default=None)
+    _ap.add_argument("--interval", type=str, default=None, help="Execution timeframe override (e.g. 1h, 4h)")
     _ap.add_argument("--no-menu", action="store_true")
     _args, _ = _ap.parse_known_args()
 
@@ -715,6 +716,8 @@ if __name__ == "__main__":
         _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
         if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
             SCAN_DAYS = int(_days_in)
+    if _args.interval:
+        INTERVAL = _args.interval
     _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2, "1h": 1, "2h": 0.5, "4h": 0.25}
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_mult.get(INTERVAL, 4))
 

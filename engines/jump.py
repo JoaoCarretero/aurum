@@ -406,7 +406,7 @@ def print_veredito(all_trades, eq, mdd_pct, mc, wf, ratios):
     log.info(f"Veredito: {passou}/7  ROI={ratios['ret']:.2f}%  WR={wr:.1f}%  MaxDD={mdd_pct:.1f}%")
 
 
-def export_json(all_trades, eq, mc, ratios, summary, config):
+def export_json(all_trades, eq, mc, ratios, summary, config, audit_results=None):
     import json
     closed = [t for t in all_trades if t["result"] in ("WIN", "LOSS")]
     wr = sum(1 for t in closed if t["result"] == "WIN") / max(len(closed), 1) * 100
@@ -437,8 +437,8 @@ def export_json(all_trades, eq, mc, ratios, summary, config):
     print(f"  json  ·  {out}")
     log.info(f"JSON → {out}")
 
-    save_run_artifacts(RUN_DIR, config, all_trades, eq, summary)
-    append_to_index(RUN_DIR, summary, config)
+    save_run_artifacts(RUN_DIR, config, all_trades, eq, summary, overfit_results=audit_results)
+    append_to_index(RUN_DIR, summary, config, audit_results)
 
     try:
         from core.db import register_run
@@ -463,9 +463,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--days", type=int, default=None)
     parser.add_argument("--basket", type=str, default=None)
+    parser.add_argument("--interval", type=str, default=None, help="TF override (e.g. 1h)")
     parser.add_argument("--leverage", type=float, default=None)
     parser.add_argument("--no-menu", action="store_true")
     args, _ = parser.parse_known_args()
+    if args.interval:
+        INTERVAL = args.interval
 
     print(f"\n{SEP}")
     print(f"  JUMP  ·  Order Flow Analysis")
@@ -477,7 +480,8 @@ if __name__ == "__main__":
         _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
         if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
             SCAN_DAYS = int(_days_in)
-    N_CANDLES = SCAN_DAYS * 24 * 4
+    _tf_mult = {"1m":60,"3m":20,"5m":12,"15m":4,"30m":2,"1h":1,"2h":0.5,"4h":0.25}
+    N_CANDLES = int(SCAN_DAYS * 24 * _tf_mult.get(INTERVAL, 4))
 
     BASKET_NAME = args.basket if (args.basket and args.basket in BASKETS) else "default"
     if args.basket and args.basket in BASKETS:
@@ -576,6 +580,15 @@ if __name__ == "__main__":
                   f"fora {w['test']['wr']:.1f}%  D {delta:+.1f}%  {ok}")
 
     print_veredito(all_trades, eq, mdd_pct, mc, wf, ratios)
+
+    try:
+        from analysis.overfit_audit import run_audit, print_audit_box
+        audit_results = run_audit(all_trades)
+        print_audit_box(audit_results)
+    except Exception as _e:
+        log.warning(f"overfit audit failed: {_e}")
+        audit_results = None
+
     config = snapshot_config()
     config.update({
         "ENGINE": "JUMP",
@@ -609,7 +622,7 @@ if __name__ == "__main__":
         "max_dd": round(mdd_pct, 2),
         "final_equity": round(eq[-1], 2) if eq else ACCOUNT_SIZE,
     }
-    export_json(all_trades, eq, mc, ratios, summary, config)
+    export_json(all_trades, eq, mc, ratios, summary, config, audit_results=audit_results)
 
     if all_vetos:
         # Coalesce parametric vetos

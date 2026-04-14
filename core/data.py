@@ -17,6 +17,8 @@ def fetch(symbol: str, interval: str | None = None,
     base = "https://fapi.binance.com/fapi/v1" if futures else "https://api.binance.com/api/v3"
     url, frames, end_time = f"{base}/klines", [], None
     remaining = _nc
+    _429_count = 0
+    _err_count = 0
     while remaining > 0:
         limit  = min(1000, remaining)
         params = {"symbol": symbol, "interval": _iv, "limit": limit}
@@ -25,24 +27,32 @@ def fetch(symbol: str, interval: str | None = None,
         try:
             r = requests.get(url, params=params, timeout=20)
             if r.status_code == 429:
-                _retries = getattr(fetch_klines, '_429_count', 0) + 1
-                if _retries > 5:
+                _429_count += 1
+                if _429_count > 5:
                     log.warning(f"[{symbol}] max retries on HTTP 429"); break
-                fetch_klines._429_count = _retries
-                time.sleep(2.0); continue
+                time.sleep(2.0 * _429_count); continue
+            if r.status_code >= 500:
+                _err_count += 1
+                if _err_count > 3:
+                    log.warning(f"[{symbol}] max retries on HTTP {r.status_code}"); break
+                time.sleep(1.0 + _err_count); continue
             if r.status_code != 200: break
             data = r.json()
             if not data: break
             frames.insert(0, data)
             end_time   = data[0][0] - 1
             remaining -= len(data)
+            _err_count = 0
             log.debug(f"[{symbol}] page {len(frames)}: got {len(data)} candles, remaining={remaining}")
             if len(data) < limit:
                 log.debug(f"[{symbol}] API returned fewer than requested — end of available history")
                 break
             time.sleep(0.08)
         except Exception as e:
-            log.warning(f"[{symbol}] fetch error: {e}"); break
+            _err_count += 1
+            if _err_count > 3:
+                log.warning(f"[{symbol}] fetch error after retries: {e}"); break
+            time.sleep(1.0 + _err_count)
     if not frames: return None
     flat = [c for f in frames for c in f]
     df   = pd.DataFrame(flat, columns=[
@@ -90,6 +100,11 @@ def fetch_all(symbols: list, interval: str | None = None,
                     print(f"  [{sym:12s}]  ✓  {len(df)}c   {span}", flush=True)
                 else:
                     print(f"  [{sym:12s}]  ✗ sem dados", flush=True)
+    missing = [s for s in symbols if s not in results]
+    if missing:
+        msg = f"fetch_all: {len(missing)}/{len(symbols)} símbolos FALTANDO: {missing}"
+        log.error(msg)
+        print(f"\n  ⚠ {msg}\n", flush=True)
     return results
 
 def validate(df: pd.DataFrame, symbol: str) -> bool:
