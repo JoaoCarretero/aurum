@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 DB_PATH = Path("data/aurum.db")
+INDEX_PATH = Path("data/index.json")
 
 _ENGINE_ALIASES = {
     "backtest": "citadel",
@@ -135,6 +136,20 @@ def _normalize_run_id(run_id: str | None, engine: str, json_path: str | None = N
     return datetime.now().strftime("%Y-%m-%d_%H%M")
 
 
+def _lookup_index_days(run_id: str) -> int | None:
+    try:
+        rows = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    for row in reversed(rows):
+        if str(row.get("run_id") or "").strip() == run_id:
+            days = row.get("period_days")
+            return int(days) if days is not None else None
+    return None
+
+
 def _extract_run_fields(
     data: dict,
     engine: str,
@@ -142,6 +157,8 @@ def _extract_run_fields(
 ) -> tuple[str, str | None, int | None, int | None, float | None, float | None, dict, dict]:
     summary = data.get("summary", {}) if isinstance(data.get("summary"), dict) else {}
     config = data.get("config", {}) if isinstance(data.get("config"), dict) else {}
+
+    run_id = _normalize_run_id(data.get("run_id"), engine, json_path)
 
     interval = (
         data.get("interval")
@@ -155,6 +172,8 @@ def _extract_run_fields(
         per_day = {"1m": 1440, "3m": 480, "5m": 288, "15m": 96, "30m": 48, "1h": 24, "2h": 12, "4h": 6, "1d": 1}.get(str(interval))
         if per_day:
             scan_days = int(round(float(n_candles) / per_day))
+    if scan_days is None:
+        scan_days = _lookup_index_days(run_id)
 
     symbols = config.get("symbols") or data.get("symbols") or []
     n_symbols = data.get("n_symbols")
@@ -169,7 +188,6 @@ def _extract_run_fields(
     if max_dd is None:
         max_dd = summary.get("max_dd_pct") or summary.get("max_dd")
 
-    run_id = _normalize_run_id(data.get("run_id"), engine, json_path)
     return run_id, interval, scan_days, n_symbols, roi, max_dd, summary, config
 
 
@@ -314,8 +332,28 @@ def register_run(
     if not resolved.is_relative_to(_base):
         raise ValueError(f"path {json_path} is outside data directory")
 
-    engine = _normalize_engine(engine, {}, str(resolved))
-    run_id = _normalize_run_id(run_id, engine, str(resolved))
+    payload = {}
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        payload = {}
+
+    engine = _normalize_engine(engine, payload, str(resolved))
+    inferred_run_id, inferred_interval, inferred_scan_days, inferred_n_symbols, inferred_roi, inferred_max_dd, _, inferred_config = _extract_run_fields(
+        payload, engine, str(resolved)
+    )
+    run_id = _normalize_run_id(run_id or inferred_run_id, engine, str(resolved))
+    interval = interval or inferred_interval
+    n_symbols = n_symbols if n_symbols is not None else inferred_n_symbols
+    roi = roi if roi is not None else inferred_roi
+    max_dd = inferred_max_dd
+    version = version or payload.get("version")
+    account_size = account_size if account_size is not None else payload.get("account_size") or inferred_config.get("account_size")
+    leverage = payload.get("leverage")
+    final_equity = final_equity if final_equity is not None else payload.get("final_equity")
+    win_rate = win_rate if win_rate is not None else payload.get("win_rate")
+    n_trades = n_trades if n_trades is not None else payload.get("n_trades")
 
     conn = _connect()
     try:
@@ -336,21 +374,21 @@ def register_run(
                 run_id,
                 engine,
                 version,
-                datetime.now().isoformat(),
+                payload.get("timestamp", datetime.now().isoformat()),
                 interval,
-                None,
+                inferred_scan_days,
                 n_symbols,
                 account_size,
-                None,
+                leverage,
                 roi,
-                None,
+                max_dd,
                 sharpe,
                 sortino,
                 None,
                 win_rate,
                 n_trades,
                 final_equity,
-                json.dumps({}, default=str),
+                json.dumps(inferred_config if inferred_config else {}, default=str),
                 str(resolved),
             ),
         )
