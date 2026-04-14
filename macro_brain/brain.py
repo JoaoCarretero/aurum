@@ -83,7 +83,13 @@ def _should_run(job: str, interval_sec: int) -> bool:
 
 def job_ingest_news():
     from macro_brain.data_ingestion.news import GDELTCollector, NewsAPICollector
+    from macro_brain.data_ingestion.rss import RSSCollector
     results = {}
+    try:
+        results["rss"] = RSSCollector().run()  # Primary — no key, institutional feeds
+    except Exception as e:
+        log.warning(f"rss job failed: {e}")
+        results["rss"] = {"error": str(e)}
     try:
         results["newsapi"] = NewsAPICollector().run()
     except Exception as e:
@@ -96,6 +102,22 @@ def job_ingest_news():
         results["gdelt"] = {"error": str(e)}
     _record_run("news", result=results)
     return results
+
+
+def job_ingest_markets():
+    """Yahoo Finance — commodities, forex, rates, equity indices."""
+    from macro_brain.data_ingestion.markets import YahooMarketsCollector
+    from datetime import timedelta
+    try:
+        result = YahooMarketsCollector().run(
+            since=datetime.utcnow() - timedelta(days=7),
+        )
+        _record_run("markets", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"markets job failed: {e}")
+        _record_run("markets", error=str(e))
+        return {"error": str(e)}
 
 
 def job_ingest_macro():
@@ -214,8 +236,9 @@ def run_once(force: bool = False):
     schedule = [
         ("sentiment",   job_ingest_sentiment,   MACRO_SCHED_NEWS_SEC),   # 15min
         ("commodities", job_ingest_commodities, MACRO_SCHED_NEWS_SEC),   # 15min
+        ("markets",     job_ingest_markets,     MACRO_SCHED_MACRO_SEC),  # daily (Yahoo)
         ("news",        job_ingest_news,        MACRO_SCHED_NEWS_SEC),   # 15min
-        ("macro",       job_ingest_macro,       MACRO_SCHED_MACRO_SEC),  # daily
+        ("macro",       job_ingest_macro,       MACRO_SCHED_MACRO_SEC),  # daily (FRED)
         ("regime",      job_regime,             MACRO_SCHED_REGIME_SEC), # 4h
         ("thesis",      job_thesis,             MACRO_SCHED_THESIS_SEC), # daily
         ("review",      job_position_review,    MACRO_SCHED_REVIEW_SEC), # hourly

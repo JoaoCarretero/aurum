@@ -347,6 +347,81 @@ def _section(title: str, content: str, id_: str = "") -> str:
 </section>'''
 
 
+def _details_block(title: str, content: str, subtitle: str = "",
+                   open_: bool = False, tone: str = "neutral") -> str:
+    open_attr = " open" if open_ else ""
+    subtitle_html = f'<span class="details-subtitle">{subtitle}</span>' if subtitle else ""
+    return f'''<details class="details-block tone-{tone}"{open_attr}>
+  <summary>
+    <div class="details-head">
+      <span class="details-kicker">AURUM</span>
+      <span class="details-title">{title}</span>
+      {subtitle_html}
+    </div>
+    <span class="details-toggle">expand</span>
+  </summary>
+  <div class="details-body">{content}</div>
+</details>'''
+
+
+def _build_executive_strip(all_trades: list[dict], by_sym: dict,
+                           audit_results: dict | None,
+                           wf_regime: dict | None,
+                           all_vetos: dict | None) -> str:
+    closed = [t for t in all_trades if t.get("result") in ("WIN", "LOSS")]
+    top_symbol = "N/A"
+    top_symbol_pnl = 0.0
+    if by_sym:
+        ranked = []
+        for sym, trades in by_sym.items():
+            pnl = sum(t.get("pnl", 0) for t in trades if t.get("result") in ("WIN", "LOSS"))
+            ranked.append((sym, pnl))
+        if ranked:
+            top_symbol, top_symbol_pnl = max(ranked, key=lambda item: item[1])
+
+    audit_card = ("Audit", "Not available", _GRAY)
+    if audit_results and isinstance(audit_results, dict):
+        tests = audit_results.get("tests", {})
+        statuses = [str((v or {}).get("status", "")).upper() for v in tests.values()]
+        n_fail = sum(1 for s in statuses if s == "FAIL")
+        n_warn = sum(1 for s in statuses if s == "WARN")
+        n_pass = sum(1 for s in statuses if s == "PASS")
+        audit_color = _GREEN if n_fail == 0 else (_GOLD if n_fail == 1 else _RED)
+        audit_card = ("Audit", f"{n_pass} pass  {n_warn} warn  {n_fail} fail", audit_color)
+
+    stability_card = ("Regime", "No stability data", _GRAY)
+    if wf_regime:
+        stable_values = []
+        for data in wf_regime.values():
+            stable = data.get("stable_pct")
+            if stable is not None:
+                stable_values.append(float(stable))
+        if stable_values:
+            avg_stable = sum(stable_values) / len(stable_values)
+            stability_color = _GREEN if avg_stable >= 60 else (_GOLD if avg_stable >= 40 else _RED)
+            stability_card = ("Regime", f"{avg_stable:.0f}% stable avg", stability_color)
+
+    friction_card = ("Main friction", "No veto pressure", _GREEN)
+    if all_vetos:
+        main_reason, main_count = max(all_vetos.items(), key=lambda item: item[1])
+        friction_card = ("Main friction", f"{main_reason} ({main_count})", _GOLD)
+
+    cards = [
+        _metric_card("Best Symbol", f'{top_symbol.replace("USDT", "")}  {_fmt_money(top_symbol_pnl)}',
+                     _GREEN if top_symbol_pnl >= 0 else _RED),
+        _metric_card(*audit_card),
+        _metric_card(*stability_card),
+        _metric_card(*friction_card),
+    ]
+    return f'''<section class="executive-strip">
+  <div class="strip-header">
+    <span class="section-kicker">Executive Summary</span>
+    <h2>Research Snapshot</h2>
+  </div>
+  <div class="strip-grid">{"".join(cards)}</div>
+</section>'''
+
+
 def _build_header(run_dir: Path, config_dict: dict | None,
                   engine_name: str = "AURUM") -> str:
     """Header inteligente: usa engine institucional + timestamp explícito do run.
@@ -396,10 +471,10 @@ def _build_header(run_dir: Path, config_dict: dict | None,
                              f'<span style="color:{_WHITE};">{v_str}</span>')
                 if len(items) >= 6:
                     break
-        cfg_summary = " &nbsp;·&nbsp; ".join(items)
+        cfg_summary = " &nbsp;&middot;&nbsp; ".join(items)
     if not cfg_summary:
         cfg_summary = (f'<span style="color:{_GRAY};">interval:</span> '
-                       f'<span style="color:{_WHITE};">{INTERVAL}</span> &nbsp;·&nbsp; '
+                       f'<span style="color:{_WHITE};">{INTERVAL}</span> &nbsp;&middot;&nbsp; '
                        f'<span style="color:{_GRAY};">account:</span> '
                        f'<span style="color:{_WHITE};">{_fmt_money(ACCOUNT_SIZE)}</span>')
 
@@ -408,7 +483,7 @@ def _build_header(run_dir: Path, config_dict: dict | None,
     <div>
       <div class="eyebrow">AURUM FINANCE</div>
       <h1>{engine_name}</h1>
-      <div class="hero-subtitle">Backtest Report</div>
+      <div class="hero-subtitle">Institutional Backtest Report</div>
     </div>
     <div class="hero-badge">Institutional Research</div>
   </div>
@@ -448,7 +523,7 @@ def _build_result_box(all_trades: list[dict], eq: list[float],
     return f'''<section class="summary-shell">
   <div class="summary-card">
     <div class="summary-balance">
-      <div class="summary-balance-label">Equity</div>
+      <div class="summary-balance-label">Net Result</div>
       <div class="summary-balance-main">
         <span class="muted">{_fmt_money(ACCOUNT_SIZE)}</span>
         <span class="arrow">&rarr;</span>
@@ -1339,6 +1414,9 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
     # ── Build all sections ──
     header = _build_header(run_dir, config_dict, engine_name=engine_name)
     result_box = _build_result_box(all_trades, eq, ratios, mdd_pct)
+    executive_strip = _build_executive_strip(
+        all_trades, by_sym, audit_results, wf_regime, all_vetos
+    )
     equity_svg = _svg_equity(eq)
     symbol_table = _build_symbol_table(by_sym, all_trades)
     omega_table = _build_omega_table(cond)
@@ -1354,7 +1432,13 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
     if audit_results:
         try:
             from analysis.overfit_audit import build_audit_html
-            audit_html = _section("Overfit Audit", build_audit_html(audit_results), "audit")
+            audit_html = _details_block(
+                "Overfit Audit",
+                build_audit_html(audit_results),
+                subtitle="reality checks and concentration diagnostics",
+                open_=False,
+                tone="risk",
+            )
         except Exception:
             pass
 
@@ -1364,12 +1448,12 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
         mc_paths_svg = _svg_mc_paths(mc, eq)
         mc_hist_svg = _svg_mc_histogram(mc)
         mc_stats = _build_mc_stats(mc)
-        mc_html = _section("Monte Carlo Simulation", f"""
+        mc_html = _details_block("Monte Carlo Simulation", f"""
             {mc_paths_svg}
             <div style="height:16px;"></div>
             {mc_hist_svg}
             {mc_stats}
-        """, "monte-carlo")
+        """, subtitle="distribution and drawdown stress", open_=False)
 
     # Walk-forward regime summary
     wf_regime_html = ""
@@ -1393,7 +1477,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
     # terminal (equity curve, MC paths, distribution as native tk.Canvas).
     # The HTML report keeps SVG-based equity_svg/mc_paths_svg/mc_hist_svg
     # which are inline and self-contained.
-    institutional_html = ""
+    institutional_html = executive_strip
 
     # ── Assemble full HTML ──
     html = f'''<!DOCTYPE html>
@@ -1401,15 +1485,29 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>{engine_name} — AURUM Backtest Report</title>
+<title>{engine_name} - AURUM Backtest Report</title>
 <style>
+  :root {{
+    --bg: {_BG};
+    --panel: rgba(15, 18, 28, 0.86);
+    --panel-strong: rgba(15, 18, 28, 0.94);
+    --panel-soft: rgba(255,255,255,0.03);
+    --border: rgba(255,255,255,0.06);
+    --border-strong: {_BORDER};
+    --text: {_WHITE};
+    --muted: {_GRAY};
+    --accent: {_GOLD};
+    --positive: {_GREEN};
+    --negative: {_RED};
+    --info: {_BLUE};
+  }}
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{
     background:
       radial-gradient(circle at top left, rgba(74,158,255,0.10), transparent 28%),
       radial-gradient(circle at top right, rgba(232,184,75,0.08), transparent 24%),
       linear-gradient(180deg, #0a0c12 0%, #0d1017 100%);
-    color: {_WHITE};
+    color: var(--text);
     font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     font-size: 14px;
     line-height: 1.6;
@@ -1434,7 +1532,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
   section {{ background: transparent; }}
   .hero {{
     background: rgba(15, 18, 28, 0.92);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
     border-radius: 22px;
     padding: 28px 30px 24px 30px;
     margin-bottom: 24px;
@@ -1501,16 +1599,36 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
     font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
   }}
   .hero-config {{
-    color: {_GRAY};
+    color: var(--muted);
     font-size: 12px;
     line-height: 1.9;
+  }}
+  .executive-strip {{
+    margin-bottom: 22px;
+  }}
+  .strip-header {{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding: 0 2px;
+  }}
+  .strip-header h2 {{
+    font-size: 18px;
+    letter-spacing: -0.02em;
+  }}
+  .strip-grid {{
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
   }}
   .summary-shell {{
     margin-bottom: 28px;
   }}
   .summary-card {{
     background: linear-gradient(180deg, rgba(15,18,28,0.94) 0%, rgba(13,15,22,0.94) 100%);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
     border-radius: 22px;
     padding: 24px 26px;
     box-shadow: 0 24px 80px rgba(0,0,0,0.28);
@@ -1554,7 +1672,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
   }}
   .metric-card {{
     background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
     border-radius: 16px;
     padding: 14px 16px;
     min-width: 0;
@@ -1580,7 +1698,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
   }}
   .report-section {{
     background: rgba(15, 18, 28, 0.82);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
     border-radius: 22px;
     padding: 22px 24px;
     margin-bottom: 22px;
@@ -1609,19 +1727,79 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
   .section-body {{
     overflow-x: auto;
   }}
+  .details-block {{
+    background: rgba(15, 18, 28, 0.78);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    margin-bottom: 18px;
+    overflow: hidden;
+  }}
+  .details-block summary {{
+    list-style: none;
+    cursor: pointer;
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }}
+  .details-block summary::-webkit-details-marker {{
+    display: none;
+  }}
+  .details-head {{
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }}
+  .details-kicker {{
+    color: var(--accent);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+  }}
+  .details-title {{
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }}
+  .details-subtitle {{
+    color: var(--muted);
+    font-size: 12px;
+  }}
+  .details-toggle {{
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+  }}
+  .details-block[open] .details-toggle {{
+    color: var(--text);
+  }}
+  .details-body {{
+    padding: 0 20px 20px 20px;
+    border-top: 1px solid var(--border);
+  }}
+  .tone-risk {{
+    border-color: rgba(232,93,93,0.24);
+  }}
   footer {{
     opacity: 0.9;
   }}
   @media (max-width: 960px) {{
     .container {{ padding: 20px 18px 40px 18px; }}
+    .strip-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     .summary-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     .hero-top {{ flex-direction: column; }}
   }}
   @media (max-width: 640px) {{
     .hero h1 {{ font-size: 28px; }}
     .summary-balance-main {{ font-size: 28px; }}
+    .strip-grid {{ grid-template-columns: 1fr; }}
     .summary-grid {{ grid-template-columns: 1fr; }}
     .report-section {{ padding: 18px 16px; }}
+    .details-block summary {{ padding: 16px; }}
+    .details-body {{ padding: 0 16px 16px 16px; }}
   }}
   ::selection {{ background: {_GOLD}; color: {_BG}; }}
 </style>
@@ -1637,19 +1815,19 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
 
 {_section("Equity Curve", equity_svg, "equity")}
 
-{mc_html}
-
 {_section("Performance by Symbol", symbol_table, "symbols")}
-
-{_section("Trade Inspector", trade_inspector_html, "trade-inspector") if trade_inspector_html else ""}
 
 {audit_html}
 
-{_section("Edge by Omega Score Range", omega_table, "omega")}
+{mc_html}
 
-{_section("Walk-Forward Analysis", wf_table + wf_regime_html, "walk-forward")}
+{_details_block("Trade Inspector", trade_inspector_html, subtitle="per-trade replay and execution context", open_=False) if trade_inspector_html else ""}
 
-{_section("Veto Filters", veto_html, "vetos")}
+{_details_block("Edge by Omega Score Range", omega_table, subtitle="score stratification and expectancy", open_=False)}
+
+{_details_block("Walk-Forward Analysis", wf_table + wf_regime_html, subtitle="stability outside the in-sample slice", open_=False)}
+
+{_details_block("Veto Filters", veto_html, subtitle="dominant rejection reasons during scan", open_=False)}
 
 <footer style="text-align:center;padding:24px 0;border-top:1px solid {_BORDER};
                margin-top:32px;font-size:11px;color:{_GRAY};">

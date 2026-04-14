@@ -1550,7 +1550,7 @@ class App(tk.Tk):
 
     # ─── SPLASH (Layer 0) — HL1 Black Mesa gate ──────────
     def _splash_on_click(self) -> None:
-        """Click / ENTER / space handler — cancel pulse and route to main menu."""
+        """Click / ENTER / space handler — route to Macro Brain cockpit first."""
         if self._splash_pulse_after_id is not None:
             try:
                 self.after_cancel(self._splash_pulse_after_id)
@@ -1558,7 +1558,9 @@ class App(tk.Tk):
                 pass
             self._splash_pulse_after_id = None
         self._splash_canvas = None
-        self._menu("main")
+        # Macro Brain cockpit é a intro — rich market data. User clica
+        # "ENTER TERMINAL" pra ir pro main menu com as trade engines.
+        self._macro_brain_menu()
 
     def _cd_draw(self):
         """Animate the CD radar on the splash screen."""
