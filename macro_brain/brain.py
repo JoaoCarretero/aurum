@@ -104,6 +104,32 @@ def job_ingest_news():
     return results
 
 
+def job_ingest_cftc():
+    """CFTC Commitments of Traders — weekly institutional positioning."""
+    from macro_brain.data_ingestion.cftc import CFTCCollector
+    try:
+        result = CFTCCollector().run()
+        _record_run("cftc", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"cftc failed: {e}")
+        _record_run("cftc", error=str(e))
+        return {"error": str(e)}
+
+
+def job_ingest_onchain():
+    """BTC on-chain metrics — hashrate, mempool, fees."""
+    from macro_brain.data_ingestion.onchain import OnChainCollector
+    try:
+        result = OnChainCollector().run()
+        _record_run("onchain", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"onchain failed: {e}")
+        _record_run("onchain", error=str(e))
+        return {"error": str(e)}
+
+
 def job_ingest_calendar():
     """Economic calendar — próximos releases (CPI, FOMC, NFP, etc)."""
     from macro_brain.data_ingestion.calendar import EconomicCalendarCollector
@@ -250,6 +276,8 @@ def run_once(force: bool = False):
         ("sentiment",   job_ingest_sentiment,   MACRO_SCHED_NEWS_SEC),   # 15min
         ("commodities", job_ingest_commodities, MACRO_SCHED_NEWS_SEC),   # 15min
         ("markets",     job_ingest_markets,     MACRO_SCHED_MACRO_SEC),  # daily (Yahoo)
+        ("cftc",        job_ingest_cftc,        MACRO_SCHED_MACRO_SEC),  # daily (weekly data)
+        ("onchain",     job_ingest_onchain,     MACRO_SCHED_NEWS_SEC),   # 15min
         ("calendar",    job_ingest_calendar,    MACRO_SCHED_MACRO_SEC),  # daily
         ("news",        job_ingest_news,        MACRO_SCHED_NEWS_SEC),   # 15min
         ("macro",       job_ingest_macro,       MACRO_SCHED_MACRO_SEC),  # daily (FRED)

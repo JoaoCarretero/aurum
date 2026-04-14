@@ -29,27 +29,62 @@ log = logging.getLogger("macro_brain.ingest.rss")
 
 # Feed registry: (url, source_tag, default_category, priority_keywords)
 _FEEDS = [
+    # ── Central Banks · Monetary Policy ────────────────────
     ("https://www.federalreserve.gov/feeds/press_all.xml",
      "fed", "monetary",
      ["rate", "FOMC", "policy", "inflation", "employment"]),
     ("https://www.ecb.europa.eu/rss/press.html",
      "ecb", "monetary",
      ["rate", "policy", "inflation", "euro"]),
-    ("https://home.treasury.gov/news/press-releases/feed",
-     "treasury", "monetary",
-     ["Treasury", "debt", "sanctions", "tariff"]),
+    ("https://www.federalreserve.gov/feeds/speeches.xml",
+     "fed_speeches", "monetary",
+     ["rate", "inflation", "outlook", "FOMC"]),
+    ("https://www.bankofengland.co.uk/rss/news",
+     "boe", "monetary",
+     ["rate", "inflation", "sterling"]),
+
+    # ── Macro · Financial News ─────────────────────────────
+    ("https://feeds.content.dowjones.io/public/rss/mw_topstories",
+     "marketwatch", "macro",
+     ["market", "fed", "recession", "inflation", "earnings"]),
+    ("https://www.cnbc.com/id/100003114/device/rss/rss.html",
+     "cnbc", "macro",
+     ["market", "fed", "rate", "earnings"]),
+    ("https://www.ft.com/myft/following/8e539ad6-d68d-4d09-aedc-6b9c4063eae4.rss",
+     "ft_markets", "macro",
+     ["market", "bond", "yield"]),
+
+    # ── International Institutions ─────────────────────────
+    ("https://www.imf.org/en/News/SearchNews?pageSize=20&format=rss",
+     "imf", "macro",
+     ["global", "growth", "debt", "IMF"]),
+
+    # ── Crypto News ────────────────────────────────────────
     ("https://www.coindesk.com/arc/outboundfeeds/rss",
      "coindesk", "crypto",
      ["bitcoin", "ethereum", "SEC", "ETF", "regulation"]),
     ("https://cointelegraph.com/rss",
      "cointelegraph", "crypto",
      ["bitcoin", "regulation", "SEC", "CBDC"]),
-    ("https://feeds.content.dowjones.io/public/rss/mw_topstories",
-     "marketwatch", "macro",
-     ["market", "fed", "recession", "inflation", "earnings"]),
-    ("https://www.bis.org/rss/home.rss",
-     "bis", "monetary",
-     ["banking", "systemic", "risk"]),
+    ("https://decrypt.co/feed",
+     "decrypt", "crypto",
+     ["bitcoin", "ethereum", "DeFi", "NFT"]),
+    ("https://theblock.co/rss",
+     "theblock", "crypto",
+     ["institutional", "ETF", "custody", "regulation"]),
+
+    # ── Commodities + Energy ───────────────────────────────
+    ("https://oilprice.com/rss/main",
+     "oilprice", "commodities",
+     ["oil", "OPEC", "gas", "supply"]),
+
+    # ── SEC Filings · Regulatory ───────────────────────────
+    ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=&company=&dateb=&owner=include&count=40&search_text=&output=atom",
+     "sec_edgar", "geopolitics",
+     ["filing", "insider", "regulation"]),
+
+    # ── Deprecated (manter como fallback se voltarem) ─────
+    # Treasury 404 (antiga URL), BIS 404. Omitidas no default.
 ]
 
 

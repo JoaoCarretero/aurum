@@ -942,6 +942,25 @@ class App(tk.Tk):
         hd = tk.Frame(self, bg=BG, height=26); hd.pack(fill="x"); hd.pack_propagate(False)
         hc = tk.Frame(hd, bg=BG); hc.pack(fill="both", expand=True, padx=10)
         tk.Label(hc, text="AURUM", font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(side="left")
+        # Macro Brain quick-return button — futuristic cyan, always top-left
+        # after AURUM brand. Sempre visível (hide em cockpit via update).
+        self.h_macro_btn = tk.Label(
+            hc, text=" ▸ MACRO ", font=(FONT, 8, "bold"),
+            fg="#000000", bg="#00eaff", cursor="hand2", padx=6, pady=0,
+        )
+        self.h_macro_btn.pack(side="left", padx=(8, 0))
+        self.h_macro_btn.bind(
+            "<Button-1>", lambda e: self._macro_brain_menu()
+        )
+        # Hover glow (futuristic feel)
+        self.h_macro_btn.bind(
+            "<Enter>",
+            lambda e: self.h_macro_btn.configure(bg="#00ffff", fg="#001015")
+        )
+        self.h_macro_btn.bind(
+            "<Leave>",
+            lambda e: self.h_macro_btn.configure(bg="#00eaff", fg="#000000")
+        )
         self.h_path = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_path.pack(side="left", padx=(8,0))
         self.h_stat = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_stat.pack(side="right")
         # Persistent badge that lights up while the COMMAND CENTER dev server is alive.

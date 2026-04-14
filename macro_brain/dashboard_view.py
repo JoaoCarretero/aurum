@@ -434,6 +434,165 @@ def render(parent: tk.Widget, app=None) -> None:
     _build_tabs()
     _render_news()
 
+    # ── CFTC COT POSITIONING ──────────────────────────
+    cot_metrics = _macro_map([
+        "DXY_NET_LONGS", "EUR_FX_NET_LONGS", "JPY_FX_NET_LONGS",
+        "GBP_FX_NET_LONGS", "GOLD_NET_LONGS", "SILVER_NET_LONGS",
+        "WTI_NET_LONGS", "SP500_ES_NET_LONGS",
+    ], n=12)
+    _section(outer, "CFTC COT · INSTITUTIONAL POSITIONING (weekly)", color="#ff00a0")
+    _metric_grid(outer, cot_metrics, [
+        ("DXY_NET_LONGS",       "DXY",      "{:+,.0f}"),
+        ("EUR_FX_NET_LONGS",    "EUR",      "{:+,.0f}"),
+        ("JPY_FX_NET_LONGS",    "JPY",      "{:+,.0f}"),
+        ("GBP_FX_NET_LONGS",    "GBP",      "{:+,.0f}"),
+        ("GOLD_NET_LONGS",      "GOLD",     "{:+,.0f}"),
+        ("SILVER_NET_LONGS",    "SILVER",   "{:+,.0f}"),
+        ("WTI_NET_LONGS",       "WTI",      "{:+,.0f}"),
+        ("SP500_ES_NET_LONGS",  "SP500",    "{:+,.0f}"),
+    ], spark_color="#ff00a0")
+
+    # ── BTC ON-CHAIN ──────────────────────────────────
+    onchain_metrics = _macro_map([
+        "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
+        "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
+        "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
+        "BTC_24H_TRADE_VOLUME_USD",
+    ], n=30)
+    _section(outer, "BTC ON-CHAIN · NETWORK STATE", color="#00ff88")
+    _metric_grid(outer, onchain_metrics, [
+        ("BTC_HASH_RATE",             "HASHRATE",  "{:,.0f}"),
+        ("BTC_DIFFICULTY",            "DIFF",      "{:,.0f}"),
+        ("BTC_BLOCK_HEIGHT",          "BLOCK",     "{:,.0f}"),
+        ("BTC_MEMPOOL_COUNT",         "MEMPOOL",   "{:,.0f}"),
+        ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB","{:.0f}"),
+        ("BTC_24H_TX_COUNT",          "24H TX",    "{:,.0f}"),
+        ("BTC_24H_MINER_REVENUE_USD", "MINER REV", "${:,.0f}"),
+        ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",   "${:,.0f}"),
+    ], spark_color="#00ff88")
+
+    # ── MACRO ANALYTICS · DERIVED INSIGHTS ────────────
+    try:
+        from macro_brain.ml_engine.analytics import compute_all
+        insights = compute_all()
+    except Exception as ex:
+        log.warning(f"analytics failed: {ex}")
+        insights = []
+    if insights:
+        _section(outer, "MACRO ANALYTICS · DERIVED INSIGHTS", color="#c87fff")
+        sig_colors = {
+            "bullish": GREEN,
+            "bearish": RED,
+            "warning": AMBER,
+            "neutral": DIM,
+        }
+        ins_row = tk.Frame(outer, bg=BG)
+        ins_row.pack(fill="x", pady=1)
+        for ins in insights:
+            sc = sig_colors.get(ins.signal, WHITE)
+            card = tk.Frame(ins_row, bg=PANEL, highlightbackground=sc,
+                           highlightthickness=1)
+            card.pack(side="left", padx=1, fill="both", expand=True)
+            tk.Label(card, text=ins.name.upper(), font=(FONT, 6, "bold"),
+                     fg=DIM, bg=PANEL, anchor="w").pack(fill="x", padx=4, pady=(2, 0))
+            tk.Label(card, text=str(ins.value), font=(FONT, 9, "bold"),
+                     fg=WHITE, bg=PANEL, anchor="w").pack(fill="x", padx=4)
+            tk.Label(card, text=ins.signal.upper(), font=(FONT, 7, "bold"),
+                     fg=sc, bg=PANEL, anchor="w").pack(fill="x", padx=4)
+            tk.Label(card, text=ins.detail[:60], font=(FONT, 7),
+                     fg=DIM, bg=PANEL, anchor="w", wraplength=180,
+                     justify="left").pack(fill="x", padx=4, pady=(0, 2))
+
+    # ── ENGINES PORTAL · running processes + VPS ──────
+    _section(outer, "ENGINES PORTAL · PROCESS MONITOR", color="#00eaff")
+    portal_row = tk.Frame(outer, bg=BG)
+    portal_row.pack(fill="x", pady=1)
+
+    # Running engine processes via core.proc
+    try:
+        from core.proc import list_procs
+        procs = list_procs()
+    except Exception as ex:
+        log.warning(f"list_procs failed: {ex}")
+        procs = []
+
+    running = [p for p in procs if p.get("alive") or p.get("status") == "running"]
+    recent_finished = [p for p in procs if not p.get("alive") and p.get("status") == "finished"][:5]
+
+    # Status boxes
+    stat_panel = tk.Frame(portal_row, bg=BG)
+    stat_panel.pack(side="left", padx=2)
+    for label, val in [
+        ("ACTIVE", f"{len(running)}"),
+        ("FINISHED", f"{len(recent_finished)}"),
+        ("TOTAL TRACKED", f"{len(procs)}"),
+    ]:
+        box = tk.Frame(stat_panel, bg=PANEL, padx=8, pady=2)
+        box.pack(side="left", padx=1)
+        tk.Label(box, text=label, font=(FONT, 6, "bold"),
+                 fg="#00eaff", bg=PANEL).pack()
+        tk.Label(box, text=val, font=(FONT, 10, "bold"),
+                 fg=WHITE, bg=PANEL).pack()
+
+    # VPS status
+    vps_online = False
+    vps_detail = "not configured"
+    try:
+        vps_path = Path("config/vps.json")
+        if vps_path.exists():
+            vps_cfg = json.loads(vps_path.read_text(encoding="utf-8"))
+            host = vps_cfg.get("host", "").strip()
+            if host and host not in ("", "n/a"):
+                # Simple TCP connect test (port 22 SSH)
+                import socket
+                try:
+                    port = int(vps_cfg.get("port", 22))
+                    with socket.create_connection((host, port), timeout=3):
+                        vps_online = True
+                        vps_detail = f"{host}:{port}"
+                except (OSError, socket.timeout, ValueError):
+                    vps_detail = f"{host}:{vps_cfg.get('port', 22)} · UNREACHABLE"
+            else:
+                vps_detail = "host not set"
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    vps_color = GREEN if vps_online else RED
+    vps_box = tk.Frame(portal_row, bg=PANEL, highlightbackground=vps_color,
+                       highlightthickness=1, padx=8, pady=2)
+    vps_box.pack(side="left", padx=2)
+    tk.Label(vps_box, text="VPS", font=(FONT, 6, "bold"),
+             fg="#00eaff", bg=PANEL).pack()
+    tk.Label(vps_box, text="ONLINE" if vps_online else "OFFLINE",
+             font=(FONT, 9, "bold"), fg=vps_color, bg=PANEL).pack()
+    tk.Label(vps_box, text=vps_detail[:20], font=(FONT, 6),
+             fg=DIM, bg=PANEL).pack()
+
+    # Process list (5 most recent)
+    if procs:
+        proc_list = tk.Frame(outer, bg=BG)
+        proc_list.pack(fill="x", pady=(1, 0))
+        for p in procs[:5]:
+            engine_name = (p.get("engine") or "?").upper()
+            pid = p.get("pid") or "?"
+            status = p.get("status", "?")
+            alive = p.get("alive", False)
+            sc = GREEN if alive else DIM
+            row = tk.Frame(proc_list, bg=BG)
+            row.pack(fill="x", pady=0)
+            tk.Label(row, text=f"  {'●' if alive else '○'}",
+                     font=(FONT, 8, "bold"), fg=sc, bg=BG, width=3).pack(side="left")
+            tk.Label(row, text=f"{engine_name:<14}", font=(FONT, 8, "bold"),
+                     fg=WHITE, bg=BG, width=16, anchor="w").pack(side="left")
+            tk.Label(row, text=f"pid {pid:<8}", font=(FONT, 7),
+                     fg=DIM, bg=BG, width=12, anchor="w").pack(side="left")
+            tk.Label(row, text=status.upper(), font=(FONT, 7, "bold"),
+                     fg=sc, bg=BG, width=10, anchor="w").pack(side="left")
+            started = p.get("started", "")
+            tk.Label(row, text=f"started {_fmt_age(started)} ago" if started else "",
+                     font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(side="left",
+                                                                      fill="x", expand=True)
+
     # ── MACRO BOOK (compact footer) ───────────────────
     _section(outer, "MACRO BOOK · PAPER", color=AMBER_D)
     book_row = tk.Frame(outer, bg=BG)

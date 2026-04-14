@@ -62,17 +62,29 @@ FRED_API_KEY = _load_macro_key("FRED_API_KEY", "fred_api_key")
 NEWSAPI_KEY = _load_macro_key("NEWSAPI_KEY", "newsapi_key")
 
 # FRED series monitoradas (ticker → nossa label)
+# Alguns tickers custom: T10Y2Y é série oficial mas às vezes 502s (retry job next cycle)
 FRED_SERIES = {
     "FEDFUNDS":    "FED_RATE",
     "DGS10":       "US10Y",
     "DGS2":        "US2Y",
-    "DXY":         "DXY",
+    "DGS30":       "US30Y_FRED",
+    "DGS5":        "US5Y_FRED",
+    "DTWEXBGS":    "DXY_BROAD",
+    "DTWEXAFEGS":  "DXY_AFE",
     "CPIAUCSL":    "CPI_US",
+    "CPILFESL":    "CORE_CPI_US",
     "UNRATE":      "UNEMPLOYMENT_US",
+    "PAYEMS":      "NONFARM_PAYROLLS",
     "T10Y2Y":      "YIELD_SPREAD_10_2",
-    "VIXCLS":      "VIX",
-    "DCOILWTICO":  "WTI_OIL",
-    "GOLDAMGBD228NLBM": "GOLD",
+    "T10Y3M":      "YIELD_SPREAD_10_3M",
+    "VIXCLS":      "VIX_FRED",
+    "DCOILWTICO":  "WTI_OIL_FRED",
+    "ICSA":        "JOBLESS_CLAIMS",
+    "INDPRO":      "INDUSTRIAL_PRODUCTION",
+    "UMCSENT":     "MICHIGAN_SENTIMENT",
+    "M2SL":        "M2_MONEY_SUPPLY",
+    "WALCL":       "FED_BALANCE_SHEET",
+    "HOUST":       "HOUSING_STARTS",
 }
 
 # ── STORAGE ──────────────────────────────────────────────────
