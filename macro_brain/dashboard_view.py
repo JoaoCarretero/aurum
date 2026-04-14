@@ -240,6 +240,55 @@ def _render_bot_slots(parent, network: str,
                  fg=DIM2, bg=PANEL, anchor="w").pack(anchor="w")
 
 
+def _cot_matrix(parent, rows: list[tuple]):
+    """Render a CFTC COT positioning matrix — markets × trader classes.
+
+    rows: list of (label, nc_metric, swap_metric, mm_metric) tuples.
+    Each metric may be None. Latest value is pulled from macro_data;
+    green/red tint based on sign, dim when missing.
+    """
+    from macro_brain.persistence.store import latest_macro
+
+    def _val(metric: str | None) -> tuple[str, str]:
+        if not metric:
+            return "—", DIM
+        lat = latest_macro(metric, n=1)
+        if not lat:
+            return "—", DIM
+        v = lat[0]["value"]
+        try: v = float(v)
+        except (TypeError, ValueError):
+            return "—", DIM
+        s = f"{v:+,.0f}"
+        c = GREEN if v > 0 else (RED if v < 0 else WHITE)
+        return s, c
+
+    # Header row
+    hdr = tk.Frame(parent, bg=BG); hdr.pack(fill="x", pady=(0, 1))
+    for txt, w, align in [
+        ("MARKET",        14, "w"),
+        ("NC NET",        13, "e"),
+        ("SWAP · BANKS",  14, "e"),
+        ("MM · FUNDS",    14, "e"),
+    ]:
+        tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM, bg=BG,
+                 width=w, anchor=align, padx=4).pack(side="left")
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(0, 1))
+
+    for label, nc, sw, mm in rows:
+        row = tk.Frame(parent, bg=BG); row.pack(fill="x")
+        _attach_hover(row, default_border=BG, hover_border=BG)  # no-op hover for row bg
+
+        tk.Label(row, text=label, font=(FONT, 8, "bold"),
+                 fg=WHITE, bg=BG, width=14, anchor="w",
+                 padx=4).pack(side="left")
+        for metric, w in [(nc, 13), (sw, 14), (mm, 14)]:
+            s, c = _val(metric)
+            tk.Label(row, text=s, font=(FONT, 8),
+                     fg=c, bg=BG, width=w, anchor="e",
+                     padx=4).pack(side="left")
+
+
 # ── TAB RENDERERS ────────────────────────────────────────────
 
 def _render_markets_tab(parent):
@@ -504,48 +553,27 @@ def _render_insights_tab(parent):
                      justify="left").pack(
                          fill="x", padx=PAD_TILE_INNER, pady=(0, 2))
 
-    left, right = _two_col(parent)
-
-    cot = _macro_map([
-        "DXY_NET_LONGS", "EUR_FX_NET_LONGS", "JPY_FX_NET_LONGS",
-        "GBP_FX_NET_LONGS", "GOLD_NET_LONGS", "SILVER_NET_LONGS",
-        "WTI_NET_LONGS", "SP500_ES_NET_LONGS",
-    ], n=12)
-    _section(left, "CFTC COT · POSITIONING (weekly)")
-    _grid(left, cot, [
-        ("DXY_NET_LONGS",    "DXY", "{:+,.0f}"),
-        ("EUR_FX_NET_LONGS", "EUR", "{:+,.0f}"),
-        ("JPY_FX_NET_LONGS", "JPY", "{:+,.0f}"),
-        ("GBP_FX_NET_LONGS", "GBP", "{:+,.0f}"),
-    ])
-    _grid(left, cot, [
-        ("GOLD_NET_LONGS",     "GOLD",   "{:+,.0f}"),
-        ("SILVER_NET_LONGS",   "SILVER", "{:+,.0f}"),
-        ("WTI_NET_LONGS",      "WTI",    "{:+,.0f}"),
-        ("SP500_ES_NET_LONGS", "SP500",  "{:+,.0f}"),
-    ])
-
-    _section(right, "ECONOMIC CALENDAR · NEXT RELEASES")
+    _section(parent, "ECONOMIC CALENDAR · NEXT RELEASES")
     cal_events = recent_events(category="calendar", limit=20)
     now_iso = datetime.utcnow().isoformat()
     future = sorted([e for e in cal_events if e.get("ts", "") >= now_iso],
-                    key=lambda e: e.get("ts", ""))[:10]
+                    key=lambda e: e.get("ts", ""))[:12]
     if future:
         for e in future:
             impact = e.get("impact", 0) or 0
             label = (e.get("entities") or ["?"])[0] if e.get("entities") else "?"
             date_s = e.get("ts", "")[:10]
             imp_c = RED if impact >= 0.9 else (AMBER if impact >= 0.7 else DIM)
-            row = tk.Frame(right, bg=BG); row.pack(fill="x", padx=2)
+            row = tk.Frame(parent, bg=BG); row.pack(fill="x", padx=2)
             tk.Frame(row, bg=imp_c, width=3).pack(side="left", fill="y")
             tk.Label(row, text=f" {date_s} ", font=(FONT, 8),
                      fg=WHITE, bg=BG, width=12, anchor="w").pack(side="left")
             tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG, width=22, anchor="w").pack(side="left")
+                     fg=WHITE, bg=BG, width=28, anchor="w").pack(side="left")
             tk.Label(row, text=f"{impact:.0%}", font=(FONT, 7),
                      fg=imp_c, bg=BG).pack(side="left")
     else:
-        tk.Label(right, text="  (no upcoming releases)",
+        tk.Label(parent, text="  (no upcoming releases)",
                  font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
 
     _section(parent, "LIVE NEWS · INSTITUTIONAL FEEDS")
@@ -654,37 +682,22 @@ def _render_analysis_tab(parent):
         ("US10Y",                 "10Y YIELD",     "{:.2f}%"),
     ])
 
-    big_banks = _macro_map([
-        "GOLD_SWAP_NET", "SILVER_SWAP_NET", "WTI_SWAP_NET",
-        "BRENT_SWAP_NET", "COPPER_SWAP_NET", "NAT_GAS_SWAP_NET",
-        "BTC_CME_SWAP_NET", "ETH_CME_SWAP_NET",
-    ], n=12)
-    _section(parent, "BIG BANKS POSITIONING · SWAP DEALERS")
-    _grid(parent, big_banks, [
-        ("GOLD_SWAP_NET",    "GOLD",    "{:+,.0f}"),
-        ("SILVER_SWAP_NET",  "SILVER",  "{:+,.0f}"),
-        ("WTI_SWAP_NET",     "WTI",     "{:+,.0f}"),
-        ("BRENT_SWAP_NET",   "BRENT",   "{:+,.0f}"),
-        ("COPPER_SWAP_NET",  "COPPER",  "{:+,.0f}"),
-        ("NAT_GAS_SWAP_NET", "NAT GAS", "{:+,.0f}"),
-        ("BTC_CME_SWAP_NET", "BTC CME", "{:+,.0f}"),
-        ("ETH_CME_SWAP_NET", "ETH CME", "{:+,.0f}"),
-    ])
-
-    hedgies = _macro_map([
-        "GOLD_MM_NET", "SILVER_MM_NET", "WTI_MM_NET",
-        "BRENT_MM_NET", "COPPER_MM_NET",
-        "BTC_CME_MM_NET", "ETH_CME_MM_NET",
-    ], n=12)
-    _section(parent, "HEDGE FUNDS POSITIONING · MANAGED MONEY")
-    _grid(parent, hedgies, [
-        ("GOLD_MM_NET",    "GOLD",    "{:+,.0f}"),
-        ("SILVER_MM_NET",  "SILVER",  "{:+,.0f}"),
-        ("WTI_MM_NET",     "WTI",     "{:+,.0f}"),
-        ("BRENT_MM_NET",   "BRENT",   "{:+,.0f}"),
-        ("COPPER_MM_NET",  "COPPER",  "{:+,.0f}"),
-        ("BTC_CME_MM_NET", "BTC CME", "{:+,.0f}"),
-        ("ETH_CME_MM_NET", "ETH CME", "{:+,.0f}"),
+    _section(parent, "CFTC COT · POSITIONING MATRIX · weekly")
+    _cot_matrix(parent, [
+        # (label,      NC NET,             SWAP (banks),      MM (funds))
+        ("DXY",        "DXY_NET_LONGS",    None,              None),
+        ("EUR FX",     "EUR_FX_NET_LONGS", None,              None),
+        ("JPY FX",     "JPY_FX_NET_LONGS", None,              None),
+        ("GBP FX",     "GBP_FX_NET_LONGS", None,              None),
+        ("GOLD",       "GOLD_NET_LONGS",   "GOLD_SWAP_NET",   "GOLD_MM_NET"),
+        ("SILVER",     "SILVER_NET_LONGS", "SILVER_SWAP_NET", "SILVER_MM_NET"),
+        ("WTI CRUDE",  "WTI_NET_LONGS",    "WTI_SWAP_NET",    "WTI_MM_NET"),
+        ("BRENT",      None,               "BRENT_SWAP_NET",  "BRENT_MM_NET"),
+        ("COPPER",     None,               "COPPER_SWAP_NET", "COPPER_MM_NET"),
+        ("NAT GAS",    None,               "NAT_GAS_SWAP_NET", None),
+        ("SP500 ES",   "SP500_ES_NET_LONGS", None,            None),
+        ("BTC CME",    "BTC_CME_NET_LONGS", "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
+        ("ETH CME",    None,               "ETH_CME_SWAP_NET", "ETH_CME_MM_NET"),
     ])
 
     insider_events = recent_events(category="insider", limit=10)
