@@ -23,16 +23,16 @@ ZOMBIE_TTL = timedelta(days=1)
 from config.engines import PROC_NAMES as ENGINE_NAMES
 
 ENGINES = {
-    "backtest": {"script": "engines/backtest.py"},
-    "multi":    {"script": "engines/multistrategy.py"},
+    "backtest": {"script": "engines/citadel.py"},
+    "multi":    {"script": "engines/millennium.py"},
     "live":     {"script": "engines/live.py"},
-    "arb":      {"script": "engines/arbitrage.py"},
-    "newton":   {"script": "engines/newton.py"},
-    "mercurio": {"script": "engines/mercurio.py"},
-    "thoth":    {"script": "engines/thoth.py"},
-    "renaissance": {"script": "engines/harmonics_backtest.py"},
-    "prometeu": {"script": "engines/prometeu.py"},
-    "darwin":   {"script": "engines/darwin.py"},
+    "arb":      {"script": "engines/janestreet.py"},
+    "newton":   {"script": "engines/deshaw.py"},
+    "mercurio": {"script": "engines/jump.py"},
+    "thoth":    {"script": "engines/bridgewater.py"},
+    "renaissance": {"script": "engines/renaissance.py"},
+    "prometeu": {"script": "engines/twosigma.py"},
+    "darwin":   {"script": "engines/aqr.py"},
     "chronos":  {"script": "core/chronos.py"},
 }
 

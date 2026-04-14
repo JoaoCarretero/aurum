@@ -2,7 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from engines.arbitrage import omega_score, scan_all
+from engines.janestreet import omega_score, scan_all
 
 
 ROOT = Path(__file__).resolve().parent.parent

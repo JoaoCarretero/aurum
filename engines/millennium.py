@@ -22,7 +22,7 @@ from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
 from analysis.benchmark import bear_market_analysis, year_by_year_analysis
 from analysis.plots import plot_montecarlo, plot_dashboard
-from engines.backtest import scan_symbol as azoth_scan, setup_run, log
+from engines.citadel import scan_symbol as azoth_scan, setup_run, log
 
 # ── FORÇAR GLOBALS PARA O TF CORRECTO ─────────────────────────
 import config.params as _params
@@ -1149,7 +1149,7 @@ if __name__ == "__main__":
         _metricas_e_export(hermes_all, label="RENAISSANCE")
 
     elif op == "4":
-        from engines.newton import find_cointegrated_pairs, scan_pair
+        from engines.deshaw import find_cointegrated_pairs, scan_pair
         print(f"\n{SEP}\n  COINTEGRATION ANALYSIS\n{SEP}")
         pairs = find_cointegrated_pairs(all_dfs)
         newton_all = []
@@ -1166,7 +1166,7 @@ if __name__ == "__main__":
         _metricas_e_export(newton_all, label="DE SHAW")
 
     elif op == "5":
-        from engines.mercurio import scan_mercurio
+        from engines.jump import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
@@ -1177,7 +1177,7 @@ if __name__ == "__main__":
         _metricas_e_export(mercurio_all, label="JUMP")
 
     elif op == "6":
-        from engines.thoth import scan_thoth, collect_sentiment
+        from engines.bridgewater import scan_thoth, collect_sentiment
         print(f"\n{SEP}\n  SENTIMENT DATA\n{SEP}")
         sentiment_data = collect_sentiment(list(all_dfs.keys()))
         thoth_all = []
@@ -1200,7 +1200,7 @@ if __name__ == "__main__":
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         engine_trades["RENAISSANCE"] = hermes_all
 
-        from engines.newton import find_cointegrated_pairs, scan_pair
+        from engines.deshaw import find_cointegrated_pairs, scan_pair
         pairs = find_cointegrated_pairs(all_dfs)
         newton_all = []
         for pair in pairs:
@@ -1212,14 +1212,14 @@ if __name__ == "__main__":
             newton_all.extend(trades)
         engine_trades["DE SHAW"] = newton_all
 
-        from engines.mercurio import scan_mercurio
+        from engines.jump import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
             mercurio_all.extend(trades)
         engine_trades["JUMP"] = mercurio_all
 
-        from engines.thoth import scan_thoth, collect_sentiment
+        from engines.bridgewater import scan_thoth, collect_sentiment
         sentiment_data = collect_sentiment(list(all_dfs.keys()))
         thoth_all = []
         for sym, df in all_dfs.items():
@@ -1260,7 +1260,7 @@ if __name__ == "__main__":
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         engine_trades["RENAISSANCE"] = hermes_all
 
-        from engines.newton import find_cointegrated_pairs, scan_pair
+        from engines.deshaw import find_cointegrated_pairs, scan_pair
         pairs = find_cointegrated_pairs(all_dfs)
         newton_all = []
         for pair in pairs:
@@ -1272,14 +1272,14 @@ if __name__ == "__main__":
             newton_all.extend(trades)
         engine_trades["DE SHAW"] = newton_all
 
-        from engines.mercurio import scan_mercurio
+        from engines.jump import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
             mercurio_all.extend(trades)
         engine_trades["JUMP"] = mercurio_all
 
-        from engines.thoth import scan_thoth, collect_sentiment
+        from engines.bridgewater import scan_thoth, collect_sentiment
         sentiment_data = collect_sentiment(list(all_dfs.keys()))
         thoth_all = []
         for sym, df in all_dfs.items():
@@ -1288,7 +1288,7 @@ if __name__ == "__main__":
             thoth_all.extend(trades)
         engine_trades["BRIDGEWATER"] = thoth_all
 
-        from engines.prometeu import run_prometeu
+        from engines.twosigma import run_prometeu
         all_trades = run_prometeu(engine_trades)
 
         if not all_trades: print("  Sem trades."); sys.exit(1)

@@ -4,7 +4,7 @@ Standalone module — zero dependency on launcher.py. Instantiate from any Tk
 context that has a parent widget:
 
     from code_viewer import CodeViewer
-    CodeViewer(parent_root, ["engines/backtest.py"], ("engines/backtest.py", "scan_symbol"))
+    CodeViewer(parent_root, ["engines/citadel.py"], ("engines/citadel.py", "scan_symbol"))
 
 Opens a modal Toplevel with ttk.Notebook tabs, one tab per source file. The
 first tab is auto-scrolled near ``def <main_function>``. ESC closes. Highlight

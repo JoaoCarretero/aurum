@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from engines.arbitrage import Engine
+from engines.janestreet import Engine
 
 def test_snapshot_contains_required_keys(tmp_run, monkeypatch):
     # Arrange: minimal engine with mocked state

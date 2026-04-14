@@ -76,7 +76,7 @@ def main():
 
     # CITADEL
     log.info("Running CITADEL...")
-    from engines.backtest import scan_symbol
+    from engines.citadel import scan_symbol
     trades = []
     for sym in [s for s in _p.SYMBOLS if s in all_dfs]:
         t, _ = scan_symbol(all_dfs[sym].copy(), sym, macro, corr)
@@ -88,7 +88,7 @@ def main():
 
     # NEWTON
     log.info("Running DE SHAW...")
-    from engines.newton import find_cointegrated_pairs, scan_pair
+    from engines.deshaw import find_cointegrated_pairs, scan_pair
     pairs = find_cointegrated_pairs(all_dfs)
     trades = []
     for pair in pairs:
@@ -103,7 +103,7 @@ def main():
 
     # THOTH
     log.info("Running BRIDGEWATER...")
-    from engines.thoth import collect_sentiment, scan_thoth
+    from engines.bridgewater import collect_sentiment, scan_thoth
     sent = collect_sentiment([s for s in _p.SYMBOLS if s in all_dfs])
     trades = []
     for sym in [s for s in _p.SYMBOLS if s in all_dfs]:
@@ -116,7 +116,7 @@ def main():
 
     # MERCURIO
     log.info("Running JUMP...")
-    from engines.mercurio import scan_mercurio
+    from engines.jump import scan_mercurio
     trades = []
     for sym in [s for s in _p.SYMBOLS if s in all_dfs]:
         t, _ = scan_mercurio(all_dfs[sym].copy(), sym, macro, corr)

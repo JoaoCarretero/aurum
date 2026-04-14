@@ -2,7 +2,7 @@
 
 9 dense panels, amber-on-black, rendered in-terminal inside the launcher main
 frame (no fullscreen). Reads live state via AlchemyState and controls
-engines/arbitrage.py via parameter hot-reload and subprocess.
+engines/janestreet.py via parameter hot-reload and subprocess.
 """
 import tkinter as tk
 import tkinter.font as tkfont
@@ -734,7 +734,7 @@ def _init_panel_engine(app):
         run_id = _dt.now().strftime("%Y-%m-%d_%H%M")
         try:
             app.proc = subprocess.Popen(
-                [_sys.executable, "engines/arbitrage.py", "--mode", mode, "--run-id", run_id],
+                [_sys.executable, "engines/janestreet.py", "--mode", mode, "--run-id", run_id],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 stdin=subprocess.PIPE, text=True, bufsize=1,
                 creationflags=_NO_WIN,

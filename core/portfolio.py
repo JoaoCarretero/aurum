@@ -80,7 +80,7 @@ def check_aggregate_notional(new_notional: float, open_pos: list,
     combined leverage that a real exchange margin system would refuse.
 
     ``open_pos`` is expected as a list of ``(exit_idx, symbol, size, entry)``
-    tuples — the 4-tuple shape introduced alongside this check in engines/backtest.py.
+    tuples — the 4-tuple shape introduced alongside this check in engines/citadel.py.
     """
     open_notional = sum(sz * en for _, _, sz, en in open_pos)
     cap = account * leverage

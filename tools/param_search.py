@@ -113,7 +113,7 @@ def _metrics(all_trades: list) -> dict:
 
 
 def run_citadel(all_dfs, macro, corr) -> dict:
-    from engines.backtest import scan_symbol
+    from engines.citadel import scan_symbol
     all_trades = []
     symbols = [s for s in _p.SYMBOLS if s in all_dfs]
     for sym in symbols:
@@ -124,7 +124,7 @@ def run_citadel(all_dfs, macro, corr) -> dict:
 
 
 def run_newton(all_dfs, macro, corr) -> dict:
-    from engines.newton import find_cointegrated_pairs, scan_pair
+    from engines.deshaw import find_cointegrated_pairs, scan_pair
     pairs = find_cointegrated_pairs(all_dfs)
     if len(pairs) < 1:
         return _metrics([])
@@ -142,7 +142,7 @@ def run_newton(all_dfs, macro, corr) -> dict:
 
 
 def run_thoth(all_dfs, macro, corr, sentiment_data=None) -> dict:
-    from engines.thoth import scan_thoth
+    from engines.bridgewater import scan_thoth
     all_trades = []
     symbols = [s for s in _p.SYMBOLS if s in all_dfs]
     for sym in symbols:
@@ -154,7 +154,7 @@ def run_thoth(all_dfs, macro, corr, sentiment_data=None) -> dict:
 
 
 def run_mercurio(all_dfs, macro, corr) -> dict:
-    from engines.mercurio import scan_mercurio
+    from engines.jump import scan_mercurio
     all_trades = []
     symbols = [s for s in _p.SYMBOLS if s in all_dfs]
     for sym in symbols:
@@ -182,8 +182,8 @@ def _patch_param(name: str, val):
     setattr(_p, name, val)
     # Also patch engine modules that did `from config.params import *`
     _engine_modules = [
-        "engines.backtest", "engines.newton", "engines.thoth",
-        "engines.mercurio", "engines.arbitrage",
+        "engines.citadel", "engines.deshaw", "engines.bridgewater",
+        "engines.jump", "engines.janestreet",
         "core.signals", "core.portfolio", "core.indicators",
     ]
     for mod_name in _engine_modules:
@@ -329,7 +329,7 @@ def main():
     sentiment_data = None
     if args.engine == "thoth":
         log.info("Fetching sentiment data...")
-        from engines.thoth import collect_sentiment
+        from engines.bridgewater import collect_sentiment
         sentiment_data = collect_sentiment(list(all_dfs.keys()))
 
     # Run grid

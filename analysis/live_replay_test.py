@@ -2,7 +2,7 @@
 ☿ AURUM Finance — Live replay test
 ===================================
 Feeds historical candles through LiveEngine.on_candle_close() and compares
-the resulting trades to what engines.backtest.scan_symbol() produces on the
+the resulting trades to what engines.citadel.scan_symbol() produces on the
 same data. Use this to verify backtest/live parity after changes to either.
 
 Known caveat:

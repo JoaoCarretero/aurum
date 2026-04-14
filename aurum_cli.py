@@ -216,18 +216,18 @@ def _resolve(strategy, method, config):
     lev   = config.get("leverage","")
     mode  = config.get("mode","1")
     if method == "backtest":
-        if strategy == "citadel":     return "backtest","engines/backtest.py",[days,plots,lev,""]
-        if strategy == "renaissance": return "multi","engines/multistrategy.py",["3",days,"","","","","",plots,""]
-        if strategy == "deshaw":      return "newton","engines/newton.py",[days,lev,"n",""]
-        if strategy == "jump":        return "mercurio","engines/mercurio.py",[days,lev,"n",""]
-        if strategy == "bridgewater": return "thoth","engines/thoth.py",[days,lev,""]
-        if strategy == "millennium":  return "multi","engines/multistrategy.py",["1",days,"","","","","",plots,""]
+        if strategy == "citadel":     return "backtest","engines/citadel.py",[days,plots,lev,""]
+        if strategy == "renaissance": return "multi","engines/millennium.py",["3",days,"","","","","",plots,""]
+        if strategy == "deshaw":      return "newton","engines/deshaw.py",[days,lev,"n",""]
+        if strategy == "jump":        return "mercurio","engines/jump.py",[days,lev,"n",""]
+        if strategy == "bridgewater": return "thoth","engines/bridgewater.py",[days,lev,""]
+        if strategy == "millennium":  return "multi","engines/millennium.py",["1",days,"","","","","",plots,""]
     if method == "simulator":
         if strategy == "citadel":    return "live","engines/live.py",[mode]
-        if strategy == "janestreet": return "arb","engines/arbitrage.py",[mode]
+        if strategy == "janestreet": return "arb","engines/janestreet.py",[mode]
     if method == "live":
         if strategy == "citadel":    return "live","engines/live.py",[mode]
-        if strategy == "janestreet": return "arb","engines/arbitrage.py",[mode]
+        if strategy == "janestreet": return "arb","engines/janestreet.py",[mode]
     return "","",[]
 
 from config.engines import PROC_NAMES as ENGINE_NAMES

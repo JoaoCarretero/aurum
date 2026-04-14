@@ -4,7 +4,7 @@ AURUM Finance — RENAISSANCE: Harmonic Pattern Engine
 # RENAISSANCE (formerly HERMES) — Pattern recognition + Bayesian scoring
 Bayesian harmonic pattern detection (Gartley, Bat, Butterfly, Crab)
 with Shannon entropy, Hurst exponent, and fractal alignment.
-Extracted from engines/multistrategy.py.
+Extracted from engines/millennium.py.
 """
 import math
 import numpy as np

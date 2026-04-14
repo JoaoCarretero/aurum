@@ -90,7 +90,7 @@ def _restore():
 # ═══════════════════════════════════════════════════════════
 
 def test_citadel():
-    from engines.backtest import scan_symbol
+    from engines.citadel import scan_symbol
 
     def _run_citadel(dfs, macro, corr, days):
         trades = []
@@ -173,7 +173,7 @@ def test_citadel():
 # ═══════════════════════════════════════════════════════════
 
 def test_deshaw():
-    from engines.newton import find_cointegrated_pairs, scan_pair
+    from engines.deshaw import find_cointegrated_pairs, scan_pair
 
     def _run_newton(dfs, macro, corr, days):
         pairs = find_cointegrated_pairs(dfs)
@@ -237,7 +237,7 @@ def test_deshaw():
 # ═══════════════════════════════════════════════════════════
 
 def test_bridgewater():
-    from engines.thoth import collect_sentiment, scan_thoth
+    from engines.bridgewater import collect_sentiment, scan_thoth
 
     def _run_thoth(dfs, macro, corr, days, sent):
         trades = []
@@ -353,7 +353,7 @@ def test_renaissance():
 # ═══════════════════════════════════════════════════════════
 
 def test_jump():
-    from engines.mercurio import scan_mercurio
+    from engines.jump import scan_mercurio
 
     def _run_jump(dfs, macro, corr, days):
         trades = []

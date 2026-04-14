@@ -65,7 +65,7 @@ def _metrics(all_trades: list) -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def run_citadel(all_dfs, macro, corr, htf_ctx=None):
-    from engines.backtest import scan_symbol
+    from engines.citadel import scan_symbol
     all_trades = []
     for sym in [s for s in _p.SYMBOLS if s in all_dfs]:
         trades, _ = scan_symbol(all_dfs[sym].copy(), sym, macro, corr)
@@ -77,7 +77,7 @@ def run_citadel(all_dfs, macro, corr, htf_ctx=None):
 
 
 def run_newton(all_dfs, macro, corr, htf_ctx=None):
-    from engines.newton import find_cointegrated_pairs, scan_pair
+    from engines.deshaw import find_cointegrated_pairs, scan_pair
     pairs = find_cointegrated_pairs(all_dfs)
     if len(pairs) < 1:
         return _metrics([])
@@ -98,7 +98,7 @@ def run_newton(all_dfs, macro, corr, htf_ctx=None):
 
 
 def run_thoth(all_dfs, macro, corr, htf_ctx=None, sentiment_data=None):
-    from engines.thoth import scan_thoth
+    from engines.bridgewater import scan_thoth
     all_trades = []
     for sym in [s for s in _p.SYMBOLS if s in all_dfs]:
         trades, _ = scan_thoth(all_dfs[sym].copy(), sym, macro, corr,
@@ -112,7 +112,7 @@ def run_thoth(all_dfs, macro, corr, htf_ctx=None, sentiment_data=None):
 
 
 def run_mercurio(all_dfs, macro, corr, htf_ctx=None):
-    from engines.mercurio import scan_mercurio
+    from engines.jump import scan_mercurio
     all_trades = []
     for sym in [s for s in _p.SYMBOLS if s in all_dfs]:
         trades, _ = scan_mercurio(all_dfs[sym].copy(), sym, macro, corr)
@@ -178,7 +178,7 @@ def main():
     sentiment_data = None
     if "thoth" in engines:
         log.info("Fetching sentiment data...")
-        from engines.thoth import collect_sentiment
+        from engines.bridgewater import collect_sentiment
         sentiment_data = collect_sentiment([s for s in _p.SYMBOLS if s in all_dfs])
 
     # ── Run A/B for each engine ──

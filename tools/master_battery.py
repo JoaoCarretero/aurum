@@ -99,7 +99,7 @@ def _checkpoint(engine):
 
 # ═══════════════════════════════════════════════════════════
 def run_citadel(dfs, macro, corr, days):
-    from engines.backtest import scan_symbol
+    from engines.citadel import scan_symbol
     trades = []
     for sym in [s for s in _p.SYMBOLS if s in dfs]:
         t, _ = scan_symbol(dfs[sym].copy(), sym, macro, corr)
@@ -108,7 +108,7 @@ def run_citadel(dfs, macro, corr, days):
     return _m(trades, days)
 
 def run_newton(dfs, macro, corr, days):
-    from engines.newton import find_cointegrated_pairs, scan_pair
+    from engines.deshaw import find_cointegrated_pairs, scan_pair
     pairs = find_cointegrated_pairs(dfs)
     trades = []
     for p in pairs:
@@ -120,7 +120,7 @@ def run_newton(dfs, macro, corr, days):
     return _m(trades, days)
 
 def run_thoth(dfs, macro, corr, days, sent):
-    from engines.thoth import scan_thoth
+    from engines.bridgewater import scan_thoth
     trades = []
     for sym in [s for s in _p.SYMBOLS if s in dfs]:
         t, _ = scan_thoth(dfs[sym].copy(), sym, macro, corr, sentiment_data=sent)
@@ -129,7 +129,7 @@ def run_thoth(dfs, macro, corr, days, sent):
     return _m(trades, days)
 
 def run_mercurio(dfs, macro, corr, days):
-    from engines.mercurio import scan_mercurio
+    from engines.jump import scan_mercurio
     trades = []
     for sym in [s for s in _p.SYMBOLS if s in dfs]:
         t, _ = scan_mercurio(dfs[sym].copy(), sym, macro, corr)
@@ -152,7 +152,7 @@ def run_renaissance(dfs, macro, corr, days):
 # ═══════════════════════════════════════════════════════════
 def block1_bridgewater():
     log.info(f"\n{SEP}\n  BLOCK 1: BRIDGEWATER\n{SEP}")
-    from engines.thoth import collect_sentiment
+    from engines.bridgewater import collect_sentiment
 
     for tf in ["15m", "1h", "4h"]:
         for days in [90, 180]:
@@ -256,7 +256,7 @@ def block5_jump():
 def block6_millennium():
     log.info(f"\n{SEP}\n  BLOCK 6: MILLENNIUM — Status Check\n{SEP}")
     try:
-        from engines.multistrategy import ensemble_reweight
+        from engines.millennium import ensemble_reweight
         log.info("  ✓ ensemble_reweight importable")
         # Check if it can consume engine outputs
         import inspect
@@ -277,7 +277,7 @@ def block6_millennium():
 def block7_twosigma():
     log.info(f"\n{SEP}\n  BLOCK 7: TWO SIGMA — Status Check\n{SEP}")
     try:
-        import engines.prometeu as prom
+        import engines.twosigma as prom
         log.info(f"  ✓ prometeu module importable")
         # Check for key functions
         funcs = [f for f in dir(prom) if not f.startswith("_") and callable(getattr(prom, f, None))]
@@ -298,7 +298,7 @@ def block7_twosigma():
 def block8_aqr():
     log.info(f"\n{SEP}\n  BLOCK 8: AQR/DARWIN — Status Check\n{SEP}")
     try:
-        import engines.darwin as dar
+        import engines.aqr as dar
         log.info(f"  ✓ darwin module importable")
         funcs = [f for f in dir(dar) if not f.startswith("_") and callable(getattr(dar, f, None))]
         log.info(f"  Functions: {funcs[:10]}")

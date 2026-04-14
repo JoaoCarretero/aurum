@@ -9,15 +9,15 @@ the trading style each engine implements.
 """
 
 ENGINES = {
-    "citadel":     {"script": "engines/backtest.py",      "display": "CITADEL",     "desc": "Systematic momentum — trend-following + fractal alignment"},
+    "citadel":     {"script": "engines/citadel.py",      "display": "CITADEL",     "desc": "Systematic momentum — trend-following + fractal alignment"},
     "renaissance": {"script": "core/harmonics.py",        "display": "RENAISSANCE", "desc": "Pattern recognition — harmonic geometry + Bayesian scoring"},
-    "jump":        {"script": "engines/mercurio.py",      "display": "JUMP",        "desc": "Order flow — CVD divergence + volume imbalance"},
-    "bridgewater": {"script": "engines/thoth.py",         "display": "BRIDGEWATER", "desc": "Macro sentiment — funding + OI + LS ratio contrarian"},
-    "deshaw":      {"script": "engines/newton.py",        "display": "DE SHAW",     "desc": "Statistical arb — pairs cointegration + mean reversion"},
-    "millennium":  {"script": "engines/multistrategy.py", "display": "MILLENNIUM",  "desc": "Multi-strategy pod — ensemble orchestrator"},
-    "twosigma":    {"script": "engines/prometeu.py",      "display": "TWO SIGMA",   "desc": "ML meta-ensemble — LightGBM walk-forward"},
-    "janestreet":  {"script": "engines/arbitrage.py",     "display": "JANE STREET", "desc": "Cross-venue arb — funding/basis multi-exchange"},
-    "aqr":         {"script": "engines/darwin.py",        "display": "AQR",         "desc": "Adaptive allocation — evolutionary parameter optimization"},
+    "jump":        {"script": "engines/jump.py",      "display": "JUMP",        "desc": "Order flow — CVD divergence + volume imbalance"},
+    "bridgewater": {"script": "engines/bridgewater.py",         "display": "BRIDGEWATER", "desc": "Macro sentiment — funding + OI + LS ratio contrarian"},
+    "deshaw":      {"script": "engines/deshaw.py",        "display": "DE SHAW",     "desc": "Statistical arb — pairs cointegration + mean reversion"},
+    "millennium":  {"script": "engines/millennium.py", "display": "MILLENNIUM",  "desc": "Multi-strategy pod — ensemble orchestrator"},
+    "twosigma":    {"script": "engines/twosigma.py",      "display": "TWO SIGMA",   "desc": "ML meta-ensemble — LightGBM walk-forward"},
+    "janestreet":  {"script": "engines/janestreet.py",     "display": "JANE STREET", "desc": "Cross-venue arb — funding/basis multi-exchange"},
+    "aqr":         {"script": "engines/aqr.py",        "display": "AQR",         "desc": "Adaptive allocation — evolutionary parameter optimization"},
     "winton":      {"script": "core/chronos.py",          "display": "WINTON",      "desc": "Time-series intelligence — HMM + GARCH + Hurst + seasonality"},
     "live":        {"script": "engines/live.py",          "display": "LIVE",        "desc": "Live execution — paper / demo / testnet / real"},
 }

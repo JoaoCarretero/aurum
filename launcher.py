@@ -222,23 +222,23 @@ COMMAND_ROADMAPS = {
 
 SUB_MENUS = {
     "backtest": [
-        ("CITADEL",      "engines/backtest.py",      "Systematic momentum — trend-following + fractal alignment"),
-        ("JUMP",         "engines/mercurio.py",       "Order flow — CVD divergence + volume imbalance"),
-        ("BRIDGEWATER",  "engines/thoth.py",          "Macro sentiment — funding + OI + LS ratio contrarian"),
-        ("DE SHAW",      "engines/newton.py",         "Statistical arb — pairs cointegration + mean reversion"),
-        ("MILLENNIUM",   "engines/multistrategy.py",  "Multi-strategy pod — ensemble orchestrator"),
-        ("TWO SIGMA",    "engines/prometeu.py",       "ML meta-ensemble — LightGBM walk-forward"),
-        ("RENAISSANCE",  "engines/harmonics_backtest.py", "Harmonic patterns — Bayesian + entropy + Hurst"),
+        ("CITADEL",      "engines/citadel.py",      "Systematic momentum — trend-following + fractal alignment"),
+        ("JUMP",         "engines/jump.py",       "Order flow — CVD divergence + volume imbalance"),
+        ("BRIDGEWATER",  "engines/bridgewater.py",          "Macro sentiment — funding + OI + LS ratio contrarian"),
+        ("DE SHAW",      "engines/deshaw.py",         "Statistical arb — pairs cointegration + mean reversion"),
+        ("MILLENNIUM",   "engines/millennium.py",  "Multi-strategy pod — ensemble orchestrator"),
+        ("TWO SIGMA",    "engines/twosigma.py",       "ML meta-ensemble — LightGBM walk-forward"),
+        ("RENAISSANCE",  "engines/renaissance.py", "Harmonic patterns — Bayesian + entropy + Hurst"),
     ],
     "live": [
         ("PAPER",        "engines/live.py",           "Execução simulada — sem ordens reais"),
         ("DEMO",         "engines/live.py",           "Binance Futures Demo API"),
         ("TESTNET",      "engines/live.py",           "Binance Futures Testnet"),
         ("LIVE",         "engines/live.py",           "CAPITAL REAL — extremo cuidado"),
-        ("JANE STREET",  "engines/arbitrage.py",      "Cross-venue arb — funding/basis multi-exchange"),
+        ("JANE STREET",  "engines/janestreet.py",      "Cross-venue arb — funding/basis multi-exchange"),
     ],
     "tools": [
-        ("AQR",          "engines/darwin.py",         "Adaptive allocation — evolutionary parameter optimization"),
+        ("AQR",          "engines/aqr.py",         "Adaptive allocation — evolutionary parameter optimization"),
         ("NEXUS API",    "run_api.py",               "REST API + WebSocket (porta 8000)"),
         ("WINTON",       "core/chronos.py",           "Time-series intelligence — HMM + GARCH + Hurst"),
     ],
@@ -473,12 +473,12 @@ BRIEFINGS["WINTON"] = {
 BRIEFINGS_V2: dict[str, dict] = {
     "CITADEL": {
         "source_files": [
-            "engines/backtest.py",
+            "engines/citadel.py",
             "core/signals.py",
             "core/portfolio.py",
             "core/htf.py",
         ],
-        "main_function": ("engines/backtest.py", "scan_symbol"),
+        "main_function": ("engines/citadel.py", "scan_symbol"),
         "one_liner": "Omega 5D fractal trend-follower with MTF alignment "
                      "and convex Kelly sizing.",
         "pseudocode": """\
@@ -534,8 +534,8 @@ for idx in range(min_idx, len(df) - MAX_HOLD - 2):
         ],
     },
     "JUMP": {
-        "source_files": ["engines/mercurio.py", "core/indicators.py"],
-        "main_function": ("engines/mercurio.py", "scan_mercurio"),
+        "source_files": ["engines/jump.py", "core/indicators.py"],
+        "main_function": ("engines/jump.py", "scan_mercurio"),
         "one_liner": "Order-flow microstructure: CVD divergence + volume "
                      "imbalance + liquidation cascades.",
         "pseudocode": """\
@@ -579,8 +579,8 @@ for idx in range(min_idx, len(df) - MAX_HOLD - 2):
         ],
     },
     "BRIDGEWATER": {
-        "source_files": ["engines/thoth.py", "core/sentiment.py"],
-        "main_function": ("engines/thoth.py", "scan_thoth"),
+        "source_files": ["engines/bridgewater.py", "core/sentiment.py"],
+        "main_function": ("engines/bridgewater.py", "scan_thoth"),
         "one_liner": "Sentiment contrarian: funding z-score + OI delta + "
                      "long/short ratio extremes.",
         "pseudocode": """\
@@ -621,8 +621,8 @@ for idx in range(min_idx, len(df) - MAX_HOLD - 2):
         ],
     },
     "DE SHAW": {
-        "source_files": ["engines/newton.py"],
-        "main_function": ("engines/newton.py", "scan_pair"),
+        "source_files": ["engines/deshaw.py"],
+        "main_function": ("engines/deshaw.py", "scan_pair"),
         "one_liner": "Statistical arbitrage: cointegration-driven pair trading "
                      "with z-score mean reversion.",
         "pseudocode": """\
@@ -674,11 +674,11 @@ for idx in range(min_idx, len(merged) - 2):
     },
     "MILLENNIUM": {
         "source_files": [
-            "engines/multistrategy.py",
-            "engines/backtest.py",
+            "engines/millennium.py",
+            "engines/citadel.py",
             "core/harmonics.py",
         ],
-        "main_function": ("engines/multistrategy.py", "scan_multistrategy"),
+        "main_function": ("engines/millennium.py", "scan_multistrategy"),
         "one_liner": "Regime-weighted ensemble of CITADEL (trend) + RENAISSANCE "
                      "(harmonics), with rolling confidence-scaled weights.",
         "pseudocode": """\
@@ -722,8 +722,8 @@ for trade in merge_by_timestamp(citadel, renaissance):
         ],
     },
     "TWO SIGMA": {
-        "source_files": ["engines/prometeu.py"],
-        "main_function": ("engines/prometeu.py", "trades_to_features"),
+        "source_files": ["engines/twosigma.py"],
+        "main_function": ("engines/twosigma.py", "trades_to_features"),
         "one_liner": "LightGBM meta-ensemble: predicts which engine to weight "
                      "higher given current market context at trade open.",
         "pseudocode": """\
@@ -767,8 +767,8 @@ weights  = softmax_normalize(probs) → per-engine weight""",
         ],
     },
     "JANE STREET": {
-        "source_files": ["engines/arbitrage.py"],
-        "main_function": ("engines/arbitrage.py", "ExecutionSimulator"),
+        "source_files": ["engines/janestreet.py"],
+        "main_function": ("engines/janestreet.py", "ExecutionSimulator"),
         "one_liner": "Cross-venue funding + basis arbitrage across 13 CEX "
                      "venues with latency-aware fill simulation.",
         "pseudocode": """\

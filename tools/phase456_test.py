@@ -78,7 +78,7 @@ def phase4_bridgewater():
     htf_ctx = prepare_htf_context(all_dfs, htf_dfs)
 
     log.info("Fetching sentiment...")
-    from engines.thoth import collect_sentiment, scan_thoth
+    from engines.bridgewater import collect_sentiment, scan_thoth
     sent = collect_sentiment([s for s in _p.SYMBOLS if s in all_dfs])
 
     syms = [s for s in _p.SYMBOLS if s in all_dfs]
@@ -124,7 +124,7 @@ def phase5_deshaw():
     log.info("  PHASE 5: DE SHAW — Timeframe Test")
     log.info("═"*60)
 
-    from engines.newton import find_cointegrated_pairs, scan_pair
+    from engines.deshaw import find_cointegrated_pairs, scan_pair
 
     results = {}
     for tf in ["15m", "1h", "4h"]:
@@ -178,7 +178,7 @@ def phase6_jump():
     log.info("  PHASE 6: JUMP — Timeframe Test")
     log.info("═"*60)
 
-    from engines.mercurio import scan_mercurio
+    from engines.jump import scan_mercurio
 
     results = {}
     for tf in ["5m", "15m", "1h"]:
