@@ -171,9 +171,10 @@ MAIN_GROUPS = [
         ("CRYPTO DASH", "_crypto_dashboard"),
     ]),
     ("EXECUTE",  "2", TILE_EXECUTE, [
-        ("STRATEGIES", "_strategies"),
-        ("ARBITRAGE",  "_arbitrage_hub"),
-        ("RISK",       "_risk_menu"),
+        ("STRATEGIES",  "_strategies"),
+        ("ARBITRAGE",   "_arbitrage_hub"),
+        ("MACRO BRAIN", "_macro_brain_menu"),
+        ("RISK",        "_risk_menu"),
     ]),
     ("RESEARCH", "3", TILE_RESEARCH, [
         ("TERMINAL", "_terminal"),
@@ -6057,6 +6058,22 @@ class App(tk.Tk):
                 self._kb(key_bind, cmd)
 
     # ─── RISK (Layer 2) ──────────────────────────────────
+    def _macro_brain_menu(self):
+        """Macro Brain dashboard — autonomous CIO layer (separate from trade engines)."""
+        self._clr(); self._clear_kb()
+        self.h_path.configure(text="> MACRO BRAIN")
+        self.h_stat.configure(text="CIO", fg=AMBER_D)
+        self.f_lbl.configure(text="ESC voltar  |  refresh button atualiza")
+        self._kb("<Escape>", lambda: self._menu("main"))
+        self._kb("<Key-0>", lambda: self._menu("main"))
+        self._bind_global_nav()
+        try:
+            from macro_brain.dashboard_view import render as _macro_render
+            _macro_render(self.main, app=self)
+        except Exception as e:
+            tk.Label(self.main, text=f"Macro Brain failed to render:\n{e}",
+                     font=(FONT, 10), fg=RED, bg=BG).pack(pady=40)
+
     def _risk_menu(self):
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> RISK"); self.h_stat.configure(text="CONSOLE", fg=AMBER_D)

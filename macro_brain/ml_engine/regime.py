@@ -151,11 +151,21 @@ def classify(fv: FeatureVector | None = None,
     )
 
     if persist:
+        # Detectar mudança de regime pra alert
+        from macro_brain.persistence.store import latest_regime as _lr
+        prev = _lr()
         insert_regime(
             regime=regime, confidence=snapshot.confidence,
             features=snapshot.features, model_version="rule-based-v1",
             reason=reason,
         )
+        if prev and prev.get("regime") != regime:
+            try:
+                from macro_brain.notify import notify_regime_change
+                notify_regime_change(prev.get("regime"), regime,
+                                      snapshot.confidence, reason)
+            except Exception as e:
+                log.debug(f"notify_regime_change failed: {e}")
 
     return snapshot
 

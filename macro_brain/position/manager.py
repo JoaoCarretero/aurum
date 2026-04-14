@@ -89,6 +89,17 @@ def open_from_thesis(thesis: dict, regime_alignment: float = 1.0) -> dict | None
     log.info(f"  OPEN  {thesis['direction']:<5} {thesis['asset']:<10} "
              f"${size_usd:>8,.0f} @ {price}  (thesis {thesis['id'][:8]})")
 
+    # Telegram notify (no-op se não configurado)
+    try:
+        from macro_brain.notify import notify_position_opened
+        notify_position_opened(
+            {"side": thesis["direction"], "asset": thesis["asset"],
+             "size_usd": size_usd, "entry_price": price},
+            thesis=thesis,
+        )
+    except Exception as e:
+        log.debug(f"notify_position_opened failed: {e}")
+
     return {
         "id": pid, "asset": thesis["asset"], "side": thesis["direction"],
         "size_usd": size_usd, "entry_price": price,
@@ -246,6 +257,12 @@ def review_open_positions() -> dict:
             update_thesis_status(pos["thesis_id"], "closed", reason=reason)
             log.info(f"  CLOSE {pos['side']:<5} {pos['asset']:<10} "
                      f"pnl=${pnl_unrealized:>+7,.2f}  reason: {reason[:40]}")
+            # Telegram notify
+            try:
+                from macro_brain.notify import notify_position_closed
+                notify_position_closed(pos, pnl_unrealized, reason)
+            except Exception as e:
+                log.debug(f"notify_position_closed failed: {e}")
             actions["closed"] += 1
         else:
             log.info(f"  KEEP  {pos['side']:<5} {pos['asset']:<10} "

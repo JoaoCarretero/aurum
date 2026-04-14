@@ -205,6 +205,16 @@ def generate(
                 target_horizon_days=c.horizon_days, invalidation=c.invalidation,
             )
             log.info(f"  [persist] {tid[:8]} {c.direction:<5} {c.asset} conf {c.confidence:.2%}")
+            # Telegram notify (no-op se não configurado)
+            try:
+                from macro_brain.notify import notify_thesis_opened
+                notify_thesis_opened({
+                    "direction": c.direction, "asset": c.asset,
+                    "confidence": c.confidence, "rationale": c.rationale,
+                    "target_horizon_days": c.horizon_days,
+                })
+            except Exception as e:
+                log.debug(f"notify_thesis_opened failed: {e}")
 
     return approved
 
