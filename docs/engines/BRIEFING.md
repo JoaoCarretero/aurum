@@ -196,7 +196,7 @@ Scanner real-time. Não tem "config vencedora" — é leitura de mercado.
 
 ### Como rodar
 ```bash
-python -m engines.arbitrage   # menu interativo
+python -m engines.janestreet   # menu interativo
 ```
 
 ---
@@ -204,11 +204,11 @@ python -m engines.arbitrage   # menu interativo
 ## Meta-Engines (não testáveis standalone)
 
 ### TWO SIGMA — ML Meta-Ensemble
-**Arquivo:** `engines/prometeu.py`
+**Arquivo:** `engines/twosigma.py`
 LightGBM walk-forward em cima dos trades de outros engines. **Bloqueado por design** — precisa histórico de 2+ engines individuais antes de treinar.
 
 ### AQR — Evolutionary Allocation
-**Arquivo:** `engines/darwin.py`
+**Arquivo:** `engines/aqr.py`
 Aloca capital dinamicamente entre engines via fitness evolutivo. Lê trades existentes em `data/`. Roda **depois** dos engines individuais.
 
 **Parâmetros (`DARWIN_*`):**
@@ -222,24 +222,8 @@ Aloca capital dinamicamente entre engines via fitness evolutivo. Lê trades exis
 | `DARWIN_ALLOC_TOP` / `_ABOVE` / `_BELOW` / `_KILLED` | Alocação de capital por tier de performance |
 
 ### MILLENNIUM — Multi-Strategy Pod
-**Arquivo:** `engines/multistrategy.py`
+**Arquivo:** `engines/millennium.py`
 Orquestrador interativo. Opção 7 = ALL engines em paralelo. GUI-driven (sem `--no-menu`).
-
-### CHRONOS — Regime / Vol / Hurst (módulo, não engine)
-**Arquivo:** `core/chronos.py`
-HMM para regimes + GARCH para vol forecast + Hurst para persistência. Consumido pelos engines, não roda standalone.
-
-**Parâmetros (`CHRONOS_*`):**
-| Param | O que é |
-|---|---|
-| `CHRONOS_HMM_REGIMES` | Número de regimes do HMM |
-| `CHRONOS_HMM_LOOKBACK` | Candles para fit do HMM |
-| `CHRONOS_GARCH_HORIZON` | Candles de forecast GARCH |
-| `CHRONOS_GARCH_LOOKBACK` | Candles para fit GARCH |
-| `CHRONOS_HURST_WINDOW` | Janela rolling do Hurst |
-| `CHRONOS_HURST_MIN` | Mínimo de períodos para calcular Hurst |
-| `HMM_GATE_ENABLED` | Gate HMM ativo (observation-only por default) |
-| `HMM_MIN_CONFIDENCE` / `HMM_BLOCK_REGIMES` | Bloqueios por regime |
 
 ---
 

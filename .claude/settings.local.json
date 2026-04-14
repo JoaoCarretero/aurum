@@ -127,7 +127,11 @@
       "Bash(du -sh data/)",
       "Bash(tasklist)",
       "Bash(cmd:*)",
-      "Bash(cd \"C:\\\\\\\\Users\\\\\\\\Joao\\\\\\\\OneDrive\\\\\\\\aurum.finance\")"
+      "Bash(cd \"C:\\\\\\\\Users\\\\\\\\Joao\\\\\\\\OneDrive\\\\\\\\aurum.finance\")",
+      "Bash(tail -30 data/.proc_logs/autonomous_*.log)",
+      "Bash(taskkill //PID 10996 //F)",
+      "Bash(xargs tail:*)",
+      "Bash(xargs head:*)"
     ]
   }
 }
