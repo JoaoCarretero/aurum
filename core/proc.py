@@ -30,6 +30,7 @@ ENGINES = {
     "newton":   {"script": "engines/newton.py"},
     "mercurio": {"script": "engines/mercurio.py"},
     "thoth":    {"script": "engines/thoth.py"},
+    "renaissance": {"script": "engines/harmonics_backtest.py"},
     "prometeu": {"script": "engines/prometeu.py"},
     "darwin":   {"script": "engines/darwin.py"},
     "chronos":  {"script": "core/chronos.py"},

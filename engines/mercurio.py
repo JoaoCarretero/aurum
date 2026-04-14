@@ -279,7 +279,7 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
             "timestamp":  df["time"].iloc[idx],
             "idx":        idx,
             "entry_idx":  idx + 1,
-            "strategy":   "MERCURIO",
+            "strategy":   "JUMP",
             "direction":  direction,
             "trade_type": "ORDER-FLOW",
             "struct":     struct,
@@ -347,7 +347,7 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
 
 def print_header():
     print(f"\n{SEP}")
-    print(f"  MERCURIO v1.0  ·  {RUN_ID}")
+    print(f"  JUMP v1.0  ·  {RUN_ID}")
     print(f"  {len(SYMBOLS)} ativos  ·  {INTERVAL}  ·  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  vimb L>{MERCURIO_VIMB_LONG} S<{MERCURIO_VIMB_SHORT}  ·  min score {MERCURIO_MIN_SCORE}")
     print(f"  {RUN_DIR}/")
@@ -432,7 +432,7 @@ def export_json(all_trades, eq, mc, ratios, summary, config):
                     for k, v in t.items()} for t in closed],
     }
 
-    out = RUN_DIR / "reports" / f"mercurio_{INTERVAL}_v1.json"
+    out = RUN_DIR / "reports" / f"jump_{INTERVAL}_v1.json"
     out.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     print(f"  json  ·  {out}")
     log.info(f"JSON → {out}")
@@ -443,7 +443,7 @@ def export_json(all_trades, eq, mc, ratios, summary, config):
     try:
         from core.db import register_run
         register_run(
-            run_id=RUN_ID, engine="mercurio", json_path=str(out),
+            run_id=RUN_ID, engine="jump", json_path=str(out),
             roi=ratios["ret"], sharpe=ratios.get("sharpe"),
             sortino=ratios.get("sortino"), win_rate=wr,
             n_trades=len(closed), final_equity=eq[-1] if eq else ACCOUNT_SIZE,
@@ -462,11 +462,13 @@ def export_json(all_trades, eq, mc, ratios, summary, config):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--days", type=int, default=None)
+    parser.add_argument("--basket", type=str, default=None)
+    parser.add_argument("--leverage", type=float, default=None)
     parser.add_argument("--no-menu", action="store_true")
     args, _ = parser.parse_known_args()
 
     print(f"\n{SEP}")
-    print(f"  MERCURIO  ·  Order Flow Analysis")
+    print(f"  JUMP  ·  Order Flow Analysis")
     print(f"  {SEP}")
 
     if args.days is not None and 7 <= int(args.days) <= 1500:
@@ -477,10 +479,14 @@ if __name__ == "__main__":
             SCAN_DAYS = int(_days_in)
     N_CANDLES = SCAN_DAYS * 24 * 4
 
-    if not args.no_menu:
+    if args.basket and args.basket in BASKETS:
+        SYMBOLS = BASKETS[args.basket]
+    elif not args.no_menu:
         SYMBOLS = select_symbols(SYMBOLS)
 
-    if not args.no_menu:
+    if args.leverage is not None and 0.1 <= args.leverage <= 125:
+        LEVERAGE = float(args.leverage)
+    elif not args.no_menu:
         _lev_in = safe_input(f"  leverage [{LEVERAGE}x] > ").strip()
         if _lev_in:
             try:
@@ -491,14 +497,14 @@ if __name__ == "__main__":
                 pass
 
     print(f"\n{SEP}")
-    print(f"  MERCURIO  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
+    print(f"  JUMP  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  {RUN_DIR}/")
     print(SEP)
     if not args.no_menu:
         safe_input("  enter para iniciar... ")
 
-    log.info(f"MERCURIO v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
+    log.info(f"JUMP v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH DATA ──
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
@@ -571,7 +577,7 @@ if __name__ == "__main__":
     print_veredito(all_trades, eq, mdd_pct, mc, wf, ratios)
     config = snapshot_config()
     config.update({
-        "ENGINE": "MERCURIO",
+        "ENGINE": "JUMP",
         "RUN_ID": RUN_ID,
         "RUN_DIR": str(RUN_DIR),
         "CLI_NO_MENU": bool(args.no_menu),

@@ -534,7 +534,7 @@ if __name__ == "__main__":
     _ap.add_argument("--interval", type=str, default=INTERVAL, help="Execution timeframe override for this run.")
     _ap.add_argument("--leverage", type=float, default=None, help="Leverage override for this run.")
     _ap.add_argument("--no-menu", action="store_true")
-    _args = _ap.parse_args()
+    _args, _ = _ap.parse_known_args()
 
     if _args.interval:
         INTERVAL = _args.interval

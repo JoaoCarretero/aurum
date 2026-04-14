@@ -16,6 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from code_viewer import CodeViewer
+from config.engines import ENGINE_NAMES, SCRIPT_TO_KEY
 from core.health import runtime_health
 from core.persistence import atomic_write_json
 from core.transport import RequestSpec, TransportClient
@@ -38,6 +39,45 @@ GREEN   = "#00c040"
 RED     = "#e03030"
 
 FONT    = "Consolas"
+
+LEGACY_ENGINE_ALIASES = {
+    "backtest": "citadel",
+    "citadel": "citadel",
+    "thoth": "bridgewater",
+    "bridgewater": "bridgewater",
+    "mercurio": "jump",
+    "jump": "jump",
+    "newton": "deshaw",
+    "deshaw": "deshaw",
+    "de_shaw": "deshaw",
+    "prometeu": "twosigma",
+    "twosigma": "twosigma",
+    "two_sigma": "twosigma",
+    "darwin": "aqr",
+    "aqr": "aqr",
+    "multistrategy": "millennium",
+    "millennium": "millennium",
+    "harmonics": "renaissance",
+    "harmonics_backtest": "renaissance",
+    "renaissance": "renaissance",
+    "arbitrage": "janestreet",
+    "jane_street": "janestreet",
+    "janestreet": "janestreet",
+}
+
+ENGINE_PREFIX_ALIASES = (
+    "citadel_", "thoth_", "bridgewater_", "newton_", "deshaw_",
+    "mercurio_", "jump_", "multistrategy_", "millennium_",
+    "prometeu_", "twosigma_", "renaissance_", "harmonics_",
+)
+
+def canonical_engine_key(name) -> str:
+    raw = str(name or "").strip().lower().replace(" ", "_")
+    return LEGACY_ENGINE_ALIASES.get(raw, raw)
+
+def engine_display_name(name) -> str:
+    key = canonical_engine_key(name)
+    return ENGINE_NAMES.get(key, key.replace("_", " ").upper())
 
 # ─── BLOOMBERG 3D MENU — tile accents ────────────────────────
 TILE_MARKETS  = "#ff8c00"   # AMBER    — quote + dash
@@ -2103,6 +2143,208 @@ class App(tk.Tk):
         tk.Label(hdr, text="BRIEFING", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="left")
         tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
 
+        overview = tk.Frame(f, bg=BG)
+        overview.pack(fill="x", pady=(0, 12))
+
+        left = tk.Frame(overview, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        right = tk.Frame(overview, bg=PANEL, highlightbackground=BORDER, highlightthickness=1, width=250)
+        right.pack(side="left", fill="y")
+        right.pack_propagate(False)
+
+        tk.Label(left, text="EXECUTIVE SUMMARY", font=(FONT, 8, "bold"),
+                 fg=BG, bg=AMBER, padx=8, pady=3).pack(anchor="nw", padx=12, pady=(12, 8))
+        summary_text = v2.get("one_liner") if v2 and v2.get("one_liner") else desc
+        tk.Label(left, text=summary_text, font=(FONT, 9, "bold"),
+                 fg=WHITE, bg=PANEL, wraplength=560, justify="left",
+                 anchor="w").pack(fill="x", padx=12)
+        if brief.get("philosophy"):
+            tk.Label(left, text=brief["philosophy"], font=(FONT, 8),
+                     fg=DIM, bg=PANEL, wraplength=560, justify="left",
+                     anchor="w").pack(fill="x", padx=12, pady=(8, 12))
+
+        tk.Label(right, text="META OPERACIONAL", font=(FONT, 8, "bold"),
+                 fg=BG, bg=AMBER, padx=8, pady=3).pack(anchor="nw", padx=12, pady=(12, 8))
+        meta_rows = [
+            ("MANDATO", parent_menu.upper()),
+            ("ENGINE", name),
+            ("ARQUIVO", script.replace("engines/", "")),
+            ("MODELO", "SYSTEMATIC" if v2 else "RULE-BASED"),
+        ]
+        if v2 and v2.get("source_files"):
+            meta_rows.append(("FONTES", f"{len(v2['source_files'])} files"))
+        for label, value in meta_rows:
+            row = tk.Frame(right, bg=PANEL)
+            row.pack(fill="x", padx=12, pady=1)
+            tk.Label(row, text=label, font=(FONT, 7, "bold"), fg=AMBER_D, bg=PANEL,
+                     width=10, anchor="w").pack(side="left")
+            tk.Label(row, text=str(value), font=(FONT, 8), fg=WHITE, bg=PANEL,
+                     anchor="w").pack(side="left", fill="x", expand=True)
+        if brief.get("edge") or brief.get("risk"):
+            tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=12, pady=10)
+            if brief.get("edge"):
+                tk.Label(right, text="EDGE", font=(FONT, 7, "bold"),
+                         fg=GREEN, bg=PANEL, anchor="w").pack(anchor="w", padx=12)
+                tk.Label(right, text=brief["edge"], font=(FONT, 7),
+                         fg=DIM, bg=PANEL, wraplength=220, justify="left",
+                         anchor="w").pack(fill="x", padx=12, pady=(2, 8))
+            if brief.get("risk"):
+                tk.Label(right, text="RISK", font=(FONT, 7, "bold"),
+                         fg=RED, bg=PANEL, anchor="w").pack(anchor="w", padx=12)
+                tk.Label(right, text=brief["risk"], font=(FONT, 7),
+                         fg=DIM, bg=PANEL, wraplength=220, justify="left",
+                         anchor="w").pack(fill="x", padx=12, pady=(2, 0))
+
+        if brief.get("logic"):
+            tk.Label(f, text="EXECUTION PIPELINE", font=(FONT, 8, "bold"),
+                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+            logic_panel = tk.Frame(f, bg=BG)
+            logic_panel.pack(fill="x", pady=(0, 12))
+            for i, step in enumerate(brief["logic"], start=1):
+                row = tk.Frame(logic_panel, bg=BG)
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text=f" {i:02d} ", font=(FONT, 7, "bold"),
+                         fg=BG, bg=AMBER_D, padx=4, pady=1).pack(side="left", padx=(0, 8))
+                tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG,
+                         wraplength=820, justify="left",
+                         anchor="w").pack(side="left", fill="x", expand=True)
+
+        if v2:
+            tk.Label(f, text="TECHNICAL MODEL", font=(FONT, 8, "bold"),
+                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+            tech_grid = tk.Frame(f, bg=BG)
+            tech_grid.pack(fill="x", pady=(0, 10))
+
+            if v2.get("params"):
+                pc = tk.Frame(tech_grid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+                pc.pack(side="left", fill="both", expand=True, padx=(0, 8))
+                tk.Label(pc, text="PARAMETER FRAMEWORK", font=(FONT, 7, "bold"),
+                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
+                for p in v2["params"][:8]:
+                    row = tk.Frame(pc, bg=PANEL)
+                    row.pack(fill="x", padx=12, pady=1)
+                    tk.Label(row, text=p.get("name", "?"), font=(FONT, 7, "bold"),
+                             fg=WHITE, bg=PANEL, width=22, anchor="w").pack(side="left")
+                    tk.Label(row, text=str(p.get("default", "?")), font=(FONT, 7),
+                             fg=AMBER, bg=PANEL, width=8, anchor="w").pack(side="left")
+                    tk.Label(row, text=str(p.get("effect", "")), font=(FONT, 7),
+                             fg=DIM, bg=PANEL, anchor="w", wraplength=220,
+                             justify="left").pack(side="left", fill="x", expand=True)
+                tk.Frame(pc, bg=PANEL, height=8).pack()
+
+            mid = tk.Frame(tech_grid, bg=BG)
+            mid.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+            if v2.get("formulas"):
+                fc = tk.Frame(mid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+                fc.pack(fill="both", expand=True, pady=(0, 8))
+                tk.Label(fc, text="DECISION MODEL", font=(FONT, 7, "bold"),
+                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
+                for form in v2["formulas"][:6]:
+                    tk.Label(fc, text="  " + form, font=(FONT, 7), fg=WHITE, bg=PANEL,
+                             anchor="w", wraplength=250,
+                             justify="left").pack(anchor="w", padx=12)
+                tk.Frame(fc, bg=PANEL, height=8).pack()
+
+            if v2.get("invariants"):
+                ic = tk.Frame(mid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+                ic.pack(fill="both", expand=True)
+                tk.Label(ic, text="CONTROL INVARIANTS", font=(FONT, 7, "bold"),
+                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
+                for inv in v2["invariants"][:6]:
+                    tk.Label(ic, text="  + " + inv, font=(FONT, 7), fg=GREEN, bg=PANEL,
+                             anchor="w", wraplength=250,
+                             justify="left").pack(anchor="w", padx=12)
+                tk.Frame(ic, bg=PANEL, height=8).pack()
+
+            gov = tk.Frame(tech_grid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1, width=220)
+            gov.pack(side="left", fill="both")
+            gov.pack_propagate(False)
+            tk.Label(gov, text="MODEL GOVERNANCE", font=(FONT, 7, "bold"),
+                     fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
+            source_count = len(v2.get("source_files", []))
+            main_fn = v2.get("main_function", ("", ""))
+            gov_rows = [
+                ("PRIMARY FILE", main_fn[0].replace("engines/", "") if main_fn and main_fn[0] else script.replace("engines/", "")),
+                ("ENTRYPOINT", main_fn[1] if main_fn and len(main_fn) > 1 else "n/a"),
+                ("SOURCE SET", f"{source_count} files" if source_count else "1 file"),
+                ("REVIEW MODE", "CodeViewer"),
+            ]
+            for label, value in gov_rows:
+                row = tk.Frame(gov, bg=PANEL)
+                row.pack(fill="x", padx=12, pady=1)
+                tk.Label(row, text=label, font=(FONT, 7, "bold"),
+                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w")
+                tk.Label(row, text=str(value), font=(FONT, 7), fg=WHITE, bg=PANEL,
+                         anchor="w", wraplength=180,
+                         justify="left").pack(anchor="w", pady=(0, 4))
+
+        bc = brief.get("best_config")
+        if bc:
+            tk.Label(f, text="DEPLOYMENT BASELINE", font=(FONT, 8, "bold"),
+                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+            bc_panel = tk.Frame(f, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+            bc_panel.pack(fill="x")
+            for k, v in bc.items():
+                row = tk.Frame(bc_panel, bg=PANEL)
+                row.pack(fill="x", padx=12, pady=2)
+                tk.Label(row, text=f"{k:<14}", font=(FONT, 8, "bold"),
+                         fg=AMBER_D, bg=PANEL, anchor="w", width=16).pack(side="left")
+                tk.Label(row, text=str(v), font=(FONT, 8),
+                         fg=WHITE, bg=PANEL, anchor="w").pack(side="left")
+            tk.Frame(bc_panel, bg=PANEL, height=8).pack()
+
+        tk.Frame(f, bg=BG, height=14).pack()
+
+        is_bt = parent_menu == "backtest"
+        is_live = parent_menu == "live"
+
+        btn_f = tk.Frame(f, bg=BG)
+        btn_f.pack()
+
+        if is_bt:
+            next_fn = lambda: self._config_backtest(name, script, desc, parent_menu)
+            btn_text = "  CONFIGURAR & RODAR  "
+        elif is_live:
+            next_fn = lambda: self._config_live(name, script, desc, parent_menu)
+            btn_text = "  SELECIONAR MODO & RODAR  "
+        else:
+            next_fn = lambda: self._exec(name, script, desc, parent_menu, [])
+            btn_text = "  EXECUTAR  "
+
+        run_btn = tk.Label(btn_f, text=btn_text, font=(FONT, 10, "bold"),
+                           fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
+        run_btn.pack(side="left", padx=4)
+        run_btn.bind("<Button-1>", lambda e: next_fn())
+        self._kb("<Return>", next_fn)
+
+        _v2_files = v2.get("source_files") if v2 else None
+        _v2_main  = v2.get("main_function") if v2 else None
+        def _open_code(_e=None, _script=script,
+                       _files=_v2_files, _main=_v2_main):
+            try:
+                files = _files if _files else [_script]
+                main  = _main  if _main  else (_script, "scan_symbol")
+                CodeViewer(self, source_files=files, main_function=main)
+            except Exception as exc:
+                messagebox.showerror("CodeViewer", f"{type(exc).__name__}: {exc}")
+
+        code_btn = tk.Label(btn_f, text="  VER CÓDIGO  ", font=(FONT, 10, "bold"),
+                            fg=AMBER, bg=BG3, cursor="hand2", padx=12, pady=4)
+        code_btn.pack(side="left", padx=4)
+        code_btn.bind("<Button-1>", _open_code)
+        self._kb("<F2>", _open_code)
+
+        back_btn = tk.Label(btn_f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
+                            cursor="hand2", padx=12, pady=4)
+        back_btn.pack(side="left", padx=4)
+        back_btn.bind("<Button-1>", lambda e: self._menu(parent_menu))
+        self._kb("<Escape>", lambda: self._menu(parent_menu))
+        return
+
         # Philosophy (italic feel with dimmer color)
         if brief.get("philosophy"):
             tk.Label(f, text='"' + brief["philosophy"] + '"', font=(FONT, 9), fg=AMBER_D,
@@ -2388,13 +2630,43 @@ class App(tk.Tk):
         btn_f.pack()
 
         def do_run():
-            # Build inputs to auto-send: period, basket, plots (if azoth), leverage, enter to start
+            # Build BOTH stdin auto-inputs (legacy) AND CLI args (preferred).
+            # Engines that parse argparse use CLI; engines with interactive
+            # prompts read stdin. Modern engines respect --no-menu and CLI
+            # args, falling back to stdin only when --no-menu is absent.
             inputs = [self._cfg_period, self._cfg_basket]
             if name == "CITADEL":
                 inputs.append(self._cfg_plots)
             inputs.append(self._cfg_leverage)
             inputs.append("")  # enter to start
-            self._exec(name, script, desc, parent_menu, inputs)
+
+            # CLI args — works for CITADEL/BRIDGEWATER/JUMP/DE SHAW/RENAISSANCE
+            cli = []
+            try:
+                _days = int(str(self._cfg_period).strip()) if str(self._cfg_period).strip() else 0
+                if _days >= 7:
+                    cli += ["--days", str(_days)]
+            except (ValueError, TypeError):
+                pass
+            _basket = str(self._cfg_basket or "").strip()
+            # _cfg_basket may be a numeric index ("1","2"...) or basket name
+            if _basket and not _basket.isdigit():
+                cli += ["--basket", _basket]
+            elif _basket.isdigit():
+                # Resolve index → basket name
+                from config.params import BASKETS
+                _bnames = [k for k in BASKETS if k != "custom"]
+                _idx = int(_basket) - 1
+                if 0 <= _idx < len(_bnames):
+                    cli += ["--basket", _bnames[_idx]]
+            try:
+                _lev = float(str(self._cfg_leverage).replace("x", "").strip()) if str(self._cfg_leverage).strip() else 0
+                if 0.1 <= _lev <= 125:
+                    cli += ["--leverage", str(_lev)]
+            except (ValueError, TypeError):
+                pass
+            cli += ["--no-menu"]
+            self._exec(name, script, desc, parent_menu, inputs, cli_args=cli)
 
         run_btn = tk.Label(btn_f, text="  RODAR BACKTEST  ", font=(FONT, 11, "bold"),
                            fg=BG, bg=AMBER, cursor="hand2", padx=16, pady=5)
@@ -2690,35 +2962,57 @@ class App(tk.Tk):
             tk.Label(mf, text=val, font=(FONT, 16, "bold"), fg=color, bg=BG3).pack()
             tk.Label(mf, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG3).pack()
 
+        def _fit_points(series, width, height, pad_x=10, pad_y=10, mn=None, mx=None):
+            if not series or len(series) < 2:
+                return []
+            mn = min(series) if mn is None else mn
+            mx = max(series) if mx is None else mx
+            rng = (mx - mn) or 1
+            pts = []
+            for i, v in enumerate(series):
+                x = pad_x + (width - pad_x * 2) * i / max(len(series) - 1, 1)
+                y = height - pad_y - (height - pad_y * 2) * (v - mn) / rng
+                pts.append((x, y))
+            return pts
+
+        def _draw_line_chart(widget, series, line_color, fill_color=None,
+                             min_label=None, max_label=None, end_label=None):
+            widget.delete("all")
+            w = widget.winfo_width() or 700
+            h = int(widget.cget("height")) or 120
+            if not series or len(series) < 2:
+                return
+            mn, mx = min(series), max(series)
+            pts = _fit_points(series, w, h, mn=mn, mx=mx)
+            if fill_color:
+                fill_pts = [(pts[0][0], h - 10)] + pts + [(pts[-1][0], h - 10)]
+                widget.create_polygon(*[c for p in fill_pts for c in p], fill=fill_color, outline="")
+            widget.create_line(*[c for p in pts for c in p], fill=line_color, width=1.8, smooth=True)
+            if max_label is not None:
+                widget.create_text(8, 8, text=max_label, font=(FONT, 7), fill=DIM, anchor="nw")
+            if min_label is not None:
+                widget.create_text(8, h - 8, text=min_label, font=(FONT, 7), fill=DIM, anchor="sw")
+            if end_label is not None:
+                widget.create_text(w - 8, 8, text=end_label, font=(FONT, 7, "bold"),
+                                   fill=line_color, anchor="ne")
+
         # ── EQUITY CURVE ──
         if eq and len(eq) > 2:
             tk.Label(sf, text="CURVA DE EQUITY", font=(FONT, 8, "bold"),
                      fg=AMBER_D, bg=BG).pack(anchor="w", padx=pad, pady=(8, 4))
-            eq_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=120)
+            eq_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=140)
             eq_canvas.pack(fill="x", padx=pad, pady=(0, 8))
 
             def draw_equity(event=None):
-                eq_canvas.delete("all")
-                w = eq_canvas.winfo_width() or 700
-                h = 120
-                if len(eq) < 2: return
-                mn, mx = min(eq), max(eq)
-                rng = mx - mn or 1
-                pts = []
-                for i, v in enumerate(eq):
-                    x = 4 + (w - 8) * i / (len(eq) - 1)
-                    y = h - 4 - (h - 8) * (v - mn) / rng
-                    pts.append((x, y))
-                fill_pts = [(4, h - 4)] + pts + [(w - 4, h - 4)]
-                eq_canvas.create_polygon(*[c for p in fill_pts for c in p],
-                                         fill="#1a1400", outline="")
-                if len(pts) >= 2:
-                    eq_canvas.create_line(*[c for p in pts for c in p],
-                                          fill=AMBER, width=1.5)
-                eq_canvas.create_text(6, 6, text=f"${mx:,.0f}",
-                                      font=(FONT, 7), fill=DIM, anchor="nw")
-                eq_canvas.create_text(6, h - 6, text=f"${mn:,.0f}",
-                                      font=(FONT, 7), fill=DIM, anchor="sw")
+                _draw_line_chart(
+                    eq_canvas,
+                    eq,
+                    AMBER,
+                    fill_color="#1a1400",
+                    min_label=f"${min(eq):,.0f}",
+                    max_label=f"${max(eq):,.0f}",
+                    end_label=f"FINAL ${eq[-1]:,.0f}",
+                )
             eq_canvas.bind("<Configure>", draw_equity)
 
         # ── MONTE CARLO ──
@@ -2742,6 +3036,90 @@ class App(tk.Tk):
                 tk.Label(mf, text=val, font=(FONT, 12, "bold"),
                          fg=color, bg=BG3).pack()
                 tk.Label(mf, text=label, font=(FONT, 7), fg=DIM, bg=BG3).pack()
+
+            mc_paths = mc.get("paths") or []
+            if mc_paths:
+                mc_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=150)
+                mc_canvas.pack(fill="x", padx=pad, pady=(0, 8))
+
+                def draw_mc_paths(event=None):
+                    mc_canvas.delete("all")
+                    w = mc_canvas.winfo_width() or 700
+                    h = int(mc_canvas.cget("height")) or 150
+                    valid = [p for p in mc_paths if p and len(p) > 1]
+                    if not valid:
+                        return
+                    mn = min(min(p) for p in valid)
+                    mx = max(max(p) for p in valid)
+                    for path in valid[:120]:
+                        pts = _fit_points(path, w, h, mn=mn, mx=mx)
+                        if len(pts) >= 2:
+                            mc_canvas.create_line(*[c for p in pts for c in p],
+                                                  fill="#274d3d", width=1)
+                    median_path = sorted(valid, key=lambda p: p[-1])[len(valid) // 2]
+                    median_pts = _fit_points(median_path, w, h, mn=mn, mx=mx)
+                    if len(median_pts) >= 2:
+                        mc_canvas.create_line(*[c for p in median_pts for c in p],
+                                              fill=AMBER, width=2.0, smooth=True)
+                    base_line = [eq[0]] * len(valid[0]) if eq else [0] * len(valid[0])
+                    base_pts = _fit_points(base_line, w, h, mn=mn, mx=mx)
+                    if len(base_pts) >= 2:
+                        mc_canvas.create_line(*[c for p in base_pts for c in p],
+                                              fill=DIM2, width=1, dash=(4, 3))
+                    mc_canvas.create_text(8, 8, text=f"${mx:,.0f}",
+                                          font=(FONT, 7), fill=DIM, anchor="nw")
+                    mc_canvas.create_text(8, h - 8, text=f"${mn:,.0f}",
+                                          font=(FONT, 7), fill=DIM, anchor="sw")
+                    mc_canvas.create_text(w - 8, 8, text="PATHS + MEDIANA",
+                                          font=(FONT, 7, "bold"), fill=AMBER, anchor="ne")
+                mc_canvas.bind("<Configure>", draw_mc_paths)
+
+            mc_finals = mc.get("finals") or []
+            if mc_finals:
+                dist_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=110)
+                dist_canvas.pack(fill="x", padx=pad, pady=(0, 8))
+
+                def draw_mc_distribution(event=None):
+                    dist_canvas.delete("all")
+                    w = dist_canvas.winfo_width() or 700
+                    h = int(dist_canvas.cget("height")) or 110
+                    if len(mc_finals) < 2:
+                        return
+                    vals = mc_finals
+                    mn = min(vals)
+                    mx = max(vals)
+                    rng = (mx - mn) or 1
+                    bins = min(28, max(8, len(vals) // 25))
+                    counts = [0] * bins
+                    for v in vals:
+                        idx = min(bins - 1, int((v - mn) / rng * bins))
+                        counts[idx] += 1
+                    top = max(counts) or 1
+                    usable_w = w - 20
+                    bar_w = usable_w / bins
+                    for i, ct in enumerate(counts):
+                        x0 = 10 + i * bar_w
+                        x1 = x0 + max(bar_w - 2, 1)
+                        y1 = h - 12
+                        y0 = y1 - (h - 28) * ct / top
+                        dist_canvas.create_rectangle(x0, y0, x1, y1, fill="#2c3e34", outline="")
+
+                    def _mark(value, color, label):
+                        x = 10 + usable_w * ((value - mn) / rng)
+                        dist_canvas.create_line(x, 10, x, h - 10, fill=color, width=1)
+                        dist_canvas.create_text(x + 4, 8, text=label, font=(FONT, 7),
+                                                fill=color, anchor="nw")
+
+                    _mark(mc.get("p5", mn), RED, "P5")
+                    _mark(mc.get("median", vals[len(vals) // 2]), AMBER, "MED")
+                    _mark(mc.get("p95", mx), GREEN, "P95")
+                    dist_canvas.create_text(8, h - 8, text=f"${mn:,.0f}",
+                                            font=(FONT, 7), fill=DIM, anchor="sw")
+                    dist_canvas.create_text(w - 8, h - 8, text=f"${mx:,.0f}",
+                                            font=(FONT, 7), fill=DIM, anchor="se")
+                    dist_canvas.create_text(w - 8, 8, text="DISTRIBUICAO FINAL",
+                                            font=(FONT, 7, "bold"), fill=WHITE, anchor="ne")
+                dist_canvas.bind("<Configure>", draw_mc_distribution)
 
         # ── REGIME PERFORMANCE ──
         if bm:
@@ -3260,7 +3638,7 @@ class App(tk.Tk):
             self._bsk_preview_lbl.configure(text="")
 
     # ─── EXECUTE ENGINE ──────────────────────────────────
-    def _exec(self, name, script, desc, parent_menu, auto_inputs):
+    def _exec(self, name, script, desc, parent_menu, auto_inputs, cli_args=None):
         self._clr(); self._clear_kb()
         self._exec_parent = parent_menu  # save for results screen
         self.oq = queue.Queue()
@@ -3401,8 +3779,11 @@ class App(tk.Tk):
                 self._poll()
                 return
 
+            _cmd = [sys.executable, "-X", "utf8", "-u", str(path)]
+            if cli_args:
+                _cmd.extend(cli_args)
             self.proc = subprocess.Popen(
-                [sys.executable, "-X", "utf8", "-u", str(path)], cwd=str(ROOT),
+                _cmd, cwd=str(ROOT),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE,
                 text=True, bufsize=1, encoding="utf-8", errors="replace",
                 startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW, env=env)
@@ -3429,16 +3810,17 @@ class App(tk.Tk):
             self._p(f"FAILED: {e}\n", "r")
 
     def _exec_script_to_proc_key(self, script: str) -> str | None:
-        mapping = {
-            "engines/backtest.py": "backtest",
-            "engines/mercurio.py": "mercurio",
-            "engines/thoth.py": "thoth",
-            "engines/newton.py": "newton",
-            "engines/multistrategy.py": "multi",
-            "engines/prometeu.py": "prometeu",
-            "engines/harmonics_backtest.py": "renaissance",
+        proc_by_key = {
+            "citadel": "backtest",
+            "jump": "mercurio",
+            "bridgewater": "thoth",
+            "deshaw": "newton",
+            "millennium": "multi",
+            "twosigma": "prometeu",
+            "renaissance": "renaissance",
         }
-        return mapping.get(script.replace("\\", "/"))
+        canon_key = canonical_engine_key(SCRIPT_TO_KEY.get(script.replace("\\", "/"), ""))
+        return proc_by_key.get(canon_key)
 
     def _exec_is_running(self) -> bool:
         if self.proc and self.proc.poll() is None:
@@ -8077,8 +8459,8 @@ class App(tk.Tk):
 
     def _bt_entry_from_report(self, engine_dir: Path, run_dir: Path, report_path: Path) -> dict:
         report = self._bt_read_json(report_path)
-        engine_name = str(report.get("engine") or engine_dir.name).strip().upper()
-        engine_slug = engine_name.lower().replace(" ", "_")
+        engine_name = str(report.get("engine") or engine_dir.name).strip()
+        engine_slug = canonical_engine_key(engine_name)
         raw_run_id = str(report.get("run_id") or run_dir.name).strip() or run_dir.name
         run_id = raw_run_id if raw_run_id.startswith(f"{engine_slug}_") else f"{engine_slug}_{raw_run_id}"
         account_size = report.get("account_size")

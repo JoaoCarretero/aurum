@@ -113,7 +113,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="RENAISSANCE harmonics standalone backtest")
     parser.add_argument("--days", type=int, default=SCAN_DAYS)
     parser.add_argument("--basket", default="default")
-    args = parser.parse_args()
+    parser.add_argument("--leverage", type=float, default=LEVERAGE)
+    parser.add_argument("--no-menu", action="store_true")
+    args, _ = parser.parse_known_args()
+    LEVERAGE = float(args.leverage)
 
     symbols = list(BASKETS.get(args.basket, SYMBOLS))
     n_candles = args.days * 24 * 4

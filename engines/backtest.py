@@ -534,7 +534,7 @@ def export_json(all_trades, eq, mc, cond, ratios, price_data=None):
         },
         "conditional": cond,
         "bear_market": {r: d for r, d in bear_market_analysis(all_trades).items() if d},
-        "monte_carlo": {k:v for k,v in (mc or {}).items() if k not in ("paths","finals","dds")},
+        "monte_carlo": mc or {},
         "hmm_regime_analysis": _regime_analysis_safe(closed),
         "trades": [{k:(str(v) if k=="timestamp" else v) for k,v in t.items() if k!="timestamp"}
                    for t in all_trades],
@@ -557,7 +557,7 @@ if __name__ == "__main__":
     _ap.add_argument("--leverage",    type=float, default=LEVERAGE,   help="Leverage multiplier")
     _ap.add_argument("--no-menu",     action="store_true",            help="Skip post-run interactive menu")
     _ap.add_argument("--holdout-pct", type=float, default=20.0,       help="Reserve last N%% of data as pure OOS holdout (0 to disable)")
-    _args = _ap.parse_args()
+    _args, _ = _ap.parse_known_args()
 
     SCAN_DAYS = _args.days
     LEVERAGE = _args.leverage

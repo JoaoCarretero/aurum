@@ -38,6 +38,7 @@ PROC_NAMES = {
     "newton":   "DE SHAW",
     "mercurio": "JUMP",
     "thoth":    "BRIDGEWATER",
+    "renaissance": "RENAISSANCE",
     "prometeu": "TWO SIGMA",
     "darwin":   "AQR",
     "chronos":  "WINTON",

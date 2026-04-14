@@ -388,7 +388,7 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                     "timestamp":  pd.Timestamp(times[trade_entry_idx]),
                     "idx":        trade_entry_idx,
                     "entry_idx":  trade_entry_idx + 1,
-                    "strategy":   "NEWTON",
+                    "strategy":   "DE SHAW",
                     "direction":  trade_dir,
                     "trade_type": "MEAN-REV",
                     "struct":     macro_b,
@@ -533,7 +533,7 @@ def scan_newton(df: pd.DataFrame, symbol: str,
                 all_dfs: dict | None = None,
                 pairs: list[dict] | None = None) -> tuple[list, dict]:
     """
-    Standard scan interface for NEWTON.
+    Standard scan interface for DE SHAW.
     Scans all cointegrated pairs involving `symbol`.
     """
     if all_dfs is None or pairs is None:
@@ -573,7 +573,7 @@ def scan_newton(df: pd.DataFrame, symbol: str,
 
 def print_header(n_pairs: int):
     print(f"\n{SEP}")
-    print(f"  NEWTON v1.0  ·  {RUN_ID}")
+    print(f"  DE SHAW v1.0  ·  {RUN_ID}")
     print(f"  {len(SYMBOLS)} ativos  ·  {n_pairs} pares  ·  {INTERVAL}  ·  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  z-entry {NEWTON_ZSCORE_ENTRY}  ·  z-stop {NEWTON_ZSCORE_STOP}  ·  HL {NEWTON_HALFLIFE_MIN}-{NEWTON_HALFLIFE_MAX}")
     print(f"  {RUN_DIR}/")
@@ -662,7 +662,7 @@ def export_json(all_trades, eq, mc, ratios, pairs):
                     for k, v in t.items()} for t in closed],
     }
 
-    out = RUN_DIR / "reports" / f"newton_{INTERVAL}_v1.json"
+    out = RUN_DIR / "reports" / f"deshaw_{INTERVAL}_v1.json"
     out.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     print(f"  json  ·  {out}")
     log.info(f"JSON → {out}")
@@ -672,7 +672,7 @@ def export_json(all_trades, eq, mc, ratios, pairs):
         from core.db import register_run
         register_run(
             run_id=RUN_ID,
-            engine="newton",
+            engine="deshaw",
             json_path=str(out),
             roi=ratios["ret"],
             sharpe=ratios.get("sharpe"),
@@ -699,10 +699,10 @@ if __name__ == "__main__":
     _ap.add_argument("--days", type=int, default=None)
     _ap.add_argument("--basket", type=str, default=None)
     _ap.add_argument("--no-menu", action="store_true")
-    _args = _ap.parse_args()
+    _args, _ = _ap.parse_known_args()
 
     print(f"\n{SEP}")
-    print(f"  NEWTON  ·  Statistical Mean Reversion")
+    print(f"  DE SHAW  ·  Statistical Mean Reversion")
     print(f"  {SEP}")
 
     if not HAS_STATSMODELS:
@@ -735,14 +735,14 @@ if __name__ == "__main__":
                 pass
 
     print(f"\n{SEP}")
-    print(f"  NEWTON  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
+    print(f"  DE SHAW  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x  ·  z-entry {NEWTON_ZSCORE_ENTRY}  ·  z-stop {NEWTON_ZSCORE_STOP}")
     print(f"  {RUN_DIR}/")
     print(SEP)
     if not _args.no_menu:
         safe_input("  enter para iniciar... ")
 
-    log.info(f"NEWTON v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
+    log.info(f"DE SHAW v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH DATA ──
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
