@@ -51,6 +51,7 @@ from core.audit_trail import AuditTrail, OrderEvent
 from core.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates,
 )
+from core.run_manager import append_to_index, snapshot_config
 
 ACCT=5000.0;MAX_POS=5;CROSS_MAX=3;LEV=2;POS_PCT=0.20;MAX_EXPO=3000.0
 SPLIT_N=5;SPLIT_DLY=0.5;SCAN_S=30;STATUS_N=3;WS_ON=True
@@ -1416,8 +1417,47 @@ async def simulate_historical_report(capital: float = 1000.0) -> Path:
             "data. This is not a trade backtest and does not simulate fills."
         ),
     }
+    config = snapshot_config()
+    config.update({
+        "ENGINE": "JANE_STREET",
+        "RUN_ID": RUN_ID,
+        "RUN_DIR": str(DIR),
+        "ARB_MODE": ARB_MODE,
+        "SIMULATE_HISTORICAL": True,
+        "SIM_CAPITAL": capital,
+        "VENUES_ACTIVE": [v.name for v in active],
+        "ARTIFACT_SCOPE": "scanner-report",
+    })
+    summary = {
+        "engine": "JANE_STREET",
+        "run_id": RUN_ID,
+        "mode": "simulate_historical",
+        "n_trades": None,
+        "win_rate": None,
+        "pnl": None,
+        "roi_pct": None,
+        "sharpe": None,
+        "sortino": None,
+        "max_dd_pct": None,
+        "total_opportunities": len(opps),
+        "profitable_count": len(profitable),
+        "avg_apr": round(avg_apr, 2),
+        "estimated_monthly_income": round(est_monthly, 2),
+        "n_symbols": len({o.get("sym") for o in opps if o.get("sym")}),
+        "n_venues": len(active),
+        "main_report": "reports/simulate_historical.json",
+    }
+    (DIR / "config.json").write_text(
+        json.dumps(config, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    (DIR / "summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
     out = DIR / "reports" / "simulate_historical.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    append_to_index(DIR, summary, config)
     print(f"\n  simulate-historical → {out}\n")
     return out
 
