@@ -143,6 +143,48 @@ def job_ingest_whales():
         return {"error": str(e)}
 
 
+def job_ingest_br():
+    """Brazilian equities (IBOV + top B3 stocks + BRL)."""
+    from macro_brain.data_ingestion.br_equities import BREquitiesCollector
+    from datetime import timedelta
+    try:
+        result = BREquitiesCollector().run(
+            since=datetime.utcnow() - timedelta(days=7),
+        )
+        _record_run("br", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"br failed: {e}")
+        _record_run("br", error=str(e))
+        return {"error": str(e)}
+
+
+def job_ingest_defi():
+    """DeFi TVL per chain + top protocols."""
+    from macro_brain.data_ingestion.defi import DeFiLlamaCollector
+    try:
+        result = DeFiLlamaCollector().run()
+        _record_run("defi", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"defi failed: {e}")
+        _record_run("defi", error=str(e))
+        return {"error": str(e)}
+
+
+def job_ingest_hyperliquid():
+    """Hyperliquid perps — funding, OI, mid prices."""
+    from macro_brain.data_ingestion.hyperliquid import HyperliquidCollector
+    try:
+        result = HyperliquidCollector().run()
+        _record_run("hyperliquid", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"hyperliquid failed: {e}")
+        _record_run("hyperliquid", error=str(e))
+        return {"error": str(e)}
+
+
 def job_ingest_calendar():
     """Economic calendar — próximos releases (CPI, FOMC, NFP, etc)."""
     from macro_brain.data_ingestion.calendar import EconomicCalendarCollector
@@ -292,6 +334,9 @@ def run_once(force: bool = False):
         ("cftc",        job_ingest_cftc,        MACRO_SCHED_MACRO_SEC),  # daily (weekly data)
         ("onchain",     job_ingest_onchain,     MACRO_SCHED_NEWS_SEC),   # 15min
         ("whales",      job_ingest_whales,      MACRO_SCHED_NEWS_SEC),   # 15min
+        ("br",          job_ingest_br,          MACRO_SCHED_MACRO_SEC),  # daily (Yahoo BR)
+        ("defi",        job_ingest_defi,        MACRO_SCHED_NEWS_SEC),   # 15min (Llama)
+        ("hyperliquid", job_ingest_hyperliquid, MACRO_SCHED_NEWS_SEC),   # 15min (HL perps)
         ("calendar",    job_ingest_calendar,    MACRO_SCHED_MACRO_SEC),  # daily
         ("news",        job_ingest_news,        MACRO_SCHED_NEWS_SEC),   # 15min
         ("macro",       job_ingest_macro,       MACRO_SCHED_MACRO_SEC),  # daily (FRED)

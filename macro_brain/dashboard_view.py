@@ -751,12 +751,211 @@ def _render_analysis_tab(parent):
                  font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
 
 
+def _render_br_tab(parent):
+    """Brazilian equities + BRL forex."""
+    # Indices + FX
+    br_indices = _macro_map([
+        "IBOVESPA", "BR_SMALL_CAPS", "BR_REAL_ESTATE",
+        "USD_BRL", "EUR_BRL",
+    ], n=30)
+    _section(parent, "BR INDICES · FOREX", color="#00c050", pady_top=(0, 0))
+    _grid(parent, br_indices, [
+        ("IBOVESPA",       "IBOV",          "{:,.0f}"),
+        ("BR_SMALL_CAPS",  "SMALL CAPS",    "{:,.2f}"),
+        ("BR_REAL_ESTATE", "IFIX",          "{:,.2f}"),
+        ("USD_BRL",        "USD/BRL",       "{:.4f}"),
+        ("EUR_BRL",        "EUR/BRL",       "{:.4f}"),
+    ], spark_color="#00c050")
+
+    # Top stocks (row 1)
+    stocks1 = _macro_map([
+        "PETR4_PETROBRAS", "VALE3_VALE", "ITUB4_ITAU", "BBDC4_BRADESCO",
+        "BBAS3_BB", "ABEV3_AMBEV", "B3SA3_B3", "WEGE3_WEG",
+    ], n=30)
+    _section(parent, "B3 TOP STOCKS · BANCOS · PETRO · MINERADORAS",
+              color="#00a040")
+    _grid(parent, stocks1, [
+        ("PETR4_PETROBRAS", "PETR4", "R${:.2f}"),
+        ("VALE3_VALE",      "VALE3", "R${:.2f}"),
+        ("ITUB4_ITAU",      "ITUB4", "R${:.2f}"),
+        ("BBDC4_BRADESCO",  "BBDC4", "R${:.2f}"),
+        ("BBAS3_BB",        "BBAS3", "R${:.2f}"),
+        ("ABEV3_AMBEV",     "ABEV3", "R${:.2f}"),
+        ("B3SA3_B3",        "B3SA3", "R${:.2f}"),
+        ("WEGE3_WEG",       "WEGE3", "R${:.2f}"),
+    ])
+
+    # Top stocks (row 2)
+    stocks2 = _macro_map([
+        "RENT3_LOCALIZA", "PRIO3_PRIO", "BRAP4_BRADESPAR",
+        "SUZB3_SUZANO", "JBSS3_JBS", "KLBN11_KLABIN",
+        "ELET3_ELETROBRAS", "MGLU3_MAGALU",
+    ], n=30)
+    _grid(parent, stocks2, [
+        ("RENT3_LOCALIZA",  "RENT3", "R${:.2f}"),
+        ("PRIO3_PRIO",      "PRIO3", "R${:.2f}"),
+        ("BRAP4_BRADESPAR", "BRAP4", "R${:.2f}"),
+        ("SUZB3_SUZANO",    "SUZB3", "R${:.2f}"),
+        ("JBSS3_JBS",       "JBSS3", "R${:.2f}"),
+        ("KLBN11_KLABIN",   "KLBN11","R${:.2f}"),
+        ("ELET3_ELETROBRAS","ELET3", "R${:.2f}"),
+        ("MGLU3_MAGALU",    "MGLU3", "R${:.2f}"),
+    ])
+
+    # ADRs US-listed
+    adrs = _macro_map(["VALE_ADR", "ITUB_ADR", "PBR_ADR", "BBD_ADR"], n=30)
+    _section(parent, "BRAZILIAN ADRs (US-LISTED)", color="#00a040")
+    _grid(parent, adrs, [
+        ("VALE_ADR", "VALE (NYSE)",  "${:.2f}"),
+        ("ITUB_ADR", "ITUB (NYSE)",  "${:.2f}"),
+        ("PBR_ADR",  "PBR (NYSE)",   "${:.2f}"),
+        ("BBD_ADR",  "BBD (NYSE)",   "${:.2f}"),
+    ])
+
+
+def _render_crypto_tab(parent):
+    """Crypto deep — organizado por rede. Sub-sections:
+    BTC · ETH · SOL · HYPE · DEFI (cross-chain TVL) · bot slots (future)"""
+
+    # BTC NETWORK
+    _section(parent, "[ BTC ] NETWORK · ON-CHAIN · POSITIONING",
+              color=AMBER, pady_top=(0, 0))
+    btc = _macro_map([
+        "BTC_SPOT", "BTC_DOMINANCE", "BTC_HASH_RATE", "BTC_DIFFICULTY",
+        "BTC_BLOCK_HEIGHT", "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
+        "BTC_24H_TX_COUNT",
+    ], n=30)
+    _grid(parent, btc, [
+        ("BTC_SPOT",              "PRICE",       "${:,.0f}"),
+        ("BTC_DOMINANCE",         "DOMINANCE",   "{:.2f}%"),
+        ("BTC_HASH_RATE",         "HASHRATE",    "{:,.0f}"),
+        ("BTC_DIFFICULTY",        "DIFFICULTY",  "{:,.0f}"),
+        ("BTC_BLOCK_HEIGHT",      "BLOCK",       "{:,.0f}"),
+        ("BTC_MEMPOOL_COUNT",     "MEMPOOL",     "{:,.0f}"),
+        ("BTC_FEE_FASTEST_SATVB", "FEE sat/vB",  "{:.0f}"),
+        ("BTC_24H_TX_COUNT",      "24H TX",      "{:,.0f}"),
+    ], spark_color=AMBER)
+    _btc_extra = _macro_map([
+        "BTC_CME_NET_LONGS", "BTC_CME_SWAP_NET",
+        "BTC_CME_MM_NET",
+    ], n=12)
+    _grid(parent, _btc_extra, [
+        ("BTC_CME_NET_LONGS",  "BTC CME NC NET",  "{:+,.0f}"),
+        ("BTC_CME_SWAP_NET",   "BTC CME BANKS",   "{:+,.0f}"),
+        ("BTC_CME_MM_NET",     "BTC CME FUNDS",   "{:+,.0f}"),
+    ], spark_color=MAGENTA)
+
+    # ETHEREUM
+    _section(parent, "[ ETH ] ETHEREUM · DEFI DOMINANT", color=BLUE)
+    eth = _macro_map([
+        "ETH_SPOT", "DEFI_ETHEREUM_TVL",
+    ], n=30)
+    _grid(parent, eth, [
+        ("ETH_SPOT",           "ETH PRICE",    "${:,.1f}"),
+        ("DEFI_ETHEREUM_TVL",  "ETH DEFI TVL", "${:,.0f}"),
+    ], spark_color=BLUE)
+
+    # SOLANA
+    _section(parent, "[ SOL ] SOLANA · HIGH THROUGHPUT · MEMECOINS",
+              color="#9945ff")
+    sol = _macro_map([
+        "SOL_SPOT", "DEFI_SOLANA_TVL",
+    ], n=30)
+    _grid(parent, sol, [
+        ("SOL_SPOT",           "SOL PRICE",    "${:.2f}"),
+        ("DEFI_SOLANA_TVL",    "SOL DEFI TVL", "${:,.0f}"),
+    ], spark_color="#9945ff")
+    # Bot slots (future)
+    slot_row = tk.Frame(parent, bg=BG); slot_row.pack(fill="x", pady=2)
+    for label, desc in [
+        ("SNIPER BOT",          "new token launches (soon)"),
+        ("INSIDER WALLET",      "follow large traders (soon)"),
+        ("MEV DETECTOR",        "sandwich attacks (soon)"),
+    ]:
+        slot = tk.Frame(slot_row, bg=PANEL, highlightbackground="#5a2f88",
+                        highlightthickness=1, padx=8, pady=4)
+        slot.pack(side="left", padx=2, fill="both", expand=True)
+        tk.Label(slot, text=f"  {label}  ", font=(FONT, 7, "bold"),
+                 fg=BG, bg="#9945ff", padx=2).pack(anchor="w")
+        tk.Label(slot, text=desc, font=(FONT, 7), fg=DIM,
+                 bg=PANEL).pack(anchor="w", padx=2)
+
+    # HYPERLIQUID
+    _section(parent, "[ HYPE ] HYPERLIQUID · PERPS · FUNDING",
+              color="#00ffaa")
+    hl = _macro_map([
+        "HL_TOTAL_OI", "HL_BTC_PRICE", "HL_BTC_OI_USD", "HL_BTC_FUNDING",
+        "HL_ETH_OI_USD", "HL_ETH_FUNDING", "HL_HYPE_PRICE",
+        "HL_HYPE_OI_USD",
+    ], n=12)
+    _grid(parent, hl, [
+        ("HL_TOTAL_OI",     "TOTAL OI",     "${:,.0f}"),
+        ("HL_BTC_PRICE",    "BTC PERP",     "${:,.0f}"),
+        ("HL_BTC_OI_USD",   "BTC OI",       "${:,.0f}"),
+        ("HL_BTC_FUNDING",  "BTC FUNDING",  "{:+.4f}%"),
+        ("HL_ETH_OI_USD",   "ETH OI",       "${:,.0f}"),
+        ("HL_ETH_FUNDING",  "ETH FUNDING",  "{:+.4f}%"),
+        ("HL_HYPE_PRICE",   "HYPE TOKEN",   "${:.2f}"),
+        ("HL_HYPE_OI_USD",  "HYPE OI",      "${:,.0f}"),
+    ], spark_color="#00ffaa")
+    # Bot slots
+    slot_row2 = tk.Frame(parent, bg=BG); slot_row2.pack(fill="x", pady=2)
+    for label, desc in [
+        ("LIQUIDATION BOT", "liquidation cascades (soon)"),
+        ("WHALE TRACKER",   "top positions > $10M (soon)"),
+        ("FUNDING ARB",     "neutralizes funding (soon)"),
+    ]:
+        slot = tk.Frame(slot_row2, bg=PANEL, highlightbackground="#007755",
+                        highlightthickness=1, padx=8, pady=4)
+        slot.pack(side="left", padx=2, fill="both", expand=True)
+        tk.Label(slot, text=f"  {label}  ", font=(FONT, 7, "bold"),
+                 fg=BG, bg="#00ffaa", padx=2).pack(anchor="w")
+        tk.Label(slot, text=desc, font=(FONT, 7), fg=DIM,
+                 bg=PANEL).pack(anchor="w", padx=2)
+
+    # CROSS-CHAIN DEFI TVL
+    _section(parent, "CROSS-CHAIN DEFI · TVL PER NETWORK",
+              color=PURPLE)
+    defi = _macro_map([
+        "DEFI_TOTAL_TVL", "DEFI_ETHEREUM_TVL", "DEFI_SOLANA_TVL",
+        "DEFI_BSC_TVL", "DEFI_BASE_TVL", "DEFI_ARBITRUM_TVL",
+        "DEFI_TRON_TVL", "DEFI_HYPERLIQUID_TVL",
+    ], n=30)
+    _grid(parent, defi, [
+        ("DEFI_TOTAL_TVL",       "TOTAL TVL",    "${:,.0f}"),
+        ("DEFI_ETHEREUM_TVL",    "ETH",          "${:,.0f}"),
+        ("DEFI_SOLANA_TVL",      "SOL",          "${:,.0f}"),
+        ("DEFI_BSC_TVL",         "BSC",          "${:,.0f}"),
+        ("DEFI_BASE_TVL",        "BASE",         "${:,.0f}"),
+        ("DEFI_ARBITRUM_TVL",    "ARB",          "${:,.0f}"),
+        ("DEFI_TRON_TVL",        "TRON",         "${:,.0f}"),
+        ("DEFI_HYPERLIQUID_TVL", "HYPERLIQUID",  "${:,.0f}"),
+    ], spark_color=PURPLE)
+
+    # Altcoins tier (from original)
+    c23 = _macro_map(["USDC_SPOT", "ADA_SPOT", "DOGE_SPOT", "AVAX_SPOT",
+                       "TRX_SPOT", "LINK_SPOT", "DOT_SPOT", "TON_SPOT"])
+    _section(parent, "ALTCOINS TIER 2")
+    _grid(parent, c23, [
+        ("USDC_SPOT", "USDC",  "${:.4f}"),
+        ("ADA_SPOT",  "ADA",   "${:.4f}"),
+        ("DOGE_SPOT", "DOGE",  "${:.5f}"),
+        ("AVAX_SPOT", "AVAX",  "${:.2f}"),
+        ("TRX_SPOT",  "TRX",   "${:.4f}"),
+        ("LINK_SPOT", "LINK",  "${:.2f}"),
+        ("DOT_SPOT",  "DOT",   "${:.3f}"),
+        ("TON_SPOT",  "TON",   "${:.2f}"),
+    ])
+
+
 _TABS = [
-    ("MARKETS",  "1", _render_markets_tab),
-    ("INSIGHTS", "2", _render_insights_tab),
-    ("ANALYSIS", "3", _render_analysis_tab),
-    ("NETWORK",  "4", _render_network_tab),
-    ("BOOK",     "5", _render_book_tab),
+    ("US MKTS",   "1", _render_markets_tab),
+    ("BR MKTS",   "2", _render_br_tab),
+    ("CRYPTO",    "3", _render_crypto_tab),
+    ("INSIGHTS",  "4", _render_insights_tab),
+    ("ANALYSIS",  "5", _render_analysis_tab),
+    ("NETWORK",   "6", _render_network_tab),
+    ("BOOK",      "7", _render_book_tab),
 ]
 
 
