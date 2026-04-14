@@ -104,6 +104,19 @@ def job_ingest_news():
     return results
 
 
+def job_ingest_calendar():
+    """Economic calendar — próximos releases (CPI, FOMC, NFP, etc)."""
+    from macro_brain.data_ingestion.calendar import EconomicCalendarCollector
+    try:
+        result = EconomicCalendarCollector().run()
+        _record_run("calendar", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"calendar job failed: {e}")
+        _record_run("calendar", error=str(e))
+        return {"error": str(e)}
+
+
 def job_ingest_markets():
     """Yahoo Finance — commodities, forex, rates, equity indices."""
     from macro_brain.data_ingestion.markets import YahooMarketsCollector
@@ -237,6 +250,7 @@ def run_once(force: bool = False):
         ("sentiment",   job_ingest_sentiment,   MACRO_SCHED_NEWS_SEC),   # 15min
         ("commodities", job_ingest_commodities, MACRO_SCHED_NEWS_SEC),   # 15min
         ("markets",     job_ingest_markets,     MACRO_SCHED_MACRO_SEC),  # daily (Yahoo)
+        ("calendar",    job_ingest_calendar,    MACRO_SCHED_MACRO_SEC),  # daily
         ("news",        job_ingest_news,        MACRO_SCHED_NEWS_SEC),   # 15min
         ("macro",       job_ingest_macro,       MACRO_SCHED_MACRO_SEC),  # daily (FRED)
         ("regime",      job_regime,             MACRO_SCHED_REGIME_SEC), # 4h

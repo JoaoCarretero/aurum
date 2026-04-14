@@ -26,12 +26,28 @@ log = logging.getLogger("macro_brain.ingest.commodities")
 _GLOBAL = "https://api.coingecko.com/api/v3/global"
 _PRICE = "https://api.coingecko.com/api/v3/simple/price"
 
-# CoinGecko IDs para nosso universe
+# CoinGecko IDs → nossa label. Top 20 by market cap.
 _COIN_IDS = {
-    "bitcoin":     "BTC_SPOT",
-    "ethereum":    "ETH_SPOT",
-    "solana":      "SOL_SPOT",
-    "binancecoin": "BNB_SPOT",
+    "bitcoin":        "BTC_SPOT",
+    "ethereum":       "ETH_SPOT",
+    "tether":         "USDT_SPOT",
+    "binancecoin":    "BNB_SPOT",
+    "solana":         "SOL_SPOT",
+    "ripple":         "XRP_SPOT",
+    "usd-coin":       "USDC_SPOT",
+    "cardano":        "ADA_SPOT",
+    "dogecoin":       "DOGE_SPOT",
+    "avalanche-2":    "AVAX_SPOT",
+    "tron":           "TRX_SPOT",
+    "chainlink":      "LINK_SPOT",
+    "polkadot":       "DOT_SPOT",
+    "polygon-ecosystem-token": "POL_SPOT",
+    "toncoin":        "TON_SPOT",
+    "shiba-inu":      "SHIB_SPOT",
+    "litecoin":       "LTC_SPOT",
+    "bitcoin-cash":   "BCH_SPOT",
+    "near":           "NEAR_SPOT",
+    "uniswap":        "UNI_SPOT",
 }
 
 

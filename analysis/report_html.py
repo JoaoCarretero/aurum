@@ -368,6 +368,8 @@ def _build_executive_strip(all_trades: list[dict], by_sym: dict,
                            audit_results: dict | None,
                            wf_regime: dict | None,
                            all_vetos: dict | None) -> str:
+    import re as _re
+
     closed = [t for t in all_trades if t.get("result") in ("WIN", "LOSS")]
     top_symbol = "N/A"
     top_symbol_pnl = 0.0
@@ -404,6 +406,7 @@ def _build_executive_strip(all_trades: list[dict], by_sym: dict,
     friction_card = ("Main friction", "No veto pressure", _GREEN)
     if all_vetos:
         main_reason, main_count = max(all_vetos.items(), key=lambda item: item[1])
+        main_reason = _re.sub(r"\([^)]*\)", "", str(main_reason)).strip() or str(main_reason)
         friction_card = ("Main friction", f"{main_reason} ({main_count})", _GOLD)
 
     cards = [

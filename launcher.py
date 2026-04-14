@@ -6086,19 +6086,28 @@ class App(tk.Tk):
 
     # ─── RISK (Layer 2) ──────────────────────────────────
     def _macro_brain_menu(self):
-        """Macro Brain dashboard — autonomous CIO layer (separate from trade engines)."""
+        """Macro Brain cockpit — intro screen + dense market data.
+
+        ESC → main menu (trade engines).
+        ENTER/space also → main menu (from splash click).
+        """
         self._clr(); self._clear_kb()
-        self.h_path.configure(text="> MACRO BRAIN")
-        self.h_stat.configure(text="CIO", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  refresh button atualiza")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
+        self.h_path.configure(text="")  # Cockpit is intro — no nav breadcrumb
+        self.h_stat.configure(text="COCKPIT", fg=AMBER)
+        self.f_lbl.configure(text="ESC ou ENTER TERMINAL → main menu  |  R refresh  |  C run cycle")
+        # Strong escape bindings — cockpit should never be a dead end
+        self._kb("<Escape>",   lambda: self._menu("main"))
+        self._kb("<Key-0>",    lambda: self._menu("main"))
+        self._kb("<BackSpace>", lambda: self._menu("main"))
         self._bind_global_nav()
+        # Override global R (risk) → refresh cockpit (after global nav binds)
+        self._kb("<Key-r>",    lambda: self._macro_brain_menu())
         try:
             from macro_brain.dashboard_view import render as _macro_render
             _macro_render(self.main, app=self)
         except Exception as e:
-            tk.Label(self.main, text=f"Macro Brain failed to render:\n{e}",
+            tk.Label(self.main,
+                     text=f"Macro Brain failed to render:\n{e}\n\nPress ESC → main menu",
                      font=(FONT, 10), fg=RED, bg=BG).pack(pady=40)
 
     def _risk_menu(self):
