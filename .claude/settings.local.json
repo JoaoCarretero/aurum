@@ -126,7 +126,8 @@
       "Bash(rm -rf data/2026-04-09)",
       "Bash(du -sh data/)",
       "Bash(tasklist)",
-      "Bash(cmd:*)"
+      "Bash(cmd:*)",
+      "Bash(cd \"C:\\\\\\\\Users\\\\\\\\Joao\\\\\\\\OneDrive\\\\\\\\aurum.finance\")"
     ]
   }
 }

@@ -479,6 +479,7 @@ if __name__ == "__main__":
             SCAN_DAYS = int(_days_in)
     N_CANDLES = SCAN_DAYS * 24 * 4
 
+    BASKET_NAME = args.basket if (args.basket and args.basket in BASKETS) else "default"
     if args.basket and args.basket in BASKETS:
         SYMBOLS = BASKETS[args.basket]
     elif not args.no_menu:
@@ -584,9 +585,11 @@ if __name__ == "__main__":
         "SELECTED_SYMBOLS": list(SYMBOLS),
         "SCAN_DAYS_EFFECTIVE": SCAN_DAYS,
         "N_CANDLES_EFFECTIVE": N_CANDLES,
+        "BASKET_EFFECTIVE": BASKET_NAME,
     })
     summary = {
         "engine": "JUMP",
+        "basket": BASKET_NAME,
         "run_id": RUN_ID,
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,

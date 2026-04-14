@@ -260,6 +260,7 @@ def append_to_index(run_dir, summary, config, overfit_results=None):
         "timestamp":    datetime.now().isoformat(),
         "interval":     s.get("interval") or config.get("INTERVAL") or config.get("ENTRY_TF"),
         "period_days":  s.get("period_days") or config.get("SCAN_DAYS"),
+        "basket":       s.get("basket") or config.get("BASKET_EFFECTIVE") or "default",
         "n_symbols":    s.get("n_symbols"),
         "n_candles":    s.get("n_candles") or config.get("N_CANDLES"),
         "n_trades":     s.get("n_trades"),

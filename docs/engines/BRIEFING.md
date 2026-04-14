@@ -1,151 +1,141 @@
 # AURUM — Engine Briefing
 
-> Referência operacional. Para cada engine: filosofia, melhor config validada,
-> parâmetros chave e quando NÃO usar.
-> Última calibração: master battery 2026-04-13.
+> Referência operacional dos engines. Para cada um: o que faz, parâmetros de
+> entrada e como rodar. Resultados e calibrações vêm de quem testar —
+> o briefing só explica os knobs.
 
 ---
 
 ## CITADEL — Systematic Momentum (Ω 5D)
 
-**Inspiração:** Citadel LLC — quant momentum
-**Arquivo:** `engines/backtest.py`
+**Inspiração:** Citadel LLC
+**Arquivo:** `engines/citadel.py`
 **Pipeline:** Data → indicators → swing → omega(5D) → macro filter → entry
 
-### Meta
-Captura tendências fortes via fractal de 5 dimensões: **struct, flow, cascade, momentum, pullback**. Só entra quando todas concordam — entradas raras, alta convicção. Stops em pivots de swing, target RR 2:1. Sizing Kelly × regime macro × convex × fractal.
+### O que faz
+Captura tendências fortes via fractal de 5 dimensões — **struct, flow, cascade, momentum, pullback**. Só entra quando as 5 concordam: entradas raras, alta convicção. Stops em pivots de swing, target RR. Sizing Kelly × regime macro × convex × fractal.
 
-### Melhor config (battery)
-| Param | Valor | Por quê |
-|---|---|---|
-| TF | `15m` | Granularidade ideal pro fractal Ω |
-| Período | **180 dias** | Precisa horizonte longo pra capturar regime cycle |
-| Basket | `default` (11 alts) ou `bluechip` (20) | bluechip+90d=Sharpe 0.43; default+180d=4.43 |
-| `RISK_SCALE_BY_REGIME` | `{BEAR:1.0, BULL:0.30, CHOP:0.50}` | Regime-adaptive — já é default via `ENGINE_RISK_SCALE_BY_REGIME["CITADEL"]` |
-| `STOP_ATR_M` | `1.8` | Swing-based |
-| `TARGET_RR` | `2.0` | Trailing multi-level após 1.5R |
-
-### Resultados validados
-- **180d default regime-adaptive** → Sharpe **4.43**, 256 trades, ROI +31%, MC 99%
-- **90d default baseline** → Sharpe -0.58 ❌ (esperado, horizonte curto)
-- **90d bluechip baseline** → Sharpe 0.43 ⚠️
+### Parâmetros (em `config/params.py`)
+| Param | O que é |
+|---|---|
+| `INTERVAL` / `ENTRY_TF` | Timeframe de entrada (ex: `15m`, `1h`, `4h`) |
+| `SCAN_DAYS` | Horizonte do backtest em dias |
+| `BASKETS[...]` | Universo de ativos (default, bluechip, majors, top12, defi, layer1...) |
+| `OMEGA_WEIGHTS` | Pesos das 5 dimensões do fractal Ω |
+| `SCORE_THRESHOLD` | Score Ω mínimo para disparar entrada |
+| `SCORE_BY_REGIME` | Threshold por regime macro (BULL/BEAR/CHOP) |
+| `RISK_SCALE_BY_REGIME` | Multiplicador de sizing por regime |
+| `STOP_ATR_M` | Distância do stop em múltiplos de ATR (swing-based) |
+| `TARGET_RR` | Risk-reward do target |
+| `TRAIL_*` | Parâmetros de trailing multi-level após 1.5R |
+| `MAX_HOLD` | Máximo de candles segurando o trade |
+| `MAX_OPEN_POSITIONS` | Cap global de posições simultâneas |
+| `CORR_THRESHOLD` / `CORR_SOFT_THRESHOLD` | Filtro de correlação hard/soft |
 
 ### Quando NÃO usar
-- Períodos < 120 dias (não captura regime)
-- Mercado puramente lateral (CHOP) — RISK_SCALE corta sizing pra 50% mas ainda perde
-- Alta concentração: 90% do PnL vem de 1-2 ativos (SUI, XRP, INJ)
+- Horizontes curtos (sistema precisa de ciclo de regime)
+- Mercado puramente lateral prolongado
 
 ### Como rodar
 ```bash
-python -m engines.backtest --no-menu --days 180
+python -m engines.citadel --no-menu --days 180
 ```
 
 ---
 
 ## BRIDGEWATER — Macro Sentiment Contrarian
 
-**Inspiração:** Bridgewater Associates — Ray Dalio
-**Arquivo:** `engines/thoth.py`
+**Inspiração:** Bridgewater Associates
+**Arquivo:** `engines/bridgewater.py`
 **Pipeline:** Funding rate → OI delta → LS ratio → composite contrarian score
 
-### Meta
-"Quando todos estão gananciosos, tenha medo." Quantifica sentimento da multidão (funding extremo, OI squeeze, LS ratio polarizado) e **vai contra**. Quando posicionamento fica unilateral demais, sistema é instável e reverte.
+### O que faz
+"Quando todos estão gananciosos, tenha medo." Quantifica sentimento da multidão (funding extremo, OI squeeze, LS ratio polarizado) e **vai contra**. Quando posicionamento fica unilateral demais, o sistema é instável e reverte.
 
-### Melhor config (battery)
-| Param | Valor | Por quê |
-|---|---|---|
-| TF | **`1h`** | 15m gera ruído; 4h tem poucos trades |
-| Período | `90d` ou `180d` | Ambos performam |
-| Basket | `default` ou `bluechip` | bluechip+1h+90d=Sharpe 10.57 |
-| `THOTH_FUNDING_ENTRY` | `2.0` | z-score mínimo do funding |
-| `THOTH_LS_CONTRARIAN` | `2.0` | ratio LS extremo |
-| `THOTH_MIN_SCORE` | `0.30` | composite mínimo |
-
-**TF override aplicado:** `ENGINE_INTERVALS["BRIDGEWATER"] = "1h"` em `params.py`. Roda 1h por default mesmo com `INTERVAL=15m` global.
-
-### Resultados validados
-- **1h default 90d** → Sharpe **5.06** (battery) / **11.37** (após Codex sentiment refactor), 269-1518 trades
-- **1h bluechip 90d** → Sharpe **10.57**, 957 trades, MC 99%
-- **1h bluechip 180d** → Sharpe **7.34**, 2090 trades, MC 99%
-- **OOS walk-forward 1h 180d** → IS Sharpe 4.97, OOS 1.78 ✓
-- **15m qualquer config** → Sharpe negativo ❌
+### Parâmetros (`THOTH_*` em `config/params.py`)
+| Param | O que é |
+|---|---|
+| `THOTH_FUNDING_WINDOW` | Períodos de 8h para calcular z-score do funding |
+| `THOTH_FUNDING_ENTRY` | `|z-score|` mínimo do funding para sinal |
+| `THOTH_OI_WINDOW` | Candles para delta de Open Interest |
+| `THOTH_LS_CONTRARIAN` | Ratio Long/Short > N → crowd long demais (sinal short) |
+| `THOTH_LS_CONTRARIAN_LOW` | Ratio Long/Short < N → crowd short demais (sinal long) |
+| `THOTH_WEIGHT_FUNDING` / `_OI` / `_LS` | Pesos no composite score |
+| `THOTH_MIN_SCORE` | Composite mínimo para entrada |
+| `THOTH_DIRECTION_THRESHOLD` | `|sent_score|` mínimo para gerar direção |
+| `THOTH_SIZE_MULT` | Multiplicador de position size |
+| `ENGINE_INTERVALS["BRIDGEWATER"]` | TF override por engine (sobrescreve `INTERVAL`) |
 
 ### Quando NÃO usar
-- TF 15m (ruído de funding domina sinal)
-- Períodos < 30 dias (poucos eventos contrarians)
-- Sem dados de funding/OI (binance API instável às vezes)
+- Sem dados de funding/OI disponíveis (API instável)
+- Períodos muito curtos (poucos eventos contrarians)
 
 ### Como rodar
 ```bash
-python engines/thoth.py --no-menu --days 90 --basket default
+python -m engines.bridgewater --no-menu --days 90 --basket default
 ```
 
 ---
 
 ## RENAISSANCE — Harmonic Patterns
 
-**Inspiração:** Renaissance Technologies — Jim Simons
-**Arquivo:** `engines/harmonics_backtest.py` (standalone) + `core/harmonics.py`
-**Pipeline:** Detecção XABCD harmônicos → Bayesian probability → entropy + Hurst gates
+**Inspiração:** Renaissance Technologies
+**Arquivo:** `engines/renaissance.py` + `core/harmonics.py`
+**Pipeline:** Detecção XABCD → Bayesian probability → entropy + Hurst gates
 
-### Meta
-Padrões harmônicos clássicos (Gartley, Bat, Butterfly, Crab) filtrados por probabilidade Bayesiana. Entrada só quando entropia do mercado é baixa (estrutura ordenada) e Hurst > 0.5 (persistência). WR muito alto, poucos trades.
+### O que faz
+Padrões harmônicos clássicos (Gartley, Bat, Butterfly, Crab) filtrados por probabilidade Bayesiana. Entrada só quando entropia do mercado é baixa (estrutura ordenada) e Hurst > 0.5 (persistência). WR alto por desenho, poucos trades.
 
-### Melhor config (battery)
-| Param | Valor | Por quê |
-|---|---|---|
-| TF | `15m` | 1h e 4h reduzem trade count drasticamente |
-| Período | `180d` | 90d gera 13 trades, 180d gera 68 |
-| Basket | `default` | bluechip não foi testado |
-
-### Resultados validados
-- **15m default 180d** → Sharpe **6.58**, 68 trades, WR 88.2%, MaxDD 0.4% ✓
-- **15m default 90d** → ~88 trades, Sharpe 4.7
-- **1h / 4h** → trade count cai pra 3-13, sample size insuficiente
-
-### Audit flag ⚠️
-Inconsistência: artifact reporta **WR 85.23%**, audit do trade list mostra **61.36%**. Investigar `renaissance_audit.md` antes de live capital.
+### Parâmetros
+| Param | O que é |
+|---|---|
+| `INTERVAL` | TF de detecção dos padrões |
+| `SCAN_DAYS` | Horizonte |
+| `BASKETS[...]` | Universo |
+| `CHRONOS_HURST_WINDOW` / `_MIN` | Gate de persistência (Hurst) |
+| Gates de entropia internos ao `core/harmonics.py` | Ordem do mercado |
 
 ### Quando NÃO usar
-- Live trading sem auditar discrepância de WR primeiro
-- TFs > 1h (não há trades suficientes)
+- TFs longos (1h+): trade count cai pra sample insuficiente
+- Live trading sem auditar discrepâncias de WR reportadas
 
 ### Como rodar
 ```bash
-python -m engines.harmonics_backtest --days 180 --basket default
+python -m engines.renaissance --days 180 --basket default
 ```
 
 ---
 
 ## DE SHAW — Statistical Arbitrage (Pairs)
 
-**Inspiração:** D.E. Shaw — David Shaw
-**Arquivo:** `engines/newton.py`
+**Inspiração:** D.E. Shaw
+**Arquivo:** `engines/deshaw.py`
 **Pipeline:** Engle-Granger cointegration → z-score do spread → mean reversion
 
-### Meta
-Encontra pares cointegrados, opera spread quando z-score > 2σ, sai quando z cruza zero. Delta-neutral entre os dois ativos do par. Em teoria reduz exposição direcional.
+### O que faz
+Encontra pares cointegrados, opera o spread quando z-score passa do threshold, sai quando z cruza zero. Delta-neutral entre os dois ativos do par — em teoria reduz exposição direcional.
 
-### Melhor config (battery, mas SEM EDGE)
-| Param | Valor | Resultado |
-|---|---|---|
-| TF | `4h` | 1h e 15m geram ruído cointegração |
-| Período | `90d` | |
-| `NEWTON_ZSCORE_ENTRY` | `2.0` | Sharpe 1.27, 92 trades |
-| `NEWTON_ZSCORE_STOP` | `3.5` | |
-| `NEWTON_HALFLIFE_MAX` | `500` | half-life máximo do spread |
+### Parâmetros (`NEWTON_*` em `config/params.py`)
+| Param | O que é |
+|---|---|
+| `NEWTON_ZSCORE_ENTRY` | `|z-score|` mínimo para entrar no spread |
+| `NEWTON_ZSCORE_EXIT` | z-score de saída (cruzamento com 0) |
+| `NEWTON_ZSCORE_STOP` | `|z-score|` máximo antes de stop (spread divergindo) |
+| `NEWTON_COINT_PVALUE` | p-value máximo pra considerar o par cointegrado |
+| `NEWTON_HALFLIFE_MIN` / `_MAX` | Faixa aceitável de half-life do spread (em candles) |
+| `NEWTON_SPREAD_WINDOW` | Rolling window para z-score |
+| `NEWTON_RECALC_EVERY` | Re-testar cointegração a cada N candles |
+| `NEWTON_MAX_HOLD` | Máximo de candles por trade |
+| `NEWTON_SIZE_MULT` | Position size relativo ao normal |
+| `NEWTON_MIN_PAIRS` | Mínimo de pares cointegrados para engine operar |
 
-### Resultados validados
-- **Melhor:** stop=2.0 entry=2.0 4h 90d → Sharpe 1.27, MC 63% ⚠️
-- **Bluechip:** 4h 90d → Sharpe 0.23, 232 trades, MC 56% ⚠️
-- **Restante do grid:** 14 configs, todas Sharpe negativo ❌
-
-### Status: operacional sem edge
-Engine roda end-to-end mas universo de altcoins atual não tem pares estavelmente cointegrados. **Roadmap:** rolling cointegration (recalcular pares por janela em vez de fixo).
+### Quando NÃO usar
+- Universos sem pares estavelmente cointegrados
+- TFs baixos (ruído domina a cointegração)
 
 ### Como rodar
 ```bash
-python -m engines.newton --no-menu --days 90
+python -m engines.deshaw --no-menu --days 90
 ```
 
 ---
@@ -153,22 +143,32 @@ python -m engines.newton --no-menu --days 90
 ## JUMP — Order Flow / Microstructure
 
 **Inspiração:** Jump Trading
-**Arquivo:** `engines/mercurio.py`
+**Arquivo:** `engines/jump.py`
 **Pipeline:** CVD divergence → volume imbalance → liquidation spike
 
-### Meta
-Captura microestrutura: cumulative volume delta divergente do preço, imbalance long/short extremo, spikes de liquidação. Trades curtos, alta frequência.
+### O que faz
+Captura microestrutura — cumulative volume delta divergente do preço, imbalance long/short extremo, spikes de liquidação. Trades curtos, alta frequência.
 
-### Status: operacional sem edge
-Battery mostrou Sharpe negativo em todas configs testadas:
-- `majors 1h 90d` → 1 trade, sample insuficiente
-- `majors 15m 90d` → 17 trades, Sharpe -4.22 ❌
+### Parâmetros (`MERCURIO_*` em `config/params.py`)
+| Param | O que é |
+|---|---|
+| `MERCURIO_CVD_WINDOW` | Janela para cálculo de CVD |
+| `MERCURIO_CVD_DIV_BARS` | Lookback para detectar divergência CVD vs preço |
+| `MERCURIO_VIMB_WINDOW` | Janela para volume imbalance |
+| `MERCURIO_VIMB_LONG` | Imbalance > N → sinal bullish |
+| `MERCURIO_VIMB_SHORT` | Imbalance < N → sinal bearish |
+| `MERCURIO_LIQ_VOL_MULT` | Spike de volume > N× média → liquidação |
+| `MERCURIO_LIQ_ATR_MULT` | Spike de ATR > N× média → liquidação |
+| `MERCURIO_MIN_SCORE` | Score mínimo para entrada |
+| `MERCURIO_SIZE_MULT` | Position size multiplier |
 
-Sentiment/flow signals não estão produzindo edge tradable. Classificar como **research-lab** até ML meta-layer (TWO SIGMA).
+### Quando NÃO usar
+- Universos sem dados de trade flow confiáveis
+- TFs baixos com poucos trades
 
 ### Como rodar
 ```bash
-python -m engines.mercurio --no-menu --days 90
+python -m engines.jump --no-menu --days 90
 ```
 
 ---
@@ -176,17 +176,20 @@ python -m engines.mercurio --no-menu --days 90
 ## JANE STREET — Cross-Venue Arbitrage (Scanner)
 
 **Inspiração:** Jane Street
-**Arquivo:** `engines/arbitrage.py`
+**Arquivo:** `engines/janestreet.py`
 **Pipeline:** Multi-venue funding/spot scan → delta-neutral opportunity ranking
 
-### Meta
-Não é backtest direcional — é **scanner ao vivo** de oportunidades de arbitragem entre venues (Binance/Bybit/Hyperliquid/etc). Encontra delta-neutral spreads via funding rate diff + spot/perp basis.
+### O que faz
+Não é backtest direcional — é **scanner ao vivo** de oportunidades de arbitragem entre venues (Binance / Bybit / Hyperliquid / MEXC / Backpack / etc). Encontra delta-neutral spreads via funding rate diff + spot/perp basis.
 
-### Resultado snapshot (último scan)
-- Total opportunities: **241**
-- Avg APR: **95.57%**
-- Estimated monthly em $1k: **$79.64**
-- Best venue: `mexc` · Worst: `backpack`
+### Parâmetros (`ARB_*` em `config/params.py`)
+| Param | O que é |
+|---|---|
+| `ARB_SCORE_WEIGHTS` | Pesos de cada componente no score final |
+| `ARB_SCORE_THRESHOLDS` | Thresholds `go` / `maybe` para classificar oportunidade |
+| `ARB_FILTER_DEFAULTS` | Filtros default aplicados no scan (APR mínimo, liquidez, etc) |
+| `ARB_VENUE_RELIABILITY` | Peso de reliability por venue |
+| `ARB_POSITION_SIZE_REF` | Tamanho de posição referência para cálculo de PnL esperado |
 
 ### Modo
 Scanner real-time. Não tem "config vencedora" — é leitura de mercado.
@@ -202,53 +205,89 @@ python -m engines.arbitrage   # menu interativo
 
 ### TWO SIGMA — ML Meta-Ensemble
 **Arquivo:** `engines/prometeu.py`
-LightGBM walk-forward em cima dos trades de outros engines. **Bloqueado por design** — precisa histórico de 2+ engines validados primeiro.
+LightGBM walk-forward em cima dos trades de outros engines. **Bloqueado por design** — precisa histórico de 2+ engines individuais antes de treinar.
 
 ### AQR — Evolutionary Allocation
 **Arquivo:** `engines/darwin.py`
 Aloca capital dinamicamente entre engines via fitness evolutivo. Lê trades existentes em `data/`. Roda **depois** dos engines individuais.
 
+**Parâmetros (`DARWIN_*`):**
+| Param | O que é |
+|---|---|
+| `DARWIN_EVAL_WINDOW` | Trades por janela de avaliação |
+| `DARWIN_MUTATION_CYCLE` | Trades entre tentativas de mutação |
+| `DARWIN_MUTATION_RANGE` | Perturbação ± de parâmetros |
+| `DARWIN_MUTATION_MIN_IMPR` | Melhoria mínima para adoptar mutação |
+| `DARWIN_KILL_WINDOWS` | Janelas negativas consecutivas → pause do engine |
+| `DARWIN_ALLOC_TOP` / `_ABOVE` / `_BELOW` / `_KILLED` | Alocação de capital por tier de performance |
+
 ### MILLENNIUM — Multi-Strategy Pod
 **Arquivo:** `engines/multistrategy.py`
-Orquestrador interativo. Opção 7 = ALL engines em paralelo. Sem `--no-menu`, é GUI-driven.
+Orquestrador interativo. Opção 7 = ALL engines em paralelo. GUI-driven (sem `--no-menu`).
+
+### CHRONOS — Regime / Vol / Hurst (módulo, não engine)
+**Arquivo:** `core/chronos.py`
+HMM para regimes + GARCH para vol forecast + Hurst para persistência. Consumido pelos engines, não roda standalone.
+
+**Parâmetros (`CHRONOS_*`):**
+| Param | O que é |
+|---|---|
+| `CHRONOS_HMM_REGIMES` | Número de regimes do HMM |
+| `CHRONOS_HMM_LOOKBACK` | Candles para fit do HMM |
+| `CHRONOS_GARCH_HORIZON` | Candles de forecast GARCH |
+| `CHRONOS_GARCH_LOOKBACK` | Candles para fit GARCH |
+| `CHRONOS_HURST_WINDOW` | Janela rolling do Hurst |
+| `CHRONOS_HURST_MIN` | Mínimo de períodos para calcular Hurst |
+| `HMM_GATE_ENABLED` | Gate HMM ativo (observation-only por default) |
+| `HMM_MIN_CONFIDENCE` / `HMM_BLOCK_REGIMES` | Bloqueios por regime |
 
 ---
 
-## Tabela Síntese — onde rodar cada engine
-
-| Engine | TF | Dias | Basket | Sharpe | Status |
-|---|---|---|---|---|---|
-| **CITADEL regime-adaptive** | 15m | **180** | default | **4.43** | ✅ edge |
-| **BRIDGEWATER** | **1h** | 90 | bluechip | **10.57** | ✅ edge |
-| **BRIDGEWATER** | **1h** | 180 | bluechip | **7.34** | ✅ edge |
-| **RENAISSANCE** | 15m | 180 | default | **6.58** | ✅ edge ⚠️audit |
-| DE SHAW | 4h | 90 | default | 1.27 | ⚠️ marginal |
-| JUMP | 15m | 90 | majors | -4.22 | ❌ sem edge |
-| JANE STREET | — | — | — | scanner | ✅ ops |
-
----
-
-## Onde mexer parâmetros
+## Parâmetros compartilhados (todos os engines)
 
 **Single source of truth:** `config/params.py`
 
-- Universo: `BASKETS` dict (default, bluechip, top12, defi, layer1...)
-- TF override por engine: `ENGINE_INTERVALS`
-- Risk override por engine: `ENGINE_RISK_SCALE_BY_REGIME`
-- Custos: `SLIPPAGE`, `SPREAD`, `COMMISSION`, `FUNDING_PER_8H`
-- Omega weights: `OMEGA_WEIGHTS` (5D)
-- Stops/targets globais: `STOP_ATR_M`, `TARGET_RR`, `MAX_HOLD`
-- Per-engine: prefixo `THOTH_*`, `NEWTON_*`, `MERCURIO_*`, `DARWIN_*`, `CHRONOS_*`
+**Universo & timeframe**
+- `BASKETS` — dicionário de universos (default, bluechip, majors, top12, defi, layer1, layer2, ai, meme, custom)
+- `SYMBOLS` — universo default
+- `INTERVAL` / `ENTRY_TF` — timeframe de entrada global
+- `SCAN_DAYS` — dias de histórico
+- `ENGINE_INTERVALS` — override de TF por engine
+- `HTF_STACK` / `MTF_ENABLED` — stack de timeframes superiores
 
-**Não mude global sem rodar nova bateria** — por isso o sistema tem `ENGINE_INTERVALS` / `ENGINE_RISK_SCALE_BY_REGIME` per-engine.
+**Conta & risco**
+- `ACCOUNT_SIZE`, `BASE_RISK`, `MAX_RISK`, `LEVERAGE`, `KELLY_FRAC`, `CONVEX_ALPHA`
+
+**Custos (C1+C2 model)**
+- `SLIPPAGE`, `SPREAD`, `COMMISSION`, `FUNDING_PER_8H`
+
+**Portfolio & correlação**
+- `MAX_OPEN_POSITIONS`, `CORR_THRESHOLD`, `CORR_SOFT_THRESHOLD`, `CORR_SOFT_MULT`, `CORR_LOOKBACK`
+
+**Macro regime**
+- `MACRO_SYMBOL`, `MACRO_SLOPE_BULL`, `MACRO_SLOPE_BEAR`
+- `RISK_SCALE_BY_REGIME`, `SCORE_BY_REGIME`
+- `ENGINE_RISK_SCALE_BY_REGIME` — override por engine
+
+**Volatilidade & chop**
+- `VOL_WINDOW`, `VOL_LOW_PCT`, `VOL_HIGH_PCT`, `VOL_RISK_SCALE`
+- `CHOP_*` — parâmetros do regime lateral
+
+**Drawdown & cooldown**
+- `DD_RISK_SCALE`, `STREAK_COOLDOWN`, `SYM_LOSS_COOLDOWN`
+- `REGIME_TRANS_*` — detecção de transição de regime
+
+**MC & walk-forward**
+- `MC_N`, `MC_BLOCK`, `WF_TRAIN`, `WF_TEST`
 
 ---
 
-## Como rodar bateria nova
+## Como testar um engine
 
-```bash
-python -m tools.master_battery   # all engines × all configs × all TFs
-# Output: data/param_search/YYYY-MM-DD/battery_full.csv
-```
+1. Ajustar os parâmetros do engine em `config/params.py`
+2. Rodar o comando `--no-menu` do engine com `--days` e `--basket`
+3. Output vai para `data/<engine>/<YYYY-MM-DD_HHMM>/` com logs, reports JSON e HTML
+4. Reports visuais: abrir `reports/*.html`
+5. Reconciliar índice: `python -m tools.reconcile_runs`
 
-Após rodar, atualize este briefing + `ENGINE_INTERVALS` / `ENGINE_RISK_SCALE_BY_REGIME` em `params.py` com winners.
+**Regra:** cada mudança em parâmetro → rodar backtest → medir → decidir. Não assuma config — teste.

@@ -718,6 +718,7 @@ if __name__ == "__main__":
     _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2, "1h": 1, "2h": 0.5, "4h": 0.25}
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_mult.get(INTERVAL, 4))
 
+    BASKET_NAME = _args.basket or "default"
     if _args.basket:
         from config.params import BASKETS
         SYMBOLS = BASKETS.get(_args.basket, SYMBOLS)
@@ -876,7 +877,9 @@ if __name__ == "__main__":
 
     roi = ratios["ret"]
     _config = snapshot_config()
+    _config["BASKET_EFFECTIVE"] = BASKET_NAME
     _summary = {
+        "basket": BASKET_NAME,
         "n_trades": len(closed),
         "win_rate": round(wr, 2),
         "pnl": round(total_pnl, 2),

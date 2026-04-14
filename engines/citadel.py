@@ -561,6 +561,7 @@ if __name__ == "__main__":
 
     SCAN_DAYS = _args.days
     LEVERAGE = _args.leverage
+    BASKET_NAME = _args.basket if _args.basket in BASKETS else "default"
     if _args.basket in BASKETS:
         SYMBOLS = BASKETS[_args.basket]
 
@@ -984,8 +985,10 @@ if __name__ == "__main__":
     )
 
     _config = snapshot_config()
+    _config["BASKET_EFFECTIVE"] = BASKET_NAME
     _summary = {
         "engine": "CITADEL",
+        "basket": BASKET_NAME,
         "n_trades": len(closed),
         "win_rate": round(wr_total, 2),
         "pnl": round(total_pnl, 2),

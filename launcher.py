@@ -850,6 +850,9 @@ PERIODS_UI = [
 _BT_COLS: list[tuple[str, int]] = [
     ("DATE / TIME",  19),
     ("STRATEGY",     14),
+    ("TF",            5),
+    ("DAYS",          5),
+    ("BASKET",       10),
     ("RUN",          14),
     ("TRADES",        8),
     ("WIN%",          8),
@@ -8242,6 +8245,7 @@ class App(tk.Tk):
             "timestamp": report.get("timestamp"),
             "interval": report.get("interval"),
             "period_days": report.get("period_days"),
+            "basket": report.get("basket", "default"),
             "n_symbols": report.get("n_symbols"),
             "n_candles": report.get("n_candles"),
             "n_trades": report.get("n_trades"),
@@ -8306,6 +8310,18 @@ class App(tk.Tk):
                         report_html = run_dir / "report.html"
                         entry.setdefault("report_html_path", str(report_html) if report_html.exists() else "")
                         entry.setdefault("source", "index")
+                        # Fallback: read summary.json for fields that might be
+                        # missing in older index entries (basket, period_days...)
+                        if not entry.get("basket"):
+                            try:
+                                _sj = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+                                entry["basket"] = _sj.get("basket") or "default"
+                                if not entry.get("period_days"):
+                                    entry["period_days"] = _sj.get("period_days")
+                                if not entry.get("interval"):
+                                    entry["interval"] = _sj.get("interval")
+                            except (OSError, json.JSONDecodeError):
+                                pass
                         runs_by_id[run_id] = entry
             except (json.JSONDecodeError, OSError, TypeError):
                 pass
@@ -8327,6 +8343,7 @@ class App(tk.Tk):
                     entry.setdefault("timestamp", summary.get("timestamp"))
                     entry.setdefault("interval", summary.get("interval", config.get("INTERVAL", config.get("ENTRY_TF"))))
                     entry.setdefault("period_days", summary.get("period_days", config.get("SCAN_DAYS")))
+                    entry.setdefault("basket", summary.get("basket", config.get("BASKET_EFFECTIVE", "default")))
                     entry.setdefault("n_symbols", summary.get("n_symbols"))
                     entry.setdefault("n_candles", summary.get("n_candles", config.get("N_CANDLES")))
                     entry.setdefault("n_trades", summary.get("n_trades"))
@@ -8452,6 +8469,10 @@ class App(tk.Tk):
             engine = str(run.get("engine") or "").lower()
             ts_raw = run.get("timestamp") or ""
             ts     = self._bt_fmt_timestamp(ts_raw)
+            tf     = str(run.get("interval") or "—")
+            days   = run.get("period_days")
+            days_s = f"{int(days)}" if days else "—"
+            basket = str(run.get("basket") or "—")[:9]
             n_tr   = run.get("n_trades") or 0
             wr     = run.get("win_rate")
             pnl    = run.get("pnl")
@@ -8481,7 +8502,7 @@ class App(tk.Tk):
                 short_id = short_id[:13]
 
             # Widths pulled from _BT_COLS to guarantee header ↔ row parity.
-            (_dw, _ew, _rw, _tw, _ww, _pw, _shw, _ddw) = [w for _, w in _BT_COLS]
+            (_dw, _ew, _tfw, _dyw, _bkw, _rw, _tw, _ww, _pw, _shw, _ddw) = [w for _, w in _BT_COLS]
             # Pre-L6 runs render the RUN cell in RED to match the "!"
             # prefix; the rest of the row keeps its normal coloring so
             # the PnL/Sharpe contrast still works.
@@ -8489,6 +8510,9 @@ class App(tk.Tk):
             cells = [
                 (ts,                  _dw,  WHITE,   "normal"),
                 (_fmt_engine(engine), _ew,  AMBER,   "bold"),
+                (tf,                  _tfw, AMBER_D, "normal"),
+                (days_s,              _dyw, WHITE,   "normal"),
+                (basket,              _bkw, WHITE,   "normal"),
                 (short_id,            _rw,  run_col, "bold"),
                 (f"{n_tr}",           _tw,  WHITE,   "normal"),
                 (_fmt_n(wr),          _ww,  WHITE,   "normal"),
