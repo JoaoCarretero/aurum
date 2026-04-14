@@ -8276,6 +8276,7 @@ class App(tk.Tk):
             "jump":        ROOT / "data" / "jump",
             "deshaw":      ROOT / "data" / "deshaw",
             "renaissance": ROOT / "data" / "renaissance",
+            "janestreet":  ROOT / "data" / "janestreet",
             "millennium":  ROOT / "data" / "millennium",
             "twosigma":    ROOT / "data" / "twosigma",
             "aqr":         ROOT / "data" / "aqr",
