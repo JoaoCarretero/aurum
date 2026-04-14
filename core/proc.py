@@ -37,13 +37,45 @@ ENGINES = {
 }
 
 
-def _load_state() -> dict:
+def _load_state_raw() -> dict:
+    """Read state file as-is, without any side effects. Internal use only."""
     if STATE_FILE.exists():
         try:
             return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
     return {"procs": {}}
+
+
+# Auto-cleanup throttle: reconcile dead PIDs at most once per _CLEANUP_INTERVAL
+# seconds. Keeps the state file "live" (matches reality on every read) without
+# thrashing the Win32 API on hot loops.
+_CLEANUP_INTERVAL = 2.0
+_last_cleanup_ts = 0.0
+_in_cleanup = False
+
+
+def _load_state() -> dict:
+    """Read state file, auto-reconciling dead PIDs transparently.
+
+    Throttled via _CLEANUP_INTERVAL so hot loops (launcher polling, battery
+    monitors) don't pay the cost on every tick. Recursion-safe via
+    _in_cleanup guard — _cleanup() calls _load_state_raw() directly.
+    """
+    global _last_cleanup_ts
+    state = _load_state_raw()
+    if _in_cleanup:
+        return state
+    # Only sweep if there's something "running" to verify AND throttle window
+    # has elapsed. No running entries = no-op. Frequent polls = 1 sweep / 2s.
+    has_running = any(p.get("status") == "running"
+                      for p in state.get("procs", {}).values())
+    now_ts = time.time()
+    if has_running and (now_ts - _last_cleanup_ts) >= _CLEANUP_INTERVAL:
+        _last_cleanup_ts = now_ts
+        _cleanup()
+        state = _load_state_raw()
+    return state
 
 
 def _save_state(state: dict):
@@ -398,7 +430,19 @@ def _cleanup():
     Terminal > Processes screen permanently populated with dead entries
     that PID recycling could even flip back to alive=True.
     """
-    state = _load_state()
+    global _in_cleanup, _last_cleanup_ts
+    _in_cleanup = True
+    try:
+        state = _load_state_raw()  # avoid recursion via _load_state
+        _do_cleanup(state)
+        _last_cleanup_ts = time.time()  # throttle subsequent auto-cleanups
+    finally:
+        _in_cleanup = False
+
+
+def _do_cleanup(state: dict):
+    """Actual cleanup logic, decoupled so auto-cleanup via _load_state
+    doesn't retrigger itself."""
     now = datetime.now()
     dead_keys: list[str] = []
 
