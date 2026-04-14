@@ -232,8 +232,8 @@ OMEGA_WEIGHTS_FOREX = {
     "struct": 0.35, "flow": 0.00,
     "cascade": 0.30, "momentum": 0.20, "pullback": 0.15,
 }
-STOP_ATR_M          = 1.8
-TARGET_RR           = 2.0
+STOP_ATR_M          = 2.5
+TARGET_RR           = 3.0
 RR_MIN              = 1.5
 MAX_HOLD            = 48
 
