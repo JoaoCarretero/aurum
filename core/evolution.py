@@ -101,7 +101,7 @@ class DarwinAllocator:
         "RSI_BEAR_MAX":    (50, 65),
     }
 
-    def __init__(self, engines: list[str] | None = None, data_dir: str = "data/darwin"):
+    def __init__(self, engines: list[str] | None = None, data_dir: str = "data/aqr"):
         self.engines = engines or self.ENGINE_KEYS
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)

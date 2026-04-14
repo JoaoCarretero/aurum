@@ -1,6 +1,6 @@
 """AlchemyState — reads arbitrage engine snapshot for the ALCHEMY dashboard.
 
-The engine writes `data/arbitrage/<run_id>/state/snapshot.json` at the end of each
+The engine writes `data/janestreet/<run_id>/state/snapshot.json` at the end of each
 scan cycle. This module discovers the latest run, reads the snapshot atomically,
 caches the last successful read, and flags stale data when the file falls behind.
 """
@@ -52,7 +52,7 @@ class AlchemyState:
         if self._pinned_run is not None:
             p = self._pinned_run / "state" / "snapshot.json"
             return p if p.exists() else None
-        base = Path("data/arbitrage")
+        base = Path("data/janestreet")
         if not base.exists():
             return None
         candidates = sorted(

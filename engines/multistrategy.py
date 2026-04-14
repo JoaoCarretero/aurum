@@ -46,7 +46,7 @@ def setup_multistrategy():
     """Initialise backtest runtime + multistrategy-specific dirs and logging."""
     global MS_RUN_DIR, RUN_ID
     RUN_ID, _run_dir = setup_run("multistrategy")
-    MS_RUN_DIR = _Path(f"data/multistrategy/{RUN_ID}")
+    MS_RUN_DIR = _Path(f"data/millennium/{RUN_ID}")
     (MS_RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
     (MS_RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)
     (MS_RUN_DIR / "charts").mkdir(parents=True, exist_ok=True)

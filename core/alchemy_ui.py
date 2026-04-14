@@ -745,7 +745,7 @@ def _init_panel_engine(app):
 
         from pathlib import Path as _P
         try:
-            app._alch_state.pin_run(_P(f"data/arbitrage/{run_id}"))
+            app._alch_state.pin_run(_P(f"data/janestreet/{run_id}"))
         except Exception:
             pass
 

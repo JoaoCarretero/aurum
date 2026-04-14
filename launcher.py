@@ -8172,10 +8172,15 @@ class App(tk.Tk):
             return {}
 
     def _bt_legacy_engine_dirs(self) -> list[Path]:
+        # Engine-specific run dirs use institutional names (post-rename
+        # commit). Skip set covers shared/non-engine dirs that should
+        # never be treated as engine runs by the dashboard scanner.
         data_dir = ROOT / "data"
         skip = {
-            ".proc_logs", "arbitrage", "runs", "audit", "darwin", "exports",
+            ".proc_logs", "runs", "audit", "exports",
             "funding_scanner", "live", "param_search", "validation",
+            "janestreet",  # scanner snapshots, not backtests
+            "aqr",          # aggregator, reads from other engines
         }
         try:
             return sorted(

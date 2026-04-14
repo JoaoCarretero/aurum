@@ -58,7 +58,7 @@ SPLIT_N=5;SPLIT_DLY=0.5;SCAN_S=30;STATUS_N=3;WS_ON=True
 MIN_SPREAD=0.0015;MIN_APR=40.0;MIN_VOL=3_000_000;MAX_PX_SPREAD=0.02
 EXIT_H=8;EXIT_DECAY=0.30;MAX_HOLD_H=72;MAX_DD_PCT=0.05;KILL_LOSSES=3
 _D=datetime.now().strftime("%Y-%m-%d");_T=datetime.now().strftime("%H%M")
-RUN_ID=_ARGS.run_id or f"{_D}_{_T}";DIR=Path(f"data/arbitrage/{RUN_ID}")
+RUN_ID=_ARGS.run_id or f"{_D}_{_T}";DIR=Path(f"data/janestreet/{RUN_ID}")
 for d in("logs","state","reports"):(DIR/d).mkdir(parents=True,exist_ok=True)
 
 fmt=logging.Formatter("%(asctime)s %(levelname)-6s %(message)s",datefmt="%Y-%m-%d %H:%M:%S")
