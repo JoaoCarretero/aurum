@@ -322,6 +322,10 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         score = min(abs(sent_score), 1.0)
         if score < THOTH_MIN_SCORE:
             vetos["score_baixo"] += 1; continue
+        # Score reportado: rescalado 0.50-1.00 pra alinhar com CITADEL/outros
+        # (sensitivity test em overfit_audit usa thresholds 0.50-0.56 hardcoded).
+        # Gate + sizing continuam usando `score` raw.
+        score_reported = 0.50 + score * 0.50
 
         # Extra check: sentiment must be strong enough
         if abs(f_z) < 1.0 and abs(oi_sig) < 0.3 and abs(ls_sig) < 0.3:
@@ -411,7 +415,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             "exit_p":     round(float(exit_p), 6),
             "rr":         rr, "duration": duration, "result": result, "exit_reason": exit_reason, "pnl": pnl,
             "size":       round(size, 4),
-            "score":      round(score, 3),
+            "score":      round(score_reported, 3),
             "fractal_align": 1.0,
             "omega_struct":   0.0, "omega_flow":     0.0,
             "omega_cascade":  0.0, "omega_momentum": 0.0,
