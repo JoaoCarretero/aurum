@@ -160,15 +160,45 @@ def job_regime():
 
 
 def job_thesis():
-    """Placeholder — implementado em Semana 2-3."""
-    log.info("[thesis] thesis.generator TBD — placeholder no-op")
-    _record_run("thesis", result={"status": "TBD"})
+    """Gera theses a partir do regime atual + scores."""
+    try:
+        from macro_brain.thesis.generator import generate
+        approved = generate(persist=True)
+        result = {
+            "approved_count": len(approved),
+            "theses": [{"asset": t.asset, "dir": t.direction,
+                        "conf": t.confidence, "template": t.template_name}
+                       for t in approved],
+        }
+        log.info(f"[thesis] {len(approved)} theses approved")
+        for t in approved:
+            log.info(f"   [{t.template_name}] {t.direction:<5} {t.asset} conf {t.confidence:.2%}")
+        _record_run("thesis", result=result)
+        return result
+    except Exception as e:
+        log.error(f"thesis generation failed: {e}")
+        _record_run("thesis", error=str(e))
+        return {"error": str(e)}
 
 
 def job_position_review():
-    """Placeholder — implementado em Semana 2-3."""
-    log.info("[position] manager TBD — placeholder no-op")
-    _record_run("review", result={"status": "TBD"})
+    """Abre pending theses + review open positions (MTM + invalidation)."""
+    try:
+        from macro_brain.position.manager import (
+            process_pending_theses, review_open_positions,
+        )
+        opened = process_pending_theses()
+        reviewed = review_open_positions()
+        result = {"opened": opened, "review": reviewed}
+        log.info(f"[position] opened={opened.get('opened',0)}  "
+                 f"closed={reviewed.get('closed',0)}  "
+                 f"kept={reviewed.get('kept',0)}")
+        _record_run("review", result=result)
+        return result
+    except Exception as e:
+        log.error(f"position review failed: {e}")
+        _record_run("review", error=str(e))
+        return {"error": str(e)}
 
 
 # ── ORCHESTRATION ────────────────────────────────────────────
