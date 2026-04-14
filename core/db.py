@@ -162,6 +162,69 @@ def save_run(engine: str, json_path: str) -> str | None:
         conn.close()
 
 
+def register_run(
+    run_id: str,
+    engine: str,
+    json_path: str,
+    roi: float | None = None,
+    sharpe: float | None = None,
+    sortino: float | None = None,
+    win_rate: float | None = None,
+    n_trades: int | None = None,
+    final_equity: float | None = None,
+    account_size: float | None = None,
+    interval: str | None = None,
+    n_symbols: int | None = None,
+    version: str | None = None,
+) -> str:
+    """Lightweight run registrar for engines that already persist JSON/index elsewhere.
+
+    Keeps DB integration backward-compatible with engines that call register_run()
+    directly after writing their report JSON. Trade rows continue to be handled by
+    save_run() when full report ingestion is desired.
+    """
+    _base = Path("data").resolve()
+    if not Path(json_path).resolve().is_relative_to(_base):
+        raise ValueError(f"path {json_path} is outside data directory")
+
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO runs
+            (run_id, engine, version, timestamp, interval, scan_days, n_symbols,
+             account_size, leverage, roi, max_dd, sharpe, sortino, calmar,
+             win_rate, n_trades, final_equity, config_json, json_path)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                run_id,
+                engine,
+                version,
+                datetime.now().isoformat(),
+                interval,
+                None,
+                n_symbols,
+                account_size,
+                None,
+                roi,
+                None,
+                sharpe,
+                sortino,
+                None,
+                win_rate,
+                n_trades,
+                final_equity,
+                json.dumps({}, default=str),
+                json_path,
+            ),
+        )
+        conn.commit()
+        return run_id
+    finally:
+        conn.close()
+
+
 # ── Read ──────────────────────────────────────────────────────
 
 def list_runs(engine: str | None = None, limit: int = 20) -> list[dict]:
