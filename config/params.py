@@ -412,7 +412,7 @@ THOTH_LS_CONTRARIAN_LOW = 0.5      # ratio < N = crowd short demais
 THOTH_WEIGHT_FUNDING    = 0.40     # peso funding no composite score
 THOTH_WEIGHT_OI         = 0.30     # peso OI no composite score
 THOTH_WEIGHT_LS         = 0.30     # peso LS ratio no composite score
-THOTH_MIN_SCORE         = 0.30     # score mínimo para entrada
+THOTH_MIN_SCORE         = 0.20     # score mínimo para entrada (grid 2026-04-14: Sharpe 2.71 vs 0.87 @ 0.30)
 THOTH_DIRECTION_THRESHOLD = 0.20   # |sent_score| > N para gerar direção
 THOTH_SIZE_MULT         = 0.50     # position size multiplier
 

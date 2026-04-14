@@ -297,20 +297,35 @@ def main():
                     help="PARAM_NAME:MIN:MAX:STEP or PARAM_NAME:V1:V2:V3")
     ap.add_argument("--days", type=int, default=90)
     ap.add_argument("--basket", type=str, default="default")
+    ap.add_argument("--interval", type=str, default=None,
+                    help="TF override (e.g. 1h, 4h). Default: engine's ENGINE_INTERVALS entry.")
     ap.add_argument("--top", type=int, default=10)
     args = ap.parse_args()
 
     # Setup
     _p.SCAN_DAYS = args.days
+    # Resolve engine TF: CLI override > ENGINE_INTERVALS > INTERVAL default
+    _engine_key_map = {"citadel": "CITADEL", "newton": "DESHAW",
+                       "thoth": "BRIDGEWATER", "mercurio": "JUMP"}
+    _ekey = _engine_key_map.get(args.engine)
+    if args.interval:
+        _p.INTERVAL = args.interval
+        if _ekey:
+            _p.ENGINE_INTERVALS[_ekey] = args.interval
+    elif _ekey:
+        _p.INTERVAL = _p.ENGINE_INTERVALS.get(_ekey, _p.INTERVAL)
     _tf_mult = {"1m": 60, "3m": 20, "5m": 12, "15m": 4, "30m": 2,
                 "1h": 1, "2h": 0.5, "4h": 0.25}
     _p.N_CANDLES = int(args.days * 24 * _tf_mult.get(_p.INTERVAL, 4))
+    # Patch INTERVAL + N_CANDLES em engine modules já importados (import-time freeze)
+    _patch_param("INTERVAL", _p.INTERVAL)
+    _patch_param("N_CANDLES", _p.N_CANDLES)
 
     if args.basket and args.basket in _p.BASKETS:
         _p.SYMBOLS = _p.BASKETS[args.basket]
 
     param_names, grid = build_grid(args.param)
-    log.info(f"Engine: {args.engine}  Days: {args.days}  Basket: {args.basket}")
+    log.info(f"Engine: {args.engine}  TF: {_p.INTERVAL}  Days: {args.days}  Basket: {args.basket}")
     log.info(f"Grid: {len(grid)} combos  Params: {param_names}")
 
     # Fetch data once
