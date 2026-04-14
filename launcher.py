@@ -2118,186 +2118,96 @@ class App(tk.Tk):
 
     # ─── STRATEGY BRIEFING ──────────────────────────────
     def _brief(self, name, script, desc, parent_menu):
-        """Show strategy philosophy + logic + technical view before running.
-
-        When BRIEFINGS_V2 has an entry for `name`, the technical section
-        (one-liner, params table, formulas, invariants) renders under the
-        legacy narrative. VER CÓDIGO uses the V2 main_function when
-        available for a direct jump into the scan loop.
-        """
+        """Half-Life 2 / Bloomberg terminal aesthetic: dense, single-column,
+        amber-on-black, monospace. Cuts cruft (technical V2 panel, model
+        governance, meta operacional) in favor of the 4 things that matter:
+        identity, best config, pipeline, edge/risk."""
         self._clr(); self._clear_kb()
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
         self.h_stat.configure(text="BRIEFING", fg=AMBER_D)
         self.f_lbl.configure(text="ENTER executar  |  ESC voltar")
 
         brief = BRIEFINGS.get(name, {})
-        v2    = BRIEFINGS_V2.get(name, None)
 
-        _outer, f = self._ui_page_shell(
-            name,
-            desc,
-            content_width=920,
-        )
+        _outer, f = self._ui_page_shell(name, desc, content_width=720)
+
+        # Bloomberg-style section header — amber bar + label + thin rule
+        def _section(parent, title):
+            tk.Frame(parent, bg=BG, height=14).pack()
+            row = tk.Frame(parent, bg=BG)
+            row.pack(fill="x")
+            tk.Frame(row, bg=AMBER, width=3).pack(side="left", fill="y")
+            tk.Label(row, text=f" {title} ", font=(FONT, 8, "bold"),
+                     fg=AMBER, bg=BG, anchor="w", padx=6).pack(side="left", fill="x", expand=True)
+            tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+
+        # ── HEADER bar: BRIEFING badge + 1-line desc + amber rule ──
         hdr = tk.Frame(f, bg=BG)
-        hdr.pack(fill="x", pady=(0, 8))
-        tk.Label(hdr, text="BRIEFING", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="left")
-        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
+        hdr.pack(fill="x", pady=(0, 4))
+        tk.Label(hdr, text=" BRIEFING ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=AMBER, padx=6, pady=2).pack(side="left")
+        tk.Label(hdr, text=f"  {desc}", font=(FONT, 8), fg=DIM, bg=BG,
+                 anchor="w").pack(side="left", fill="x", expand=True)
+        tk.Frame(f, bg=AMBER_D, height=1).pack(fill="x", pady=(4, 0))
 
-        overview = tk.Frame(f, bg=BG)
-        overview.pack(fill="x", pady=(0, 12))
-
-        left = tk.Frame(overview, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
-        right = tk.Frame(overview, bg=PANEL, highlightbackground=BORDER, highlightthickness=1, width=250)
-        right.pack(side="left", fill="y")
-        right.pack_propagate(False)
-
-        tk.Label(left, text="EXECUTIVE SUMMARY", font=(FONT, 8, "bold"),
-                 fg=BG, bg=AMBER, padx=8, pady=3).pack(anchor="nw", padx=12, pady=(12, 8))
-        summary_text = v2.get("one_liner") if v2 and v2.get("one_liner") else desc
-        tk.Label(left, text=summary_text, font=(FONT, 9, "bold"),
-                 fg=WHITE, bg=PANEL, wraplength=560, justify="left",
-                 anchor="w").pack(fill="x", padx=12)
+        # Philosophy as a single italic block (no panel chrome)
         if brief.get("philosophy"):
-            tk.Label(left, text=brief["philosophy"], font=(FONT, 8),
-                     fg=DIM, bg=PANEL, wraplength=560, justify="left",
-                     anchor="w").pack(fill="x", padx=12, pady=(8, 12))
+            tk.Frame(f, bg=BG, height=10).pack()
+            tk.Label(f, text=brief["philosophy"], font=(FONT, 8, "italic"),
+                     fg=AMBER_D, bg=BG, wraplength=680, justify="left",
+                     anchor="w").pack(fill="x")
 
-        tk.Label(right, text="META OPERACIONAL", font=(FONT, 8, "bold"),
-                 fg=BG, bg=AMBER, padx=8, pady=3).pack(anchor="nw", padx=12, pady=(12, 8))
-        meta_rows = [
-            ("MANDATO", parent_menu.upper()),
-            ("ENGINE", name),
-            ("ARQUIVO", script.replace("engines/", "")),
-            ("MODELO", "SYSTEMATIC" if v2 else "RULE-BASED"),
-        ]
-        if v2 and v2.get("source_files"):
-            meta_rows.append(("FONTES", f"{len(v2['source_files'])} files"))
-        for label, value in meta_rows:
-            row = tk.Frame(right, bg=PANEL)
-            row.pack(fill="x", padx=12, pady=1)
-            tk.Label(row, text=label, font=(FONT, 7, "bold"), fg=AMBER_D, bg=PANEL,
-                     width=10, anchor="w").pack(side="left")
-            tk.Label(row, text=str(value), font=(FONT, 8), fg=WHITE, bg=PANEL,
-                     anchor="w").pack(side="left", fill="x", expand=True)
-        if brief.get("edge") or brief.get("risk"):
-            tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=12, pady=10)
-            if brief.get("edge"):
-                tk.Label(right, text="EDGE", font=(FONT, 7, "bold"),
-                         fg=GREEN, bg=PANEL, anchor="w").pack(anchor="w", padx=12)
-                tk.Label(right, text=brief["edge"], font=(FONT, 7),
-                         fg=DIM, bg=PANEL, wraplength=220, justify="left",
-                         anchor="w").pack(fill="x", padx=12, pady=(2, 8))
-            if brief.get("risk"):
-                tk.Label(right, text="RISK", font=(FONT, 7, "bold"),
-                         fg=RED, bg=PANEL, anchor="w").pack(anchor="w", padx=12)
-                tk.Label(right, text=brief["risk"], font=(FONT, 7),
-                         fg=DIM, bg=PANEL, wraplength=220, justify="left",
-                         anchor="w").pack(fill="x", padx=12, pady=(2, 0))
-
-        if brief.get("logic"):
-            tk.Label(f, text="EXECUTION PIPELINE", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-            logic_panel = tk.Frame(f, bg=BG)
-            logic_panel.pack(fill="x", pady=(0, 12))
-            for i, step in enumerate(brief["logic"], start=1):
-                row = tk.Frame(logic_panel, bg=BG)
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text=f" {i:02d} ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=AMBER_D, padx=4, pady=1).pack(side="left", padx=(0, 8))
-                tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG,
-                         wraplength=820, justify="left",
-                         anchor="w").pack(side="left", fill="x", expand=True)
-
-        if v2:
-            tk.Label(f, text="TECHNICAL MODEL", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-            tech_grid = tk.Frame(f, bg=BG)
-            tech_grid.pack(fill="x", pady=(0, 10))
-
-            if v2.get("params"):
-                pc = tk.Frame(tech_grid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-                pc.pack(side="left", fill="both", expand=True, padx=(0, 8))
-                tk.Label(pc, text="PARAMETER FRAMEWORK", font=(FONT, 7, "bold"),
-                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
-                for p in v2["params"][:8]:
-                    row = tk.Frame(pc, bg=PANEL)
-                    row.pack(fill="x", padx=12, pady=1)
-                    tk.Label(row, text=p.get("name", "?"), font=(FONT, 7, "bold"),
-                             fg=WHITE, bg=PANEL, width=22, anchor="w").pack(side="left")
-                    tk.Label(row, text=str(p.get("default", "?")), font=(FONT, 7),
-                             fg=AMBER, bg=PANEL, width=8, anchor="w").pack(side="left")
-                    tk.Label(row, text=str(p.get("effect", "")), font=(FONT, 7),
-                             fg=DIM, bg=PANEL, anchor="w", wraplength=220,
-                             justify="left").pack(side="left", fill="x", expand=True)
-                tk.Frame(pc, bg=PANEL, height=8).pack()
-
-            mid = tk.Frame(tech_grid, bg=BG)
-            mid.pack(side="left", fill="both", expand=True, padx=(0, 8))
-
-            if v2.get("formulas"):
-                fc = tk.Frame(mid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-                fc.pack(fill="both", expand=True, pady=(0, 8))
-                tk.Label(fc, text="DECISION MODEL", font=(FONT, 7, "bold"),
-                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
-                for form in v2["formulas"][:6]:
-                    tk.Label(fc, text="  " + form, font=(FONT, 7), fg=WHITE, bg=PANEL,
-                             anchor="w", wraplength=250,
-                             justify="left").pack(anchor="w", padx=12)
-                tk.Frame(fc, bg=PANEL, height=8).pack()
-
-            if v2.get("invariants"):
-                ic = tk.Frame(mid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-                ic.pack(fill="both", expand=True)
-                tk.Label(ic, text="CONTROL INVARIANTS", font=(FONT, 7, "bold"),
-                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
-                for inv in v2["invariants"][:6]:
-                    tk.Label(ic, text="  + " + inv, font=(FONT, 7), fg=GREEN, bg=PANEL,
-                             anchor="w", wraplength=250,
-                             justify="left").pack(anchor="w", padx=12)
-                tk.Frame(ic, bg=PANEL, height=8).pack()
-
-            gov = tk.Frame(tech_grid, bg=PANEL, highlightbackground=BORDER, highlightthickness=1, width=220)
-            gov.pack(side="left", fill="both")
-            gov.pack_propagate(False)
-            tk.Label(gov, text="MODEL GOVERNANCE", font=(FONT, 7, "bold"),
-                     fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w", padx=12, pady=(12, 8))
-            source_count = len(v2.get("source_files", []))
-            main_fn = v2.get("main_function", ("", ""))
-            gov_rows = [
-                ("PRIMARY FILE", main_fn[0].replace("engines/", "") if main_fn and main_fn[0] else script.replace("engines/", "")),
-                ("ENTRYPOINT", main_fn[1] if main_fn and len(main_fn) > 1 else "n/a"),
-                ("SOURCE SET", f"{source_count} files" if source_count else "1 file"),
-                ("REVIEW MODE", "CodeViewer"),
-            ]
-            for label, value in gov_rows:
-                row = tk.Frame(gov, bg=PANEL)
-                row.pack(fill="x", padx=12, pady=1)
-                tk.Label(row, text=label, font=(FONT, 7, "bold"),
-                         fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="w")
-                tk.Label(row, text=str(value), font=(FONT, 7), fg=WHITE, bg=PANEL,
-                         anchor="w", wraplength=180,
-                         justify="left").pack(anchor="w", pady=(0, 4))
-
+        # ── BEST CONFIG (most actionable, render first) ──
         bc = brief.get("best_config")
         if bc:
-            tk.Label(f, text="DEPLOYMENT BASELINE", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-            bc_panel = tk.Frame(f, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-            bc_panel.pack(fill="x")
+            _section(f, "BEST CONFIG · BATTERY VALIDATED")
             for k, v in bc.items():
-                row = tk.Frame(bc_panel, bg=PANEL)
-                row.pack(fill="x", padx=12, pady=2)
-                tk.Label(row, text=f"{k:<14}", font=(FONT, 8, "bold"),
-                         fg=AMBER_D, bg=PANEL, anchor="w", width=16).pack(side="left")
-                tk.Label(row, text=str(v), font=(FONT, 8),
-                         fg=WHITE, bg=PANEL, anchor="w").pack(side="left")
-            tk.Frame(bc_panel, bg=PANEL, height=8).pack()
+                row = tk.Frame(f, bg=BG)
+                row.pack(fill="x", pady=0)
+                tk.Label(row, text=f"  {k.upper():<14}", font=(FONT, 8, "bold"),
+                         fg=AMBER_D, bg=BG, anchor="w", width=16).pack(side="left")
+                # Status row gets emoji-aware color
+                v_str = str(v)
+                _fg = (GREEN if "✓" in v_str else
+                       RED   if "✗" in v_str else
+                       AMBER if "⚠" in v_str else WHITE)
+                tk.Label(row, text=v_str, font=(FONT, 8),
+                         fg=_fg, bg=BG, anchor="w",
+                         wraplength=540, justify="left").pack(side="left", fill="x", expand=True)
 
-        tk.Frame(f, bg=BG, height=14).pack()
+        # ── PIPELINE (numbered, no panel chrome) ──
+        if brief.get("logic"):
+            _section(f, "PIPELINE")
+            for i, step in enumerate(brief["logic"], start=1):
+                row = tk.Frame(f, bg=BG)
+                row.pack(fill="x", pady=1)
+                tk.Label(row, text=f"  {i:02d}", font=(FONT, 7, "bold"),
+                         fg=AMBER, bg=BG, width=4, anchor="w").pack(side="left")
+                tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG,
+                         wraplength=620, justify="left",
+                         anchor="w").pack(side="left", fill="x", expand=True)
+
+        # ── EDGE / RISK (color-tagged inline pills) ──
+        if brief.get("edge") or brief.get("risk"):
+            _section(f, "EDGE / RISK")
+            if brief.get("edge"):
+                row = tk.Frame(f, bg=BG)
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text="  EDGE  ", font=(FONT, 7, "bold"),
+                         fg=BG, bg=GREEN, padx=4).pack(side="left")
+                tk.Label(row, text="  " + brief["edge"], font=(FONT, 8),
+                         fg=WHITE, bg=BG, anchor="w",
+                         wraplength=580, justify="left").pack(side="left", fill="x", expand=True)
+            if brief.get("risk"):
+                row = tk.Frame(f, bg=BG)
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text="  RISK  ", font=(FONT, 7, "bold"),
+                         fg=BG, bg=RED, padx=4).pack(side="left")
+                tk.Label(row, text="  " + brief["risk"], font=(FONT, 8),
+                         fg=DIM, bg=BG, anchor="w",
+                         wraplength=580, justify="left").pack(side="left", fill="x", expand=True)
+
+        tk.Frame(f, bg=BG, height=20).pack()
 
         is_bt = parent_menu == "backtest"
         is_live = parent_menu == "live"
@@ -2321,8 +2231,11 @@ class App(tk.Tk):
         run_btn.bind("<Button-1>", lambda e: next_fn())
         self._kb("<Return>", next_fn)
 
-        _v2_files = v2.get("source_files") if v2 else None
-        _v2_main  = v2.get("main_function") if v2 else None
+        # VER CÓDIGO — opens engine source. Uses BRIEFINGS_V2 main_function
+        # when available (richer entry point), falls back to script + scan_symbol.
+        _v2 = BRIEFINGS_V2.get(name, None)
+        _v2_files = _v2.get("source_files") if _v2 else None
+        _v2_main  = _v2.get("main_function") if _v2 else None
         def _open_code(_e=None, _script=script,
                        _files=_v2_files, _main=_v2_main):
             try:
@@ -2345,168 +2258,6 @@ class App(tk.Tk):
         self._kb("<Escape>", lambda: self._menu(parent_menu))
         return
 
-        # Philosophy (italic feel with dimmer color)
-        if brief.get("philosophy"):
-            tk.Label(f, text='"' + brief["philosophy"] + '"', font=(FONT, 9), fg=AMBER_D,
-                     bg=BG, wraplength=700, justify="left", anchor="w").pack(fill="x", pady=(0, 14))
-
-        # Logic steps
-        if brief.get("logic"):
-            tk.Label(f, text="LÓGICA", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-            for i, step in enumerate(brief["logic"]):
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=1)
-                tk.Label(row, text=f"  {i+1}.", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, width=4, anchor="e").pack(side="left")
-                tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG, anchor="w").pack(side="left", padx=4)
-
-        # ═══ TECHNICAL VIEW (BRIEFINGS_V2) ═══
-        # Renders after the narrative logic steps, before edge/risk.
-        # One-liner banner, then 3 compact columns: PARAMS | FORMULAS |
-        # INVARIANTS. The full pseudocode is reachable via VER CÓDIGO.
-        if v2:
-            tk.Frame(f, bg=BG, height=12).pack()
-            tk.Label(f, text="TECHNICAL", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-
-            if v2.get("one_liner"):
-                tk.Label(f, text=v2["one_liner"], font=(FONT, 8, "italic"),
-                         fg=WHITE, bg=BG, anchor="w",
-                         wraplength=780, justify="left").pack(anchor="w",
-                                                               pady=(0, 6))
-
-            tech_grid = tk.Frame(f, bg=BG)
-            tech_grid.pack(fill="x")
-
-            # PARAMS — left column
-            if v2.get("params"):
-                pc = tk.Frame(tech_grid, bg=BG)
-                pc.pack(side="left", fill="both", expand=True, padx=(0, 8))
-                tk.Label(pc, text="PARAMS", font=(FONT, 7, "bold"),
-                         fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
-                for p in v2["params"][:8]:
-                    row = tk.Frame(pc, bg=BG)
-                    row.pack(fill="x", pady=0)
-                    tk.Label(row, text=p.get("name", "?"),
-                             font=(FONT, 7, "bold"), fg=WHITE, bg=BG,
-                             width=22, anchor="w").pack(side="left")
-                    tk.Label(row, text=str(p.get("default", "?")),
-                             font=(FONT, 7), fg=AMBER, bg=BG,
-                             width=8, anchor="w").pack(side="left")
-                    tk.Label(row, text=str(p.get("effect", "")),
-                             font=(FONT, 7), fg=DIM, bg=BG,
-                             anchor="w", wraplength=230).pack(side="left",
-                                                               fill="x", expand=True)
-
-            # FORMULAS — middle column
-            if v2.get("formulas"):
-                fc = tk.Frame(tech_grid, bg=BG)
-                fc.pack(side="left", fill="both", expand=True, padx=(0, 8))
-                tk.Label(fc, text="FORMULAS", font=(FONT, 7, "bold"),
-                         fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
-                for form in v2["formulas"][:6]:
-                    tk.Label(fc, text="  " + form,
-                             font=(FONT, 7), fg=WHITE, bg=BG,
-                             anchor="w", wraplength=280,
-                             justify="left").pack(anchor="w")
-
-            # INVARIANTS — right column
-            if v2.get("invariants"):
-                ic = tk.Frame(tech_grid, bg=BG)
-                ic.pack(side="left", fill="both", expand=True)
-                tk.Label(ic, text="INVARIANTS", font=(FONT, 7, "bold"),
-                         fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
-                for inv in v2["invariants"][:6]:
-                    tk.Label(ic, text="  ✓ " + inv,
-                             font=(FONT, 7), fg=GREEN, bg=BG,
-                             anchor="w", wraplength=280,
-                             justify="left").pack(anchor="w")
-
-        # Edge + Risk side by side
-        if brief.get("edge") or brief.get("risk"):
-            tk.Frame(f, bg=BG, height=10).pack()
-            er = tk.Frame(f, bg=BG)
-            er.pack(fill="x")
-            if brief.get("edge"):
-                ef = tk.Frame(er, bg=BG)
-                ef.pack(side="left", fill="x", expand=True)
-                tk.Label(ef, text="VANTAGEM", font=(FONT, 7, "bold"), fg=GREEN, bg=BG, anchor="w").pack(anchor="w")
-                tk.Label(ef, text=brief["edge"], font=(FONT, 8), fg=DIM, bg=BG, anchor="w", wraplength=350).pack(anchor="w")
-            if brief.get("risk"):
-                rf = tk.Frame(er, bg=BG)
-                rf.pack(side="right", fill="x", expand=True)
-                tk.Label(rf, text="RISCO", font=(FONT, 7, "bold"), fg=RED, bg=BG, anchor="w").pack(anchor="w")
-                tk.Label(rf, text=brief["risk"], font=(FONT, 8), fg=DIM, bg=BG, anchor="w", wraplength=350).pack(anchor="w")
-
-        # ── BEST CONFIG (battery validated) ──
-        bc = brief.get("best_config")
-        if bc:
-            tk.Frame(f, bg=BG, height=10).pack()
-            tk.Label(f, text="MELHOR CONFIG (BATTERY)", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-            for k, v in bc.items():
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=1)
-                tk.Label(row, text=f"  {k:<14}", font=(FONT, 8, "bold"),
-                         fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
-                tk.Label(row, text=str(v), font=(FONT, 8),
-                         fg=WHITE, bg=BG, anchor="w").pack(side="left")
-
-        tk.Frame(f, bg=BG, height=14).pack()
-
-        # Route to correct config screen
-        is_bt = parent_menu == "backtest"
-        is_live = parent_menu == "live"
-        is_tool = parent_menu == "tools"
-
-        btn_f = tk.Frame(f, bg=BG)
-        btn_f.pack()
-
-        if is_bt:
-            next_fn = lambda: self._config_backtest(name, script, desc, parent_menu)
-            btn_text = "  CONFIGURAR & RODAR  "
-        elif is_live:
-            next_fn = lambda: self._config_live(name, script, desc, parent_menu)
-            btn_text = "  SELECIONAR MODO & RODAR  "
-        else:
-            next_fn = lambda: self._exec(name, script, desc, parent_menu, [])
-            btn_text = "  EXECUTAR  "
-
-        run_btn = tk.Label(btn_f, text=btn_text, font=(FONT, 10, "bold"),
-                           fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
-        run_btn.pack(side="left", padx=4)
-        run_btn.bind("<Button-1>", lambda e: next_fn())
-        self._kb("<Return>", next_fn)
-
-        # VER CÓDIGO — opens the strategy source in a read-only modal viewer.
-        # When BRIEFINGS_V2 has an entry, use its source_files list and
-        # main_function tuple so the viewer opens the exact scan loop the
-        # technical view above is describing. Otherwise fall back to the
-        # single-file lookup with "scan_symbol" as a best-guess anchor.
-        _v2_files = v2.get("source_files") if v2 else None
-        _v2_main  = v2.get("main_function") if v2 else None
-        def _open_code(_e=None, _script=script,
-                       _files=_v2_files, _main=_v2_main):
-            try:
-                files = _files if _files else [_script]
-                main  = _main  if _main  else (_script, "scan_symbol")
-                CodeViewer(self, source_files=files, main_function=main)
-            except Exception as exc:
-                messagebox.showerror("CodeViewer", f"{type(exc).__name__}: {exc}")
-
-        code_btn = tk.Label(btn_f, text="  VER CÓDIGO  ", font=(FONT, 10, "bold"),
-                            fg=AMBER, bg=BG3, cursor="hand2", padx=12, pady=4)
-        code_btn.pack(side="left", padx=4)
-        code_btn.bind("<Button-1>", _open_code)
-        self._kb("<F2>", _open_code)
-
-        back_btn = tk.Label(btn_f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
-                            cursor="hand2", padx=12, pady=4)
-        back_btn.pack(side="left", padx=4)
-        back_btn.bind("<Button-1>", lambda e: self._menu(parent_menu))
-        self._kb("<Escape>", lambda: self._menu(parent_menu))
 
     # ─── BACKTEST CONFIG (clickable inputs) ──────────────
     def _config_backtest(self, name, script, desc, parent_menu):
@@ -3147,15 +2898,12 @@ class App(tk.Tk):
         tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", padx=pad, pady=(12, 8))
         act_f = tk.Frame(sf, bg=BG); act_f.pack(padx=pad, pady=(0, 16))
 
-        oj = tk.Label(act_f, text="  ABRIR JSON  ", font=(FONT, 9, "bold"),
-                      fg=BG, bg=AMBER, cursor="hand2", padx=10, pady=3)
-        oj.pack(side="left", padx=4)
-        oj.bind("<Button-1>", lambda e: self._open_file(report))
-
-        of = tk.Label(act_f, text="  ABRIR PASTA  ", font=(FONT, 9),
-                      fg=DIM, bg=BG3, cursor="hand2", padx=10, pady=3)
-        of.pack(side="left", padx=4)
-        of.bind("<Button-1>", lambda e: self._open_file(report.parent.parent))
+        report_html = self._results_run_dir / "report.html"
+        if report_html.exists():
+            oh = tk.Label(act_f, text="  ABRIR HTML  ", font=(FONT, 9, "bold"),
+                          fg=BG, bg=AMBER, cursor="hand2", padx=10, pady=3)
+            oh.pack(side="left", padx=4)
+            oh.bind("<Button-1>", lambda e: self._open_file(report_html))
 
         ti = tk.Label(act_f, text="  TRADE INSPECTOR →  ",
                       font=(FONT, 9, "bold"), fg=BG, bg=GREEN,
