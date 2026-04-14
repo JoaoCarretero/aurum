@@ -558,7 +558,7 @@ if __name__ == "__main__":
     _ap.add_argument("--basket",      type=str,   default="default",  help="Asset basket name")
     _ap.add_argument("--leverage",    type=float, default=LEVERAGE,   help="Leverage multiplier")
     _ap.add_argument("--no-menu",     action="store_true",            help="Skip post-run interactive menu")
-    _ap.add_argument("--holdout-pct", type=float, default=20.0,       help="Reserve last N%% of data as pure OOS holdout (0 to disable)")
+    _ap.add_argument("--holdout-pct", type=float, default=0.0,        help="Reserve last N%% of data as pure OOS holdout (0 = disabled, matches other engines)")
     _args, _ = _ap.parse_known_args()
 
     SCAN_DAYS = _args.days
