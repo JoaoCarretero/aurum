@@ -2518,15 +2518,15 @@ class App(tk.Tk):
         back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
         self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
 
-    def _try_results(self, parent):
+    def _try_results(self, parent, run_id=None):
         try:
-            self._show_results(parent)
+            self._show_results(parent, run_id=run_id)
         except Exception as e:
             self._p(f"\n  Erro no dashboard de resultados: {e}\n", "r")
             self._p("  Use o menu DADOS para navegar relatórios manualmente.\n", "d")
 
     # ─── RESULTS DASHBOARD (Overview + Trade Inspector) ──────
-    def _show_results(self, parent_menu):
+    def _show_results(self, parent_menu, run_id=None):
         """Parse latest backtest JSON and show a tabbed dashboard.
         Tab 1 = Overview (metrics / equity / MC / regime).
         Tab 2 = Trade Inspector (list + matplotlib chart + data panel)."""
@@ -2543,28 +2543,49 @@ class App(tk.Tk):
         self._kb("<Right>", lambda: self._results_next_trade())
         self._kb("<Down>",  lambda: self._results_next_trade())
 
-        # Locate the latest run + its exported JSON.
+        # Locate the requested run (preferred) or latest run + its exported JSON.
         # New layout (preferred): data/runs/<run_id>/<engine>_*.json  (run_dir = parent)
         # Legacy layout (fallback): data/<engine>/<run_id>/reports/<engine>_*.json
         report = None
         run_dir = None
         skip_names = {"config.json", "equity.json", "index.json", "overfit.json", "price_data.json", "summary.json", "trades.json"}
 
-        runs_root = ROOT / "data" / "runs"
-        if runs_root.exists():
-            run_dirs = sorted(
-                [d for d in runs_root.iterdir() if d.is_dir()],
-                key=lambda p: p.stat().st_mtime, reverse=True,
-            )
-            for rd in run_dirs:
+        if run_id:
+            run_meta = self._bt_resolve_run(run_id)
+            report_path = str(run_meta.get("report_json_path") or "").strip()
+            run_dir_path = str(run_meta.get("run_dir") or "").strip()
+            if report_path:
+                cand = Path(report_path)
+                if cand.exists():
+                    report = cand
+            if run_dir_path:
+                cand_dir = Path(run_dir_path)
+                if cand_dir.exists():
+                    run_dir = cand_dir
+            if report is None and run_dir is not None:
                 candidates = sorted(
-                    [p for p in rd.glob("*.json") if p.name not in skip_names],
+                    [p for p in run_dir.glob("*.json") if p.name not in skip_names],
                     key=lambda p: p.stat().st_mtime, reverse=True,
                 )
                 if candidates:
                     report = candidates[0]
-                    run_dir = rd
-                    break
+
+        if report is None:
+            runs_root = ROOT / "data" / "runs"
+            if runs_root.exists():
+                run_dirs = sorted(
+                    [d for d in runs_root.iterdir() if d.is_dir()],
+                    key=lambda p: p.stat().st_mtime, reverse=True,
+                )
+                for rd in run_dirs:
+                    candidates = sorted(
+                        [p for p in rd.glob("*.json") if p.name not in skip_names],
+                        key=lambda p: p.stat().st_mtime, reverse=True,
+                    )
+                    if candidates:
+                        report = candidates[0]
+                        run_dir = rd
+                        break
 
         if report is None:
             data_dir = ROOT / "data"
@@ -8656,6 +8677,15 @@ class App(tk.Tk):
             btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=AMBER_B))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=AMBER))
 
+        metrics_btn = tk.Label(actions, text="  METRICS  ",
+                               font=(FONT, 8, "bold"),
+                               fg=BG, bg=GREEN, cursor="hand2",
+                               padx=8, pady=5)
+        metrics_btn.pack(side="left", padx=(0, 4))
+        metrics_btn.bind("<Button-1>", lambda e: self._dash_backtest_metrics(run_id))
+        metrics_btn.bind("<Enter>", lambda e, b=metrics_btn: b.configure(bg="#36d86b"))
+        metrics_btn.bind("<Leave>", lambda e, b=metrics_btn: b.configure(bg=GREEN))
+
         del_btn = tk.Label(actions, text="  DELETE  ",
                            font=(FONT, 8, "bold"),
                            fg=WHITE, bg=RED, cursor="hand2",
@@ -8872,6 +8902,14 @@ class App(tk.Tk):
             self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
 
     # ── COCKPIT TAB (VPS remote control over SSH) ─────────
+    def _dash_backtest_metrics(self, run_id: str):
+        """Open the internal metrics/results view for a specific run."""
+        try:
+            self._show_results("backtest", run_id=run_id)
+        except Exception:
+            self.h_stat.configure(text="METRICS FAILED", fg=RED)
+            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+
     def _dash_build_cockpit_tab(self, parent):
         """VPS remote cockpit: screen session status, positions, controls, logs."""
         wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=10)

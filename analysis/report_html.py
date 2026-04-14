@@ -330,22 +330,20 @@ def _svg_mc_histogram(mc: dict, w: int = 900, h: int = 250, n_bins: int = 40) ->
 # ── HTML section builders ────────────────────────────────────────
 
 def _metric_card(label: str, value: str, color: str = _WHITE) -> str:
-    return f'''<div style="background:{_PANEL};border:1px solid {_BORDER};border-radius:6px;
-               padding:12px 18px;text-align:center;min-width:120px;">
-      <div style="font-size:11px;color:{_GRAY};text-transform:uppercase;letter-spacing:1px;
-                  margin-bottom:4px;">{label}</div>
-      <div style="font-size:20px;font-weight:700;color:{color};">{value}</div>
+    return f'''<div class="metric-card">
+      <div class="metric-label">{label}</div>
+      <div class="metric-value" style="color:{color};">{value}</div>
     </div>'''
 
 
 def _section(title: str, content: str, id_: str = "") -> str:
     id_attr = f' id="{id_}"' if id_ else ""
-    return f'''<section{id_attr} style="margin-bottom:32px;">
-  <h2 style="color:{_GOLD};font-size:16px;letter-spacing:2px;text-transform:uppercase;
-             border-bottom:1px solid {_BORDER};padding-bottom:8px;margin-bottom:16px;">
-    {title}
-  </h2>
-  {content}
+    return f'''<section{id_attr} class="report-section">
+  <div class="section-head">
+    <div class="section-kicker">AURUM</div>
+    <h2>{title}</h2>
+  </div>
+  <div class="section-body">{content}</div>
 </section>'''
 
 
@@ -405,25 +403,26 @@ def _build_header(run_dir: Path, config_dict: dict | None,
                        f'<span style="color:{_GRAY};">account:</span> '
                        f'<span style="color:{_WHITE};">{_fmt_money(ACCOUNT_SIZE)}</span>')
 
-    return f'''<header style="text-align:center;padding:24px 0 16px 0;
-               border-bottom:1px solid {_BORDER};margin-bottom:24px;">
-  <h1 style="font-size:32px;color:{_GOLD};margin:0 0 6px 0;letter-spacing:6px;
-             font-weight:700;">
-    {engine_name} &middot; AURUM
-  </h1>
-  <div style="font-size:11px;color:{_GRAY};letter-spacing:2px;
-              text-transform:uppercase;margin-bottom:14px;">
-    Backtest Report
+    return f'''<header class="hero">
+  <div class="hero-top">
+    <div>
+      <div class="eyebrow">AURUM FINANCE</div>
+      <h1>{engine_name}</h1>
+      <div class="hero-subtitle">Backtest Report</div>
+    </div>
+    <div class="hero-badge">Institutional Research</div>
   </div>
-  <div style="font-size:13px;color:{_WHITE};margin-bottom:6px;
-              font-family:'SF Mono','Cascadia Code','Consolas',monospace;">
-    <span style="color:{_GRAY};">RUN</span>
-    <span style="color:{_GOLD};font-weight:600;"> {run_id} </span>
-    &nbsp;·&nbsp;
-    <span style="color:{_GRAY};">EXECUTED</span>
-    <span style="color:{_WHITE};"> {run_ts} </span>
+  <div class="hero-meta">
+    <div class="hero-meta-item">
+      <span>Run</span>
+      <strong>{run_id}</strong>
+    </div>
+    <div class="hero-meta-item">
+      <span>Executed</span>
+      <strong>{run_ts}</strong>
+    </div>
   </div>
-  <div style="font-size:11px;line-height:1.8;margin-top:12px;">{cfg_summary}</div>
+  <div class="hero-config">{cfg_summary}</div>
 </header>'''
 
 
@@ -446,29 +445,27 @@ def _build_result_box(all_trades: list[dict], eq: list[float],
 
     pnl_color = _GREEN if pnl >= 0 else _RED
 
-    return f'''<div style="background:{_PANEL};border:2px solid {v_color};border-radius:10px;
-                padding:24px 32px;margin-bottom:32px;text-align:center;">
-  <div style="font-size:32px;font-weight:700;color:{_WHITE};margin-bottom:8px;">
-    {_fmt_money(ACCOUNT_SIZE)}
-    <span style="color:{_GRAY};font-size:20px;"> &rarr; </span>
-    <span style="color:{pnl_color};">{_fmt_money(final)}</span>
-    <span style="font-size:18px;color:{pnl_color};"> ({_fmt_pct(roi)})</span>
+    return f'''<section class="summary-shell">
+  <div class="summary-card">
+    <div class="summary-balance">
+      <div class="summary-balance-label">Equity</div>
+      <div class="summary-balance-main">
+        <span class="muted">{_fmt_money(ACCOUNT_SIZE)}</span>
+        <span class="arrow">&rarr;</span>
+        <span style="color:{pnl_color};">{_fmt_money(final)}</span>
+      </div>
+      <div class="summary-balance-roi" style="color:{pnl_color};">{_fmt_pct(roi)}</div>
+    </div>
+    <div class="summary-grid">
+      {_metric_card("Trades", str(n_trades), _WHITE)}
+      {_metric_card("Win Rate", f"{wr:.1f}%", _GREEN if wr > 50 else _RED)}
+      {_metric_card("Sharpe", sharpe_str, _WHITE)}
+      {_metric_card("Max DD", f"-{mdd_pct:.1f}%", _RED)}
+      {_metric_card("PnL", _fmt_money(pnl), pnl_color)}
+    </div>
+    <div class="summary-verdict" style="color:{v_color};">{verdict}</div>
   </div>
-  <div style="display:flex;justify-content:center;gap:32px;flex-wrap:wrap;margin:16px 0;">
-    <div><span style="color:{_GRAY};font-size:12px;">TRADES</span><br/>
-         <span style="font-size:18px;color:{_WHITE};">{n_trades}</span></div>
-    <div><span style="color:{_GRAY};font-size:12px;">WIN RATE</span><br/>
-         <span style="font-size:18px;color:{_GREEN if wr > 50 else _RED};">{wr:.1f}%</span></div>
-    <div><span style="color:{_GRAY};font-size:12px;">SHARPE</span><br/>
-         <span style="font-size:18px;color:{_WHITE};">{sharpe_str}</span></div>
-    <div><span style="color:{_GRAY};font-size:12px;">MAX DD</span><br/>
-         <span style="font-size:18px;color:{_RED};">-{mdd_pct:.1f}%</span></div>
-    <div><span style="color:{_GRAY};font-size:12px;">PnL</span><br/>
-         <span style="font-size:18px;color:{pnl_color};">{_fmt_money(pnl)}</span></div>
-  </div>
-  <div style="font-size:22px;font-weight:700;color:{v_color};letter-spacing:3px;
-              margin-top:8px;">{verdict}</div>
-</div>'''
+</section>'''
 
 
 def _build_mc_stats(mc: dict) -> str:
@@ -1408,31 +1405,224 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{
-    background: {_BG};
+    background:
+      radial-gradient(circle at top left, rgba(74,158,255,0.10), transparent 28%),
+      radial-gradient(circle at top right, rgba(232,184,75,0.08), transparent 24%),
+      linear-gradient(180deg, #0a0c12 0%, #0d1017 100%);
     color: {_WHITE};
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono',
-                 'Consolas', 'Monaco', monospace;
+    font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.6;
     padding: 0;
   }}
   .container {{
-    max-width: 1000px;
+    max-width: 1120px;
     margin: 0 auto;
-    padding: 20px 32px 48px 32px;
+    padding: 28px 32px 56px 32px;
   }}
   table {{ border-spacing: 0; }}
   th {{
     color: {_GOLD};
-    font-weight: 600;
+    font-weight: 700;
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 0.12em;
   }}
   tr {{ border-bottom: 1px solid {_BORDER}; }}
   td {{ border-bottom: 1px solid {_BORDER}; }}
   a {{ color: {_BLUE}; text-decoration: none; }}
   section {{ background: transparent; }}
+  .hero {{
+    background: rgba(15, 18, 28, 0.92);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 22px;
+    padding: 28px 30px 24px 30px;
+    margin-bottom: 24px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.35);
+    backdrop-filter: blur(10px);
+  }}
+  .hero-top {{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+  }}
+  .eyebrow {{
+    color: {_GOLD};
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }}
+  .hero h1 {{
+    font-size: 36px;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin-bottom: 8px;
+  }}
+  .hero-subtitle {{
+    color: {_GRAY};
+    font-size: 14px;
+  }}
+  .hero-badge {{
+    color: {_WHITE};
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    padding: 10px 14px;
+    font-size: 12px;
+    white-space: nowrap;
+  }}
+  .hero-meta {{
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }}
+  .hero-meta-item {{
+    min-width: 220px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 12px 14px;
+  }}
+  .hero-meta-item span {{
+    display: block;
+    color: {_GRAY};
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 6px;
+  }}
+  .hero-meta-item strong {{
+    color: {_WHITE};
+    font-size: 14px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  }}
+  .hero-config {{
+    color: {_GRAY};
+    font-size: 12px;
+    line-height: 1.9;
+  }}
+  .summary-shell {{
+    margin-bottom: 28px;
+  }}
+  .summary-card {{
+    background: linear-gradient(180deg, rgba(15,18,28,0.94) 0%, rgba(13,15,22,0.94) 100%);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 22px;
+    padding: 24px 26px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.28);
+  }}
+  .summary-balance {{
+    margin-bottom: 18px;
+  }}
+  .summary-balance-label {{
+    color: {_GRAY};
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin-bottom: 8px;
+  }}
+  .summary-balance-main {{
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    font-size: 36px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+  }}
+  .summary-balance-main .muted {{
+    color: {_WHITE};
+    opacity: 0.76;
+  }}
+  .summary-balance-main .arrow {{
+    color: {_GRAY};
+    font-size: 24px;
+  }}
+  .summary-balance-roi {{
+    margin-top: 6px;
+    font-size: 15px;
+    font-weight: 600;
+  }}
+  .summary-grid {{
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+  }}
+  .metric-card {{
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    padding: 14px 16px;
+    min-width: 0;
+  }}
+  .metric-label {{
+    color: {_GRAY};
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 8px;
+  }}
+  .metric-value {{
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }}
+  .summary-verdict {{
+    margin-top: 18px;
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }}
+  .report-section {{
+    background: rgba(15, 18, 28, 0.82);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 22px;
+    padding: 22px 24px;
+    margin-bottom: 22px;
+    box-shadow: 0 18px 56px rgba(0,0,0,0.22);
+  }}
+  .section-head {{
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }}
+  .section-kicker {{
+    color: {_GOLD};
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }}
+  .section-head h2 {{
+    color: {_WHITE};
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }}
+  .section-body {{
+    overflow-x: auto;
+  }}
+  footer {{
+    opacity: 0.9;
+  }}
+  @media (max-width: 960px) {{
+    .container {{ padding: 20px 18px 40px 18px; }}
+    .summary-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    .hero-top {{ flex-direction: column; }}
+  }}
+  @media (max-width: 640px) {{
+    .hero h1 {{ font-size: 28px; }}
+    .summary-balance-main {{ font-size: 28px; }}
+    .summary-grid {{ grid-template-columns: 1fr; }}
+    .report-section {{ padding: 18px 16px; }}
+  }}
   ::selection {{ background: {_GOLD}; color: {_BG}; }}
 </style>
 </head>
