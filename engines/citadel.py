@@ -1037,7 +1037,7 @@ if __name__ == "__main__":
         export_json(all_trades, eq, mc, cond, ratios)
         _json = str(RUN_DIR / f"citadel_{INTERVAL}_v36.json")
         if _Path(_json).exists():
-            _db_save("backtest", _json)
+            _db_save("citadel", _json)
     except Exception:
         pass
 

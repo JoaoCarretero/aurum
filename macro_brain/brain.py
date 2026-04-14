@@ -139,9 +139,24 @@ def job_ingest_commodities():
 
 
 def job_regime():
-    """Placeholder — implementado em Semana 2."""
-    log.info("[regime] ml_engine.regime TBD — placeholder no-op")
-    _record_run("regime", result={"status": "TBD"})
+    """Classify current regime via rule-based v1 and persist snapshot."""
+    try:
+        from macro_brain.ml_engine.regime import classify
+        snap = classify(persist=True)
+        result = {
+            "regime": snap.regime,
+            "confidence": snap.confidence,
+            "reason": snap.reason[:200],
+            "rules": len(snap.rules_matched),
+            "features_count": len(snap.features),
+        }
+        log.info(f"[regime] {snap.regime}  conf {snap.confidence:.2%}  {snap.reason[:80]}")
+        _record_run("regime", result=result)
+        return result
+    except Exception as e:
+        log.error(f"regime classification failed: {e}")
+        _record_run("regime", error=str(e))
+        return {"error": str(e)}
 
 
 def job_thesis():

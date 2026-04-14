@@ -6300,6 +6300,7 @@ class App(tk.Tk):
 
         cfgs = [
             ("API KEYS",           "Exchange & broker credentials",      self._cfg_keys,  True),
+            ("MACRO BRAIN APIS",   "FRED, NewsAPI (data sources)",       self._cfg_macro_keys, True),
             ("TELEGRAM",           "Bot token & chat ID",                self._cfg_tg,    True),
             ("RISK PARAMETERS",    "Account size, max risk, leverage",   None,            False),
             ("STRATEGY DEFAULTS",  "Timeframes, symbols, baskets",      None,            False),
@@ -6402,6 +6403,25 @@ class App(tk.Tk):
             ("demo_key","DEMO KEY","",True), ("demo_sec","DEMO SECRET","",True),
             ("test_key","TESTNET KEY","",True), ("test_sec","TESTNET SECRET","",True),
             ("live_key","LIVE KEY","REAL $",True), ("live_sec","LIVE SECRET","REAL $",True),
+        ], load, save)
+
+    def _cfg_macro_keys(self):
+        """Macro Brain API keys — free/freemium data sources."""
+        def load():
+            k = self._load_json("keys.json"); m = k.get("macro_brain", {})
+            return {
+                "fred":    m.get("fred_api_key", ""),
+                "newsapi": m.get("newsapi_key", ""),
+            }
+        def save(v):
+            k = self._load_json("keys.json")
+            k.setdefault("macro_brain", {})
+            k["macro_brain"]["fred_api_key"] = v["fred"]
+            k["macro_brain"]["newsapi_key"]  = v["newsapi"]
+            self._save_json("keys.json", k)
+        self._cfg_edit("MACRO BRAIN APIS", [
+            ("fred",    "FRED API KEY",    "free @ stlouisfed.org",       True),
+            ("newsapi", "NEWSAPI KEY",     "free 500/day @ newsapi.org",  True),
         ], load, save)
 
     def _cfg_tg(self):

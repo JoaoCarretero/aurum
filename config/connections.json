@@ -5,8 +5,8 @@
       "mode": "testnet",
       "connected": true,
       "label": "Binance Futures",
-      "latency_ms": 1748,
-      "last_ping": "2026-04-14T15:13:41.985298"
+      "latency_ms": 1722,
+      "last_ping": "2026-04-14T15:20:46.139033"
     },
     "binance_spot": {
       "connected": false,

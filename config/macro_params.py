@@ -35,10 +35,31 @@ MACRO_SCHED_THESIS_SEC = 24 * 60 * 60   # daily
 MACRO_SCHED_REVIEW_SEC = 60 * 60        # hourly
 
 # ── DATA SOURCES ─────────────────────────────────────────────
-# Free/freemium tier primeiro. Keys via env vars pra não committar.
-FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
-NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "")
-# GDELT e Fear&Greed não precisam key
+# Keys resolution (prioridade):
+#   1. Env vars (FRED_API_KEY, NEWSAPI_KEY)
+#   2. config/keys.json → macro_brain.{fred_api_key, newsapi_key}
+#   3. vazio (collector skipa graceful)
+#
+# GDELT e Fear&Greed não precisam key — funcionam sempre.
+
+
+def _load_macro_key(env_name: str, json_key: str) -> str:
+    v = os.environ.get(env_name, "").strip()
+    if v:
+        return v
+    import json
+    keys_path = Path(__file__).resolve().parent / "keys.json"
+    if keys_path.exists():
+        try:
+            data = json.loads(keys_path.read_text(encoding="utf-8"))
+            return (data.get("macro_brain") or {}).get(json_key, "") or ""
+        except (OSError, json.JSONDecodeError):
+            return ""
+    return ""
+
+
+FRED_API_KEY = _load_macro_key("FRED_API_KEY", "fred_api_key")
+NEWSAPI_KEY = _load_macro_key("NEWSAPI_KEY", "newsapi_key")
 
 # FRED series monitoradas (ticker → nossa label)
 FRED_SERIES = {

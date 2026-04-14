@@ -514,7 +514,7 @@ def export_json(all_trades, eq, mc, ratios):
 
     try:
         from core.db import save_run
-        save_run("thoth", str(out))
+        save_run("bridgewater", str(out))
     except Exception as e:
         log.warning(f"DB register failed: {e}")
 

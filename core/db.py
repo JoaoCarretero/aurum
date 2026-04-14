@@ -1,15 +1,35 @@
 """
-AURUM Finance — SQLite database for run history and trade logs.
+AURUM Finance - SQLite database for run history and trade logs.
 DB lives at data/aurum.db (gitignored with the rest of data/).
 """
 import json
 import sqlite3
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 DB_PATH = Path("data/aurum.db")
 
-# ── Schema ────────────────────────────────────────────────────
+_ENGINE_ALIASES = {
+    "backtest": "citadel",
+    "thoth": "bridgewater",
+    "mercurio": "jump",
+    "newton": "deshaw",
+    "arbitrage": "janestreet",
+    "jane_street": "janestreet",
+    "jane street": "janestreet",
+}
+
+_PARENT_TO_ENGINE = {
+    "runs": "citadel",
+    "bridgewater": "bridgewater",
+    "jump": "jump",
+    "deshaw": "deshaw",
+    "renaissance": "renaissance",
+    "millennium": "millennium",
+    "twosigma": "twosigma",
+    "aqr": "aqr",
+    "janestreet": "janestreet",
+}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -72,89 +92,195 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-# ── Write ─────────────────────────────────────────────────────
+def _normalize_engine(engine: str | None, data: dict | None = None, json_path: str | None = None) -> str:
+    text = str(engine or "").strip().lower()
+    if text in _ENGINE_ALIASES:
+        return _ENGINE_ALIASES[text]
+    if text:
+        return text
+
+    payload = data or {}
+    payload_engine = str(payload.get("engine") or "").strip().lower()
+    if payload_engine in _ENGINE_ALIASES:
+        return _ENGINE_ALIASES[payload_engine]
+    if payload_engine:
+        return payload_engine.replace(" ", "")
+
+    if json_path:
+        path = Path(json_path)
+        for parent in (path.parent, path.parent.parent, path.parent.parent.parent):
+            name = parent.name.lower()
+            if name in _PARENT_TO_ENGINE:
+                return _PARENT_TO_ENGINE[name]
+
+    run_id = str(payload.get("run_id") or "").strip().lower()
+    if "_" in run_id:
+        prefix = run_id.split("_", 1)[0]
+        return _ENGINE_ALIASES.get(prefix, prefix)
+    return "unknown"
+
+
+def _normalize_run_id(run_id: str | None, engine: str, json_path: str | None = None) -> str:
+    raw = str(run_id or "").strip()
+    if raw.startswith(f"{engine}_"):
+        return raw
+    if raw and raw[:4].isdigit() and raw.count("_") >= 2:
+        return f"{engine}_{raw}"
+    if raw:
+        return raw
+    if json_path:
+        folder = Path(json_path).resolve().parent.parent.name
+        if folder:
+            return folder if folder.startswith(f"{engine}_") else f"{engine}_{folder}"
+    return datetime.now().strftime("%Y-%m-%d_%H%M")
+
+
+def _extract_run_fields(
+    data: dict,
+    engine: str,
+    json_path: str,
+) -> tuple[str, str | None, int | None, int | None, float | None, float | None, dict, dict]:
+    summary = data.get("summary", {}) if isinstance(data.get("summary"), dict) else {}
+    config = data.get("config", {}) if isinstance(data.get("config"), dict) else {}
+
+    interval = (
+        data.get("interval")
+        or config.get("interval")
+        or config.get("INTERVAL")
+        or config.get("ENTRY_TF")
+    )
+    scan_days = config.get("scan_days") or config.get("SCAN_DAYS") or data.get("scan_days")
+    n_candles = data.get("n_candles") or config.get("n_candles") or config.get("N_CANDLES")
+    if scan_days is None and interval and n_candles:
+        per_day = {"1m": 1440, "3m": 480, "5m": 288, "15m": 96, "30m": 48, "1h": 24, "2h": 12, "4h": 6, "1d": 1}.get(str(interval))
+        if per_day:
+            scan_days = int(round(float(n_candles) / per_day))
+
+    symbols = config.get("symbols") or data.get("symbols") or []
+    n_symbols = data.get("n_symbols")
+    if n_symbols is None and isinstance(symbols, list):
+        n_symbols = len(symbols)
+
+    roi = data.get("roi")
+    if roi is None:
+        roi = summary.get("ret") or summary.get("roi") or summary.get("roi_pct")
+
+    max_dd = data.get("max_dd_pct")
+    if max_dd is None:
+        max_dd = summary.get("max_dd_pct") or summary.get("max_dd")
+
+    run_id = _normalize_run_id(data.get("run_id"), engine, json_path)
+    return run_id, interval, scan_days, n_symbols, roi, max_dd, summary, config
+
 
 def save_run(engine: str, json_path: str) -> str | None:
     """Read a JSON report and persist run + trades to the DB. Returns run_id."""
-    # validate path is within data/ directory
     _base = Path("data").resolve()
-    if not Path(json_path).resolve().is_relative_to(_base):
+    resolved = Path(json_path).resolve()
+    if not resolved.is_relative_to(_base):
         print(f"  DB: path {json_path} is outside data directory")
         return None
     try:
-        with open(json_path, "r", encoding="utf-8") as f:
+        with open(resolved, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"  DB: erro ao ler {json_path}: {e}")
         return None
 
-    run_id  = data.get("run_id", datetime.now().strftime("%Y-%m-%d_%H%M"))
-    summary = data.get("summary", {})
-    config  = data.get("config", {})
+    engine = _normalize_engine(engine, data, str(resolved))
+    run_id, interval, scan_days, n_symbols, roi, max_dd, summary, config = _extract_run_fields(
+        data, engine, str(resolved)
+    )
 
     conn = _connect()
     try:
-        conn.execute("""
+        conn.execute(
+            """
             INSERT OR REPLACE INTO runs
             (run_id, engine, version, timestamp, interval, scan_days, n_symbols,
              account_size, leverage, roi, max_dd, sharpe, sortino, calmar,
              win_rate, n_trades, final_equity, config_json, json_path)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            run_id, engine,
-            data.get("version"),
-            data.get("timestamp", datetime.now().isoformat()),
-            config.get("interval"),
-            config.get("scan_days") or config.get("n_candles", 0) // (24 * 4) or None,
-            len(config.get("symbols", [])),
-            config.get("account_size", 10000),
-            config.get("leverage", 1.0),
-            summary.get("ret"),
-            None,  # max_dd — compute from trades if needed
-            summary.get("sharpe"),
-            summary.get("sortino"),
-            summary.get("calmar"),
-            summary.get("win_rate"),
-            summary.get("closed") or summary.get("total"),
-            summary.get("final_equity"),
-            json.dumps(config, default=str),
-            json_path,
-        ))
+            """,
+            (
+                run_id,
+                engine,
+                data.get("version"),
+                data.get("timestamp", datetime.now().isoformat()),
+                interval,
+                scan_days,
+                n_symbols,
+                data.get("account_size", config.get("account_size", 10000)),
+                data.get("leverage", config.get("leverage", 1.0)),
+                roi,
+                max_dd,
+                data.get("sharpe", summary.get("sharpe")),
+                data.get("sortino", summary.get("sortino")),
+                data.get("calmar", summary.get("calmar")),
+                data.get("win_rate", summary.get("win_rate")),
+                data.get("n_trades", summary.get("closed") or summary.get("total")),
+                data.get("final_equity", summary.get("final_equity")),
+                json.dumps(config, default=str),
+                str(resolved),
+            ),
+        )
 
-        # Trades
         trades = data.get("trades", [])
         for t in trades:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO trades
                 (run_id, symbol, strategy, direction, entry_price, exit_price,
                  stop, target, pnl, result, rr, score, macro_bias, vol_regime,
                  duration, trade_time, chop_trade, details_json)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                run_id,
-                t.get("symbol"),
-                t.get("strategy", engine),
-                t.get("direction"),
-                t.get("entry"),
-                t.get("exit_p"),
-                t.get("stop"),
-                t.get("target"),
-                t.get("pnl"),
-                t.get("result"),
-                t.get("rr"),
-                t.get("score"),
-                t.get("macro_bias"),
-                t.get("vol_regime"),
-                t.get("duration"),
-                t.get("time"),
-                1 if t.get("chop_trade") else 0,
-                json.dumps({k: v for k, v in t.items()
-                            if k not in ("symbol","direction","entry","exit_p",
-                                         "stop","target","pnl","result","rr",
-                                         "score","macro_bias","vol_regime",
-                                         "duration","time","chop_trade","strategy")},
-                           default=str),
-            ))
+                """,
+                (
+                    run_id,
+                    t.get("symbol"),
+                    t.get("strategy", engine),
+                    t.get("direction"),
+                    t.get("entry"),
+                    t.get("exit_p"),
+                    t.get("stop"),
+                    t.get("target"),
+                    t.get("pnl"),
+                    t.get("result"),
+                    t.get("rr"),
+                    t.get("score"),
+                    t.get("macro_bias"),
+                    t.get("vol_regime"),
+                    t.get("duration"),
+                    t.get("time"),
+                    1 if t.get("chop_trade") else 0,
+                    json.dumps(
+                        {
+                            k: v
+                            for k, v in t.items()
+                            if k
+                            not in (
+                                "symbol",
+                                "direction",
+                                "entry",
+                                "exit_p",
+                                "stop",
+                                "target",
+                                "pnl",
+                                "result",
+                                "rr",
+                                "score",
+                                "macro_bias",
+                                "vol_regime",
+                                "duration",
+                                "time",
+                                "chop_trade",
+                                "strategy",
+                            )
+                        },
+                        default=str,
+                    ),
+                ),
+            )
 
         conn.commit()
         return run_id
@@ -177,15 +303,14 @@ def register_run(
     n_symbols: int | None = None,
     version: str | None = None,
 ) -> str:
-    """Lightweight run registrar for engines that already persist JSON/index elsewhere.
-
-    Keeps DB integration backward-compatible with engines that call register_run()
-    directly after writing their report JSON. Trade rows continue to be handled by
-    save_run() when full report ingestion is desired.
-    """
+    """Lightweight run registrar for engines that already persist JSON/index elsewhere."""
     _base = Path("data").resolve()
-    if not Path(json_path).resolve().is_relative_to(_base):
+    resolved = Path(json_path).resolve()
+    if not resolved.is_relative_to(_base):
         raise ValueError(f"path {json_path} is outside data directory")
+
+    engine = _normalize_engine(engine, {}, str(resolved))
+    run_id = _normalize_run_id(run_id, engine, str(resolved))
 
     conn = _connect()
     try:
@@ -216,7 +341,7 @@ def register_run(
                 n_trades,
                 final_equity,
                 json.dumps({}, default=str),
-                json_path,
+                str(resolved),
             ),
         )
         conn.commit()
@@ -225,7 +350,10 @@ def register_run(
         conn.close()
 
 
-# ── Read ──────────────────────────────────────────────────────
+def repair_run(json_path: str, engine: str | None = None) -> str | None:
+    """Re-ingest a report, normalizing DB metadata from the artifact itself."""
+    return save_run(engine or "", json_path)
+
 
 def list_runs(engine: str | None = None, limit: int = 20) -> list[dict]:
     conn = _connect()
@@ -233,11 +361,13 @@ def list_runs(engine: str | None = None, limit: int = 20) -> list[dict]:
         if engine:
             rows = conn.execute(
                 "SELECT * FROM runs WHERE engine=? ORDER BY timestamp DESC LIMIT ?",
-                (engine, limit)).fetchall()
+                (engine, limit),
+            ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT * FROM runs ORDER BY timestamp DESC LIMIT ?",
-                (limit,)).fetchall()
+                (limit,),
+            ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -256,11 +386,11 @@ def get_trades(run_id: str) -> list[dict]:
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT * FROM trades WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+            "SELECT * FROM trades WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
-
 
 
 def delete_run(run_id: str, delete_files: bool = False) -> bool:
@@ -275,6 +405,7 @@ def delete_run(run_id: str, delete_files: bool = False) -> bool:
         conn.commit()
         if delete_files and row["json_path"]:
             import shutil
+
             folder = Path(row["json_path"]).parent.parent
             _base = Path("data").resolve()
             if folder.resolve().is_relative_to(_base) and folder.exists():
@@ -296,7 +427,8 @@ def stats_summary() -> dict:
         ).fetchall()
         best = conn.execute(
             "SELECT run_id, engine, roi, sharpe FROM runs "
-            "WHERE roi IS NOT NULL ORDER BY roi DESC LIMIT 1").fetchone()
+            "WHERE roi IS NOT NULL ORDER BY roi DESC LIMIT 1"
+        ).fetchone()
         return {
             "total_runs": total_runs,
             "total_trades": total_trades,
