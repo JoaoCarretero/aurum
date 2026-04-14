@@ -133,7 +133,7 @@ def _normalize_run_id(run_id: str | None, engine: str, json_path: str | None = N
         folder = Path(json_path).resolve().parent.parent.name
         if folder:
             return folder if folder.startswith(f"{engine}_") else f"{engine}_{folder}"
-    return datetime.now().strftime("%Y-%m-%d_%H%M")
+    return datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
 
 def _lookup_index_days(run_id: str) -> int | None:

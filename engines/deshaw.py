@@ -53,7 +53,7 @@ if not log.handlers:
 SEP = "─" * 80
 
 # ── RUN IDENTITY ─────────────────────────────────────────────
-RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M")
+RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 RUN_DIR = Path(f"data/deshaw/{RUN_ID}")
 (RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
 (RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)

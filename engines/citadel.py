@@ -290,10 +290,10 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
         entry, stop, target, rr = levels
 
         if is_chop_trade:
-            result, duration, exit_p = label_trade_chop(
+            result, duration, exit_p, exit_reason = label_trade_chop(
                 df, idx+1, direction, entry, stop, target)
         else:
-            result, duration, exit_p = label_trade(
+            result, duration, exit_p, exit_reason = label_trade(
                 df, idx+1, direction, entry, stop, target)
 
         # Mark-to-market: force-close at last bar's close rather than
@@ -381,7 +381,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             "trans_mult":    round(trans_mult, 2),
             "entry":      entry, "stop": stop, "target": target,
             "exit_p":     round(float(exit_p),6),
-            "rr":         rr, "duration": duration, "result": result, "pnl": pnl,
+            "rr":         rr, "duration": duration, "result": result, "exit_reason": exit_reason, "pnl": pnl,
             "size":       round(size, 4),
             "score":      score, "fractal_align": fractal_score,
             "omega_struct":   comps["struct"],   "omega_flow":     comps["flow"],

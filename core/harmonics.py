@@ -283,7 +283,7 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
             entry=round(entry,8)
             if direction=="BULLISH" and (stop>=entry or target<=entry): vetos["hermes_niveis"]+=1; continue
             if direction=="BEARISH" and (stop<=entry or target>=entry): vetos["hermes_niveis"]+=1; continue
-            result,duration,exit_p=label_trade(df,idx+1,direction,entry,stop,target)
+            result,duration,exit_p,exit_reason=label_trade(df,idx+1,direction,entry,stop,target)
             if result=="OPEN": continue
             size=position_size(account,entry,stop,max(score,SCORE_THRESHOLD),macro_b,direction,vol_r,dd_scale,False,peak_equity=peak_equity)
             size=round(size*corr_size_mult*trans_mult*fractal_score,4)
@@ -325,7 +325,7 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                 "direction":direction,"macro_bias":macro_b,"vol_regime":vol_r,
                 "h_regime":h_regime,"entropy":ent,"hurst":hurst,
                 "entry":entry,"stop":stop,"target":target,"exit_p":round(ep,6),
-                "rr":rr,"duration":duration,"result":result,"pnl":pnl,
+                "rr":rr,"duration":duration,"result":result,"exit_reason":exit_reason,"pnl":pnl,
                 "size":round(size,4),
                 "score":score,"fractal_align":fractal_score,
                 "dd_scale":round(dd_scale,2),"corr_mult":round(corr_size_mult,2),

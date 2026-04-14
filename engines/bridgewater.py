@@ -53,7 +53,7 @@ if not log.handlers:
 SEP = "─" * 80
 
 # ── RUN IDENTITY ─────────────────────────────────────────────
-RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M")
+RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 RUN_DIR = Path(f"data/bridgewater/{RUN_ID}")
 (RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
 (RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)
@@ -334,7 +334,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         entry, stop, target, rr = levels
 
         # ── LABEL TRADE ──
-        result, duration, exit_p = label_trade(df, idx + 1, direction, entry, stop, target)
+        result, duration, exit_p, exit_reason = label_trade(df, idx + 1, direction, entry, stop, target)
         if result == "OPEN":
             continue
 
@@ -409,7 +409,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             "trans_mult":    round(trans_mult, 2),
             "entry":      entry, "stop": stop, "target": target,
             "exit_p":     round(float(exit_p), 6),
-            "rr":         rr, "duration": duration, "result": result, "pnl": pnl,
+            "rr":         rr, "duration": duration, "result": result, "exit_reason": exit_reason, "pnl": pnl,
             "size":       round(size, 4),
             "score":      round(score, 3),
             "fractal_align": 1.0,

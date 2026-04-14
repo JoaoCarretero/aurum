@@ -251,7 +251,7 @@ def label_trade(df, entry_idx, direction, entry, stop, target):
             # the liq price, the exchange closed the position there regardless
             # of any favourable trailing stop computed above it.
             if l <= liq_long:
-                return "LOSS", j-entry_idx, liq_long
+                return "LOSS", j-entry_idx, liq_long, "liquidation"
             if not be_done and h >= entry + _be * risk:
                 cur_stop = entry; be_done = True
             if be_done and not trail_done and h >= entry + _act * risk:
@@ -260,12 +260,13 @@ def label_trade(df, entry_idx, direction, entry, stop, target):
                 cur_stop = max(cur_stop, h - _dst * risk)
             if l <= cur_stop:
                 result = "WIN" if cur_stop >= entry else "LOSS"
-                return result, j-entry_idx, cur_stop
+                reason = "trailing" if trail_done else ("breakeven" if be_done else "stop_initial")
+                return result, j-entry_idx, cur_stop, reason
             if h >= target:
-                return "WIN", j-entry_idx, target
+                return "WIN", j-entry_idx, target, "target"
         else:
             if h >= liq_short:
-                return "LOSS", j-entry_idx, liq_short
+                return "LOSS", j-entry_idx, liq_short, "liquidation"
             if not be_done and l <= entry - _be * risk:
                 cur_stop = entry; be_done = True
             if be_done and not trail_done and l <= entry - _act * risk:
@@ -274,10 +275,11 @@ def label_trade(df, entry_idx, direction, entry, stop, target):
                 cur_stop = min(cur_stop, l + _dst * risk)
             if h >= cur_stop:
                 result = "WIN" if cur_stop <= entry else "LOSS"
-                return result, j-entry_idx, cur_stop
+                reason = "trailing" if trail_done else ("breakeven" if be_done else "stop_initial")
+                return result, j-entry_idx, cur_stop, reason
             if l <= target:
-                return "WIN", j-entry_idx, target
-    return "OPEN", MAX_HOLD, df["close"].iloc[min(end-1,len(df)-1)]
+                return "WIN", j-entry_idx, target, "target"
+    return "OPEN", MAX_HOLD, df["close"].iloc[min(end-1,len(df)-1)], "max_hold"
 
 def label_trade_chop(df, entry_idx, direction, entry, stop, target):
     """
@@ -292,12 +294,12 @@ def label_trade_chop(df, entry_idx, direction, entry, stop, target):
     for j in range(entry_idx, end):
         h, l = df["high"].iloc[j], df["low"].iloc[j]
         if direction == "BULLISH":
-            if l <= liq_long: return "LOSS", j-entry_idx, liq_long
-            if l <= stop:   return "LOSS", j-entry_idx, stop
-            if h >= target: return "WIN",  j-entry_idx, target
+            if l <= liq_long: return "LOSS", j-entry_idx, liq_long, "liquidation"
+            if l <= stop:   return "LOSS", j-entry_idx, stop, "stop_initial"
+            if h >= target: return "WIN",  j-entry_idx, target, "target"
         else:
-            if h >= liq_short: return "LOSS", j-entry_idx, liq_short
-            if h >= stop:   return "LOSS", j-entry_idx, stop
-            if l <= target: return "WIN",  j-entry_idx, target
-    return "OPEN", chop_max_hold, df["close"].iloc[min(end-1,len(df)-1)]
+            if h >= liq_short: return "LOSS", j-entry_idx, liq_short, "liquidation"
+            if h >= stop:   return "LOSS", j-entry_idx, stop, "stop_initial"
+            if l <= target: return "WIN",  j-entry_idx, target, "target"
+    return "OPEN", chop_max_hold, df["close"].iloc[min(end-1,len(df)-1)], "max_hold"
 

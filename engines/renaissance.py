@@ -25,7 +25,7 @@ from core.harmonics import scan_hermes
 from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
 
 
-RUN_ID = datetime.now().strftime("%Y-%m-%d_%H%M")
+RUN_ID = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 RUN_DIR = ROOT / "data" / "renaissance" / RUN_ID
 (RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
 (RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)

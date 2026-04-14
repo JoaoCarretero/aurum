@@ -87,7 +87,7 @@ def create_run_dir(engine_name: str = "citadel") -> tuple[str, Path]:
 
     Returns (run_id, run_dir) where run_id is e.g. 'citadel_2026-04-09_1940'.
     """
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     run_id = f"{engine_name}_{stamp}"
     run_dir = RUNS_DIR / run_id
 
