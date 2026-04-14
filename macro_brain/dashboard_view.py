@@ -1,13 +1,12 @@
-"""Macro Brain cockpit v3 — 4-TAB organized layout.
+"""Macro Brain cockpit v4 — 4 tabs with 2-column layouts + visual hierarchy.
 
 Tabs:
-  MARKETS    Rates / FX / Commodities / Equity / Crypto
-  INSIGHTS   Analytics / COT / News / Calendar
-  NETWORK    On-chain / Engines portal / VPS
-  BOOK       Regime / Theses / Positions / P&L
+  [1] MARKETS    [Rates│FX] [Commodities│Equity] Crypto (full)
+  [2] INSIGHTS   Analytics (full) [COT│Calendar] News (full)
+  [3] NETWORK    On-chain (full) [Portal│VPS + Processes]
+  [4] BOOK       P&L cards · [Theses│Positions] · Regime
 
-Persisted tab state via module-level dict (survives refresh).
-Keyboard: 1-4 switch tab, ESC → main menu, R refresh.
+Better chrome: thicker section bars, larger titles, more breathing room.
 """
 from __future__ import annotations
 
@@ -42,13 +41,12 @@ BORDER  = "#1a1a1a"
 FONT    = "Consolas"
 
 
-# ── TAB STATE (persisted) ───────────────────────────────────
 _STATE = {"tab": "MARKETS", "news_filter": "ALL"}
 
 
 # ── DATA UTILS ───────────────────────────────────────────────
 
-def _macro_map(metrics: list[str], n: int = 30) -> dict[str, dict]:
+def _macro_map(metrics, n=30):
     from macro_brain.persistence.store import macro_series
     out = {}
     for m in metrics:
@@ -143,49 +141,71 @@ def _grid(parent, data, specs, spark_color=AMBER):
         t.pack(side="left", padx=1, fill="both", expand=True)
 
 
-def _section(parent, title, color=AMBER):
-    row = tk.Frame(parent, bg=BG); row.pack(fill="x", pady=(4, 0))
-    tk.Frame(row, bg=color, width=2).pack(side="left", fill="y")
-    tk.Label(row, text=f" {title}", font=(FONT, 7, "bold"),
-             fg=color, bg=BG, anchor="w").pack(side="left")
-    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", pady=(0, 1))
+def _section(parent, title, color=AMBER, pady_top=(8, 0)):
+    """Section header: thicker colored bar + bigger title + breathing room."""
+    spacer = tk.Frame(parent, bg=BG, height=pady_top[0])
+    spacer.pack(fill="x")
+    row = tk.Frame(parent, bg=BG); row.pack(fill="x")
+    tk.Frame(row, bg=color, width=4).pack(side="left", fill="y")  # 4px bar
+    tk.Label(row, text=f"  {title}", font=(FONT, 8, "bold"),
+             fg=color, bg=BG, anchor="w", padx=2).pack(side="left")
+    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", pady=(2, 2))
+
+
+def _column(parent, side: str = "left"):
+    """Create a column frame inside a 2-col row."""
+    col = tk.Frame(parent, bg=BG)
+    col.pack(side=side, fill="both", expand=True,
+             padx=(0, 4) if side == "left" else (4, 0))
+    return col
+
+
+def _two_col(parent) -> tuple[tk.Frame, tk.Frame]:
+    """Returns (left, right) frames inside a horizontal row."""
+    row = tk.Frame(parent, bg=BG); row.pack(fill="x", pady=0)
+    left = tk.Frame(row, bg=BG)
+    left.pack(side="left", fill="both", expand=True, padx=(0, 4))
+    right = tk.Frame(row, bg=BG)
+    right.pack(side="left", fill="both", expand=True, padx=(4, 0))
+    return left, right
 
 
 # ── TAB RENDERERS ────────────────────────────────────────────
 
 def _render_markets_tab(parent):
-    """Tab 1: MARKETS — price data across asset classes."""
-    # RATES
+    """[Rates│FX] [Commodities│Equity] Crypto (full)."""
+    # Row 1: Rates + FX side by side
+    left, right = _two_col(parent)
     rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
                          "YIELD_SPREAD_10_2", "FED_RATE"])
-    _section(parent, "US RATES · YIELDS", color=BLUE)
-    _grid(parent, rates, [
+    _section(left, "US RATES · YIELDS", color=BLUE, pady_top=(0, 0))
+    _grid(left, rates, [
         ("US13W",     "13W",       "{:.3f}%"),
         ("US5Y",      "5Y",        "{:.3f}%"),
         ("US10Y",     "10Y",       "{:.3f}%"),
         ("US30Y",     "30Y",       "{:.3f}%"),
         ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
-        ("FED_RATE",  "FED FUNDS", "{:.2f}%"),
+        ("FED_RATE",  "FED",       "{:.2f}%"),
     ], spark_color=BLUE)
 
-    # FOREX
     fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
                       "DXY_BROAD"])
-    _section(parent, "FOREX · MAJOR PAIRS")
-    _grid(parent, fx, [
+    _section(right, "FOREX · MAJOR PAIRS", color=AMBER_D, pady_top=(0, 0))
+    _grid(right, fx, [
         ("DXY",       "DXY",       "{:.2f}"),
         ("EUR_USD",   "EUR/USD",   "{:.4f}"),
         ("USD_JPY",   "USD/JPY",   "{:.2f}"),
         ("GBP_USD",   "GBP/USD",   "{:.4f}"),
         ("USD_CNY",   "USD/CNY",   "{:.4f}"),
-        ("DXY_BROAD", "DXY BROAD", "{:.2f}"),
+        ("DXY_BROAD", "BROAD",     "{:.2f}"),
     ])
 
-    # COMMODITIES
+    # Row 2: Commodities + Equity
+    left2, right2 = _two_col(parent)
     cmd = _macro_map(["GOLD", "SILVER", "WTI_OIL", "BRENT_OIL",
                        "COPPER", "NAT_GAS"])
-    _section(parent, "COMMODITIES", color=AMBER_B)
-    _grid(parent, cmd, [
+    _section(left2, "COMMODITIES", color=AMBER_B, pady_top=(0, 0))
+    _grid(left2, cmd, [
         ("GOLD",      "GOLD",      "${:,.0f}"),
         ("SILVER",    "SILVER",    "${:.2f}"),
         ("WTI_OIL",   "WTI",       "${:.2f}"),
@@ -194,10 +214,9 @@ def _render_markets_tab(parent):
         ("NAT_GAS",   "NAT GAS",   "${:.3f}"),
     ], spark_color=AMBER_B)
 
-    # EQUITY + VIX
     eq = _macro_map(["SP500", "NASDAQ", "DAX", "FTSE", "NIKKEI", "HSI", "VIX"])
-    _section(parent, "EQUITY · VOLATILITY", color=BLUE)
-    _grid(parent, eq, [
+    _section(right2, "EQUITY · VOLATILITY", color=BLUE, pady_top=(0, 0))
+    _grid(right2, eq, [
         ("SP500",    "S&P 500",   "{:,.0f}"),
         ("NASDAQ",   "NASDAQ",    "{:,.0f}"),
         ("DAX",      "DAX",       "{:,.0f}"),
@@ -207,7 +226,7 @@ def _render_markets_tab(parent):
         ("VIX",      "VIX",       "{:.2f}"),
     ], spark_color=BLUE)
 
-    # CRYPTO TIER 1
+    # Row 3: Crypto Tier 1 (full width)
     c1 = _macro_map(["BTC_SPOT", "ETH_SPOT", "SOL_SPOT", "BNB_SPOT", "XRP_SPOT",
                       "BTC_DOMINANCE", "TOTAL_CRYPTO_MCAP", "CRYPTO_FEAR_GREED"])
     _section(parent, "CRYPTO TIER 1 · SENTIMENT", color=AMBER)
@@ -222,12 +241,12 @@ def _render_markets_tab(parent):
         ("CRYPTO_FEAR_GREED",   "F&G",      "{:.0f}/100"),
     ])
 
-    # CRYPTO TIER 2 + 3 (condensed)
+    # Row 4: Crypto Tier 2+3 (full width, 14 across split into 2 rows)
     c23 = _macro_map(["USDC_SPOT", "ADA_SPOT", "DOGE_SPOT", "AVAX_SPOT",
                        "TRX_SPOT", "LINK_SPOT", "DOT_SPOT", "TON_SPOT",
                        "POL_SPOT", "SHIB_SPOT", "LTC_SPOT", "BCH_SPOT",
                        "NEAR_SPOT", "UNI_SPOT"])
-    _section(parent, "CRYPTO TIER 2-3")
+    _section(parent, "CRYPTO TIER 2-3", color=DIM)
     _grid(parent, c23, [
         ("USDC_SPOT", "USDC",  "${:.4f}"),
         ("ADA_SPOT",  "ADA",   "${:.4f}"),
@@ -236,9 +255,9 @@ def _render_markets_tab(parent):
         ("TRX_SPOT",  "TRX",   "${:.4f}"),
         ("LINK_SPOT", "LINK",  "${:.2f}"),
         ("DOT_SPOT",  "DOT",   "${:.3f}"),
-        ("TON_SPOT",  "TON",   "${:.2f}"),
     ])
     _grid(parent, c23, [
+        ("TON_SPOT",  "TON",   "${:.2f}"),
         ("POL_SPOT",  "POL",   "${:.4f}"),
         ("SHIB_SPOT", "SHIB",  "${:.8f}"),
         ("LTC_SPOT",  "LTC",   "${:.2f}"),
@@ -249,22 +268,22 @@ def _render_markets_tab(parent):
 
 
 def _render_insights_tab(parent):
-    """Tab 2: INSIGHTS — analytics, positioning, news, calendar."""
+    """Analytics (full) [COT│Calendar] News (full)."""
     from macro_brain.persistence.store import recent_events
 
-    # ANALYTICS
+    # ANALYTICS (full width — always 7 cards)
     try:
         from macro_brain.ml_engine.analytics import compute_all
         insights = compute_all()
     except Exception:
         insights = []
     if insights:
-        _section(parent, "MACRO ANALYTICS · DERIVED INSIGHTS", color=PURPLE)
-        sig_colors = {"bullish": GREEN, "bearish": RED, "warning": AMBER, "neutral": DIM}
-        ins_row = tk.Frame(parent, bg=BG); ins_row.pack(fill="x", pady=1)
+        _section(parent, "MACRO ANALYTICS · DERIVED INSIGHTS", color=PURPLE, pady_top=(0, 0))
+        sig_c = {"bullish": GREEN, "bearish": RED, "warning": AMBER, "neutral": DIM}
+        row = tk.Frame(parent, bg=BG); row.pack(fill="x", pady=1)
         for ins in insights:
-            sc = sig_colors.get(ins.signal, WHITE)
-            card = tk.Frame(ins_row, bg=PANEL, highlightbackground=sc,
+            sc = sig_c.get(ins.signal, WHITE)
+            card = tk.Frame(row, bg=PANEL, highlightbackground=sc,
                            highlightthickness=1)
             card.pack(side="left", padx=1, fill="both", expand=True)
             tk.Label(card, text=ins.name.upper(), font=(FONT, 6, "bold"),
@@ -277,48 +296,54 @@ def _render_insights_tab(parent):
                      fg=DIM, bg=PANEL, anchor="w", wraplength=180,
                      justify="left").pack(fill="x", padx=4, pady=(0, 2))
 
-    # CFTC COT
+    # Row: COT + Calendar side by side
+    left, right = _two_col(parent)
+
+    # COT (left)
     cot = _macro_map([
         "DXY_NET_LONGS", "EUR_FX_NET_LONGS", "JPY_FX_NET_LONGS",
         "GBP_FX_NET_LONGS", "GOLD_NET_LONGS", "SILVER_NET_LONGS",
         "WTI_NET_LONGS", "SP500_ES_NET_LONGS",
     ], n=12)
-    _section(parent, "CFTC COT · INSTITUTIONAL POSITIONING (weekly)", color=MAGENTA)
-    _grid(parent, cot, [
+    _section(left, "CFTC COT · POSITIONING (weekly)", color=MAGENTA)
+    _grid(left, cot, [
         ("DXY_NET_LONGS",       "DXY",      "{:+,.0f}"),
         ("EUR_FX_NET_LONGS",    "EUR",      "{:+,.0f}"),
         ("JPY_FX_NET_LONGS",    "JPY",      "{:+,.0f}"),
         ("GBP_FX_NET_LONGS",    "GBP",      "{:+,.0f}"),
+    ], spark_color=MAGENTA)
+    _grid(left, cot, [
         ("GOLD_NET_LONGS",      "GOLD",     "{:+,.0f}"),
         ("SILVER_NET_LONGS",    "SILVER",   "{:+,.0f}"),
         ("WTI_NET_LONGS",       "WTI",      "{:+,.0f}"),
         ("SP500_ES_NET_LONGS",  "SP500",    "{:+,.0f}"),
     ], spark_color=MAGENTA)
 
-    # ECONOMIC CALENDAR
+    # Calendar (right)
+    _section(right, "ECONOMIC CALENDAR · NEXT RELEASES", color=AMBER_B)
     cal_events = recent_events(category="calendar", limit=20)
     now_iso = datetime.utcnow().isoformat()
     future = sorted([e for e in cal_events if e.get("ts", "") >= now_iso],
-                    key=lambda e: e.get("ts", ""))[:6]
+                    key=lambda e: e.get("ts", ""))[:12]
     if future:
-        _section(parent, "ECONOMIC CALENDAR · NEXT RELEASES", color=AMBER_B)
-        cal_row = tk.Frame(parent, bg=BG); cal_row.pack(fill="x", pady=1)
-        for e in future:
+        for e in future[:10]:
             impact = e.get("impact", 0) or 0
             label = (e.get("entities") or ["?"])[0] if e.get("entities") else "?"
             date_s = e.get("ts", "")[:10]
             chip_c = RED if impact >= 0.9 else (AMBER if impact >= 0.7 else DIM)
-            chip = tk.Frame(cal_row, bg=PANEL, highlightbackground=chip_c,
-                            highlightthickness=1, padx=6, pady=2)
-            chip.pack(side="left", padx=2)
-            tk.Label(chip, text=label, font=(FONT, 7, "bold"),
-                     fg=chip_c, bg=PANEL).pack()
-            tk.Label(chip, text=date_s, font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=PANEL).pack()
-            tk.Label(chip, text=f"impact {impact:.0%}",
-                     font=(FONT, 6), fg=DIM, bg=PANEL).pack()
+            row = tk.Frame(right, bg=BG); row.pack(fill="x", pady=0, padx=2)
+            tk.Frame(row, bg=chip_c, width=3).pack(side="left", fill="y")
+            tk.Label(row, text=f" {date_s} ", font=(FONT, 8),
+                     fg=WHITE, bg=BG, width=12, anchor="w").pack(side="left")
+            tk.Label(row, text=label, font=(FONT, 8, "bold"),
+                     fg=chip_c, bg=BG, width=22, anchor="w").pack(side="left")
+            tk.Label(row, text=f"{impact:.0%}", font=(FONT, 7),
+                     fg=DIM, bg=BG).pack(side="left")
+    else:
+        tk.Label(right, text="  (no upcoming releases)",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
 
-    # NEWS FEED with filter tabs
+    # NEWS (full width with filter tabs)
     _section(parent, "LIVE NEWS · INSTITUTIONAL FEEDS", color=AMBER_B)
     tabs_row = tk.Frame(parent, bg=BG); tabs_row.pack(fill="x", pady=(0, 2))
     news_body = tk.Frame(parent, bg=BG); news_body.pack(fill="x")
@@ -337,7 +362,7 @@ def _render_insights_tab(parent):
         cat = _STATE["news_filter"].lower()
         if cat != "all":
             filt = [e for e in filt if e.get("category", "").lower() == cat]
-        for e in filt[:12]:
+        for e in filt[:15]:
             sent = e.get("sentiment") or 0.0
             impact = e.get("impact") or 0.0
             sc = GREEN if sent > 0.2 else (RED if sent < -0.2 else DIM)
@@ -357,15 +382,15 @@ def _render_insights_tab(parent):
                      bg=BG, width=9, anchor="w").pack(side="left")
             tk.Label(row, text=f"{sent:+.2f}", font=(FONT, 7, "bold"),
                      fg=sc, bg=BG, width=6, anchor="w").pack(side="left")
-            tk.Label(row, text=hl[:140], font=(FONT, 8), fg=WHITE, bg=BG,
+            tk.Label(row, text=hl[:160], font=(FONT, 8), fg=WHITE, bg=BG,
                      anchor="w").pack(side="left", fill="x", expand=True)
         if not filt:
             tk.Label(news_body, text="  (no news matching filter)",
                      font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
 
-    def _set_filter(c, parent_frame=tabs_row):
+    def _set_filter(c):
         _STATE["news_filter"] = c
-        for w in parent_frame.winfo_children():
+        for w in tabs_row.winfo_children():
             try: w.destroy()
             except Exception: pass
         _build_news_tabs()
@@ -388,15 +413,15 @@ def _render_insights_tab(parent):
 
 
 def _render_network_tab(parent):
-    """Tab 3: NETWORK — on-chain, engines portal, VPS."""
-    # BTC ON-CHAIN
+    """On-chain (full) [Portal│VPS + processes]."""
+    # On-chain basic (full)
     onchain = _macro_map([
         "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
         "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
         "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
         "BTC_24H_TRADE_VOLUME_USD",
     ], n=30)
-    _section(parent, "BTC ON-CHAIN · NETWORK STATE", color="#00ff88")
+    _section(parent, "BTC ON-CHAIN · NETWORK STATE", color="#00ff88", pady_top=(0, 0))
     _grid(parent, onchain, [
         ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
         ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
@@ -408,26 +433,28 @@ def _render_network_tab(parent):
         ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
     ], spark_color="#00ff88")
 
-    # BTC ADVANCED METRICS
+    # On-chain advanced (full, smaller)
     adv = _macro_map([
         "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
         "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
         "BTC_24H_FEES_BTC", "BTC_24H_MINED",
     ], n=30)
+    _section(parent, "BTC ADVANCED · FEES · BLOCK TIME", color="#00cc66")
     _grid(parent, adv, [
-        ("BTC_FEE_30MIN_SATVB",      "30MIN FEE",  "{:.0f}"),
-        ("BTC_FEE_1H_SATVB",         "1H FEE",     "{:.0f}"),
-        ("BTC_FEE_ECONOMY_SATVB",    "ECON FEE",   "{:.0f}"),
-        ("BTC_MEMPOOL_VSIZE",        "MP VSIZE",   "{:,.0f}"),
-        ("BTC_AVG_BLOCK_TIME_MIN",   "BLOCK TIME", "{:.1f}"),
-        ("BTC_24H_FEES_BTC",         "24H FEES BTC", "{:.2f}"),
-        ("BTC_24H_MINED",            "24H MINED",  "{:.0f}"),
-    ])
+        ("BTC_FEE_30MIN_SATVB",      "30MIN FEE",   "{:.0f}"),
+        ("BTC_FEE_1H_SATVB",         "1H FEE",      "{:.0f}"),
+        ("BTC_FEE_ECONOMY_SATVB",    "ECON FEE",    "{:.0f}"),
+        ("BTC_MEMPOOL_VSIZE",        "MP VSIZE",    "{:,.0f}"),
+        ("BTC_AVG_BLOCK_TIME_MIN",   "BLOCK TIME",  "{:.1f}"),
+        ("BTC_24H_FEES_BTC",         "24H FEES",    "{:.2f}"),
+        ("BTC_24H_MINED",            "24H MINED",   "{:.0f}"),
+    ], spark_color="#00cc66")
 
-    # ENGINES PORTAL
-    _section(parent, "ENGINES PORTAL · PROCESS MONITOR", color=CYAN)
-    portal_row = tk.Frame(parent, bg=BG); portal_row.pack(fill="x", pady=1)
+    # Row: Portal stats + VPS side by side
+    left, right = _two_col(parent)
 
+    # Portal (left)
+    _section(left, "ENGINES PORTAL · PROCESS MONITOR", color=CYAN)
     try:
         from core.proc import list_procs
         procs = list_procs()
@@ -436,17 +463,21 @@ def _render_network_tab(parent):
     running = [p for p in procs if p.get("alive") or p.get("status") == "running"]
     finished = [p for p in procs if not p.get("alive") and p.get("status") == "finished"]
 
-    for label, val in [("ACTIVE", f"{len(running)}"),
-                        ("FINISHED", f"{len(finished)}"),
-                        ("TOTAL TRACKED", f"{len(procs)}")]:
-        box = tk.Frame(portal_row, bg=PANEL, padx=8, pady=2)
-        box.pack(side="left", padx=1)
+    stat_row = tk.Frame(left, bg=BG); stat_row.pack(fill="x", pady=2)
+    for label, val, col in [
+        ("ACTIVE",    f"{len(running)}",  GREEN),
+        ("FINISHED",  f"{len(finished)}", DIM),
+        ("TOTAL",     f"{len(procs)}",    CYAN),
+    ]:
+        box = tk.Frame(stat_row, bg=PANEL, padx=10, pady=4,
+                       highlightbackground=col, highlightthickness=1)
+        box.pack(side="left", padx=2, fill="both", expand=True)
         tk.Label(box, text=label, font=(FONT, 6, "bold"),
-                 fg=CYAN, bg=PANEL).pack()
-        tk.Label(box, text=val, font=(FONT, 10, "bold"),
+                 fg=col, bg=PANEL).pack()
+        tk.Label(box, text=val, font=(FONT, 14, "bold"),
                  fg=WHITE, bg=PANEL).pack()
 
-    # VPS
+    # VPS (right)
     vps_online = False; vps_detail = "not configured"
     try:
         vps_path = Path("config/vps.json")
@@ -461,25 +492,32 @@ def _render_network_tab(parent):
                         vps_online = True
                     vps_detail = f"{host}:{port}"
                 except (OSError, ValueError):
-                    vps_detail = f"{host}:{cfg.get('port', 22)} UNREACHABLE"
+                    vps_detail = f"{host}:{cfg.get('port', 22)}"
             else: vps_detail = "host not set"
     except (OSError, json.JSONDecodeError):
         pass
 
     vps_c = GREEN if vps_online else RED
-    vps_box = tk.Frame(portal_row, bg=PANEL, highlightbackground=vps_c,
-                       highlightthickness=1, padx=8, pady=2)
-    vps_box.pack(side="left", padx=2)
-    tk.Label(vps_box, text="VPS", font=(FONT, 6, "bold"),
-             fg=CYAN, bg=PANEL).pack()
-    tk.Label(vps_box, text="ONLINE" if vps_online else "OFFLINE",
-             font=(FONT, 9, "bold"), fg=vps_c, bg=PANEL).pack()
-    tk.Label(vps_box, text=vps_detail[:20], font=(FONT, 6),
-             fg=DIM, bg=PANEL).pack()
+    _section(right, "VPS STATUS", color=vps_c)
+    vps_box = tk.Frame(right, bg=PANEL, padx=12, pady=10,
+                       highlightbackground=vps_c, highlightthickness=1)
+    vps_box.pack(fill="x", padx=2, pady=2)
+    tk.Label(vps_box, text="● ONLINE" if vps_online else "○ OFFLINE",
+             font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL).pack(anchor="w")
+    tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
+             fg=WHITE, bg=PANEL).pack(anchor="w")
+    tk.Label(vps_box, text="SSH connect test · port 22",
+             font=(FONT, 6), fg=DIM, bg=PANEL).pack(anchor="w", pady=(2, 0))
 
-    # Process list
+    # Process list (full width)
     if procs:
-        _section(parent, "ACTIVE + RECENT PROCESSES")
+        _section(parent, "PROCESSES · ACTIVE + RECENT")
+        hdr = tk.Frame(parent, bg=BG); hdr.pack(fill="x", pady=(0, 1))
+        for txt, w in [("", 3), ("ENGINE", 16), ("PID", 12),
+                        ("STATUS", 10), ("STARTED", 15)]:
+            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=AMBER_D,
+                     bg=BG, width=w, anchor="w").pack(side="left")
+
         for p in procs[:15]:
             engine = (p.get("engine") or "?").upper()
             pid = p.get("pid") or "?"
@@ -487,11 +525,11 @@ def _render_network_tab(parent):
             alive = p.get("alive", False)
             sc = GREEN if alive else DIM
             row = tk.Frame(parent, bg=BG); row.pack(fill="x")
-            tk.Label(row, text=f"  {'●' if alive else '○'}",
+            tk.Label(row, text=f" {'●' if alive else '○'}",
                      font=(FONT, 8, "bold"), fg=sc, bg=BG, width=3).pack(side="left")
             tk.Label(row, text=f"{engine:<14}", font=(FONT, 8, "bold"),
                      fg=WHITE, bg=BG, width=16, anchor="w").pack(side="left")
-            tk.Label(row, text=f"pid {pid}", font=(FONT, 7),
+            tk.Label(row, text=f"{pid}", font=(FONT, 7),
                      fg=DIM, bg=BG, width=12, anchor="w").pack(side="left")
             tk.Label(row, text=status.upper(), font=(FONT, 7, "bold"),
                      fg=sc, bg=BG, width=10, anchor="w").pack(side="left")
@@ -502,68 +540,51 @@ def _render_network_tab(parent):
 
 
 def _render_book_tab(parent):
-    """Tab 4: BOOK — regime + theses + positions + P&L."""
+    """Header stats · [Theses│Positions] · Regime details."""
     from macro_brain.persistence.store import (
         active_theses, latest_regime, open_positions, pnl_summary,
     )
 
-    # REGIME details
-    _section(parent, "CURRENT REGIME · DETAILS", color=AMBER)
-    regime = latest_regime()
-    reg_frame = tk.Frame(parent, bg=BG); reg_frame.pack(fill="x", pady=1)
-    if regime:
-        reg_name = (regime.get("regime") or "?").upper()
-        conf = regime.get("confidence") or 0.0
-        reg_color = {"RISK_ON": GREEN, "RISK_OFF": RED,
-                     "TRANSITION": AMBER, "UNCERTAINTY": DIM}.get(reg_name, WHITE)
-        tk.Label(reg_frame, text=reg_name, font=(FONT, 18, "bold"),
-                 fg=reg_color, bg=BG).pack(side="left", padx=(8, 16))
-        col = tk.Frame(reg_frame, bg=BG); col.pack(side="left")
-        tk.Label(col, text=f"confidence {conf:.0%}", font=(FONT, 9),
-                 fg=WHITE, bg=BG).pack(anchor="w")
-        tk.Label(col, text=f"age {_fmt_age(regime.get('ts', ''))}",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w")
-        reason = regime.get("reason") or ""
-        if reason:
-            tk.Label(parent, text=f"  reason: {reason}", font=(FONT, 8),
-                     fg=DIM, bg=BG, anchor="w",
-                     wraplength=1000, justify="left").pack(fill="x", padx=6)
-    else:
-        tk.Label(reg_frame, text="  (no regime snapshot yet)",
-                 font=(FONT, 9), fg=DIM, bg=BG).pack()
-
-    # P&L CARDS
-    _section(parent, "MACRO BOOK · P&L", color=AMBER_D)
+    # Big P&L header
     pnl = pnl_summary()
-    pnl_row = tk.Frame(parent, bg=BG); pnl_row.pack(fill="x", pady=1)
     total = pnl.get("total_pnl", 0) or 0
     equity = pnl.get("equity", 0) or 0
     initial = pnl.get("initial", 0) or 0
     dd_pct = ((initial - equity) / initial * 100) if initial else 0
+    theses = active_theses()
+    positions = open_positions()
 
+    _section(parent, "MACRO BOOK · PAPER", color=AMBER_D, pady_top=(0, 0))
+    pnl_row = tk.Frame(parent, bg=BG); pnl_row.pack(fill="x", pady=1)
     for label, val, col in [
-        ("EQUITY",   f"${equity:,.0f}", AMBER),
-        ("TOTAL P&L", f"${total:+,.0f}", GREEN if total >= 0 else RED),
-        ("INITIAL", f"${initial:,.0f}", WHITE),
-        ("DRAWDOWN", f"{-dd_pct:+.2f}%" if dd_pct > 0 else "0.00%",
+        ("EQUITY",    f"${equity:,.0f}",
+         AMBER),
+        ("TOTAL P&L", f"${total:+,.0f}",
+         GREEN if total >= 0 else RED),
+        ("INITIAL",   f"${initial:,.0f}",  WHITE),
+        ("DRAWDOWN",  f"{-dd_pct:+.2f}%" if dd_pct > 0 else "0.00%",
          RED if dd_pct > 0 else GREEN),
+        ("THESES",    f"{len(theses)}",    AMBER),
+        ("POSITIONS", f"{len(positions)}", AMBER),
     ]:
-        box = tk.Frame(pnl_row, bg=BG3, padx=12, pady=6)
-        box.pack(side="left", padx=2)
-        tk.Label(box, text=val, font=(FONT, 14, "bold"),
+        box = tk.Frame(pnl_row, bg=BG3, padx=12, pady=6,
+                       highlightbackground=col, highlightthickness=1)
+        box.pack(side="left", padx=2, fill="both", expand=True)
+        tk.Label(box, text=val, font=(FONT, 13, "bold"),
                  fg=col, bg=BG3).pack()
         tk.Label(box, text=label, font=(FONT, 7, "bold"),
                  fg=DIM, bg=BG3).pack()
 
-    # ACTIVE THESES
-    _section(parent, "ACTIVE THESES")
-    theses = active_theses()
+    # Theses + Positions side by side
+    left, right = _two_col(parent)
+
+    _section(left, "ACTIVE THESES")
     if theses:
         for t in theses:
-            card = tk.Frame(parent, bg=PANEL, highlightbackground=BORDER,
+            card = tk.Frame(left, bg=PANEL, highlightbackground=BORDER,
                             highlightthickness=1)
             card.pack(fill="x", pady=2, padx=2)
-            hdr_c = tk.Frame(card, bg=PANEL); hdr_c.pack(fill="x", padx=8, pady=(4, 2))
+            hdr_c = tk.Frame(card, bg=PANEL); hdr_c.pack(fill="x", padx=6, pady=(4, 2))
             sc = GREEN if t["direction"] == "long" else RED
             tk.Label(hdr_c, text=t["direction"].upper(), font=(FONT, 8, "bold"),
                      fg=BG, bg=sc, padx=4).pack(side="left")
@@ -574,44 +595,168 @@ def _render_book_tab(parent):
             tk.Label(hdr_c, text=f"{t.get('target_horizon_days', '?')}d",
                      font=(FONT, 8), fg=DIM, bg=PANEL).pack(side="right", padx=4)
             rationale = t.get("rationale", "") or ""
-            tk.Label(card, text=rationale[:300], font=(FONT, 8), fg=DIM,
-                     bg=PANEL, wraplength=900, justify="left",
-                     anchor="w").pack(fill="x", padx=8, pady=(0, 4))
+            tk.Label(card, text=rationale[:250], font=(FONT, 8), fg=DIM,
+                     bg=PANEL, wraplength=500, justify="left",
+                     anchor="w").pack(fill="x", padx=6, pady=(0, 4))
     else:
-        tk.Label(parent, text="  (no active theses)", font=(FONT, 9),
+        tk.Label(left, text="  (no active theses)", font=(FONT, 9),
                  fg=DIM, bg=BG).pack(pady=6)
 
-    # OPEN POSITIONS
-    _section(parent, "OPEN POSITIONS")
-    positions = open_positions()
+    _section(right, "OPEN POSITIONS")
     if positions:
-        tk.Label(parent, text=f"  {'ASSET':<10} {'SIDE':<6} {'SIZE USD':>10} "
-                                f"{'ENTRY':>10} {'UNREALIZED':>12}",
-                 font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG,
-                 anchor="w").pack(fill="x")
         for p in positions:
             sc = GREEN if p["side"] == "long" else RED
-            row = tk.Frame(parent, bg=PANEL, highlightbackground=BORDER,
-                          highlightthickness=1)
-            row.pack(fill="x", pady=1, padx=2)
-            text = (f"  {p['asset']:<10} "
-                    f"{p['side'].upper():<6} "
-                    f"${p['size_usd']:>9,.0f} "
-                    f"@ {p['entry_price']:>9,.1f}")
-            tk.Label(row, text=text, font=(FONT, 9), fg=sc, bg=PANEL,
-                     anchor="w").pack(side="left", fill="x", expand=True, padx=6, pady=3)
+            card = tk.Frame(right, bg=PANEL, highlightbackground=sc,
+                            highlightthickness=1)
+            card.pack(fill="x", pady=2, padx=2)
+            tk.Label(card, text=f"  {p['side'].upper()}  {p['asset']}",
+                     font=(FONT, 10, "bold"),
+                     fg=sc, bg=PANEL).pack(anchor="w", padx=6, pady=(4, 0))
+            detail = f"  size ${p['size_usd']:,.0f}  @  {p['entry_price']:,.2f}"
+            tk.Label(card, text=detail, font=(FONT, 8),
+                     fg=WHITE, bg=PANEL).pack(anchor="w", padx=6, pady=(0, 4))
     else:
-        tk.Label(parent, text="  (no open positions)", font=(FONT, 9),
+        tk.Label(right, text="  (no open positions)", font=(FONT, 9),
                  fg=DIM, bg=BG).pack(pady=6)
+
+    # Regime details (full width)
+    _section(parent, "CURRENT REGIME · DETAILS", color=AMBER)
+    regime = latest_regime()
+    if regime:
+        reg_name = (regime.get("regime") or "?").upper()
+        conf = regime.get("confidence") or 0.0
+        reg_color = {"RISK_ON": GREEN, "RISK_OFF": RED,
+                     "TRANSITION": AMBER, "UNCERTAINTY": DIM}.get(reg_name, WHITE)
+        reg_row = tk.Frame(parent, bg=BG); reg_row.pack(fill="x", pady=1)
+        tk.Label(reg_row, text=reg_name, font=(FONT, 20, "bold"),
+                 fg=reg_color, bg=BG).pack(side="left", padx=(8, 20))
+        col = tk.Frame(reg_row, bg=BG); col.pack(side="left")
+        tk.Label(col, text=f"confidence {conf:.0%}",
+                 font=(FONT, 10), fg=WHITE, bg=BG).pack(anchor="w")
+        tk.Label(col, text=f"snapshot age {_fmt_age(regime.get('ts', ''))}",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w")
+        reason = regime.get("reason") or ""
+        if reason:
+            tk.Label(parent, text=f"  {reason}", font=(FONT, 8),
+                     fg=DIM, bg=BG, anchor="w",
+                     wraplength=1000, justify="left").pack(fill="x", padx=6,
+                                                            pady=(2, 0))
+    else:
+        tk.Label(parent, text="  (no regime snapshot yet)",
+                 font=(FONT, 9), fg=DIM, bg=BG).pack(pady=6)
 
 
 # ── MAIN RENDER ──────────────────────────────────────────────
 
+def _render_analysis_tab(parent):
+    """Economic indicators + detailed COT by trader class + whales."""
+    from macro_brain.persistence.store import recent_events
+
+    # ── ECONOMIC INDICATORS (FRED) ────────────────────
+    econ = _macro_map([
+        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
+        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "M2_MONEY_SUPPLY",
+        "FED_BALANCE_SHEET", "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION",
+        "FED_RATE", "US10Y", "YIELD_SPREAD_10_2",
+    ], n=30)
+    _section(parent, "ECONOMIC INDICATORS · FRED",
+              color=AMBER_B, pady_top=(0, 0))
+    _grid(parent, econ, [
+        ("CPI_US",             "CPI",              "{:.2f}"),
+        ("CORE_CPI_US",        "CORE CPI",         "{:.2f}"),
+        ("UNEMPLOYMENT_US",    "UNEMPLOYMENT",     "{:.2f}%"),
+        ("NONFARM_PAYROLLS",   "NFP",              "{:,.0f}"),
+        ("JOBLESS_CLAIMS",     "JOBLESS CLAIMS",   "{:,.0f}"),
+        ("MICHIGAN_SENTIMENT", "MICHIGAN",         "{:.1f}"),
+    ], spark_color=AMBER_B)
+    _grid(parent, econ, [
+        ("M2_MONEY_SUPPLY",     "M2",              "{:,.0f}"),
+        ("FED_BALANCE_SHEET",   "FED BAL SHEET",   "{:,.0f}"),
+        ("HOUSING_STARTS",      "HOUSING",         "{:,.0f}"),
+        ("INDUSTRIAL_PRODUCTION", "INDUST PROD",   "{:.2f}"),
+        ("FED_RATE",            "FED FUNDS",       "{:.2f}%"),
+        ("US10Y",               "10Y YIELD",       "{:.2f}%"),
+    ], spark_color=AMBER_B)
+
+    # ── BIG BANKS (SWAP DEALERS) ──────────────────────
+    big_banks = _macro_map([
+        "GOLD_SWAP_NET", "SILVER_SWAP_NET", "WTI_SWAP_NET",
+        "BRENT_SWAP_NET", "COPPER_SWAP_NET", "NAT_GAS_SWAP_NET",
+        "BTC_CME_SWAP_NET", "ETH_CME_SWAP_NET",
+    ], n=12)
+    _section(parent, "BIG BANKS POSITIONING · SWAP DEALERS (JPM/GS/BAC/MS)",
+              color=CYAN)
+    _grid(parent, big_banks, [
+        ("GOLD_SWAP_NET",    "GOLD",    "{:+,.0f}"),
+        ("SILVER_SWAP_NET",  "SILVER",  "{:+,.0f}"),
+        ("WTI_SWAP_NET",     "WTI",     "{:+,.0f}"),
+        ("BRENT_SWAP_NET",   "BRENT",   "{:+,.0f}"),
+        ("COPPER_SWAP_NET",  "COPPER",  "{:+,.0f}"),
+        ("NAT_GAS_SWAP_NET", "NAT GAS", "{:+,.0f}"),
+        ("BTC_CME_SWAP_NET", "BTC CME", "{:+,.0f}"),
+        ("ETH_CME_SWAP_NET", "ETH CME", "{:+,.0f}"),
+    ], spark_color=CYAN)
+
+    # ── HEDGE FUNDS (MANAGED MONEY) ───────────────────
+    hedgies = _macro_map([
+        "GOLD_MM_NET", "SILVER_MM_NET", "WTI_MM_NET",
+        "BRENT_MM_NET", "COPPER_MM_NET", "BTC_CME_MM_NET", "ETH_CME_MM_NET",
+    ], n=12)
+    _section(parent, "HEDGE FUNDS POSITIONING · MANAGED MONEY",
+              color=MAGENTA)
+    _grid(parent, hedgies, [
+        ("GOLD_MM_NET",    "GOLD",     "{:+,.0f}"),
+        ("SILVER_MM_NET",  "SILVER",   "{:+,.0f}"),
+        ("WTI_MM_NET",     "WTI",      "{:+,.0f}"),
+        ("BRENT_MM_NET",   "BRENT",    "{:+,.0f}"),
+        ("COPPER_MM_NET",  "COPPER",   "{:+,.0f}"),
+        ("BTC_CME_MM_NET", "BTC CME",  "{:+,.0f}"),
+        ("ETH_CME_MM_NET", "ETH CME",  "{:+,.0f}"),
+    ], spark_color=MAGENTA)
+
+    # ── WHALES / INSTITUTIONAL FILINGS ────────────────
+    insider_events = recent_events(category="insider", limit=10)
+    inst_events = recent_events(category="institutional", limit=10)
+
+    left, right = _two_col(parent)
+
+    _section(left, "INSIDER TRADING · SEC FORM 4 (realtime)", color=GREEN)
+    if insider_events:
+        for e in insider_events[:10]:
+            age = _fmt_age(e.get("ts", ""))
+            hl = (e.get("headline", "") or "").replace("INSIDER: ", "")
+            row = tk.Frame(left, bg=BG); row.pack(fill="x", pady=0)
+            tk.Label(row, text=f" {age:<4}", font=(FONT, 7), fg=DIM,
+                     bg=BG, width=6, anchor="w").pack(side="left")
+            tk.Label(row, text=hl[:72], font=(FONT, 8),
+                     fg=WHITE, bg=BG, anchor="w").pack(side="left",
+                                                         fill="x", expand=True)
+    else:
+        tk.Label(left, text="  (no insider filings)",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+
+    _section(right, "13F · INSTITUTIONAL HOLDINGS (quarterly)", color=PURPLE)
+    if inst_events:
+        for e in inst_events[:10]:
+            age = _fmt_age(e.get("ts", ""))
+            hl = (e.get("headline", "") or "").replace("13F FILING: ", "")
+            row = tk.Frame(right, bg=BG); row.pack(fill="x", pady=0)
+            tk.Label(row, text=f" {age:<4}", font=(FONT, 7), fg=DIM,
+                     bg=BG, width=6, anchor="w").pack(side="left")
+            tk.Label(row, text=hl[:72], font=(FONT, 8),
+                     fg=WHITE, bg=BG, anchor="w").pack(side="left",
+                                                         fill="x", expand=True)
+    else:
+        tk.Label(right, text="  (no 13F filings)",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+
+
 _TABS = [
     ("MARKETS",  "1", _render_markets_tab),
     ("INSIGHTS", "2", _render_insights_tab),
-    ("NETWORK",  "3", _render_network_tab),
-    ("BOOK",     "4", _render_book_tab),
+    ("ANALYSIS", "3", _render_analysis_tab),
+    ("NETWORK",  "4", _render_network_tab),
+    ("BOOK",     "5", _render_book_tab),
 ]
 
 
@@ -626,7 +771,6 @@ def render(parent: tk.Widget, app=None) -> None:
     outer = tk.Frame(parent, bg=BG)
     outer.pack(fill="both", expand=True, padx=6, pady=2)
 
-    # Nav bindings
     if app is not None:
         for k in ("<Escape>", "<Key-0>", "<BackSpace>"):
             try: app._kb(k, lambda: app._menu("main"))
@@ -668,21 +812,19 @@ def render(parent: tk.Widget, app=None) -> None:
 
     tk.Frame(outer, bg=AMBER, height=1).pack(fill="x", pady=(1, 0))
 
-    # ── TAB BAR ────────────────────────────────────────
+    # ── TAB BAR (bolder) ───────────────────────────────
     tab_bar = tk.Frame(outer, bg=BG)
-    tab_bar.pack(fill="x", pady=(4, 0))
+    tab_bar.pack(fill="x", pady=(6, 0))
 
     content = tk.Frame(outer, bg=BG)
-    content.pack(fill="both", expand=True, pady=(4, 0))
+    content.pack(fill="both", expand=True, pady=(6, 0))
 
     def _switch_tab(name):
         _STATE["tab"] = name
-        # redraw tab bar
         for w in tab_bar.winfo_children():
             try: w.destroy()
             except Exception: pass
         _build_tabs()
-        # render content
         for w in content.winfo_children():
             try: w.destroy()
             except Exception: pass
@@ -691,30 +833,28 @@ def render(parent: tk.Widget, app=None) -> None:
                 try: renderer(content)
                 except Exception as e:
                     log.warning(f"tab render {name} failed: {e}")
-                    tk.Label(content, text=f"Error rendering {name}: {e}",
+                    tk.Label(content, text=f"Error: {e}",
                              font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
                 break
 
     def _build_tabs():
         for tab_name, key_num, _r in _TABS:
             active = (_STATE["tab"] == tab_name)
-            fg = BG if active else DIM
-            bg = AMBER if active else BG3
-            ff = FONT
+            fg = BG if active else WHITE
+            bg = AMBER if active else BG2
             tab = tk.Label(tab_bar,
-                           text=f" {key_num}  {tab_name} ",
-                           font=(ff, 9, "bold"),
-                           fg=fg, bg=bg, cursor="hand2", padx=8, pady=3)
-            tab.pack(side="left", padx=1)
+                           text=f"  {key_num}  {tab_name}  ",
+                           font=(FONT, 10, "bold"),
+                           fg=fg, bg=bg, cursor="hand2", padx=14, pady=5)
+            tab.pack(side="left", padx=0)
             tab.bind("<Button-1>", lambda e, n=tab_name: _switch_tab(n))
-            # Keyboard: 1-4 switch tab
             if app is not None:
                 try: app._kb(f"<Key-{key_num}>",
                              lambda n=tab_name: _switch_tab(n))
                 except Exception: pass
 
     _build_tabs()
-    _switch_tab(_STATE["tab"])  # render current tab
+    _switch_tab(_STATE["tab"])
 
     # ── FOOTER ─────────────────────────────────────────
     foot = tk.Frame(outer, bg=BG)

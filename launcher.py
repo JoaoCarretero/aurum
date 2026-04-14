@@ -943,7 +943,7 @@ class App(tk.Tk):
         hc = tk.Frame(hd, bg=BG); hc.pack(fill="both", expand=True, padx=10)
         tk.Label(hc, text="AURUM", font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(side="left")
         # Macro Brain quick-return button — futuristic cyan, always top-left
-        # after AURUM brand. Sempre visível (hide em cockpit via update).
+        # after AURUM brand. Sempre visível.
         self.h_macro_btn = tk.Label(
             hc, text=" ▸ MACRO ", font=(FONT, 8, "bold"),
             fg="#000000", bg="#00eaff", cursor="hand2", padx=6, pady=0,
@@ -952,7 +952,6 @@ class App(tk.Tk):
         self.h_macro_btn.bind(
             "<Button-1>", lambda e: self._macro_brain_menu()
         )
-        # Hover glow (futuristic feel)
         self.h_macro_btn.bind(
             "<Enter>",
             lambda e: self.h_macro_btn.configure(bg="#00ffff", fg="#001015")
@@ -960,6 +959,23 @@ class App(tk.Tk):
         self.h_macro_btn.bind(
             "<Leave>",
             lambda e: self.h_macro_btn.configure(bg="#00eaff", fg="#000000")
+        )
+
+        # Main menu quick-access — magenta futuristic, sempre visível.
+        # Complementa MACRO button: uma click → cockpit, outra → terminal/engines.
+        self.h_main_btn = tk.Label(
+            hc, text=" ≡ MAIN ", font=(FONT, 8, "bold"),
+            fg="#000000", bg="#ff00a0", cursor="hand2", padx=6, pady=0,
+        )
+        self.h_main_btn.pack(side="left", padx=(4, 0))
+        self.h_main_btn.bind("<Button-1>", lambda e: self._menu("main"))
+        self.h_main_btn.bind(
+            "<Enter>",
+            lambda e: self.h_main_btn.configure(bg="#ff33b0", fg="#150005")
+        )
+        self.h_main_btn.bind(
+            "<Leave>",
+            lambda e: self.h_main_btn.configure(bg="#ff00a0", fg="#000000")
         )
         self.h_path = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_path.pack(side="left", padx=(8,0))
         self.h_stat = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_stat.pack(side="right")

@@ -130,6 +130,19 @@ def job_ingest_onchain():
         return {"error": str(e)}
 
 
+def job_ingest_whales():
+    """SEC insider (Form 4) + institutional (13F) filings."""
+    from macro_brain.data_ingestion.whales import WhalesCollector
+    try:
+        result = WhalesCollector().run()
+        _record_run("whales", result=result)
+        return result
+    except Exception as e:
+        log.warning(f"whales failed: {e}")
+        _record_run("whales", error=str(e))
+        return {"error": str(e)}
+
+
 def job_ingest_calendar():
     """Economic calendar — próximos releases (CPI, FOMC, NFP, etc)."""
     from macro_brain.data_ingestion.calendar import EconomicCalendarCollector
@@ -278,6 +291,7 @@ def run_once(force: bool = False):
         ("markets",     job_ingest_markets,     MACRO_SCHED_MACRO_SEC),  # daily (Yahoo)
         ("cftc",        job_ingest_cftc,        MACRO_SCHED_MACRO_SEC),  # daily (weekly data)
         ("onchain",     job_ingest_onchain,     MACRO_SCHED_NEWS_SEC),   # 15min
+        ("whales",      job_ingest_whales,      MACRO_SCHED_NEWS_SEC),   # 15min
         ("calendar",    job_ingest_calendar,    MACRO_SCHED_MACRO_SEC),  # daily
         ("news",        job_ingest_news,        MACRO_SCHED_NEWS_SEC),   # 15min
         ("macro",       job_ingest_macro,       MACRO_SCHED_MACRO_SEC),  # daily (FRED)
