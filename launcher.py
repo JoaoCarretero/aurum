@@ -235,6 +235,14 @@ BRIEFINGS = {
         ],
         "edge": "Trend-following com confirmação fractal. Lucrativo em mercados direcionais.",
         "risk": "Subperforma em chop prolongado. Max drawdown histórico ~5%.",
+        "best_config": {
+            "TF":         "15m",
+            "Período":    "180 dias (90d quase sempre negativo)",
+            "Basket":     "default",
+            "Risk":       "regime-adaptive (BULL=0.30, CHOP=0.50) já default",
+            "Sharpe val": "4.43 · 256 trades · ROI +31% · MC 99%",
+            "Status":     "✓ EDGE CONFIRMADO em 180d",
+        },
     },
     "JUMP": {
         "philosophy": "O preço é a última coisa a se mover — como a onda de choque que chega depois do raio. Antes do preço romper, o volume se desloca. Pressão de taker buy/sell, delta cumulativo e imbalances de order flow revelam a intenção antes da vela fechar. É o princípio de conservação de momento: o fluxo de ordens carrega informação sobre a força resultante antes que o preço a reflita. JUMP escuta o que o mercado sussurra.",
@@ -247,6 +255,13 @@ BRIEFINGS = {
         ],
         "edge": "Enxerga fluxo institucional antes do varejo. Funciona em todos os regimes.",
         "risk": "Sinais falsos em mercados de baixo volume. Requer pares líquidos.",
+        "best_config": {
+            "TF":         "15m (1h tem 1 trade só)",
+            "Período":    "90 dias",
+            "Basket":     "majors",
+            "Sharpe val": "-4.22 · 17 trades",
+            "Status":     "✗ SEM EDGE — research lab até ML meta-layer",
+        },
     },
     "BRIDGEWATER": {
         "philosophy": "Quando todos estão gananciosos, tenha medo. Quando todos têm medo, seja ganancioso. BRIDGEWATER quantifica o sentimento da multidão — funding rates, variações de open interest e ratios long/short — para encontrar extremos contrários onde a maioria está errada. É a teoria dos jogos em ação: quando o posicionamento fica unilateral demais, o sistema se torna instável e reverte — como um pêndulo no ponto máximo de deslocamento, a energia potencial se converte em cinética na direção oposta.",
@@ -259,6 +274,14 @@ BRIEFINGS = {
         ],
         "edge": "Captura reversões em extremos de sentimento. Win rate alto.",
         "risk": "Sentimento pode ficar extremo mais tempo que o esperado. Risco de timing.",
+        "best_config": {
+            "TF":         "1h (15m=Sharpe -1.95, 4h=poucos trades) já default",
+            "Período":    "90 dias (180 também ok)",
+            "Basket":     "bluechip (default também ok)",
+            "Sharpe val": "10.57 (bluechip 90d) · 7.34 (bluechip 180d)",
+            "OOS WF":     "IS 4.97 / OOS 1.78 — 99 trades",
+            "Status":     "✓ EDGE CONFIRMADO — winner do battery",
+        },
     },
     "DE SHAW": {
         "philosophy": "Dois ativos conectados que divergem devem convergir — como a lei da gravitação universal. Cointegração não é correlação — é um vínculo matemático, um atrator estável. Quando o spread entre dois pares cointegrados estica além do normal, a 'gravidade estatística' o puxa de volta à média. É a reversão à média de Ornstein-Uhlenbeck: o spread se comporta como uma mola — quanto mais se afasta do equilíbrio, maior a força restauradora. DE SHAW opera esta gravidade.",
@@ -271,6 +294,14 @@ BRIEFINGS = {
         ],
         "edge": "Market-neutral. Lucra independente da direção do mercado.",
         "risk": "Cointegração pode quebrar permanentemente. Requer seleção cuidadosa de pares.",
+        "best_config": {
+            "TF":         "4h (1h e 15m geram ruído cointegração)",
+            "Período":    "90 dias",
+            "Basket":     "default",
+            "Z-entry":    "2.0 · Z-stop 3.5",
+            "Sharpe val": "1.27 · 92 trades · MC 63%",
+            "Status":     "⚠ MARGINAL — universo altcoin atual sem pares cointegrados estáveis",
+        },
     },
     "MILLENNIUM": {
         "philosophy": "Nenhuma estratégia única sobrevive a todas as condições de mercado — assim como nenhuma partícula isolada explica toda a matéria. Mas um portfolio de estratégias não-correlacionadas, cada uma forte em regimes diferentes, cria um edge que persiste. É o princípio da superposição: sinais independentes combinados reduzem o ruído por √N enquanto preservam o sinal. MILLENNIUM orquestra — combinando sinais, gerenciando correlação, alocando capital onde a matemática aponta.",
@@ -309,6 +340,14 @@ BRIEFINGS["RENAISSANCE"] = {
     ],
     "edge": "Reversões de alta precisão em pontos de completação harmónica. WR 85%+.",
     "risk": "Poucos sinais por período. Depende de volatilidade para gerar padrões.",
+    "best_config": {
+        "TF":         "15m (1h/4h reduzem trade count drasticamente)",
+        "Período":    "180 dias (90d gera só ~13)",
+        "Basket":     "default",
+        "Sharpe val": "6.58 · 68 trades · WR 88% · MaxDD 0.4%",
+        "Audit":      "⚠ WR reportado 85% vs auditado 61% — verificar antes do live",
+        "Status":     "✓ EDGE CONFIRMADO (com flag de audit)",
+    },
 }
 
 BRIEFINGS["PAPER"] = BRIEFINGS["DEMO"] = BRIEFINGS["TESTNET"] = BRIEFINGS["LIVE"] = {
@@ -770,11 +809,12 @@ PERIODS_UI = [
 # and rows both render at (FONT, 8, *).
 _BT_COLS: list[tuple[str, int]] = [
     ("DATE / TIME",  19),
-    ("RUN",          17),
+    ("STRATEGY",     14),
+    ("RUN",          14),
     ("TRADES",        8),
     ("WIN%",          8),
     ("PNL",          12),
-    ("SHARPE",        9),
+    ("SHARPE",        8),
     ("DD",            8),
 ]
 
@@ -800,6 +840,21 @@ class App(tk.Tk):
         self.proc = None
         self.oq = queue.Queue()
         self.history = []  # nav history for back
+        self._exec_progress_after_id = None
+        self._exec_visual_mode = None
+        self._exec_progress_value = 0.0
+        self._exec_progress_target = 0.0
+        self._exec_progress_pulse = 0
+        self._exec_recent_lines = []
+        self._exec_stage_label = None
+        self._exec_file_label = None
+        self._exec_pct_label = None
+        self._exec_bar_canvas = None
+        self._exec_recent_labels = []
+        self._exec_live_tail_label = None
+        self._exec_progress_last_paint = 0.0
+        self._exec_last_feed_at = 0.0
+        self._exec_managed_info = None
 
         # ─── Bloomberg 3D main menu state ────────────────
         self._start_t = time.monotonic()
@@ -859,6 +914,23 @@ class App(tk.Tk):
         tk.Label(fc, text="v2.0", font=(FONT, 7), fg=DIM2, bg=BG2).pack(side="left")
 
     def _clr(self):
+        aid = getattr(self, "_exec_progress_after_id", None)
+        if aid:
+            try: self.after_cancel(aid)
+            except Exception: pass
+        self._exec_progress_after_id = None
+        self._exec_visual_mode = None
+        self._exec_visual = None
+        self._exec_console = None
+        self._exec_stage_label = None
+        self._exec_file_label = None
+        self._exec_pct_label = None
+        self._exec_bar_canvas = None
+        self._exec_recent_labels = []
+        self._exec_live_tail_label = None
+        self._exec_progress_last_paint = 0.0
+        self._exec_last_feed_at = 0.0
+        self._exec_managed_info = None
         # Crypto dashboard owns a recurring after() timer — kill it on any screen change
         aid = getattr(self, "_dash_after_id", None)
         if aid:
@@ -2125,6 +2197,21 @@ class App(tk.Tk):
                 tk.Label(rf, text="RISCO", font=(FONT, 7, "bold"), fg=RED, bg=BG, anchor="w").pack(anchor="w")
                 tk.Label(rf, text=brief["risk"], font=(FONT, 8), fg=DIM, bg=BG, anchor="w", wraplength=350).pack(anchor="w")
 
+        # ── BEST CONFIG (battery validated) ──
+        bc = brief.get("best_config")
+        if bc:
+            tk.Frame(f, bg=BG, height=10).pack()
+            tk.Label(f, text="MELHOR CONFIG (BATTERY)", font=(FONT, 8, "bold"),
+                     fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+            tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
+            for k, v in bc.items():
+                row = tk.Frame(f, bg=BG)
+                row.pack(fill="x", pady=1)
+                tk.Label(row, text=f"  {k:<14}", font=(FONT, 8, "bold"),
+                         fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
+                tk.Label(row, text=str(v), font=(FONT, 8),
+                         fg=WHITE, bg=BG, anchor="w").pack(side="left")
+
         tk.Frame(f, bg=BG, height=14).pack()
 
         # Route to correct config screen
@@ -2426,10 +2513,11 @@ class App(tk.Tk):
         self._kb("<Down>",  lambda: self._results_next_trade())
 
         # Locate the latest run + its exported JSON.
-        # New layout (preferred): data/runs/<run_id>/citadel_*.json  (run_dir = parent)
-        # Legacy layout (fallback): data/<date>/reports/citadel_*.json (run_dir = parent.parent)
+        # New layout (preferred): data/runs/<run_id>/<engine>_*.json  (run_dir = parent)
+        # Legacy layout (fallback): data/<engine>/<run_id>/reports/<engine>_*.json
         report = None
         run_dir = None
+        skip_names = {"config.json", "equity.json", "index.json", "overfit.json", "price_data.json", "summary.json", "trades.json"}
 
         runs_root = ROOT / "data" / "runs"
         if runs_root.exists():
@@ -2439,7 +2527,7 @@ class App(tk.Tk):
             )
             for rd in run_dirs:
                 candidates = sorted(
-                    rd.glob("citadel_*.json"),
+                    [p for p in rd.glob("*.json") if p.name not in skip_names],
                     key=lambda p: p.stat().st_mtime, reverse=True,
                 )
                 if candidates:
@@ -2449,13 +2537,17 @@ class App(tk.Tk):
 
         if report is None:
             data_dir = ROOT / "data"
-            legacy = sorted(data_dir.rglob("citadel_*.json"),
-                            key=lambda p: p.stat().st_mtime, reverse=True)
+            legacy = sorted(
+                [
+                    p for p in data_dir.rglob("*.json")
+                    if p.name not in skip_names and "reports" in str(p.parent)
+                ],
+                key=lambda p: p.stat().st_mtime, reverse=True
+            )
             for r in legacy:
-                if "reports" in str(r):
-                    report = r
-                    run_dir = r.parent.parent
-                    break
+                report = r
+                run_dir = r.parent.parent
+                break
 
         if report is None:
             f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
@@ -3171,9 +3263,15 @@ class App(tk.Tk):
     def _exec(self, name, script, desc, parent_menu, auto_inputs):
         self._clr(); self._clear_kb()
         self._exec_parent = parent_menu  # save for results screen
+        self.oq = queue.Queue()
+        is_bt = parent_menu == "backtest"
         self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
         self.h_stat.configure(text="RODANDO", fg=GREEN)
-        self.f_lbl.configure(text="Digite abaixo + ENTER  |  vazio = aceitar padrão")
+        self.f_lbl.configure(
+            text="M mapa de install  |  C console runtime  |  ENTER enviar  |  vazio = aceitar padrão"
+            if is_bt else
+            "Digite abaixo + ENTER  |  vazio = aceitar padrão"
+        )
 
         f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True)
 
@@ -3187,11 +3285,32 @@ class App(tk.Tk):
         tk.Button(top, text=" BACK ", font=(FONT, 7, "bold"), fg=DIM, bg=BG2, border=0, cursor="hand2",
                   activeforeground=WHITE, activebackground=BG3,
                   command=lambda: (self._stop(), self._menu(parent_menu))).pack(side="right", pady=3)
+        if is_bt:
+            tk.Button(top, text=" CMD ", font=(FONT, 7, "bold"), fg=AMBER, bg=BG2, border=0, cursor="hand2",
+                      activeforeground=WHITE, activebackground=BG3,
+                      command=lambda: self._exec_show_view("console")).pack(side="right", padx=(0, 4), pady=3)
+            tk.Button(top, text=" MAPA ", font=(FONT, 7, "bold"), fg=GREEN, bg=BG2, border=0, cursor="hand2",
+                      activeforeground=WHITE, activebackground=BG3,
+                      command=lambda: self._exec_show_view("visual")).pack(side="right", padx=(0, 4), pady=3)
 
         tk.Frame(f, bg=AMBER_D, height=1).pack(fill="x")
 
+        body = tk.Frame(f, bg=BG)
+        body.pack(fill="both", expand=True)
+        self._exec_body = body
+
+        if is_bt:
+            self._exec_visual = tk.Frame(body, bg=BG)
+            self._exec_visual.pack(fill="both", expand=True)
+            self._exec_init_progress_ui(self._exec_visual, name, desc)
+        else:
+            self._exec_visual = None
+
         # Console
-        cf = tk.Frame(f, bg=PANEL); cf.pack(fill="both", expand=True)
+        cf = tk.Frame(body, bg=PANEL)
+        if not is_bt:
+            cf.pack(fill="both", expand=True)
+        self._exec_console = cf
         sb = tk.Scrollbar(cf, bg=BG, troughcolor=BG, highlightthickness=0, bd=0)
         sb.pack(side="right", fill="y")
         self.con = tk.Text(cf, bg=PANEL, fg=WHITE, font=(FONT, 9), wrap="word",
@@ -3205,6 +3324,10 @@ class App(tk.Tk):
         self.con.tag_configure("r", foreground=RED)
         self.con.tag_configure("d", foreground=DIM)
         self.con.tag_configure("w", foreground=WHITE)
+        if is_bt:
+            self._exec_show_view("visual")
+            self._kb("<Key-c>", lambda: self._exec_show_view("console"))
+            self._kb("<Key-m>", lambda: self._exec_show_view("visual"))
 
         # Input bar
         tk.Frame(f, bg=AMBER, height=1).pack(fill="x")
@@ -3219,14 +3342,20 @@ class App(tk.Tk):
         self.inp.pack(side="left", fill="x", expand=True, padx=4, pady=5, ipady=1)
         self.inp.focus_set()
         self.inp.bind("<Return>", self._send)
+        if is_bt:
+            self.inp.configure(state="disabled")
 
-        tk.Label(ib, text="ENTER send | empty=default", font=(FONT, 7), fg=DIM2, bg=BG2).pack(side="right", padx=6)
+        tk.Label(
+            ib,
+            text="BACKGROUND MANAGED | live log only" if is_bt else "ENTER send | empty=default",
+            font=(FONT, 7), fg=DIM2, bg=BG2
+        ).pack(side="right", padx=6)
 
         # Blink indicator
         self._blink = True
         def blink():
             if not hasattr(self, '_inp_lbl') or not self._inp_lbl.winfo_exists(): return
-            if self.proc and self.proc.poll() is None:
+            if self._exec_is_running():
                 self._blink = not self._blink
                 self._inp_lbl.configure(bg=AMBER if self._blink else BG2, fg=BG if self._blink else AMBER)
             else:
@@ -3249,6 +3378,29 @@ class App(tk.Tk):
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow = 0
 
         try:
+            if is_bt:
+                proc_key = self._exec_script_to_proc_key(script)
+                if proc_key is None:
+                    self._p(f"FAILED: background mapping not found for {script}\n", "r")
+                    return
+                from core.proc import spawn
+                info = spawn(proc_key, stdin_lines=auto_inputs or None)
+                if not info:
+                    self._p(f"FAILED: {name} already running in background or could not start\n", "r")
+                    self._p("Open TERMINAL > ENGINE LOGS to inspect existing managed runs.\n", "d")
+                    return
+                self._exec_managed_info = info
+                self.h_stat.configure(text="BACKGROUND", fg=GREEN)
+                self._p(f"  managed pid {info['pid']}  ·  background active\n", "g")
+                self._p(f"  log {info['log_file']}\n", "d")
+                threading.Thread(
+                    target=self._read_managed_log,
+                    args=(Path(info["log_file"]), info),
+                    daemon=True,
+                ).start()
+                self._poll()
+                return
+
             self.proc = subprocess.Popen(
                 [sys.executable, "-X", "utf8", "-u", str(path)], cwd=str(ROOT),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE,
@@ -3271,7 +3423,251 @@ class App(tk.Tk):
                 threading.Thread(target=_auto, daemon=True).start()
 
         except Exception as e:
+            self._exec_progress_target = self._exec_progress_value
+            if self._exec_stage_label is not None and self._exec_stage_label.winfo_exists():
+                self._exec_stage_label.configure(text="launcher failed to start process")
             self._p(f"FAILED: {e}\n", "r")
+
+    def _exec_script_to_proc_key(self, script: str) -> str | None:
+        mapping = {
+            "engines/backtest.py": "backtest",
+            "engines/mercurio.py": "mercurio",
+            "engines/thoth.py": "thoth",
+            "engines/newton.py": "newton",
+            "engines/multistrategy.py": "multi",
+            "engines/prometeu.py": "prometeu",
+            "engines/harmonics_backtest.py": "renaissance",
+        }
+        return mapping.get(script.replace("\\", "/"))
+
+    def _exec_is_running(self) -> bool:
+        if self.proc and self.proc.poll() is None:
+            return True
+        info = getattr(self, "_exec_managed_info", None)
+        if info:
+            try:
+                from core.proc import _is_alive
+                return _is_alive(int(info["pid"]), expected=info)
+            except Exception:
+                return False
+        return False
+
+    def _exec_init_progress_ui(self, parent, name, desc):
+        self._exec_progress_value = 2.0
+        self._exec_progress_target = 7.0
+        self._exec_progress_pulse = 0
+        self._exec_recent_lines = []
+
+        self._exec_progress_last_paint = 0.0
+        self._exec_last_feed_at = 0.0
+
+        wrap = tk.Frame(parent, bg=BG, padx=30, pady=26)
+        wrap.pack(fill="both", expand=True)
+
+        hdr = tk.Frame(wrap, bg=BG)
+        hdr.pack(fill="x", pady=(0, 18))
+        tk.Label(hdr, text=name.upper(), font=(FONT, 14, "bold"),
+                 fg=AMBER, bg=BG).pack(anchor="w")
+        tk.Label(hdr, text=f"{name}  ·  institutional build pipeline  ·  {desc}",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=(3, 0))
+        tk.Label(hdr, text=desc,
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=(4, 0))
+
+        top = tk.Frame(wrap, bg=BG)
+        top.pack(fill="x", pady=(0, 12))
+
+        left = tk.Frame(top, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+        left.pack(side="left", fill="both", expand=True)
+
+        left_head = tk.Frame(left, bg=PANEL)
+        left_head.pack(fill="x", padx=14, pady=(12, 8))
+        tk.Label(left_head, text="BACKTEST", font=(FONT, 8, "bold"),
+                 fg=BG, bg=AMBER, padx=6, pady=2).pack(side="left")
+        self._exec_pct_label = tk.Label(left_head, text="2%", font=(FONT, 12, "bold"),
+                                        fg=AMBER_B, bg=PANEL)
+        self._exec_pct_label.pack(side="right")
+
+        self._exec_stage_label = tk.Label(left, text="preparing backtest runtime",
+                                          font=(FONT, 10, "bold"), fg=WHITE, bg=PANEL,
+                                          anchor="w")
+        self._exec_stage_label.pack(fill="x", padx=14)
+        self._exec_file_label = tk.Label(left, text="waiting for first engine event",
+                                         font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w")
+        self._exec_file_label.pack(fill="x", padx=14, pady=(4, 8))
+
+        self._exec_bar_canvas = tk.Canvas(left, bg=BG2, highlightthickness=0, height=34)
+        self._exec_bar_canvas.pack(fill="x", padx=14, pady=(0, 12))
+
+        hints = tk.Frame(left, bg=PANEL)
+        hints.pack(fill="x", padx=14, pady=(0, 12))
+        for lbl, txt, col in [
+            ("route", "local subprocess attached to launcher runtime", AMBER_D),
+            ("view",  "M visual map  ·  C cmd console", DIM),
+            ("mode",  "no separate cmd pop-up during backtests", GREEN),
+        ]:
+            row = tk.Frame(hints, bg=PANEL)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=lbl.upper(), font=(FONT, 7, "bold"), fg=col, bg=PANEL,
+                     width=8, anchor="w").pack(side="left")
+            tk.Label(row, text=txt, font=(FONT, 7), fg=WHITE if lbl == "mode" else DIM,
+                     bg=PANEL, anchor="w").pack(side="left")
+
+        right = tk.Frame(top, bg=PANEL, width=220, highlightbackground=BORDER, highlightthickness=1)
+        right.pack(side="left", fill="both", padx=(12, 0))
+        right.pack_propagate(False)
+
+        tk.Label(right, text="LIVE", font=(FONT, 8, "bold"),
+                 fg=BG, bg=GREEN, padx=6, pady=2).pack(anchor="nw", padx=12, pady=(12, 8))
+        self._exec_recent_labels = []
+        for _ in range(2):
+            lbl = tk.Label(right, text="",
+                           font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w", justify="left",
+                           wraplength=235)
+            lbl.pack(fill="x", padx=12, pady=2)
+            self._exec_recent_labels.append(lbl)
+
+        note = tk.Frame(wrap, bg=BG)
+        note.pack(fill="x")
+        tk.Label(note, text="Visual by default. Open CMD only when needed.",
+                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(anchor="w")
+        actions = tk.Frame(note, bg=BG)
+        actions.pack(anchor="w", pady=(8, 0))
+        live_cmd = tk.Label(actions, text="  ABRIR CMD AO VIVO  ", font=(FONT, 8, "bold"),
+                            fg=BG, bg=GREEN, cursor="hand2", padx=8, pady=4)
+        live_cmd.pack(side="left")
+        live_cmd.bind("<Button-1>", lambda e: self._exec_open_live_cmd())
+        live_cmd.bind("<Enter>", lambda e: live_cmd.configure(bg="#36d86b"))
+        live_cmd.bind("<Leave>", lambda e: live_cmd.configure(bg=GREEN))
+        back_map = tk.Label(actions, text="  VOLTAR PRO MAPA  ", font=(FONT, 8),
+                            fg=DIM, bg=BG3, cursor="hand2", padx=8, pady=4)
+        back_map.pack(side="left", padx=(8, 0))
+        back_map.bind("<Button-1>", lambda e: self._exec_show_view("visual"))
+        back_map.bind("<Enter>", lambda e: back_map.configure(fg=AMBER))
+        back_map.bind("<Leave>", lambda e: back_map.configure(fg=DIM))
+
+        self._exec_progress_tick()
+
+    def _exec_show_view(self, mode):
+        self._exec_visual_mode = mode
+        visual = getattr(self, "_exec_visual", None)
+        console = getattr(self, "_exec_console", None)
+        if visual is None or console is None:
+            return
+        visual.pack_forget()
+        console.pack_forget()
+        if mode == "console":
+            console.pack(fill="both", expand=True)
+            self.h_stat.configure(text="CMD VIEW", fg=AMBER_D)
+        else:
+            visual.pack(fill="both", expand=True)
+            self.h_stat.configure(text="INSTALL MAP", fg=GREEN)
+
+    def _exec_open_live_cmd(self):
+        self._exec_show_view("console")
+        if hasattr(self, "inp") and self.inp.winfo_exists():
+            try:
+                self.inp.focus_set()
+            except Exception:
+                pass
+
+    def _exec_progress_feed(self, clean: str):
+        low = clean.strip().lower()
+        if not low:
+            return
+
+        targets = [
+            (("iniciado", "started"), 10, "allocating launch package"),
+            (("dados", "fetch", "loading"), 24, "downloading candle archives"),
+            (("sentiment", "funding", "open interest", "long/short"), 40, "installing sentiment bundles"),
+            (("scan", "scanning"), 58, "building route graph and trade cache"),
+            (("total:", "resultados", "wr=", "pnl="), 74, "compiling execution manifests"),
+            (("metricas", "metrics", "sharpe", "sortino"), 86, "verifying institutional metrics"),
+            (("monte", "walk", "robust", "json"), 94, "packing report artifacts"),
+            (("backtest complete", "loading results dashboard"), 100, "installation complete"),
+        ]
+        for keys, target, stage in targets:
+            if any(k in low for k in keys):
+                self._exec_progress_target = max(self._exec_progress_target, float(target))
+                if self._exec_stage_label is not None:
+                    self._exec_stage_label.configure(text=stage)
+                break
+        else:
+            self._exec_progress_target = min(88.0, self._exec_progress_target + 0.2)
+
+        if self._exec_file_label is not None:
+            token = low.replace("  ", " ")[:56]
+            self._exec_file_label.configure(text=token)
+
+        now = time.monotonic()
+        if now - getattr(self, "_exec_last_feed_at", 0.0) < 0.18:
+            return
+        self._exec_last_feed_at = now
+
+        self._exec_recent_lines.append(clean.strip())
+        self._exec_recent_lines = self._exec_recent_lines[-3:]
+        tail = "  |  ".join(self._exec_recent_lines[-2:])
+        live_lbl = getattr(self, "_exec_live_tail_label", None)
+        if live_lbl is not None and live_lbl.winfo_exists():
+            live_lbl.configure(text=tail[:180])
+
+        if self._exec_recent_labels:
+            first = self._exec_recent_labels[0]
+            if first.winfo_exists():
+                first.configure(text=tail[:80] or " ", fg=WHITE if tail else DIM)
+            for lbl in self._exec_recent_labels[1:]:
+                if lbl.winfo_exists():
+                    lbl.configure(text=" ", fg=DIM)
+
+    def _exec_progress_tick(self):
+        canvas = getattr(self, "_exec_bar_canvas", None)
+        if canvas is None or not canvas.winfo_exists():
+            self._exec_progress_after_id = None
+            return
+
+        if self._exec_is_running():
+            self._exec_progress_value = min(
+                self._exec_progress_target,
+                self._exec_progress_value + max(0.4, (self._exec_progress_target - self._exec_progress_value) * 0.08)
+            )
+        elif self._exec_progress_target >= 100.0:
+            self._exec_progress_value = 100.0
+        elif self._exec_progress_value < self._exec_progress_target:
+            self._exec_progress_value = min(
+                self._exec_progress_target,
+                self._exec_progress_value + max(0.8, (self._exec_progress_target - self._exec_progress_value) * 0.2)
+            )
+        now = time.monotonic()
+        if now - getattr(self, "_exec_progress_last_paint", 0.0) < 0.12:
+            self._exec_progress_after_id = self.after(120, self._exec_progress_tick)
+            return
+        self._exec_progress_last_paint = now
+
+        self._exec_progress_pulse = (self._exec_progress_pulse + 5) % 300
+        pct = max(0, min(100, int(round(self._exec_progress_value))))
+
+        w = max(canvas.winfo_width(), 10)
+        h = max(canvas.winfo_height(), 10)
+        pad = 2
+        bar_w = w - pad * 2
+        fill_w = int(bar_w * (pct / 100))
+
+        canvas.delete("all")
+        canvas.create_rectangle(pad, pad, w - pad, h - pad, outline=BORDER, width=1, fill=BG2)
+        if fill_w > 0:
+            canvas.create_rectangle(pad + 1, pad + 1, pad + fill_w, h - pad - 1,
+                                    outline="", fill=GREEN)
+            shine_x = pad + (self._exec_progress_pulse % max(fill_w, 16))
+            canvas.create_rectangle(max(pad + 1, shine_x - 6), pad + 1,
+                                    min(pad + fill_w, shine_x + 6), h - pad - 1,
+                                    outline="", fill=AMBER_B)
+
+        if self._exec_pct_label is not None and self._exec_pct_label.winfo_exists():
+            self._exec_pct_label.configure(text=f"{pct}%")
+
+        if self._exec_is_running() or self._exec_progress_value < self._exec_progress_target:
+            self._exec_progress_after_id = self.after(140, self._exec_progress_tick)
+        else:
+            self._exec_progress_after_id = None
 
     def _send(self, ev=None):
         t = self.inp.get(); self.inp.delete(0, "end")
@@ -3289,16 +3685,56 @@ class App(tk.Tk):
         except: pass
         self.oq.put(None)
 
+    def _read_managed_log(self, log_path: Path, info: dict):
+        from core.proc import _is_alive
+
+        last = 0
+        while True:
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(last)
+                    chunk = f.read()
+                    last = f.tell()
+                if chunk:
+                    for line in chunk.splitlines(True):
+                        self.oq.put(line)
+            except OSError:
+                pass
+
+            if not _is_alive(int(info["pid"]), expected=info):
+                time.sleep(0.2)
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(last)
+                        chunk = f.read()
+                    if chunk:
+                        for line in chunk.splitlines(True):
+                            self.oq.put(line)
+                except OSError:
+                    pass
+                break
+            time.sleep(0.15)
+
+        self.oq.put(None)
+
     def _poll(self):
         try:
-            for _ in range(80):
+            for _ in range(32):
                 line = self.oq.get_nowait()
                 if line is None:
                     rc = self.proc.poll() if self.proc else -1
+                    if self._exec_managed_info is not None:
+                        rc = 0
+                    self._exec_progress_target = 100.0
+                    if self._exec_stage_label is not None and self._exec_stage_label.winfo_exists():
+                        self._exec_stage_label.configure(
+                            text="installation complete" if rc == 0 else f"installation failed  ·  exit {rc}"
+                        )
                     self._p(f"\n{'─'*60}\n", "d")
                     self._p(f"  EXIT {rc}\n", "g" if rc == 0 else "r")
                     self.h_stat.configure(text="DONE" if rc == 0 else f"EXIT {rc}", fg=GREEN if rc == 0 else RED)
                     self.proc = None
+                    self._exec_managed_info = None
                     # Show results dashboard for backtests
                     parent = getattr(self, '_exec_parent', 'main')
                     if parent == "backtest" and rc == 0:
@@ -3307,19 +3743,25 @@ class App(tk.Tk):
                     return
                 self._p(line)
         except queue.Empty: pass
-        self.after(30 if self.proc and self.proc.poll() is None else 100, self._poll)
+        self.after(80 if self._exec_is_running() else 140, self._poll)
 
     def _p(self, text, tag="w"):
         import re
         # Strip ANSI escape codes for clean output
         clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
-        self.con.configure(state="normal")
-        self.con.insert("end", clean, tag)
-        self.con.see("end")
-        self.con.configure(state="disabled")
+        if hasattr(self, "con") and self.con.winfo_exists():
+            self.con.configure(state="normal")
+            self.con.insert("end", clean, tag)
+            self.con.see("end")
+            self.con.configure(state="disabled")
+        if getattr(self, "_exec_visual", None) is not None:
+            self._exec_progress_feed(clean)
 
     def _stop(self):
         if self.proc and self.proc.poll() is None:
+            self._exec_progress_target = max(self._exec_progress_target, self._exec_progress_value)
+            if self._exec_stage_label is not None and self._exec_stage_label.winfo_exists():
+                self._exec_stage_label.configure(text="operator stopped installation")
             self._p("\n  >> SIGTERM\n", "r")
             self.proc.terminate()
             try: self.proc.wait(timeout=5)
@@ -3327,6 +3769,18 @@ class App(tk.Tk):
             self._p("  >> STOPPED\n", "r")
             self.h_stat.configure(text="STOPPED", fg=RED)
             self.proc = None
+        elif self._exec_managed_info is not None:
+            self._exec_progress_target = max(self._exec_progress_target, self._exec_progress_value)
+            if self._exec_stage_label is not None and self._exec_stage_label.winfo_exists():
+                self._exec_stage_label.configure(text="operator stopped installation")
+            try:
+                from core.proc import stop_proc
+                stop_proc(int(self._exec_managed_info["pid"]), expected=self._exec_managed_info)
+                self._p(f"\n  >> BACKGROUND STOP {self._exec_managed_info['pid']}\n", "r")
+            except Exception as e:
+                self._p(f"\n  >> STOP FAILED: {e}\n", "r")
+            self.h_stat.configure(text="STOPPED", fg=RED)
+            self._exec_managed_info = None
 
     # ─── MARKETS (Layer 2) ───────────────────────────────
     def _markets(self):
@@ -4980,16 +5434,10 @@ class App(tk.Tk):
         # OPEN HTML + DELETE buttons immediately. Clicking other rows
         # still swaps the selection as before.
         try:
-            idx_path = ROOT / "data" / "index.json"
-            if idx_path.exists():
-                rows = json.loads(idx_path.read_text(encoding="utf-8"))
-                if isinstance(rows, list) and rows:
-                    rows.sort(key=lambda r: r.get("timestamp", "") or "",
-                              reverse=True)
-                    newest = rows[0].get("run_id")
-                    if newest:
-                        self.after(0, lambda rid=newest:
-                                   self._dash_backtest_select(rid))
+            newest = getattr(self, "_bt_recent_run_id", None)
+            if newest:
+                self.after(0, lambda rid=newest:
+                           self._dash_backtest_select(rid))
         except (OSError, json.JSONDecodeError, TypeError):
             pass
 
@@ -7585,6 +8033,191 @@ class App(tk.Tk):
         except (ValueError, TypeError):
             return str(ts_raw)[:16].replace("T", " ")
 
+    def _bt_read_json(self, path: Path) -> dict:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError, TypeError):
+            return {}
+
+    def _bt_legacy_engine_dirs(self) -> list[Path]:
+        data_dir = ROOT / "data"
+        skip = {
+            ".proc_logs", "arbitrage", "runs", "audit", "darwin", "exports",
+            "funding_scanner", "live", "param_search", "validation",
+        }
+        try:
+            return sorted(
+                [
+                    p for p in data_dir.iterdir()
+                    if p.is_dir() and p.name not in skip and not p.name[:4].isdigit()
+                ]
+            )
+        except OSError:
+            return []
+
+    def _bt_report_candidates(self, run_dir: Path) -> list[Path]:
+        rep_dir = run_dir / "reports"
+        if not rep_dir.exists():
+            return []
+        skip_names = {
+            "config.json", "equity.json", "index.json", "overfit.json",
+            "price_data.json", "summary.json", "trades.json",
+            "simulate_historical.json",
+        }
+        try:
+            files = [
+                p for p in rep_dir.iterdir()
+                if p.is_file() and p.suffix.lower() == ".json" and p.name not in skip_names
+            ]
+        except OSError:
+            return []
+        files.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+        return files
+
+    def _bt_entry_from_report(self, engine_dir: Path, run_dir: Path, report_path: Path) -> dict:
+        report = self._bt_read_json(report_path)
+        engine_name = str(report.get("engine") or engine_dir.name).strip().upper()
+        engine_slug = engine_name.lower().replace(" ", "_")
+        raw_run_id = str(report.get("run_id") or run_dir.name).strip() or run_dir.name
+        run_id = raw_run_id if raw_run_id.startswith(f"{engine_slug}_") else f"{engine_slug}_{raw_run_id}"
+        account_size = report.get("account_size")
+        final_equity = report.get("final_equity")
+        pnl = report.get("pnl")
+        if pnl is None and account_size is not None and final_equity is not None:
+            try:
+                pnl = float(final_equity) - float(account_size)
+            except (TypeError, ValueError):
+                pnl = None
+
+        report_html = run_dir / "report.html"
+        if not report_html.exists():
+            try:
+                html_candidates = [p for p in (run_dir / "reports").iterdir() if p.suffix.lower() == ".html"]
+            except OSError:
+                html_candidates = []
+            if html_candidates:
+                html_candidates.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+                report_html = html_candidates[0]
+
+        return {
+            "run_id": run_id,
+            "engine": engine_slug,
+            "timestamp": report.get("timestamp"),
+            "interval": report.get("interval"),
+            "period_days": report.get("period_days"),
+            "n_symbols": report.get("n_symbols"),
+            "n_candles": report.get("n_candles"),
+            "n_trades": report.get("n_trades"),
+            "win_rate": report.get("win_rate"),
+            "pnl": pnl,
+            "roi_pct": report.get("roi_pct", report.get("roi")),
+            "sharpe": report.get("sharpe"),
+            "sortino": report.get("sortino"),
+            "max_dd_pct": report.get("max_dd_pct", report.get("max_dd")),
+            "account_size": account_size,
+            "leverage": report.get("leverage"),
+            "final_equity": final_equity,
+            "summary_path": str(report_path),
+            "config_path": str(run_dir / "config.json"),
+            "report_html_path": str(report_html) if report_html.exists() else "",
+            "run_dir": str(run_dir),
+            "source": "legacy",
+        }
+
+    def _bt_collect_runs(self) -> list[dict]:
+        idx_path = ROOT / "data" / "index.json"
+        runs_by_id: dict[str, dict] = {}
+
+        if idx_path.exists():
+            try:
+                rows = json.loads(idx_path.read_text(encoding="utf-8"))
+                if isinstance(rows, list):
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        run_id = str(row.get("run_id") or "").strip()
+                        if not run_id:
+                            continue
+                        run_dir = ROOT / "data" / "runs" / run_id
+                        entry = dict(row)
+                        entry.setdefault("run_dir", str(run_dir))
+                        entry.setdefault("summary_path", str(run_dir / "summary.json"))
+                        entry.setdefault("config_path", str(run_dir / "config.json"))
+                        report_html = run_dir / "report.html"
+                        entry.setdefault("report_html_path", str(report_html) if report_html.exists() else "")
+                        entry.setdefault("source", "index")
+                        runs_by_id[run_id] = entry
+            except (json.JSONDecodeError, OSError, TypeError):
+                pass
+
+        runs_root = ROOT / "data" / "runs"
+        if runs_root.exists():
+            try:
+                for run_dir in runs_root.iterdir():
+                    if not run_dir.is_dir():
+                        continue
+                    run_id = run_dir.name
+                    summary_path = run_dir / "summary.json"
+                    config_path = run_dir / "config.json"
+                    summary = self._bt_read_json(summary_path)
+                    config = self._bt_read_json(config_path)
+                    entry = runs_by_id.get(run_id, {}).copy()
+                    entry.setdefault("run_id", run_id)
+                    entry.setdefault("engine", str(entry.get("engine") or run_id.split("_", 1)[0]).lower())
+                    entry.setdefault("timestamp", summary.get("timestamp"))
+                    entry.setdefault("interval", summary.get("interval", config.get("INTERVAL", config.get("ENTRY_TF"))))
+                    entry.setdefault("period_days", summary.get("period_days", config.get("SCAN_DAYS")))
+                    entry.setdefault("n_symbols", summary.get("n_symbols"))
+                    entry.setdefault("n_candles", summary.get("n_candles", config.get("N_CANDLES")))
+                    entry.setdefault("n_trades", summary.get("n_trades"))
+                    entry.setdefault("win_rate", summary.get("win_rate"))
+                    entry.setdefault("pnl", summary.get("pnl", summary.get("total_pnl")))
+                    entry.setdefault("roi_pct", summary.get("roi_pct", summary.get("roi")))
+                    entry.setdefault("sharpe", summary.get("sharpe"))
+                    entry.setdefault("sortino", summary.get("sortino"))
+                    entry.setdefault("max_dd_pct", summary.get("max_dd_pct", summary.get("max_dd")))
+                    entry.setdefault("account_size", summary.get("account_size", config.get("ACCOUNT_SIZE")))
+                    entry.setdefault("leverage", summary.get("leverage", config.get("LEVERAGE")))
+                    entry.setdefault("final_equity", summary.get("final_equity"))
+                    entry["run_dir"] = str(run_dir)
+                    entry["summary_path"] = str(summary_path)
+                    entry["config_path"] = str(config_path)
+                    report_html = run_dir / "report.html"
+                    entry["report_html_path"] = str(report_html) if report_html.exists() else entry.get("report_html_path", "")
+                    entry.setdefault("source", "runs")
+                    runs_by_id[run_id] = entry
+            except OSError:
+                pass
+
+        for engine_dir in self._bt_legacy_engine_dirs():
+            try:
+                run_dirs = [p for p in engine_dir.iterdir() if p.is_dir()]
+            except OSError:
+                continue
+            for run_dir in run_dirs:
+                report_files = self._bt_report_candidates(run_dir)
+                if not report_files:
+                    continue
+                entry = self._bt_entry_from_report(engine_dir, run_dir, report_files[0])
+                runs_by_id.setdefault(entry["run_id"], entry)
+
+        runs = list(runs_by_id.values())
+        runs.sort(key=lambda r: str(r.get("timestamp") or ""), reverse=True)
+        self._bt_run_map = {str(r.get("run_id")): r for r in runs if r.get("run_id")}
+        self._bt_recent_run_id = runs[0]["run_id"] if runs else None
+        return runs
+
+    def _bt_resolve_run(self, run_id: str) -> dict:
+        cache = getattr(self, "_bt_run_map", {}) or {}
+        row = cache.get(run_id)
+        if row:
+            return row
+        for row in self._bt_collect_runs():
+            if row.get("run_id") == run_id:
+                return row
+        return {}
+
     def _dash_backtest_render(self):
         list_wrap = self._dash_widgets.get(("bt_list",))
         count_l   = self._dash_widgets.get(("bt_count",))
@@ -7600,14 +8233,7 @@ class App(tk.Tk):
             try: w.destroy()
             except Exception: pass
 
-        idx_path = ROOT / "data" / "index.json"
-        runs: list[dict] = []
-        if idx_path.exists():
-            try:
-                runs = json.loads(idx_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                runs = []
-        runs.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+        runs = self._bt_collect_runs()
 
         if count_l:
             count_l.configure(text=f"{len(runs)} runs")
@@ -7620,6 +8246,37 @@ class App(tk.Tk):
 
         def _fmt_n(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "—"
         def _fmt_m(v): return f"${v:+,.0f}" if v is not None else "—"
+        # Code-name → institutional-name (battery/marketing taxonomy).
+        # Maps both legacy lowercase file names (thoth, mercurio, newton)
+        # and uppercase variants. Falls back to upper() for unknowns.
+        _ENGINE_NAMES = {
+            "backtest":      "CITADEL",
+            "citadel":       "CITADEL",
+            "thoth":         "BRIDGEWATER",
+            "bridgewater":   "BRIDGEWATER",
+            "mercurio":      "JUMP",
+            "jump":          "JUMP",
+            "newton":        "DE SHAW",
+            "deshaw":        "DE SHAW",
+            "de_shaw":       "DE SHAW",
+            "prometeu":      "TWO SIGMA",
+            "twosigma":      "TWO SIGMA",
+            "two_sigma":     "TWO SIGMA",
+            "darwin":        "AQR",
+            "aqr":           "AQR",
+            "multistrategy": "MILLENNIUM",
+            "millennium":    "MILLENNIUM",
+            "harmonics":     "RENAISSANCE",
+            "harmonics_backtest": "RENAISSANCE",
+            "renaissance":   "RENAISSANCE",
+            "arbitrage":     "JANE STREET",
+            "jane_street":   "JANE STREET",
+            "janestreet":    "JANE STREET",
+        }
+        def _fmt_engine(v):
+            raw = str(v or "—").strip().lower()
+            name = _ENGINE_NAMES.get(raw, raw.replace("_", " ").upper())
+            return name[:13]
 
         # [Backlog #7] Pre-L6 warning badge for engines whose pre-fix
         # reports are potentially inflated. Runs written before commit
@@ -7650,25 +8307,29 @@ class App(tk.Tk):
             row.pack(fill="x", pady=0)
 
             pnl_col = GREEN if (pnl or 0) > 0 else (RED if (pnl or 0) < 0 else DIM)
-            # Strip 'citadel_' prefix from run_id for compactness — the
-            # column is 17 chars wide, so keep up to 16 chars of content.
-            # When tagged as pre-L6, prefix "! " eats 2 chars (ASCII to
-            # avoid tk font fallback weirdness on the unicode warning
-            # glyph; color-only cue in the RUN cell instead).
-            short_id = run_id.replace("citadel_", "")
+            short_id = run_id
+            for prefix in (
+                "citadel_", "thoth_", "bridgewater_", "newton_", "deshaw_",
+                "mercurio_", "jump_", "multistrategy_", "millennium_",
+                "prometeu_", "twosigma_", "renaissance_", "harmonics_",
+            ):
+                if short_id.startswith(prefix):
+                    short_id = short_id[len(prefix):]
+                    break
             if pre_l6:
-                short_id = ("! " + short_id)[:16]
+                short_id = ("! " + short_id)[:13]
             else:
-                short_id = short_id[:16]
+                short_id = short_id[:13]
 
             # Widths pulled from _BT_COLS to guarantee header ↔ row parity.
-            (_dw, _rw, _tw, _ww, _pw, _shw, _ddw) = [w for _, w in _BT_COLS]
+            (_dw, _ew, _rw, _tw, _ww, _pw, _shw, _ddw) = [w for _, w in _BT_COLS]
             # Pre-L6 runs render the RUN cell in RED to match the "!"
             # prefix; the rest of the row keeps its normal coloring so
             # the PnL/Sharpe contrast still works.
             run_col = RED if pre_l6 else AMBER
             cells = [
                 (ts,                  _dw,  WHITE,   "normal"),
+                (_fmt_engine(engine), _ew,  AMBER,   "bold"),
                 (short_id,            _rw,  run_col, "bold"),
                 (f"{n_tr}",           _tw,  WHITE,   "normal"),
                 (_fmt_n(wr),          _ww,  WHITE,   "normal"),
@@ -7716,17 +8377,13 @@ class App(tk.Tk):
             try: w.destroy()
             except Exception: pass
 
-        run_dir = ROOT / "data" / "runs" / run_id
-        summary_path = run_dir / "summary.json"
-        config_path  = run_dir / "config.json"
+        run_meta = self._bt_resolve_run(run_id)
+        run_dir = Path(run_meta.get("run_dir")) if run_meta.get("run_dir") else (ROOT / "data" / "runs" / run_id)
+        summary_path = Path(run_meta.get("summary_path")) if run_meta.get("summary_path") else (run_dir / "summary.json")
+        config_path  = Path(run_meta.get("config_path")) if run_meta.get("config_path") else (run_dir / "config.json")
 
         # Index entry for timestamp + period_days fallback
-        idx_entry = {}
-        try:
-            idx = json.loads((ROOT / "data" / "index.json").read_text(encoding="utf-8"))
-            idx_entry = next((r for r in idx if r.get("run_id") == run_id), {})
-        except Exception:
-            pass
+        idx_entry = dict(run_meta) if run_meta else {}
 
         summary: dict = {}
         if summary_path.exists():
@@ -7897,7 +8554,7 @@ class App(tk.Tk):
         try:
             from core.fs import robust_rmtree
             idx_path = ROOT / "data" / "index.json"
-            run_dir = ROOT / "data" / "runs" / run_id
+            run_dir = Path((getattr(self, "_bt_run_map", {}) or {}).get(run_id, {}).get("run_dir") or (ROOT / "data" / "runs" / run_id))
 
             # ── Step 1: remove the row from index.json (atomic). ──
             index_removed = False
@@ -7973,7 +8630,9 @@ class App(tk.Tk):
 
     def _dash_backtest_open(self, run_id: str):
         """Open the HTML report for a given run in the default browser."""
-        report = ROOT / "data" / "runs" / run_id / "report.html"
+        run_meta = self._bt_resolve_run(run_id)
+        report_path = str(run_meta.get("report_html_path") or "")
+        report = Path(report_path) if report_path else (ROOT / "data" / "runs" / run_id / "report.html")
         if not report.exists():
             self.h_stat.configure(text="NO REPORT", fg=RED)
             self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
@@ -8960,6 +9619,15 @@ class App(tk.Tk):
                 self.proc.terminate()
                 try: self.proc.wait(timeout=3)
                 except: self.proc.kill()
+        elif self._exec_managed_info is not None:
+            r = messagebox.askyesnocancel("AURUM", "Background backtest running. Stop before closing?")
+            if r is None: return
+            if r:
+                try:
+                    from core.proc import stop_proc
+                    stop_proc(int(self._exec_managed_info["pid"]), expected=self._exec_managed_info)
+                except Exception:
+                    pass
         sr = getattr(self, "_site_runner_inst", None)
         if sr and sr.is_running():
             r = messagebox.askyesnocancel("AURUM", "Dev server running. Stop before closing?")

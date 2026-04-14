@@ -702,7 +702,7 @@ if __name__ == "__main__":
         "leverage": LEVERAGE,
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,
-        "engine": "thoth",
+        "engine": "BRIDGEWATER",
     }
 
     save_run_artifacts(

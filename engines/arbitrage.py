@@ -1397,7 +1397,7 @@ async def simulate_historical_report(capital: float = 1000.0) -> Path:
     ]
 
     payload = {
-        "engine": "JANE_STREET",
+        "engine": "JANE STREET",
         "version": ARB_ENGINE_VERSION,
         "mode": "simulate_historical",
         "snapshot_proxy": True,
@@ -1429,7 +1429,7 @@ async def simulate_historical_report(capital: float = 1000.0) -> Path:
         "ARTIFACT_SCOPE": "scanner-report",
     })
     summary = {
-        "engine": "JANE_STREET",
+        "engine": "JANE STREET",
         "run_id": RUN_ID,
         "mode": "simulate_historical",
         "n_trades": None,

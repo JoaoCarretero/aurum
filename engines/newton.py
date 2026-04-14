@@ -640,7 +640,7 @@ def export_json(all_trades, eq, mc, ratios, pairs):
     wr = sum(1 for t in closed if t["result"] == "WIN") / max(len(closed), 1) * 100
 
     data = {
-        "engine": "NEWTON",
+        "engine": "DE SHAW",
         "version": "1.0",
         "run_id": RUN_ID,
         "timestamp": datetime.now().isoformat(),
@@ -895,7 +895,7 @@ if __name__ == "__main__":
         "leverage": LEVERAGE,
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,
-        "engine": "newton",
+        "engine": "DE SHAW",
         "n_pairs": len(pairs),
     }
 

@@ -985,6 +985,7 @@ if __name__ == "__main__":
 
     _config = snapshot_config()
     _summary = {
+        "engine": "CITADEL",
         "n_trades": len(closed),
         "win_rate": round(wr_total, 2),
         "pnl": round(total_pnl, 2),

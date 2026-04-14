@@ -412,7 +412,7 @@ def export_json(all_trades, eq, mc, ratios, summary, config):
     wr = sum(1 for t in closed if t["result"] == "WIN") / max(len(closed), 1) * 100
 
     data = {
-        "engine": "MERCURIO",
+        "engine": "JUMP",
         "version": "1.0",
         "run_id": RUN_ID,
         "timestamp": datetime.now().isoformat(),
@@ -580,7 +580,7 @@ if __name__ == "__main__":
         "N_CANDLES_EFFECTIVE": N_CANDLES,
     })
     summary = {
-        "engine": "MERCURIO",
+        "engine": "JUMP",
         "run_id": RUN_ID,
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,
