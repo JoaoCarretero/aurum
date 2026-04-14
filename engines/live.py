@@ -798,7 +798,8 @@ class SignalEngine:
         # fix #3b+3d — account real + peak_equity
         size = position_size(account, entry_price, stop, score,
                              macro_b, direction, vol_r, dd_scale,
-                             is_chop_trade=is_chop_trade, peak_equity=peak_equity)
+                             is_chop_trade=is_chop_trade, peak_equity=peak_equity,
+                             regime_scale=ENGINE_RISK_SCALE_BY_REGIME.get("CITADEL"))
         size = round(size * corr_mult * trans_mult, 4)
         if size <= 0:
             self._veto(symbol, "size_zero", score, thresh); return None

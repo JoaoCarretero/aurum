@@ -81,6 +81,8 @@ __all__ = [
     "FROZEN_ENGINES",
     # Ablation
     "ABLATION_DISABLE",
+    # Per-engine winning configs (from master battery 2026-04-13)
+    "ENGINE_INTERVALS", "ENGINE_RISK_SCALE_BY_REGIME",
 ]
 
 # ── UNIVERSO ──────────────────────────────────────────────────
@@ -251,6 +253,18 @@ RISK_SCALE_BY_REGIME: dict[str, float] = {
     "CHOP": 0.45,
 }
 BULL_LONG_MIN_PULLBACK_ATR = 0.15
+
+# ── PER-ENGINE WINNING CONFIGS ─────────────────────────────────
+# Configs vencedoras da master battery 2026-04-13.
+# Cada engine pode sobrescrever o default global com seu melhor regime.
+# Expansão: acrescentar chaves conforme novas baterias validarem edges.
+ENGINE_INTERVALS: dict[str, str] = {
+    "BRIDGEWATER": "1h",   # Sharpe 5.06 @ 1h vs -1.95 @ 15m (90d default)
+}
+ENGINE_RISK_SCALE_BY_REGIME: dict[str, dict[str, float]] = {
+    # CITADEL regime-adaptive: Sharpe 4.43 vs 0.39 com default (180d)
+    "CITADEL": {"BEAR": 1.00, "BULL": 0.30, "CHOP": 0.50},
+}
 
 # ── DRAWDOWN & COOLDOWN ──────────────────────────────────────
 DD_RISK_SCALE: dict[float, float] = {

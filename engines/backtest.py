@@ -309,7 +309,8 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
         size  = position_size(account, entry, stop, score,
                               macro_b, direction, vol_r, dd_scale,
                               is_chop_trade=is_chop_trade,
-                              peak_equity=peak_equity)
+                              peak_equity=peak_equity,
+                              regime_scale=ENGINE_RISK_SCALE_BY_REGIME.get("CITADEL"))
         size  = round(size * corr_size_mult * trans_mult, 4)
         if not is_chop_trade:
             size = round(size * fractal_score, 4)

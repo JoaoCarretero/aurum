@@ -26,6 +26,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
+# Per-engine TF override (master battery 2026-04-13: 1h wins over 15m)
+INTERVAL = ENGINE_INTERVALS.get("BRIDGEWATER", INTERVAL)
 from core.chronos import enrich_with_regime
 from core import (
     fetch_all, validate, indicators, swing_structure, omega,
@@ -503,7 +505,9 @@ if __name__ == "__main__":
         _days_in = safe_input(f"\n  periodo em dias [{SCAN_DAYS}] > ").strip()
         if _days_in.isdigit() and 7 <= int(_days_in) <= 1500:
             SCAN_DAYS = int(_days_in)
-    N_CANDLES = SCAN_DAYS * 24 * 4
+    # N_CANDLES scales with TF (15m=4/h, 1h=1/h, 4h=1/4h)
+    _tf_per_hour = 60 / _TF_MINUTES.get(INTERVAL, 15)
+    N_CANDLES = int(SCAN_DAYS * 24 * _tf_per_hour)
 
     if _args.basket:
         from config.params import BASKETS

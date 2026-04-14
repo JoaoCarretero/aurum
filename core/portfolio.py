@@ -121,7 +121,8 @@ def _global_risk_mult(macro_bias: str, direction: str) -> float:
 def position_size(account, entry, stop, score,
                   macro_bias="CHOP", direction="BEARISH",
                   vol_regime="NORMAL", dd_scale=1.0,
-                  is_chop_trade=False, peak_equity=None):
+                  is_chop_trade=False, peak_equity=None,
+                  regime_scale=None):
     """Simplified position sizing: Kelly base + 2 multiplicadores.
 
     v3.7 — reduced from 8 multiplicadores to 3 after ablation test showed
@@ -142,7 +143,8 @@ def position_size(account, entry, stop, score,
     risk    = BASE_RISK + t * (min(kelly, MAX_RISK) - BASE_RISK)
 
     # Factor 1: regime × drawdown (combined)
-    regime_dd = RISK_SCALE_BY_REGIME.get(macro_bias, 1.0) * dd_scale
+    _scale = regime_scale if regime_scale is not None else RISK_SCALE_BY_REGIME
+    regime_dd = _scale.get(macro_bias, 1.0) * dd_scale
     risk *= max(0.2, min(regime_dd, 1.0))
 
     # Factor 2: convex sizing (equity curve shape)
