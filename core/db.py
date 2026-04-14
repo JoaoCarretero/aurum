@@ -124,7 +124,7 @@ def _normalize_run_id(run_id: str | None, engine: str, json_path: str | None = N
     raw = str(run_id or "").strip()
     if raw.startswith(f"{engine}_"):
         return raw
-    if raw and raw[:4].isdigit() and raw.count("_") >= 2:
+    if raw and raw[:4].isdigit() and "_" in raw:
         return f"{engine}_{raw}"
     if raw:
         return raw
@@ -194,6 +194,11 @@ def save_run(engine: str, json_path: str) -> str | None:
 
     conn = _connect()
     try:
+        conn.execute(
+            "DELETE FROM trades WHERE run_id IN (SELECT run_id FROM runs WHERE json_path=?)",
+            (str(resolved),),
+        )
+        conn.execute("DELETE FROM runs WHERE json_path=?", (str(resolved),))
         conn.execute(
             """
             INSERT OR REPLACE INTO runs
@@ -314,6 +319,11 @@ def register_run(
 
     conn = _connect()
     try:
+        conn.execute(
+            "DELETE FROM trades WHERE run_id IN (SELECT run_id FROM runs WHERE json_path=?)",
+            (str(resolved),),
+        )
+        conn.execute("DELETE FROM runs WHERE json_path=?", (str(resolved),))
         conn.execute(
             """
             INSERT OR REPLACE INTO runs
