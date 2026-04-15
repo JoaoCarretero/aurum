@@ -38,7 +38,23 @@ dev = [
 aurum = "aurum_cli:main"
 
 [tool.setuptools]
-py-modules = ["aurum_cli", "backtest"]
+py-modules = ["aurum_cli"]
 
 [tool.setuptools.packages.find]
 include = ["config*", "core*", "analysis*", "engines*", "bot*", "api*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".git",
+    ".worktrees",
+    ".pytest_cache",
+    ".pytest_local_tmp",
+    ".test_tmp",
+    "tests/_tmp",
+    "_tmp",
+    "pytest-cache-files-*",
+    "pytest-run-*",
+    "tmp*",
+    "__pycache__",
+]

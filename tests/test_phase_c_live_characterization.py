@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import datetime as dt
 
+import pytest
+
 from engines import live as live_mod
 from engines.live import LiveEngine, SignalEngine
 
@@ -11,6 +13,11 @@ from engines.live import LiveEngine, SignalEngine
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "phase_c" / "live"
 RECORDED_STATE = ROOT / "data" / "live" / "2026-04-09_1503" / "state" / "positions.json"
+
+pytestmark = pytest.mark.skipif(
+    not RECORDED_STATE.exists(),
+    reason="recorded live state dir cleaned up — replay fixture not yet wired",
+)
 
 
 def _load_json(path: Path):
