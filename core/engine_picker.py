@@ -660,6 +660,10 @@ def render(
             try: on_select(t)
             except Exception: pass
 
+    def _set_chip(chip: str):
+        state["chip"] = chip
+        _paint_detail()
+
     def _paint_overview(host, t: EngineTrack):
         sbody = _scrollable(host)
         brief = t.brief or {}
@@ -1351,8 +1355,9 @@ def render(
         if not cur or cur.slug != slug:
             return
         _apply_progress_from_selection()
-        if state["chip"] != "RUN":
-            state["chip"] = "RUN"
+        target_chip = "LOG" if mode == "live" else "RUN"
+        if state["chip"] != target_chip:
+            state["chip"] = target_chip
             _paint_detail()
         else:
             _repaint_bar()
@@ -1363,6 +1368,8 @@ def render(
         "current": lambda: tracks[state["sel"]] if tracks else None,
         "run_current": _run_current,
         "delta": lambda d: _sel(state["sel"] + d, scroll=True),
+        "open_chip": _set_chip,
+        "refresh": _paint_detail,
         "set_progress": _set_progress,
     }
 
