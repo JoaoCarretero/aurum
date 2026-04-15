@@ -57,7 +57,7 @@ from core import (
 )
 from core.audit_trail import AuditTrail, OrderEvent
 from core.risk_gates import (
-    RiskGateConfig, RiskState, GateDecision, check_gates,
+    RiskGateConfig, RiskState, GateDecision, check_gates, load_gate_config,
 )
 from core.fixture_capture import write_capture
 from core.fs import atomic_write
@@ -97,43 +97,8 @@ if CANARY_CAPITAL_PCT <= 0.0 or CANARY_CAPITAL_PCT > 1.0:
     CANARY_CAPITAL_PCT = 0.01
 
 
-def _load_risk_gate_config(mode: str) -> RiskGateConfig:
-    """Load the RiskGateConfig for ``mode`` from config/risk_gates.json.
-
-    Falls back to the permissive default (RiskGateConfig()) if the file
-    is absent or the mode section is missing. This keeps the wiring a
-    no-op for any user who hasn't opted into the guardrails yet — their
-    engine runs exactly as before.
-
-    Unknown keys in the JSON are ignored (forward-compat).
-    """
-    cfg_path = Path(__file__).parent.parent / "config" / "risk_gates.json"
-    if not cfg_path.exists():
-        return RiskGateConfig()
-    try:
-        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return RiskGateConfig()
-    if not isinstance(raw, dict):
-        return RiskGateConfig()
-    section = raw.get(mode, {})
-    if not isinstance(section, dict):
-        return RiskGateConfig()
-    # Filter to only known fields — tolerant of extra keys like "_comment".
-    allowed = {
-        "max_daily_dd_pct", "max_daily_loss_pct",
-        "max_consecutive_losses", "soft_block_losses",
-        "max_gross_notional_pct", "max_net_exposure_pct",
-        "max_concurrent_positions", "freeze_hours_utc",
-    }
-    kwargs = {k: v for k, v in section.items() if k in allowed}
-    # freeze_hours_utc must be a tuple for the dataclass
-    if "freeze_hours_utc" in kwargs and isinstance(kwargs["freeze_hours_utc"], list):
-        kwargs["freeze_hours_utc"] = tuple(int(h) for h in kwargs["freeze_hours_utc"])
-    try:
-        return RiskGateConfig(**kwargs)
-    except TypeError:
-        return RiskGateConfig()
+# Legacy alias — config loading moved to core.risk_gates.load_gate_config
+_load_risk_gate_config = load_gate_config
 
 # ── CONFIG ────────────────────────────────────────────────────
 LIVE_MODE         = False          # False = PAPER  |  True = LIVE/TESTNET

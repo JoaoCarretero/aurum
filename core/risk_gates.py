@@ -51,8 +51,10 @@ Usage
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 log = logging.getLogger(__name__)
@@ -301,11 +303,50 @@ def check_gates(state: RiskState,
     return soft_decision or _allow()
 
 
+# ── Config loader ────────────────────────────────────────────────────
+
+_CONFIG_PATH = Path(__file__).parent.parent / "config" / "risk_gates.json"
+_ALLOWED_KEYS = {
+    "max_daily_dd_pct", "max_daily_loss_pct",
+    "max_consecutive_losses", "soft_block_losses",
+    "max_gross_notional_pct", "max_net_exposure_pct",
+    "max_concurrent_positions", "freeze_hours_utc",
+    "max_single_position_pct",
+}
+
+
+def load_gate_config(mode: str) -> RiskGateConfig:
+    """Load RiskGateConfig for ``mode`` from config/risk_gates.json.
+
+    Falls back to the permissive default if the file is absent, malformed,
+    or the mode section is missing. Unknown keys are ignored (forward-compat).
+    """
+    if not _CONFIG_PATH.exists():
+        return RiskGateConfig()
+    try:
+        raw = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return RiskGateConfig()
+    if not isinstance(raw, dict):
+        return RiskGateConfig()
+    section = raw.get(mode, {})
+    if not isinstance(section, dict):
+        return RiskGateConfig()
+    kwargs = {k: v for k, v in section.items() if k in _ALLOWED_KEYS}
+    if "freeze_hours_utc" in kwargs and isinstance(kwargs["freeze_hours_utc"], list):
+        kwargs["freeze_hours_utc"] = tuple(int(h) for h in kwargs["freeze_hours_utc"])
+    try:
+        return RiskGateConfig(**kwargs)
+    except TypeError:
+        return RiskGateConfig()
+
+
 __all__ = [
     "RiskGateConfig",
     "RiskState",
     "GateDecision",
     "check_gates",
+    "load_gate_config",
     "gate_daily_dd",
     "gate_daily_loss",
     "gate_consecutive_losses",

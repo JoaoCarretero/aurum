@@ -49,6 +49,7 @@ class WithdrawRequest(BaseModel):
 
 class EngineAction(BaseModel):
     engine: str
+    mode: str = "paper"
 
 
 _PROC_TO_CANONICAL = {k: v["canonical"] for k, v in PROC_ENGINES.items()}
@@ -390,12 +391,31 @@ async def trade_history(
 
 @trading_router.post("/start")
 async def start_engine(req: EngineAction, user: dict = Depends(require_admin)):
-    """Start an engine by name (admin only)."""
+    """Start an engine by name (admin only).
+
+    Pre-start risk gates are evaluated before spawn. hard_block → 403,
+    soft_block → 403 (starting a new engine counts as a new entry, which
+    is exactly what soft_block is supposed to pause).
+    """
     engine_key = _proc_engine_key(req.engine)
     if engine_key not in proc.ENGINES:
         raise HTTPException(
             status_code=404,
             detail=f"Unknown engine '{req.engine}'. Available: {sorted(_CANONICAL_TO_PROC.keys())}",
+        )
+
+    from api.risk_check import evaluate_start_gates
+    decision = evaluate_start_gates(req.mode)
+    if decision.severity in ("hard_block", "soft_block"):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message":  f"Risk gate blocked start: {decision.reason}",
+                "severity": decision.severity,
+                "gate":     decision.gate,
+                "metric":   decision.metric,
+                "threshold": decision.threshold,
+            },
         )
 
     result = proc.spawn(engine_key)
