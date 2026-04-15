@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 # reports real test results instead of crashing in session teardown.
 pytest_pathlib.cleanup_dead_symlinks = lambda root: None
 
-TMP_ROOT = ROOT / "tests" / "_tmp"
+TMP_ROOT = Path.home() / ".codex" / "memories" / "aurum.finance" / "pytest_tmp"
 
 
 class _TmpPathFactory:

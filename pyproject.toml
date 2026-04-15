@@ -45,6 +45,7 @@ include = ["config*", "core*", "analysis*", "engines*", "bot*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
 norecursedirs = [
     ".git",
     ".worktrees",
