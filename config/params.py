@@ -220,7 +220,7 @@ CASCADE_MIN                 = 1
 
 # ── OMEGA & SCORE ─────────────────────────────────────────────
 REGIME_MIN_STRENGTH = 0.25
-SCORE_THRESHOLD     = 0.53    # 0.55 seria ótimo (Sharpe 4.49 grid) mas fica na beira do cliff 0.56 (overfit FAIL); 0.53 é a zona estável
+SCORE_THRESHOLD     = 0.54    # iter2 1080d bluechip: +1bp do 0.53 — menos turnover, alvo slippage WARN→PASS; cliff 0.56 estrutural persiste
 OMEGA_MIN_COMPONENT = 0.15
 OMEGA_WEIGHTS       = {
     "struct": 0.25, "flow": 0.25,
