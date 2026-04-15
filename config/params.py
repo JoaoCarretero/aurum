@@ -32,7 +32,7 @@ __all__ = [
     "DD_RISK_SCALE", "REGIME_TRANS_WINDOW", "REGIME_TRANS_ATR_JUMP", "REGIME_TRANS_SIZE_MULT",
     "STREAK_COOLDOWN", "SYM_LOSS_COOLDOWN",
     # Volatilidade
-    "SCORE_THRESHOLD_HIGH_VOL", "VOL_WINDOW", "VOL_LOW_PCT", "VOL_HIGH_PCT", "VOL_RISK_SCALE",
+    "SCORE_THRESHOLD_HIGH_VOL", "SCORE_THRESHOLD_LOW_VOL", "VOL_WINDOW", "VOL_LOW_PCT", "VOL_HIGH_PCT", "VOL_RISK_SCALE",
     # Portfolio
     "MAX_OPEN_POSITIONS", "CORR_THRESHOLD", "CORR_SOFT_THRESHOLD", "CORR_SOFT_MULT", "CORR_LOOKBACK",
     # Macro
@@ -240,7 +240,7 @@ MAX_HOLD            = 48
 # Trailing stop phases
 TRAIL_BE_MULT       = 1.0    # move 1.0x risk → stop to breakeven
 TRAIL_ACTIVATE_MULT = 1.5    # move 1.5x risk → activate trailing
-TRAIL_DISTANCE_MULT = 0.5    # iter5 1080d: voltando 0.3→0.5 — winners correm + slippage breakeven (WARN→PASS)
+TRAIL_DISTANCE_MULT = 0.3    # grid 2026-04-14: 0.3 gives Sharpe 5.60 vs 5.25 @ 0.5; iter5/1080d confirmou (0.5 quebra: Sharpe 0.76 / MaxDD 41%)
 
 SCORE_BY_REGIME: dict[str, float] = {
     "BEAR": 0.53,
@@ -301,7 +301,8 @@ STREAK_COOLDOWN: dict[int, int] = {
 SYM_LOSS_COOLDOWN = 3
 
 # ── VOLATILIDADE ──────────────────────────────────────────────
-SCORE_THRESHOLD_HIGH_VOL = 0.58
+SCORE_THRESHOLD_HIGH_VOL = 0.58    # wired em iter6/1080d — antes era ghost param (só tinha +0.05 hardcoded)
+SCORE_THRESHOLD_LOW_VOL  = 0.62    # iter6 1080d bluechip: forense W1/W3/W4 mostra LOW vol avg -2 PnL/trade, NORMAL avg +5.6
 
 VOL_WINDOW    = 100
 VOL_LOW_PCT   = 0.20

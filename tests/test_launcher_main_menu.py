@@ -286,62 +286,73 @@ def test_draw_status_block_creates_rows(app):
     canvas.destroy()
 
 
-# ── Arbitrage hub ───────────────────────────────────────────────
+# ── Arbitrage hub (tabbed rewrite) ──────────────────────────────
+# Hub is now a single page with 6 internal tabs (CEX-CEX / DEX-DEX /
+# CEX-DEX / BASIS / SPOT / ENGINE). The old row-menu API (_arb_hub_pick,
+# _arb_hub_row_widgets, hover cursor, semaphore bullets) was retired in
+# the unification refactor.
 
-def test_arbitrage_hub_renders_five_rows(app):
+def test_arbitrage_hub_renders_six_tabs(app):
     app._arbitrage_hub()
     app.update_idletasks()
-    assert hasattr(app, "_arb_hub_row_widgets")
-    assert len(app._arb_hub_row_widgets) == 5
-    for w in app._arb_hub_row_widgets:
-        assert "frame" in w
-        assert "bullet" in w
-        assert "label" in w
-        assert "meta" in w
-        assert "sub" in w
+    assert hasattr(app, "_arb_tab_labels")
+    # Six tabs: cex-cex, dex-dex, cex-dex, basis, spot, engine
+    expected = {"cex-cex", "dex-dex", "cex-dex", "basis", "spot", "engine"}
+    assert set(app._arb_tab_labels.keys()) == expected
 
 
-def test_arbitrage_hub_pick_dispatches_to_alchemy(app, monkeypatch):
+def test_arbitrage_hub_default_tab_is_cex_cex(app):
     app._arbitrage_hub()
-    called = []
-    monkeypatch.setattr(app, "_alchemy_enter",
-                        lambda: called.append("alchemy"))
-    app._arb_hub_pick(0)
-    assert called == ["alchemy"]
+    app.update_idletasks()
+    assert app._arb_tab == "cex-cex"
 
 
-def test_arbitrage_hub_telem_update_populates_sub_lines(app):
+def test_arbitrage_hub_tab_switch(app):
+    app._arbitrage_hub(tab="dex-dex")
+    app.update_idletasks()
+    assert app._arb_tab == "dex-dex"
+    # Re-entering with another tab swaps state
+    app._arbitrage_hub(tab="engine")
+    app.update_idletasks()
+    assert app._arb_tab == "engine"
+
+
+def test_arbitrage_hub_telem_update_populates_status_strip(app):
     app._arbitrage_hub()
 
     class FakeTop:
         symbol = "BTC"
         apr = 42.3
         venue = "binance"
+        venue_type = "CEX"
     stats = {"dex_online": 3, "cex_online": 5, "total": 1042}
     top = FakeTop()
-    arb_dd = [{"symbol": "ETH", "net_apr": 18.7, "short_venue": "dydx", "long_venue": "hyperliquid"}]
-    arb_cd = [{"symbol": "SOL", "net_apr": 95.2, "short_venue": "bybit", "long_venue": "paradex"}]
-    app._arb_hub_telem_update(stats, top, arb_dd, arb_cd)
+    opps = [top]
+    arb_dd = [{"symbol": "ETH", "net_apr": 18.7,
+               "short_venue": "dydx", "long_venue": "hyperliquid",
+               "risk": "MED"}]
+    arb_cd = [{"symbol": "SOL", "net_apr": 95.2,
+               "short_venue": "bybit", "long_venue": "paradex",
+               "risk": "HIGH"}]
+    app._arb_hub_telem_update(stats, top, opps, arb_dd, arb_cd,
+                              basis=[], spot=[])
     app.update_idletasks()
 
-    rows = app._arb_hub_row_widgets
-    assert "JANE ST" in rows[0]["meta"].cget("text")
-    assert "3" in rows[1]["meta"].cget("text")
-    assert "8" in rows[2]["meta"].cget("text")
-    assert "18" in rows[1]["sub"].cget("text") or "19" in rows[1]["sub"].cget("text")
-    assert "95" in rows[2]["sub"].cget("text") or "96" in rows[2]["sub"].cget("text")
+    # Status strip shows live numbers
+    assert "5" in app._arb_sum_cex.cget("text")
+    assert "3" in app._arb_sum_dex.cget("text")
+    assert "42" in app._arb_sum_best.cget("text")
+    # Cache is populated for tab switches
+    assert app._arb_cache["top"] is top
+    assert app._arb_cache["arb_dd"] == arb_dd
 
 
-def test_arbitrage_hub_hover_enter_moves_cursor(app, mod):
-    app._arbitrage_hub()
+def test_arb_engine_tab_renders_without_snapshot(app):
+    # Engine tab should render even when no JANE STREET run is active.
+    app._arbitrage_hub(tab="engine")
     app.update_idletasks()
-    app._arb_hub_idx = 0
-    app._arb_hub_repaint()
-    app._arb_hub_hover_enter(2)
-    app.update_idletasks()
-    assert app._arb_hub_idx == 2
-    assert app._arb_hub_row_widgets[2]["label"].cget("fg") == mod.AMBER
-    assert app._arb_hub_row_widgets[0]["label"].cget("fg") == mod.WHITE
+    # Tab registered as active
+    assert app._arb_tab == "engine"
 
 
 def test_scanner_filter_bar_renders(app):
@@ -354,32 +365,3 @@ def test_scanner_filter_bar_renders(app):
         assert len(app._arb_filter_labels) == 5
     finally:
         app._funding_alive = False
-
-
-def test_arbitrage_hub_semaphore_colors_bullets(app):
-    app._arbitrage_hub()
-    stats = {"dex_online": 3, "cex_online": 5, "total": 100}
-
-    class FakeTop:
-        symbol = "BTC"
-        apr = 80.0
-        venue = "binance"
-    top = FakeTop()
-    arb_dd = [{
-        "symbol": "ETH", "net_apr": 85.0,
-        "short_venue": "dydx", "short_venue_type": "DEX",
-        "long_venue": "hyperliquid", "long_venue_type": "DEX",
-        "short_apr": 50.0, "long_apr": -35.0,
-        "short_rate": 0.0003, "long_rate": -0.0002,
-        "short_interval_h": 8, "long_interval_h": 1,
-        "mark_price": 3200.0,
-        "volume_24h_short": 8_000_000, "volume_24h_long": 5_000_000,
-        "open_interest_short": 3_000_000, "open_interest_long": 2_000_000,
-    }]
-    arb_cd = []
-    app._arb_hub_telem_update(stats, top, arb_dd, arb_cd)
-    app.update_idletasks()
-
-    rows = app._arb_hub_row_widgets
-    bullet_fg = rows[1]["bullet"].cget("fg")
-    assert bullet_fg == "#00ff41", f"expected green bullet, got {bullet_fg}"

@@ -1094,6 +1094,25 @@ class App(tk.Tk):
             lambda e: self.h_data_btn.configure(bg="#a855f7", fg="#000000")
         )
 
+        # ARBITRAGE — amarelo · delta-neutral funding + basis + spot spreads
+        # Single entry point for everything JANE STREET related.
+        self.h_arb_btn = tk.Label(
+            hc, text=" ⇄ ARBITRAGE ", font=(FONT, 8, "bold"),
+            fg="#000000", bg="#ffd700", cursor="hand2", padx=6, pady=0,
+        )
+        self.h_arb_btn.pack(side="left", padx=(4, 0))
+        self.h_arb_btn.bind(
+            "<Button-1>", lambda e: self._arbitrage_hub()
+        )
+        self.h_arb_btn.bind(
+            "<Enter>",
+            lambda e: self.h_arb_btn.configure(bg="#ffed4e", fg="#1a1500")
+        )
+        self.h_arb_btn.bind(
+            "<Leave>",
+            lambda e: self.h_arb_btn.configure(bg="#ffd700", fg="#000000")
+        )
+
         self.h_path = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_path.pack(side="left", padx=(8,0))
         self.h_stat = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_stat.pack(side="right")
         # Persistent badge that lights up while the COMMAND CENTER dev server is alive.
@@ -5096,220 +5115,353 @@ class App(tk.Tk):
          "_arb_spot_screen"),
     ]
 
-    def _arbitrage_hub(self):
-        """HL2 + Bloomberg minimalist hub: 5 clickable rows with live data.
+    # ══════════════════════════════════════════════════════════════
+    # ARBITRAGE DESK — unified tabbed view
+    # Single entry point for everything arbitrage-related. Internal tabs
+    # cover all modes (CEX-CEX, DEX-DEX, CEX-DEX, BASIS, SPOT) plus the
+    # JANE STREET engine control panel. Replaces the old row-menu hub,
+    # _arb_basis_screen, _arb_spot_screen, and _funding_scanner_screen
+    # (those stay as thin redirects for back-compat).
+    # ══════════════════════════════════════════════════════════════
 
-        Rows: CEX-CEX (Jane Street execution), DEX-DEX (scanner),
-        CEX-DEX (scanner), BASIS TRADE (spot-perp), SPOT-SPOT (spread).
-        Click or C/D/X/B/S keyboard shortcuts. Hover highlights the row.
-        ESC returns to the main menu.
+    _ARB_TAB_DEFS = [
+        # (key, tab_id, label, color)
+        ("1", "cex-cex", "CEX \u2194 CEX",   "#ffd700"),
+        ("2", "dex-dex", "DEX \u2194 DEX",   "#00eaff"),
+        ("3", "cex-dex", "CEX \u2194 DEX",   "#c084fc"),
+        ("4", "basis",   "BASIS",            "#32bcad"),
+        ("5", "spot",    "SPOT \u2194 SPOT", "#ff00a0"),
+        ("6", "engine",  "ENGINE",           "#00ff80"),
+    ]
+
+    def _arbitrage_hub(self, tab: str = "cex-cex"):
+        """Unified arbitrage desk with 6 internal tabs.
+
+        Each tab renders its own view into a shared content frame. A single
+        background scanner feeds the status strip AND the active tab's data.
+        JANE STREET engine snapshot (if running) overlays real positions on
+        the CEX-CEX tab.
         """
         self._clr(); self._clear_kb()
         self.history.append("main")
-        self.h_path.configure(text="> ARBITRAGE DESK")
-        self.h_stat.configure(text="HUB", fg=AMBER_D)
-        self.f_lbl.configure(
-            text="click row  |  C D X B S direct  |  \u2191\u2193 ENTER  |  ESC back"
-        )
+        self.h_path.configure(text=f"> ARBITRAGE > {tab.upper()}")
+        self.h_stat.configure(text="DESK", fg=AMBER_D)
+        self.f_lbl.configure(text="1-6 switch tab  |  R refresh  |  ESC back")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._bind_global_nav()
 
         _outer, outer = self._ui_page_shell(
             "ARBITRAGE DESK",
-            "Funding, basis and spread routing across execution and scanner modes",
+            "All arbitrage modes in one place — scan, execute, monitor",
         )
 
-        # ── Header bar (minimal: section label + clock) ──
-        header = tk.Frame(outer, bg=BG, height=24)
-        header.pack(fill="x", pady=(0, 6))
-        header.pack_propagate(False)
-        tk.Label(header, text="ROUTER",
-                 font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="left")
-        self._arb_hub_clock = tk.Label(header, text="",
-                                        font=(FONT, 8),
-                                        fg=DIM, bg=BG)
-        self._arb_hub_clock.pack(side="right")
+        # ── Status strip (clock + CEX/DEX/TOP telemetry) ──
+        status = tk.Frame(outer, bg=BG, height=18)
+        status.pack(fill="x", padx=16, pady=(2, 4))
+        status.pack_propagate(False)
+        self._arb_clock = tk.Label(status, text="", font=(FONT, 7),
+                                    fg=DIM, bg=BG)
+        self._arb_clock.pack(side="left")
         try:
-            self._arb_hub_clock.configure(
-                text=datetime.now().strftime("%H:%M:%S  UTC"))
+            self._arb_clock.configure(
+                text=datetime.now().strftime("%H:%M:%S UTC"))
+        except Exception:
+            pass
+        self._arb_sum_best = tk.Label(status, text="TOP —", font=(FONT, 7),
+                                       fg=DIM, bg=BG)
+        self._arb_sum_best.pack(side="right")
+        self._arb_sum_dex = tk.Label(status, text="DEX —", font=(FONT, 7),
+                                      fg=DIM, bg=BG)
+        self._arb_sum_dex.pack(side="right", padx=(0, 12))
+        self._arb_sum_cex = tk.Label(status, text="CEX —", font=(FONT, 7, "bold"),
+                                      fg=AMBER_D, bg=BG)
+        self._arb_sum_cex.pack(side="right", padx=(0, 12))
+
+        # ── Tab strip ──
+        tabs_frame = tk.Frame(outer, bg=BG)
+        tabs_frame.pack(fill="x", padx=16, pady=(2, 0))
+        self._arb_tab = tab
+        self._arb_tab_labels = {}
+        for key, tid, label, color in self._ARB_TAB_DEFS:
+            is_active = (tid == tab)
+            fg = color if is_active else DIM
+            bg = BG2 if is_active else BG
+            txt = f" {key} {label} "
+            lbl = tk.Label(tabs_frame, text=txt, font=(FONT, 8, "bold"),
+                           fg=fg, bg=bg, cursor="hand2", padx=4, pady=2)
+            lbl.pack(side="left", padx=(0, 1))
+            lbl.bind("<Button-1>", lambda _e, _t=tid: self._arbitrage_hub(_t))
+            self._arb_tab_labels[tid] = lbl
+        tk.Frame(outer, bg=BORDER, height=1).pack(
+            fill="x", padx=16, pady=(0, 6))
+
+        # ── Content area (tab-specific render) ──
+        content = tk.Frame(outer, bg=BG)
+        content.pack(fill="both", expand=True, padx=16, pady=(0, 6))
+        self._arb_content = content
+
+        # Keyboard shortcuts — 1-6 switch tabs, R refresh, ESC back
+        for key, tid, _, _ in self._ARB_TAB_DEFS:
+            self._kb(f"<Key-{key}>",
+                     lambda _t=tid: self._arbitrage_hub(_t))
+        self._kb("<Key-r>",
+                 lambda: self._arbitrage_hub(self._arb_tab))
+
+        # Route to the tab renderer
+        render_map = {
+            "cex-cex": self._arb_render_cex_cex,
+            "dex-dex": self._arb_render_dex_dex,
+            "cex-dex": self._arb_render_cex_dex,
+            "basis":   self._arb_render_basis,
+            "spot":    self._arb_render_spot,
+            "engine":  self._arb_render_engine,
+        }
+        render_fn = render_map.get(tab, self._arb_render_cex_cex)
+        render_fn(content)
+
+        # Kick off async scan (populates status strip + re-renders tab)
+        self._arb_hub_scan_async()
+
+    # ── Table helper used by every tab ─────────────────────────
+    def _arb_make_table(self, parent, cols: list[tuple[str, int, str]]):
+        """Build a header + body pair. Returns (body_frame, repaint_fn)."""
+        hrow = tk.Frame(parent, bg=BG)
+        hrow.pack(fill="x")
+        for label, w, anchor in cols:
+            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill="both", expand=True)
+
+        def repaint(rows: list[list[tuple[str, str]]]):
+            """Each cell is (text, fg). Clear body and re-paint."""
+            for w in body.winfo_children():
+                w.destroy()
+            if not rows:
+                tk.Label(body, text="  \u2014 no data \u2014",
+                         font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=16)
+                return
+            for i, row in enumerate(rows):
+                bg = BG if i % 2 == 0 else BG2
+                rf = tk.Frame(body, bg=bg)
+                rf.pack(fill="x")
+                for (txt, fg), (_, w, anchor) in zip(row, cols):
+                    tk.Label(rf, text=txt, font=(FONT, 8),
+                             fg=fg, bg=bg, width=w, anchor=anchor).pack(side="left")
+        return body, repaint
+
+    # ── Tab renderers ──────────────────────────────────────────
+    def _arb_render_cex_cex(self, parent):
+        """CEX↔CEX tab: live opportunities + JANE STREET snapshot (if running)."""
+        hdr = tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
+                       font=(FONT, 8, "bold"), fg=AMBER, bg=BG)
+        hdr.pack(anchor="w", pady=(0, 4))
+
+        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 9, "w"),
+                ("SHORT", 9, "w"), ("APR", 8, "e"),
+                ("VOL", 10, "e"), ("\u03a9", 6, "e")]
+        body, repaint = self._arb_make_table(parent, cols)
+        self._arb_cex_repaint = repaint
+        repaint([[(" ", DIM)] * 7])  # placeholder until scan returns
+
+        # Live positions panel (shown only if engine has snapshot)
+        try:
+            from core.alchemy_state import AlchemyState
+            state = getattr(self, "_arb_alchemy_state", None)
+            if state is None:
+                state = AlchemyState()
+                self._arb_alchemy_state = state
+            snap = state.read()
+            if not snap.get("_stale", True) and snap.get("positions"):
+                tk.Frame(parent, bg=BORDER, height=1).pack(
+                    fill="x", pady=(8, 4))
+                tk.Label(parent, text="LIVE POSITIONS (JANE STREET)",
+                         font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(anchor="w")
+                pcols = [("SYM", 8, "w"), ("L/S", 10, "w"),
+                         ("PNL", 10, "e"), ("DECAY", 8, "e"), ("EXIT", 8, "e")]
+                _, p_repaint = self._arb_make_table(parent, pcols)
+                pos_rows = []
+                for p in snap.get("positions", []):
+                    pnl = p.get("pnl", 0) or 0
+                    exit_s = p.get("exit_in_s", 0) or 0
+                    h, rem = divmod(int(exit_s), 3600)
+                    m = rem // 60
+                    long_v = (p.get("long") or "")[:3].upper()
+                    short_v = (p.get("short") or "")[:3].upper()
+                    pos_rows.append([
+                        ((p.get("sym") or "—")[:6], WHITE),
+                        (f"{long_v}/{short_v}", AMBER_D),
+                        (f"{pnl:+.2f}", GREEN if pnl >= 0 else RED),
+                        (f"-{p.get('edge_decay_pct', 0):.0f}%", AMBER),
+                        (f"{h}h{m:02d}" if exit_s > 0 else "—", DIM),
+                    ])
+                p_repaint(pos_rows)
         except Exception:
             pass
 
-        # ── Title block (compact, Bloomberg-density) ──
-        title_frame = tk.Frame(outer, bg=BG)
-        title_frame.pack(fill="x", pady=(14, 0))
-        tk.Label(title_frame, text="ARBITRAGE",
-                 font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack()
-        tk.Frame(title_frame, bg=AMBER_D, height=1, width=120).pack(pady=(2, 2))
-        tk.Label(title_frame, text="funding  \u00b7  basis  \u00b7  spread",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack()
+    def _arb_render_dex_dex(self, parent):
+        tk.Label(parent, text="DEX \u2194 DEX  \u00b7  funding diff across decentralized venues",
+                 font=(FONT, 8, "bold"), fg="#00eaff", bg=BG).pack(anchor="w", pady=(0, 4))
+        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 12, "w"),
+                ("SHORT", 12, "w"), ("NET APR", 10, "e"),
+                ("RISK", 6, "e")]
+        _, repaint = self._arb_make_table(parent, cols)
+        self._arb_dex_repaint = repaint
+        repaint([])
 
-        # ── Summary strip (dense, right-aligned telemetry) ──
-        summary = tk.Frame(outer, bg=BG)
-        summary.pack(fill="x", pady=(8, 4), padx=28)
-        self._arb_hub_sum_cex = tk.Label(summary, text="CEX —", font=(FONT, 7, "bold"),
-                                         fg=AMBER_D, bg=BG, anchor="w")
-        self._arb_hub_sum_cex.pack(side="left")
-        self._arb_hub_sum_dex = tk.Label(summary, text="DEX —", font=(FONT, 7),
-                                         fg=DIM, bg=BG, anchor="w")
-        self._arb_hub_sum_dex.pack(side="left", padx=(14, 0))
-        self._arb_hub_sum_best = tk.Label(summary, text="TOP —", font=(FONT, 7),
-                                          fg=DIM, bg=BG, anchor="w")
-        self._arb_hub_sum_best.pack(side="left", padx=(14, 0))
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+    def _arb_render_cex_dex(self, parent):
+        tk.Label(parent, text="CEX \u2194 DEX  \u00b7  funding diff cex vs dex",
+                 font=(FONT, 8, "bold"), fg="#c084fc", bg=BG).pack(anchor="w", pady=(0, 4))
+        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 12, "w"),
+                ("SHORT", 12, "w"), ("NET APR", 10, "e"),
+                ("RISK", 6, "e")]
+        _, repaint = self._arb_make_table(parent, cols)
+        self._arb_cdex_repaint = repaint
+        repaint([])
 
-        rows_frame = tk.Frame(outer, bg=BG)
-        rows_frame.pack(fill="x", pady=(8, 0), padx=28)
+    def _arb_render_basis(self, parent):
+        tk.Label(parent, text="BASIS  \u00b7  buy spot / short perp (or reverse) to lock basis",
+                 font=(FONT, 8, "bold"), fg="#32bcad", bg=BG).pack(anchor="w", pady=(0, 4))
+        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("PERP", 10, "w"),
+                ("SPOT", 10, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
+                ("BASIS", 8, "e"), ("APR", 8, "e")]
+        _, repaint = self._arb_make_table(parent, cols)
+        self._arb_basis_repaint = repaint
+        repaint([])
 
-        self._arb_hub_idx = 0
-        self._arb_hub_row_widgets: list[dict] = []
+    def _arb_render_spot(self, parent):
+        tk.Label(parent, text="SPOT \u2194 SPOT  \u00b7  same asset, different exchange",
+                 font=(FONT, 8, "bold"), fg="#ff00a0", bg=BG).pack(anchor="w", pady=(0, 4))
+        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("VENUE A", 10, "w"),
+                ("VENUE B", 10, "w"), ("PRICE A", 12, "e"),
+                ("PRICE B", 12, "e"), ("SPREAD", 10, "e")]
+        _, repaint = self._arb_make_table(parent, cols)
+        self._arb_spot_repaint = repaint
+        repaint([])
 
-        # Row definitions — match self._ARB_HUB_ITEMS order
-        exec_sec = self._ui_section(rows_frame, "EXECUTION", note="operator-routed")
-        scan_sec = self._ui_section(rows_frame, "SCANNERS", note="observation and research")
-        row_defs = [
-            (exec_sec, "CEX  \u2194  CEX", "JANE ST",    "execution  \u00b7  \u2014"),
-            (scan_sec, "DEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
-            (scan_sec, "CEX  \u2194  DEX", "\u2014 VENUES", "observation  \u00b7  \u2014"),
-            (scan_sec, "BASIS TRADE", "SPOT\u21c4PERP", "spot-perp basis  \u00b7  \u2014"),
-            (scan_sec, "SPOT  \u2194  SPOT", "2 VENUES", "spot spread  \u00b7  \u2014"),
-        ]
+    def _arb_render_engine(self, parent):
+        """JANE STREET engine controls + live risk + log tail."""
+        try:
+            from core.alchemy_state import AlchemyState
+            state = getattr(self, "_arb_alchemy_state", None)
+            if state is None:
+                state = AlchemyState()
+                self._arb_alchemy_state = state
+            snap = state.read()
+        except Exception:
+            snap = {"_stale": True}
 
-        for i, (parent, big_label, meta, sub) in enumerate(row_defs):
-            row_frame = tk.Frame(parent, bg=BG, cursor="hand2", height=38)
-            row_frame.pack(fill="x", pady=(0, 2))
-            row_frame.pack_propagate(False)
+        stale = snap.get("_stale", True)
+        running_badge = ("OFF", RED) if stale else ("RUN", GREEN)
 
-            top_line = tk.Frame(row_frame, bg=BG)
-            top_line.pack(fill="x", pady=(4, 0))
+        # Status strip (engine-specific)
+        top = tk.Frame(parent, bg=BG)
+        top.pack(fill="x", pady=(0, 4))
+        tk.Label(top, text="JANE STREET",
+                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(top, text=f"  \u00b7  {running_badge[0]}  \u00b7  mode {snap.get('mode', '—')}",
+                 font=(FONT, 8), fg=running_badge[1], bg=BG).pack(side="left")
 
-            bullet_lbl = tk.Label(top_line, text=f"{i+1:02d}",
-                                  font=(FONT, 7),
-                                  fg=DIM, bg=BG, width=3, anchor="w")
-            bullet_lbl.pack(side="left")
+        # Live risk gauges
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
+        gauges = tk.Frame(parent, bg=BG)
+        gauges.pack(fill="x", pady=(0, 4))
+        for k, label, fmt in [
+            ("account", "ACCT", "${:,.0f}"),
+            ("drawdown_pct", "DD", "{:+.2f}%"),
+            ("exposure_usd", "EXPO", "${:,.0f}"),
+            ("realized_pnl", "REAL", "${:+,.2f}"),
+            ("unrealized_pnl", "UPNL", "${:+,.2f}"),
+            ("losses_streak", "STREAK", "{}"),
+            ("trades_count", "TRADES", "{}"),
+        ]:
+            val = snap.get(k, 0) or 0
+            try:
+                vtxt = fmt.format(val)
+            except Exception:
+                vtxt = "—"
+            col = tk.Frame(gauges, bg=BG)
+            col.pack(side="left", padx=(0, 16))
+            tk.Label(col, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=BG).pack(anchor="w")
+            tk.Label(col, text=vtxt, font=(FONT, 10, "bold"),
+                     fg=WHITE, bg=BG).pack(anchor="w")
 
-            label_lbl = tk.Label(top_line, text=big_label,
-                                 font=(FONT, 10, "bold"),
-                                 fg=WHITE, bg=BG, anchor="w")
-            label_lbl.pack(side="left", padx=(2, 0))
+        # Controls
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
+        ctrls = tk.Frame(parent, bg=BG)
+        ctrls.pack(fill="x", pady=(0, 4))
+        tk.Label(ctrls, text="  controls:",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left")
+        for text, cmd, color in [
+            ("START PAPER", lambda: self._arb_engine_start("paper"), GREEN),
+            ("START DEMO",  lambda: self._arb_engine_start("demo"),  AMBER),
+            ("STOP",        self._arb_engine_stop,                    RED),
+        ]:
+            b = tk.Label(ctrls, text=f"  {text}  ", font=(FONT, 7, "bold"),
+                         fg=BG, bg=color, cursor="hand2", padx=6, pady=1)
+            b.pack(side="left", padx=(6, 0))
+            b.bind("<Button-1>", lambda _e, _c=cmd: _c())
 
-            meta_lbl = tk.Label(top_line, text=meta,
-                                font=(FONT, 7, "bold"),
-                                fg=AMBER_D, bg=BG, anchor="e")
-            meta_lbl.pack(side="right", padx=(0, 8))
-
-            sub_lbl = tk.Label(row_frame, text=sub,
-                               font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
-            sub_lbl.pack(fill="x", padx=(28, 8), pady=(2, 0))
-            tk.Frame(row_frame, bg=BORDER, height=1).pack(fill="x", side="bottom", pady=(4, 0))
-
-            widgets = {
-                "frame":  row_frame,
-                "top":    top_line,
-                "bullet": bullet_lbl,
-                "label":  label_lbl,
-                "meta":   meta_lbl,
-                "sub":    sub_lbl,
-            }
-            self._arb_hub_row_widgets.append(widgets)
-
-            # Bind hover + click on frame AND all child labels
-            targets = (row_frame, top_line, bullet_lbl, label_lbl, meta_lbl, sub_lbl)
-            for t in targets:
-                t.bind("<Enter>",    lambda _e, _i=i: self._arb_hub_hover_enter(_i))
-                t.bind("<Leave>",    lambda _e, _i=i: self._arb_hub_hover_leave(_i))
-                t.bind("<Button-1>", lambda _e, _i=i: self._arb_hub_pick(_i))
-
-        # ── Keyboard shortcuts (preserved) ──
-        self._kb("<Key-c>", lambda: self._arb_hub_pick(0))
-        self._kb("<Key-d>", lambda: self._arb_hub_pick(1))
-        self._kb("<Key-x>", lambda: self._arb_hub_pick(2))
-        self._kb("<Key-b>", lambda: self._arb_hub_pick(3))
-        self._kb("<Key-s>", lambda: self._arb_hub_pick(4))
-        self._kb("<Up>",    lambda: self._arb_hub_move(-1))
-        self._kb("<Down>",  lambda: self._arb_hub_move(1))
-        self._kb("<Return>", lambda: self._arb_hub_pick(self._arb_hub_idx))
-        self._kb("<space>",  lambda: self._arb_hub_pick(self._arb_hub_idx))
-
-        self._arb_hub_repaint()
-
-        # ── Footer hint ──
-        footer = tk.Frame(outer, bg=BG)
-        footer.pack(fill="x", pady=(12, 0))
-        tk.Label(footer,
-                 text="execution and scanner routes  \u00b7  C D X B S direct  \u00b7  ESC back",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(anchor="w", pady=(6, 0))
-
-        # ── Kick off async scan for live data ──
-        self._arb_hub_scan_async()
-
-    def _arb_hub_move(self, delta: int):
-        rows = getattr(self, "_arb_hub_row_widgets", None)
-        if not rows:
-            return
-        self._arb_hub_idx = (self._arb_hub_idx + delta) % len(rows)
-        self._arb_hub_repaint()
-
-    def _arb_hub_repaint(self):
-        """Repaint all 3 rows based on self._arb_hub_idx (keyboard cursor)."""
-        rows = getattr(self, "_arb_hub_row_widgets", None) or []
-        for i, w in enumerate(rows):
-            if i == self._arb_hub_idx:
-                w["frame"].configure(bg=BG3)
-                w["top"].configure(bg=BG3)
-                w["bullet"].configure(fg=AMBER, bg=BG3)
-                w["label"].configure(fg=AMBER, bg=BG3)
-                w["meta"].configure(fg=AMBER, bg=BG3)
-                w["sub"].configure(fg=AMBER_D, bg=BG3)
+        # Log tail (last 8 lines from most recent log)
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
+        tk.Label(parent, text="LOG TAIL",
+                 font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
+        log_body = tk.Text(parent, height=10, font=(FONT, 7),
+                           bg=BG2, fg=DIM, bd=0, highlightthickness=0,
+                           wrap="none")
+        log_body.pack(fill="both", expand=True, pady=(2, 0))
+        try:
+            from pathlib import Path as _P
+            logs = sorted((_P("data") / ".proc_logs").glob("janestreet_*.log"),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+            if logs:
+                with logs[0].open("r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-60:]
+                log_body.insert("end", "".join(lines))
+                log_body.see("end")
             else:
-                w["frame"].configure(bg=BG)
-                w["top"].configure(bg=BG)
-                w["bullet"].configure(fg=AMBER_D, bg=BG)
-                w["label"].configure(fg=WHITE, bg=BG)
-                w["meta"].configure(fg=AMBER_D, bg=BG)
-                w["sub"].configure(fg=DIM, bg=BG)
+                log_body.insert("end", "  no log yet — start the engine\n")
+        except Exception as e:
+            log_body.insert("end", f"  log unavailable: {e}\n")
+        log_body.configure(state="disabled")
 
-    def _arb_hub_hover_enter(self, idx: int) -> None:
-        """Mouse hover enters row idx — same visual as keyboard focus."""
-        if not (0 <= idx < len(getattr(self, "_arb_hub_row_widgets", []))):
-            return
-        self._arb_hub_idx = idx
-        self._arb_hub_repaint()
+    # ── Engine control shortcuts ──────────────────────────────
+    def _arb_engine_start(self, mode: str):
+        """Start JANE STREET engine in the given mode (paper/demo/live)."""
+        from core import proc
+        proc.spawn("janestreet", cli_args=["--mode", mode])
+        try:
+            self.after(500, lambda: self._arbitrage_hub("engine"))
+        except Exception:
+            pass
 
-    def _arb_hub_hover_leave(self, idx: int) -> None:
-        """Mouse hover leaves row idx — no-op.
+    def _arb_engine_stop(self):
+        """Stop any running JANE STREET process."""
+        from core import proc
+        for p in proc.list_procs():
+            if p.get("engine") == "janestreet" and p.get("alive"):
+                proc.stop_proc(p["pid"], expected=p)
+        try:
+            self.after(500, lambda: self._arbitrage_hub("engine"))
+        except Exception:
+            pass
 
-        Cursor stays on last-hovered row (Bloomberg-style). If the user
-        enters another row, that row's <Enter> fires and repaints.
-        """
-        pass
-
-    def _arb_hub_pick(self, idx: int):
-        if idx < 0 or idx >= len(self._ARB_HUB_ITEMS):
-            return
-        target = self._ARB_HUB_ITEMS[idx][3]
-        if isinstance(target, tuple):
-            method, arg = target
-            getattr(self, method)(arg)
-        else:
-            getattr(self, target)()
-
-    # ── Background scan: populates telemetry strip without blocking Tk ─
+    # ── Background scan: populates status strip + active tab ────
     def _arb_hub_scan_async(self):
-        """Kick off a funding_scanner.scan() in a daemon thread, then
-        marshal the result back to the UI via self.after(0, ...).
+        """Run FundingScanner in a worker thread and push results to the UI.
 
-        The scanner itself is cached (CACHE_TTL) so hitting the hub
-        repeatedly doesn't hammer venue APIs.
+        The scanner is cached (CACHE_TTL) so hopping between tabs doesn't
+        hammer venue APIs. After the scan returns, the status strip is
+        always refreshed; the active tab's table is repainted with live
+        data via whichever ``_arb_*_repaint`` callback is registered.
         """
         import threading
         try:
             from core.funding_scanner import FundingScanner
         except Exception as e:
-            rows = getattr(self, "_arb_hub_row_widgets", None)
-            if rows:
-                rows[0]["sub"].configure(
-                    text=f"scanner unavailable: {str(e)[:40]}", fg=RED)
+            self._arb_set_status_error(f"scanner unavailable: {str(e)[:40]}")
             return
         scanner = getattr(self, "_funding_scanner", None)
         if scanner is None:
@@ -5322,164 +5474,171 @@ class App(tk.Tk):
                 stats = scanner.stats()
                 arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=5.0)
                 arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=5.0)
+                basis = []
+                spot = []
+                try:
+                    scanner.scan_spot()
+                    basis = scanner.basis_pairs(min_basis_bps=5)[:20]
+                    spot = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
+                except Exception:
+                    pass
                 top = opps[0] if opps else None
                 try:
                     self.after(0, lambda: self._arb_hub_telem_update(
-                        stats, top, arb_dd, arb_cd))
+                        stats, top, opps, arb_dd, arb_cd, basis, spot))
                 except (RuntimeError, tk.TclError):
                     # Tk root gone (test teardown / app shutdown) — drop update
                     pass
             except Exception as e:
-                def _fail(err=e):
-                    rs = getattr(self, "_arb_hub_row_widgets", None)
-                    if rs:
-                        try:
-                            rs[0]["sub"].configure(
-                                text=f"scan failed: {str(err)[:40]}", fg=RED)
-                        except Exception:
-                            pass
                 try:
-                    self.after(0, _fail)
+                    self.after(0, lambda: self._arb_set_status_error(
+                        f"scan failed: {str(e)[:40]}"))
                 except (RuntimeError, tk.TclError):
                     pass
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _arb_hub_telem_update(self, stats, top, arb_dd, arb_cd):
-        """Populate the 5 hub rows with live data from the scanner.
+    def _arb_set_status_error(self, msg: str):
+        """Paint the right side of the status strip with an error tag."""
+        lbl = getattr(self, "_arb_sum_best", None)
+        if lbl is not None:
+            try:
+                lbl.configure(text=msg, fg=RED)
+            except Exception:
+                pass
 
-        stats: dict with dex_online, cex_online, total from FundingScanner.stats()
-        top:   FundingOpp or None — single best observation across all venues
-        arb_dd: list of dex-dex spread pairs from scanner.arb_pairs("dex-dex")
-        arb_cd: list of cex-dex spread pairs from scanner.arb_pairs("cex-dex")
-        Rows 3-4 (BASIS TRADE, SPOT-SPOT) are updated separately via
-        scanner.basis_pairs() / scanner.spot_arb_pairs() when available.
+    def _arb_hub_telem_update(self, stats, top, opps, arb_dd, arb_cd,
+                               basis, spot):
+        """Populate the status strip and the active tab's table.
+
+        stats     : dict from FundingScanner.stats() — dex_online / cex_online
+        top       : top FundingOpp across all venues (or None)
+        opps      : full list of FundingOpp from scanner.scan()
+        arb_dd    : list of DEX↔DEX arb pairs (dict) from scanner.arb_pairs
+        arb_cd    : list of CEX↔DEX arb pairs
+        basis     : list of basis (spot-perp) pairs from scanner.basis_pairs
+        spot      : list of spot spread pairs from scanner.spot_arb_pairs
+
+        Each tab renderer registers a repaint callback (e.g. _arb_cex_repaint);
+        we only call the one for the currently active tab.
         """
-        rows = getattr(self, "_arb_hub_row_widgets", None)
-        if not rows:
-            return
+        # Status strip
+        dex_on = (stats or {}).get("dex_online", 0)
+        cex_on = (stats or {}).get("cex_online", 0)
         try:
-            dex_on = stats.get("dex_online", 0)
-            cex_on = stats.get("cex_online", 0)
-            if hasattr(self, "_arb_hub_sum_cex"):
-                self._arb_hub_sum_cex.configure(text=f"CEX  {cex_on}")
-            if hasattr(self, "_arb_hub_sum_dex"):
-                self._arb_hub_sum_dex.configure(text=f"DEX  {dex_on}")
-
-            # Row 0 — CEX ↔ CEX (Jane Street execution)
-            top_s = "\u2014"
+            self._arb_sum_cex.configure(text=f"CEX {cex_on}")
+            self._arb_sum_dex.configure(text=f"DEX {dex_on}")
+            top_s = "—"
             if top is not None and getattr(top, "apr", None) is not None:
                 try:
-                    top_s = f"top {float(top.apr):+.1f}%"
+                    top_s = f"{float(top.apr):+.1f}%"
                 except Exception:
-                    top_s = "\u2014"
-            if hasattr(self, "_arb_hub_sum_best"):
-                self._arb_hub_sum_best.configure(text=f"TOP APR  {top_s}")
-            rows[0]["meta"].configure(text="JANE ST")
-            rows[0]["sub"].configure(
-                text=f"execution  \u00b7  {top_s}  \u00b7  24 pairs")
-
-            # Row 1 — DEX ↔ DEX
-            rows[1]["meta"].configure(text=f"{dex_on} VENUES")
-            if arb_dd:
-                a = arb_dd[0]
-                try:
-                    best_s = f"best {float(a.get('net_apr', 0)):+.1f}%"
-                    venue_s = str(a.get("long_venue") or a.get("short_venue") or "\u2014")
-                except Exception:
-                    best_s = "\u2014"
-                    venue_s = "\u2014"
-                rows[1]["sub"].configure(
-                    text=f"observation  \u00b7  {best_s}  \u00b7  {venue_s}")
-            else:
-                rows[1]["sub"].configure(
-                    text="observation  \u00b7  \u2014  \u00b7  \u2014")
-
-            # Row 2 — CEX ↔ DEX
-            rows[2]["meta"].configure(text=f"{dex_on + cex_on} VENUES")
-            if arb_cd:
-                a = arb_cd[0]
-                try:
-                    best_s = f"best {float(a.get('net_apr', 0)):+.1f}%"
-                    venue_s = str(a.get("long_venue") or a.get("short_venue") or "\u2014")
-                except Exception:
-                    best_s = "\u2014"
-                    venue_s = "\u2014"
-                rows[2]["sub"].configure(
-                    text=f"observation  \u00b7  {best_s}  \u00b7  {venue_s}")
-            else:
-                rows[2]["sub"].configure(
-                    text="observation  \u00b7  \u2014  \u00b7  \u2014")
-
-            # ── Semaphore bullets (best score per category) ──────
-            from core.arb_scoring import score_opp, score_batch
-            GREEN_SEM = "#00ff41"
-
-            # Row 0 — CEX-CEX: score the top opp if available
-            if top is not None:
-                top_d = top.to_dict() if hasattr(top, "to_dict") else {
-                    "symbol": getattr(top, "symbol", ""),
-                    "venue": getattr(top, "venue", ""),
-                    "apr": getattr(top, "apr", 0),
-                    "volume_24h": getattr(top, "volume_24h", 0),
-                    "open_interest": getattr(top, "open_interest", 0),
-                    "risk": getattr(top, "risk", "HIGH"),
-                }
-                cex_sc = score_opp(top_d)
-                if cex_sc.grade == "GO":
-                    rows[0]["bullet"].configure(fg=GREEN_SEM)
-                elif cex_sc.grade == "MAYBE":
-                    rows[0]["bullet"].configure(fg=AMBER)
-                else:
-                    rows[0]["bullet"].configure(fg=DIM)
-
-            # Row 1 — DEX-DEX
-            if arb_dd:
-                dd_scores = score_batch(arb_dd)
-                best_dd = max(dd_scores, key=lambda s: s.score)
-                if best_dd.grade == "GO":
-                    rows[1]["bullet"].configure(fg=GREEN_SEM)
-                elif best_dd.grade == "MAYBE":
-                    rows[1]["bullet"].configure(fg=AMBER)
-                else:
-                    rows[1]["bullet"].configure(fg=DIM)
-
-            # Row 2 — CEX-DEX
-            if arb_cd:
-                cd_scores = score_batch(arb_cd)
-                best_cd = max(cd_scores, key=lambda s: s.score)
-                if best_cd.grade == "GO":
-                    rows[2]["bullet"].configure(fg=GREEN_SEM)
-                elif best_cd.grade == "MAYBE":
-                    rows[2]["bullet"].configure(fg=AMBER)
-                else:
-                    rows[2]["bullet"].configure(fg=DIM)
+                    pass
+            self._arb_sum_best.configure(text=f"TOP {top_s}", fg=DIM)
         except Exception:
             pass
 
-        # Row 3 — BASIS TRADE (spot-perp)
-        try:
-            if hasattr(self, "_funding_scanner") and self._funding_scanner:
-                bp = self._funding_scanner.basis_pairs(min_basis_bps=5)
-                if bp:
-                    best = bp[0]
-                    rows[3]["sub"].configure(
-                        text=f"spot-perp basis  \u00b7  {best['symbol']} {best['basis_bps']:+.0f}bps  \u00b7  {best['venue_perp']}")
-                    rows[3]["meta"].configure(text=f"{len(bp)} PAIRS")
-        except Exception:
-            pass
+        # Cache raw results so tab switches can repaint without rescanning
+        self._arb_cache = {
+            "stats": stats, "top": top, "opps": opps,
+            "arb_dd": arb_dd, "arb_cd": arb_cd,
+            "basis": basis, "spot": spot,
+        }
 
-        # Row 4 — SPOT ↔ SPOT
-        try:
-            if hasattr(self, "_funding_scanner") and self._funding_scanner:
-                sp = self._funding_scanner.spot_arb_pairs(min_spread_bps=3)
-                if sp:
-                    best = sp[0]
-                    rows[4]["sub"].configure(
-                        text=f"spot spread  \u00b7  {best['symbol']} {best['spread_bps']:.0f}bps  \u00b7  {best['venue_a']}\u21c4{best['venue_b']}")
-                    rows[4]["meta"].configure(text=f"{len(sp)} PAIRS")
-        except Exception:
-            pass
+        # Route to the repaint callback for the active tab
+        tab = getattr(self, "_arb_tab", "cex-cex")
+        if tab == "cex-cex":
+            self._arb_paint_cex_cex(opps)
+        elif tab == "dex-dex":
+            self._arb_paint_pairs(arb_dd, getattr(self, "_arb_dex_repaint", None))
+        elif tab == "cex-dex":
+            self._arb_paint_pairs(arb_cd, getattr(self, "_arb_cdex_repaint", None))
+        elif tab == "basis":
+            self._arb_paint_basis(basis)
+        elif tab == "spot":
+            self._arb_paint_spot(spot)
+        # ENGINE tab doesn't consume scanner data
+
+    def _arb_paint_cex_cex(self, opps):
+        repaint = getattr(self, "_arb_cex_repaint", None)
+        if repaint is None:
+            return
+        # Filter to CEX-only opportunities; top 15 by APR
+        cex_only = [o for o in (opps or [])
+                    if str(getattr(o, "venue_type", "")).lower() == "cex"][:15]
+        rows = []
+        for i, o in enumerate(cex_only, 1):
+            apr = float(getattr(o, "apr", 0) or 0)
+            apr_fg = GREEN if apr >= 50 else (AMBER if apr >= 20 else DIM)
+            vol = float(getattr(o, "volume_24h", 0) or 0) / 1e6
+            rows.append([
+                (f"{i:>2}", DIM),
+                (getattr(o, "symbol", "—")[:7], WHITE),
+                (str(getattr(o, "venue", ""))[:8].lower(), AMBER_D),
+                ("—", DIM),  # SHORT placeholder (arb_pairs has it; single-venue obs doesn't)
+                (f"{apr:+.1f}%", apr_fg),
+                (f"${vol:.1f}M", DIM),
+                (f"{getattr(o, 'omega', 0):.1f}", AMBER),
+            ])
+        repaint(rows)
+
+    def _arb_paint_pairs(self, pairs, repaint):
+        if repaint is None:
+            return
+        rows = []
+        for i, a in enumerate((pairs or [])[:15], 1):
+            net_apr = float(a.get("net_apr", 0) or 0)
+            apr_fg = GREEN if net_apr >= 20 else (AMBER if net_apr >= 10 else DIM)
+            risk = a.get("risk", "—")
+            risk_fg = RED if risk == "HIGH" else (AMBER if risk == "MED" else GREEN)
+            rows.append([
+                (f"{i:>2}", DIM),
+                ((a.get("symbol", "—") or "—")[:7], WHITE),
+                ((a.get("long_venue") or "—")[:10].lower(), AMBER_D),
+                ((a.get("short_venue") or "—")[:10].lower(), AMBER_D),
+                (f"{net_apr:+.1f}%", apr_fg),
+                (risk, risk_fg),
+            ])
+        repaint(rows)
+
+    def _arb_paint_basis(self, basis):
+        repaint = getattr(self, "_arb_basis_repaint", None)
+        if repaint is None:
+            return
+        rows = []
+        for i, p in enumerate((basis or [])[:15], 1):
+            bps = p.get("basis_bps", 0)
+            bps_fg = GREEN if abs(bps) >= 20 else (AMBER if abs(bps) >= 10 else DIM)
+            rows.append([
+                (f"{i:>2}", DIM),
+                (p.get("symbol", "—")[:7], WHITE),
+                (p.get("venue_perp", "—")[:8].lower(), AMBER_D),
+                (p.get("venue_spot", "—")[:8].lower(), AMBER_D),
+                (f"${p.get('mark_price', 0):,.2f}", DIM),
+                (f"${p.get('spot_price', 0):,.2f}", DIM),
+                (f"{bps:+.0f}bps", bps_fg),
+                (f"{p.get('basis_apr', 0):.0f}%", bps_fg),
+            ])
+        repaint(rows)
+
+    def _arb_paint_spot(self, spot):
+        repaint = getattr(self, "_arb_spot_repaint", None)
+        if repaint is None:
+            return
+        rows = []
+        for i, p in enumerate((spot or [])[:15], 1):
+            bps = p.get("spread_bps", 0)
+            bps_fg = GREEN if bps >= 15 else (AMBER if bps >= 8 else DIM)
+            rows.append([
+                (f"{i:>2}", DIM),
+                (p.get("symbol", "—")[:7], WHITE),
+                (p.get("venue_a", "—")[:8].lower(), AMBER_D),
+                (p.get("venue_b", "—")[:8].lower(), AMBER_D),
+                (f"${p.get('price_a', 0):,.4f}", DIM),
+                (f"${p.get('price_b', 0):,.4f}", DIM),
+                (f"{bps:.1f}bps", bps_fg),
+            ])
+        repaint(rows)
 
     # ═══════════════════════════════════════════════════════════════
     # BASIS TRADE SCREEN — spot-perp basis opportunities

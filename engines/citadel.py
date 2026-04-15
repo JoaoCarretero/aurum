@@ -273,7 +273,12 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
             vol_r_now   = str(_volr[idx])
             base_thresh = SCORE_BY_REGIME.get(macro_b, SCORE_THRESHOLD)
-            threshold   = base_thresh + 0.05 if vol_r_now == "HIGH" else base_thresh
+            if vol_r_now == "HIGH":
+                threshold = max(base_thresh, SCORE_THRESHOLD_HIGH_VOL)
+            elif vol_r_now == "LOW":
+                threshold = max(base_thresh, SCORE_THRESHOLD_LOW_VOL)
+            else:
+                threshold = base_thresh
             if score < threshold:
                 vetos["score_baixo"] += 1; continue
         else:
