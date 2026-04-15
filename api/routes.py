@@ -20,6 +20,8 @@ from api.auth import (
     get_current_user,
     require_admin,
 )
+from config.engines import PROC_ENGINES
+from config.paths import DATA_DIR, PROC_STATE_PATH
 from core import proc
 from core import db as trade_db
 
@@ -47,6 +49,29 @@ class WithdrawRequest(BaseModel):
 
 class EngineAction(BaseModel):
     engine: str
+
+
+_PROC_TO_CANONICAL = {k: v["canonical"] for k, v in PROC_ENGINES.items()}
+_CANONICAL_TO_PROC = {}
+for _proc_key, _canonical in _PROC_TO_CANONICAL.items():
+    _CANONICAL_TO_PROC.setdefault(_canonical, _proc_key)
+
+
+def _sum_pending(conn, table: str, user_id: int) -> float:
+    row = conn.execute(
+        f"SELECT COALESCE(SUM(amount), 0) AS total FROM {table} "
+        "WHERE user_id = ? AND status = 'pending'",
+        (user_id,),
+    ).fetchone()
+    return float(row["total"] if row and row["total"] is not None else 0.0)
+
+
+def _canonical_engine_key(key: str) -> str:
+    return _PROC_TO_CANONICAL.get(key, key)
+
+
+def _proc_engine_key(key: str) -> str:
+    return _CANONICAL_TO_PROC.get(key, key)
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -148,16 +173,26 @@ async def get_account(user: dict = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Account not found")
 
         acct_dict = dict(acct)
+        pending_deposits = _sum_pending(conn, "deposits", user["id"])
+        pending_withdrawals = _sum_pending(conn, "withdrawals", user["id"])
+        available_balance = acct_dict["balance"] - pending_withdrawals
         pnl = acct_dict["balance"] - acct_dict["total_deposited"] + acct_dict["total_withdrawn"]
 
         # Engine allocations from engine_state
         engines = conn.execute("SELECT engine, status, fitness_score FROM engine_state").fetchall()
-        allocations = [dict(e) for e in engines]
+        allocations = []
+        for e in engines:
+            row = dict(e)
+            row["engine"] = _canonical_engine_key(row.get("engine", ""))
+            allocations.append(row)
 
         return {
             "balance": acct_dict["balance"],
+            "available_balance": round(available_balance, 2),
             "total_deposited": acct_dict["total_deposited"],
             "total_withdrawn": acct_dict["total_withdrawn"],
+            "pending_deposits": round(pending_deposits, 2),
+            "pending_withdrawals": round(pending_withdrawals, 2),
             "pnl": round(pnl, 2),
             "allocations": allocations,
         }
@@ -179,13 +214,6 @@ async def deposit(req: DepositRequest, user: dict = Depends(get_current_user)):
             "VALUES (?, ?, ?, 'pending', ?)",
             (user["id"], req.amount, req.method, now),
         )
-
-        # Update account balance and totals
-        conn.execute(
-            "UPDATE accounts SET balance = balance + ?, total_deposited = total_deposited + ? "
-            "WHERE user_id = ?",
-            (req.amount, req.amount, user["id"]),
-        )
         conn.commit()
         return {"message": "Deposit registered", "amount": req.amount, "status": "pending"}
     finally:
@@ -203,7 +231,9 @@ async def withdraw(req: WithdrawRequest, user: dict = Depends(get_current_user))
         acct = conn.execute(
             "SELECT balance FROM accounts WHERE user_id = ?", (user["id"],)
         ).fetchone()
-        if not acct or acct["balance"] < req.amount:
+        pending_withdrawals = _sum_pending(conn, "withdrawals", user["id"])
+        available_balance = float(acct["balance"]) - pending_withdrawals if acct else 0.0
+        if not acct or available_balance < req.amount:
             raise HTTPException(status_code=400, detail="Insufficient balance")
 
         now = datetime.now(timezone.utc).isoformat()
@@ -211,12 +241,6 @@ async def withdraw(req: WithdrawRequest, user: dict = Depends(get_current_user))
             "INSERT INTO withdrawals (user_id, amount, status, created_at) "
             "VALUES (?, ?, 'pending', ?)",
             (user["id"], req.amount, now),
-        )
-
-        conn.execute(
-            "UPDATE accounts SET balance = balance - ?, total_withdrawn = total_withdrawn + ? "
-            "WHERE user_id = ?",
-            (req.amount, req.amount, user["id"]),
         )
         conn.commit()
         return {"message": "Withdrawal requested", "amount": req.amount, "status": "pending"}
@@ -273,7 +297,8 @@ async def trading_status(user: dict = Depends(get_current_user)):
     live_procs = proc.list_procs()
     proc_map = {}
     for p in live_procs:
-        proc_map[p.get("engine", "")] = {
+        eng = _canonical_engine_key(p.get("engine", ""))
+        proc_map[eng] = {
             "pid": p.get("pid"),
             "alive": p.get("alive", False),
             "started": p.get("started"),
@@ -281,10 +306,11 @@ async def trading_status(user: dict = Depends(get_current_user)):
         }
 
     result = {}
-    all_engines = set(list(engines_db.keys()) + list(proc.ENGINE_NAMES.keys()))
+    db_keys = {_canonical_engine_key(k): v for k, v in engines_db.items()}
+    all_engines = set(list(db_keys.keys()) + list(proc_map.keys()))
     for eng in all_engines:
         result[eng] = {
-            "db_state": engines_db.get(eng, {}),
+            "db_state": {**db_keys.get(eng, {}), **({"engine": eng} if eng in db_keys else {})},
             "process": proc_map.get(eng, {"alive": False, "status": "stopped"}),
         }
 
@@ -295,7 +321,7 @@ async def trading_status(user: dict = Depends(get_current_user)):
 async def open_positions(user: dict = Depends(get_current_user)):
     """Get open positions from proc state files."""
     positions = []
-    state_dir = Path("data")
+    state_dir = DATA_DIR
     if state_dir.exists():
         for f in state_dir.glob("*_positions.json"):
             try:
@@ -308,7 +334,7 @@ async def open_positions(user: dict = Depends(get_current_user)):
                 continue
 
     # Also check proc state for live positions
-    state_file = Path("data/.aurum_procs.json")
+    state_file = PROC_STATE_PATH
     if state_file.exists():
         try:
             state = json.loads(state_file.read_text(encoding="utf-8"))
@@ -365,13 +391,14 @@ async def trade_history(
 @trading_router.post("/start")
 async def start_engine(req: EngineAction, user: dict = Depends(require_admin)):
     """Start an engine by name (admin only)."""
-    if req.engine not in proc.ENGINES:
+    engine_key = _proc_engine_key(req.engine)
+    if engine_key not in proc.ENGINES:
         raise HTTPException(
             status_code=404,
-            detail=f"Unknown engine '{req.engine}'. Available: {list(proc.ENGINES.keys())}",
+            detail=f"Unknown engine '{req.engine}'. Available: {sorted(_CANONICAL_TO_PROC.keys())}",
         )
 
-    result = proc.spawn(req.engine)
+    result = proc.spawn(engine_key)
     if result is None:
         raise HTTPException(status_code=409, detail=f"Engine '{req.engine}' is already running or failed to start")
 
@@ -381,22 +408,24 @@ async def start_engine(req: EngineAction, user: dict = Depends(require_admin)):
         conn.execute(
             "INSERT INTO engine_state (engine, status) VALUES (?, 'running') "
             "ON CONFLICT(engine) DO UPDATE SET status = 'running'",
-            (req.engine,),
+            (_canonical_engine_key(engine_key),),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"message": f"Engine '{req.engine}' started", "pid": result.get("pid")}
+    return {"message": f"Engine '{_canonical_engine_key(engine_key)}' started", "pid": result.get("pid")}
 
 
 @trading_router.post("/stop")
 async def stop_engine(req: EngineAction, user: dict = Depends(require_admin)):
     """Stop an engine by name (admin only)."""
+    engine_key = _proc_engine_key(req.engine)
+    canonical = _canonical_engine_key(engine_key)
     live_procs = proc.list_procs()
     target = None
     for p in live_procs:
-        if p.get("engine") == req.engine and p.get("alive"):
+        if _canonical_engine_key(p.get("engine", "")) == canonical and p.get("alive"):
             target = p
             break
 
@@ -412,13 +441,13 @@ async def stop_engine(req: EngineAction, user: dict = Depends(require_admin)):
     try:
         conn.execute(
             "UPDATE engine_state SET status = 'stopped' WHERE engine = ?",
-            (req.engine,),
+            (canonical,),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"message": f"Engine '{req.engine}' stopped"}
+    return {"message": f"Engine '{canonical}' stopped"}
 
 
 # ═════════════════════════════════════════════════════════════════
