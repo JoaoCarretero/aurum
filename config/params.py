@@ -414,7 +414,7 @@ THOTH_WEIGHT_OI         = 0.30     # peso OI no composite score
 THOTH_WEIGHT_LS         = 0.30     # peso LS ratio no composite score
 THOTH_MIN_SCORE         = 0.20     # score mínimo para entrada (grid 2026-04-14: Sharpe 2.71 vs 0.87 @ 0.30)
 THOTH_DIRECTION_THRESHOLD = 0.20   # |sent_score| > N para gerar direção
-THOTH_SIZE_MULT         = 0.50     # position size multiplier
+THOTH_SIZE_MULT         = 0.35     # position size multiplier (grid 2026-04-14: Sharpe 7.32 vs 3.41 @ 0.50; MaxDD 18%→6%)
 
 # ── DARWIN — Adaptive Strategy Evolution ─────────────────────
 DARWIN_EVAL_WINDOW      = 30      # trades por janela de avaliação
