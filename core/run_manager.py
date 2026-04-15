@@ -24,15 +24,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from config.paths import DATA_DIR, ROOT, RUN_INDEX_PATH
 from core.persistence import atomic_write_json
 
 # ---------------------------------------------------------------------------
 # Project root — one level up from core/
 # ---------------------------------------------------------------------------
-ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
 RUNS_DIR = DATA_DIR / "runs"
-INDEX_PATH = DATA_DIR / "index.json"
+INDEX_PATH = RUN_INDEX_PATH
 
 
 # ── TeeLogger ──────────────────────────────────────────────────────────────

@@ -21,6 +21,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from config.paths import SITE_CONFIG_PATH
+from core.persistence import atomic_write_json
+
 
 _DEFAULT_CONFIG = {
     "project_dir":       "",
@@ -46,7 +49,7 @@ _FRAMEWORK_COMMANDS = {
 class SiteRunner:
     """Owns the dev-server subprocess + a thread-safe rolling stdout buffer."""
 
-    def __init__(self, config_path: str | Path = "config/site.json"):
+    def __init__(self, config_path: str | Path = SITE_CONFIG_PATH):
         self.config_path = Path(config_path)
         self.config: dict = self._load_config()
         self.proc: Optional[subprocess.Popen] = None
@@ -75,11 +78,7 @@ class SiteRunner:
         """Update config with the given kwargs and persist to disk."""
         for k, v in kwargs.items():
             self.config[k] = v
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(
-            json.dumps(self.config, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        atomic_write_json(self.config_path, self.config)
 
     # ── FRAMEWORK DETECTION ───────────────────────────────────
     def detect_framework(self, project_dir: str | None = None) -> tuple[str, str]:

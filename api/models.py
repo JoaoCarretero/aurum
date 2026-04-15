@@ -4,9 +4,10 @@ Plain sqlite3, consistent with core/db.py patterns.
 DB lives at data/nexus.db (gitignored with the rest of data/).
 """
 import sqlite3
-from pathlib import Path
 
-DB_PATH = Path("data/nexus.db")
+from config.paths import NEXUS_DB_PATH
+
+DB_PATH = NEXUS_DB_PATH
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (

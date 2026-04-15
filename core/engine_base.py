@@ -10,6 +10,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from config.paths import DATA_DIR
+from core.persistence import atomic_write_json
+
 
 class EngineRuntime:
     """Initialise RUN_DIR, logging, and report saving for any engine."""
@@ -19,7 +22,7 @@ class EngineRuntime:
         self.run_date = datetime.now().strftime("%Y-%m-%d")
         self.run_time = datetime.now().strftime("%H%M")
         self.run_id = f"{self.run_date}_{self.run_time}"
-        self.run_dir = Path(f"data/{engine_name}/{self.run_id}")
+        self.run_dir = DATA_DIR / engine_name / self.run_id
         for d in subdirs:
             (self.run_dir / d).mkdir(parents=True, exist_ok=True)
         self.log = self._setup_logging()
@@ -53,9 +56,6 @@ class EngineRuntime:
 
     def save_report(self, payload: dict, filename: str):
         path = self.run_dir / "reports" / filename
-        path.write_text(
-            json.dumps(payload, indent=2, default=str, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        atomic_write_json(path, payload)
         self.log.info(f"Report -> {path}")
         return path

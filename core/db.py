@@ -7,8 +7,10 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path("data/aurum.db")
-INDEX_PATH = Path("data/index.json")
+from config.paths import AURUM_DB_PATH, DATA_DIR, RUN_INDEX_PATH
+
+DB_PATH = AURUM_DB_PATH
+INDEX_PATH = RUN_INDEX_PATH
 
 _ENGINE_ALIASES = {
     "backtest": "citadel",
@@ -193,7 +195,7 @@ def _extract_run_fields(
 
 def save_run(engine: str, json_path: str) -> str | None:
     """Read a JSON report and persist run + trades to the DB. Returns run_id."""
-    _base = Path("data").resolve()
+    _base = DATA_DIR.resolve()
     resolved = Path(json_path).resolve()
     if not resolved.is_relative_to(_base):
         print(f"  DB: path {json_path} is outside data directory")

@@ -4,12 +4,15 @@ AURUM Finance — Connection Manager
 Manages state for all exchange, broker, and data provider connections.
 Persists to config/connections.json.
 """
+import copy
 import json
 import time
-from pathlib import Path
 from datetime import datetime
 
-STATE_FILE = Path("config/connections.json")
+from config.paths import CONNECTIONS_STATE_PATH
+from core.persistence import atomic_write_json
+
+STATE_FILE = CONNECTIONS_STATE_PATH
 
 DEFAULT_STATE = {
     "active_market": "crypto_futures",
@@ -64,7 +67,7 @@ class ConnectionManager:
                 with open(STATE_FILE, "r", encoding="utf-8") as f:
                     saved = json.load(f)
                 # Merge with defaults to handle new fields
-                merged = dict(DEFAULT_STATE)
+                merged = copy.deepcopy(DEFAULT_STATE)
                 merged["active_market"] = saved.get("active_market", "crypto_futures")
                 for k, v in saved.get("connections", {}).items():
                     if k in merged["connections"]:
@@ -72,12 +75,10 @@ class ConnectionManager:
                 return merged
             except Exception:
                 pass
-        return dict(DEFAULT_STATE)
+        return copy.deepcopy(DEFAULT_STATE)
 
     def save(self):
-        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.state, f, indent=2, default=str)
+        atomic_write_json(STATE_FILE, self.state)
 
     @property
     def active_market(self) -> str:
