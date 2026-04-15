@@ -220,7 +220,7 @@ CASCADE_MIN                 = 1
 
 # ── OMEGA & SCORE ─────────────────────────────────────────────
 REGIME_MIN_STRENGTH = 0.25
-SCORE_THRESHOLD     = 0.54    # iter2 1080d bluechip: +1bp do 0.53 — menos turnover, alvo slippage WARN→PASS; cliff 0.56 estrutural persiste
+SCORE_THRESHOLD     = 0.53    # fallback global (regimes usam SCORE_BY_REGIME). 0.55 seria ótimo mas colide com cliff 0.56 (sensitivity FAIL)
 OMEGA_MIN_COMPONENT = 0.15
 OMEGA_WEIGHTS       = {
     "struct": 0.25, "flow": 0.25,
@@ -243,7 +243,7 @@ TRAIL_ACTIVATE_MULT = 1.5    # move 1.5x risk → activate trailing
 TRAIL_DISTANCE_MULT = 0.3    # trailing stop distance (grid 2026-04-14: 0.3 gives Sharpe 5.60 vs 5.25 @ 0.5)
 
 SCORE_BY_REGIME: dict[str, float] = {
-    "BEAR": 0.53,
+    "BEAR": 0.54,
     "BULL": 0.62,
     "CHOP": 0.63,
 }
