@@ -35,6 +35,12 @@ from launcher_support.execution import (
     script_to_proc_key as _script_to_proc_key,
     strategies_progress_target as _strategies_progress_target_helper,
 )
+from launcher_support.menu_data import (
+    BLOCK_DESCRIPTIONS as _MENU_BLOCK_DESCRIPTIONS,
+    COMMAND_ROADMAPS as _MENU_COMMAND_ROADMAPS,
+    MAIN_MENU as _MENU_MAIN_MENU,
+    main_groups as _menu_main_groups,
+)
 
 # ═══════════════════════════════════════════════════════════
 # PALETTE — imported from core/ui_palette (SSOT)
@@ -268,6 +274,15 @@ COMMAND_ROADMAPS = {
         "Top processes",
     ],
 }
+
+# Extracted navigation data re-bound here so launcher.py keeps the same
+# public constants while the menu topology moves out incrementally.
+MAIN_MENU = list(_MENU_MAIN_MENU)
+MAIN_GROUPS = _menu_main_groups(
+    MARKETS, TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL
+)
+BLOCK_DESCRIPTIONS = dict(_MENU_BLOCK_DESCRIPTIONS)
+COMMAND_ROADMAPS = {k: list(v) for k, v in _MENU_COMMAND_ROADMAPS.items()}
 
 SUB_MENUS = {
     "backtest": [

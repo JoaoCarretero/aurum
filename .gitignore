@@ -55,6 +55,7 @@ dist/
 tests/_tmp/
 pytest-cache-files-*/
 pytest-run-*/
+pytest_tmp_local*/
 /tmp*/
 
 # Alchemy (ARBITRAGE) param files — generated at runtime, not versioned
