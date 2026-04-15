@@ -5309,8 +5309,17 @@ class App(tk.Tk):
             for w in body.winfo_children():
                 w.destroy()
             if not rows:
-                tk.Label(body, text="  \u2014 no data \u2014",
-                         font=(FONT, 8), fg=DIM2, bg=BG).grid(
+                # Whether this is "still scanning" or "scan done but nothing
+                # matched filters" gets disambiguated by whether _arb_cache
+                # exists yet. Initial render → loading; post-scan empty →
+                # filtered out hint.
+                has_scan = getattr(self, "_arb_cache", None) is not None
+                msg = ("  \u2014 no pairs match current filters \u2014\n"
+                       "  click filter chips above to relax"
+                       if has_scan else
+                       "  \u2014 scanning venues, hold on \u2014")
+                tk.Label(body, text=msg, font=(FONT, 8),
+                         fg=DIM2, bg=BG, justify="center").grid(
                     row=0, column=0, columnspan=len(cols), pady=16)
                 return
             for ri, row in enumerate(rows):
@@ -5347,9 +5356,12 @@ class App(tk.Tk):
     _ARB_OI_OPTS    = [0, 50_000, 100_000, 500_000, 1_000_000]
     _ARB_RISK_OPTS  = ["HIGH", "MED", "LOW"]
     _ARB_GRADE_OPTS = ["SKIP", "MAYBE", "GO"]
+    # Defaults são permissivos DE PROPÓSITO — se começarmos apertado
+    # (GRADE≥MAYBE, APR≥20%), o usuário abre a desk e vê tabela vazia sem
+    # saber porquê. Começa relaxado, user aperta se quiser ver só o topo.
     _ARB_FILTER_DEFAULTS = {
-        "min_apr": 20.0, "min_volume": 500_000, "min_oi": 0,
-        "risk_max": "HIGH", "grade_min": "MAYBE",
+        "min_apr": 5.0, "min_volume": 0, "min_oi": 0,
+        "risk_max": "HIGH", "grade_min": "SKIP",
     }
 
     def _arb_filter_state(self) -> dict:
@@ -5539,11 +5551,33 @@ class App(tk.Tk):
         return f"{sym}  \u00b7  {venue.strip(' \u2194')}"
 
     # ── Scoring filter ───────────────────────────────────────
-    def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
-        """Apply user filters + arb_scoring.score_opp to each pair.
+    def _arb_score_fallback(self, pair: dict):
+        """Synthesize a ScoreResult from net_apr alone.
 
-        Returns a list of (pair_dict, ScoreResult) in descending score order,
-        already filtered out of SKIP rows (unless the grade filter allows it).
+        arb_pairs() doesn't propagate volume_24h / open_interest per leg,
+        so score_opp returns mostly-None factors and grades SKIP for
+        everything. When that happens, fall back to a pure-APR score so the
+        table doesn't look all-SKIP.
+        """
+        from core.arb_scoring import ScoreResult
+        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
+        # APR → score mapping: 0% = 0, 50%+ = 100
+        score = min(100.0, apr * 2.0)
+        if score >= 70:
+            grade = "GO"
+        elif score >= 40:
+            grade = "MAYBE"
+        else:
+            grade = "SKIP"
+        return ScoreResult(score=round(score, 0), grade=grade,
+                            factors={"net_apr": score})
+
+    def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
+        """Apply user filters + scoring to each pair.
+
+        Uses arb_scoring.score_opp when pair has enough fields (vol/oi), else
+        falls back to an APR-only heuristic so the table is never all-SKIP.
+        Returns (pair_dict, ScoreResult) in descending score order.
         """
         from core.arb_scoring import score_opp
         state = self._arb_filter_state()
@@ -5576,10 +5610,17 @@ class App(tk.Tk):
             risk = p.get("risk", "HIGH")
             if _R.get(risk, 2) > risk_cap:
                 continue
+
+            # Score via arb_scoring. If all non-APR factors come back None
+            # (pair dict lacks volume/oi per leg), fall back to APR-only.
             try:
                 sr = score_opp(p)
+                populated = sum(1 for v in sr.factors.values() if v is not None)
+                if populated <= 1:
+                    sr = self._arb_score_fallback(p)
             except Exception:
-                continue
+                sr = self._arb_score_fallback(p)
+
             if _G.get(sr.grade, 2) > grade_cap:
                 continue
             out.append((p, sr))
@@ -5838,9 +5879,13 @@ class App(tk.Tk):
             try:
                 opps = scanner.scan()
                 stats = scanner.stats()
-                arb_cc = scanner.arb_pairs(mode="cex-cex", min_spread_apr=5.0)
-                arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=5.0)
-                arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=5.0)
+                # Lower min_spread_apr from 5% to 1% — the UI filter handles
+                # tighter thresholds now; we want the scanner to hand us as
+                # many candidates as possible so the post-filter has options
+                # to display.
+                arb_cc = scanner.arb_pairs(mode="cex-cex", min_spread_apr=1.0)
+                arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=1.0)
+                arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=1.0)
                 basis = []
                 spot = []
                 try:

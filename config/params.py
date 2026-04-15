@@ -394,9 +394,9 @@ NEWTON_SIZE_MULT       = 0.30      # position size relativo ao normal (grid 2026
 NEWTON_MIN_PAIRS       = 2         # mínimo de pares cointegrados para operar
 
 # ── MERCURIO — Order Flow / Microstructure ────────────────────
-MERCURIO_CVD_WINDOW     = 20       # janela para CVD divergence
-MERCURIO_CVD_DIV_BARS   = 10       # lookback para detectar divergência
-MERCURIO_VIMB_WINDOW    = 10       # janela para volume imbalance
+MERCURIO_CVD_WINDOW     = 80       # TEMP test-15m-scaled: 20→80 (20h no 1h = 80 bars no 15m)
+MERCURIO_CVD_DIV_BARS   = 40       # TEMP test-15m-scaled: 10→40 (10h no 1h = 40 bars no 15m)
+MERCURIO_VIMB_WINDOW    = 40       # TEMP test-15m-scaled: 10→40 (10h no 1h = 40 bars no 15m)
 MERCURIO_VIMB_LONG      = 0.60     # iter3 1080d: revertido — relaxar VIMB degradou quality; fix real é filtro counter-trend
 MERCURIO_VIMB_SHORT     = 0.40
 MERCURIO_LIQ_VOL_MULT   = 3.0     # spike volume > N× média = liquidação
