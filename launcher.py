@@ -19,7 +19,22 @@ from code_viewer import CodeViewer
 from config.engines import ENGINE_NAMES, SCRIPT_TO_KEY
 from core.health import runtime_health
 from core.persistence import atomic_write_json
-from core.transport import RequestSpec, TransportClient
+from launcher_support.bootstrap import (
+    ENGINE_PREFIX_ALIASES as _BOOTSTRAP_ENGINE_PREFIX_ALIASES,
+    NO_WINDOW as _BOOTSTRAP_NO_WINDOW,
+    VPS_HOST as _BOOTSTRAP_VPS_HOST,
+    VPS_PROJECT as _BOOTSTRAP_VPS_PROJECT,
+    canonical_engine_key as _bootstrap_canonical_engine_key,
+    engine_display_name as _bootstrap_engine_display_name,
+    fetch_ticker_loop as _bootstrap_fetch_ticker_loop,
+    run_vps_cmd as _bootstrap_run_vps_cmd,
+    ticker_str as _bootstrap_ticker_str,
+)
+from launcher_support.execution import (
+    live_launch_plan,
+    script_to_proc_key as _script_to_proc_key,
+    strategies_progress_target as _strategies_progress_target_helper,
+)
 
 # ═══════════════════════════════════════════════════════════
 # PALETTE — imported from core/ui_palette (SSOT)
@@ -137,6 +152,15 @@ def _ticker_str():
 from core.connections import ConnectionManager, MARKETS
 from core.alchemy_state import AlchemyState
 from core import alchemy_ui
+ENGINE_PREFIX_ALIASES = _BOOTSTRAP_ENGINE_PREFIX_ALIASES
+VPS_HOST = _BOOTSTRAP_VPS_HOST
+VPS_PROJECT = _BOOTSTRAP_VPS_PROJECT
+_NO_WINDOW = _BOOTSTRAP_NO_WINDOW
+canonical_engine_key = _bootstrap_canonical_engine_key
+engine_display_name = _bootstrap_engine_display_name
+_vps_cmd = _bootstrap_run_vps_cmd
+_fetch = _bootstrap_fetch_ticker_loop
+_ticker_str = _bootstrap_ticker_str
 _conn = ConnectionManager()
 
 MAIN_MENU = [
@@ -2822,25 +2846,14 @@ class App(tk.Tk):
                 self.h_stat.configure(text="LIVE cancelado", fg=AMBER_D)
                 return
 
-        script_l = (script or "").replace("\\", "/").lower()
-        # JANESTREET has its own menu/CLI and cannot be routed through the
-        # generic live runner.
-        is_arb = script_l.endswith("/janestreet.py") or "janestreet" in script_l
-        if is_arb:
-            arb_mode_map = {"paper": "2", "demo": "3", "live": "4", "testnet": "2"}
-            inputs = [arb_mode_map.get(mode_preset, "1")]
-            self._exec(name, script, desc, "live", inputs)
+        plan = live_launch_plan(script, mode_preset, cfg)
+        if plan["uses_dedicated_runner"]:
+            self._exec(name, plan["script"], desc, "live", plan["stdin_inputs"])
             return
 
         # Default: route via engines/live.py with --mode + leverage CLI
-        live_script = "engines/live.py"
-        cli: list[str] = [mode_preset]
-        try:
-            lev = float(str(cfg.get("leverage", "")).replace("x", "").strip()) if cfg else 0
-            if 0.1 <= lev <= 125:
-                cli += ["--leverage", str(lev)]
-        except (ValueError, TypeError):
-            pass
+        live_script = plan["script"]
+        cli: list[str] = plan["cli_args"]
 
         # Hint + status — let the user know which strategy is being routed
         self.h_stat.configure(
@@ -2915,23 +2928,7 @@ class App(tk.Tk):
         self._exec(name, script, desc, parent_menu, inputs, cli_args=cli)
 
     def _strategies_progress_target(self, clean: str) -> tuple[float, str]:
-        low = (clean or "").strip().lower()
-        if not low:
-            return 0.0, ""
-        targets = [
-            (("iniciado", "started"), 10.0, "allocating launch package"),
-            (("dados", "fetch", "loading"), 24.0, "downloading candle archives"),
-            (("sentiment", "funding", "open interest", "long/short"), 40.0, "installing sentiment bundles"),
-            (("scan", "scanning"), 58.0, "building route graph and trade cache"),
-            (("total:", "resultados", "wr=", "pnl="), 74.0, "compiling execution manifests"),
-            (("metricas", "metrics", "sharpe", "sortino"), 86.0, "verifying institutional metrics"),
-            (("monte", "walk", "robust", "json"), 94.0, "packing report artifacts"),
-            (("backtest complete", "loading results dashboard"), 100.0, "installation complete"),
-        ]
-        for keys, pct, stage in targets:
-            if any(k in low for k in keys):
-                return pct, stage
-        return 0.0, low[:180]
+        return _strategies_progress_target_helper(clean)
 
     def _strategies_spawn_inline_backtest(self, name, script, cli_args, auto_inputs) -> bool:
         handle = getattr(self, "_strategies_picker", None)
@@ -4458,17 +4455,7 @@ class App(tk.Tk):
             self._p(f"FAILED: {e}\n", "r")
 
     def _exec_script_to_proc_key(self, script: str) -> str | None:
-        proc_by_key = {
-            "citadel": "backtest",
-            "jump": "mercurio",
-            "bridgewater": "thoth",
-            "deshaw": "newton",
-            "millennium": "multi",
-            "twosigma": "prometeu",
-            "renaissance": "renaissance",
-        }
-        canon_key = canonical_engine_key(SCRIPT_TO_KEY.get(script.replace("\\", "/"), ""))
-        return proc_by_key.get(canon_key)
+        return _script_to_proc_key(script)
 
     def _exec_is_running(self) -> bool:
         if self.proc and self.proc.poll() is None:
