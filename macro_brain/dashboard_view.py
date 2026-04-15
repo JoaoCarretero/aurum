@@ -28,27 +28,27 @@ import tkinter as tk
 
 log = logging.getLogger("macro_brain.dashboard")
 
-# ── PALETTE ──────────────────────────────────────────────────
-#   Backgrounds
-BG      = "#050505"
-PANEL   = "#0d0d0d"
-BG2     = "#131313"
-BG3     = "#1a1a1a"
-#   Borders
-BORDER  = "#222222"
-BORDER_H = "#3a3a3a"     # hover border
+# ── PALETTE (NEUTRAL) ────────────────────────────────────────
+#   Backgrounds — black and graphite
+BG      = "#080808"
+PANEL   = "#0C0C0C"
+BG2     = "#101010"
+BG3     = "#181818"
+#   Borders — charcoal / steel
+BORDER  = "#242424"
+BORDER_H = "#5A5A5A"
 #   Text
-WHITE   = "#e0e0e0"
-DIM     = "#606060"
-DIM2    = "#909090"
-#   Primary accent
-AMBER   = "#ffa500"
-AMBER_H = "#ffcc33"      # hover amber (brighter)
+WHITE   = "#E6E6E6"
+DIM     = "#707070"
+DIM2    = "#9A9A9A"
+#   Primary accent — silver
+AMBER   = "#C8C8C8"
+AMBER_H = "#F0F0F0"
 #   Signal
-GREEN   = "#30c050"
-RED     = "#e03030"
+GREEN   = "#00D26A"
+RED     = "#FF4D4F"
 #   Secondary accent (interactive)
-CYAN    = "#00c0d0"
+CYAN    = "#A8A8A8"
 FONT    = "Consolas"
 
 # ── SPACING (consistent across all tabs) ─────────────────────
@@ -996,6 +996,19 @@ def _render_book_tab(parent):
 
 # ── TAB BAR / MAIN RENDER ────────────────────────────────────
 
+def _render_engines_tab(parent):
+    """iPod-classic engine picker — shared component."""
+    try:
+        from config.engines import ENGINES
+        from core import engine_picker as ep
+    except Exception as e:
+        tk.Label(parent, text=f"picker unavailable: {e}",
+                 font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
+        return
+    tracks = ep.build_tracks_from_registry(ENGINES)
+    ep.render(parent, tracks)
+
+
 _TABS = [
     ("US MKTS",  "1", _render_markets_tab),
     ("BR MKTS",  "2", _render_br_tab),
@@ -1004,6 +1017,7 @@ _TABS = [
     ("ANALYSIS", "5", _render_analysis_tab),
     ("NETWORK",  "6", _render_network_tab),
     ("BOOK",     "7", _render_book_tab),
+    ("ENGINES",  "8", _render_engines_tab),
 ]
 
 

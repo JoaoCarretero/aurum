@@ -48,7 +48,7 @@ class BotWatcher(ABC):
     label: str = ""
     network: str = ""
     tagline: str = ""
-    color: str = "#5a2f88"
+    color: str = "#9945FF"
     status: BotStatus = "planned"
 
     @abstractmethod

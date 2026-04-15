@@ -10,22 +10,22 @@ from pathlib import Path
 from typing import Callable
 
 # ═══════════════════════════════════════════════════════════
-# PALETTE — HEV TERMINAL (Half-Life 1 amber on black)
+# PALETTE — neutral black/gray
 # ═══════════════════════════════════════════════════════════
-HEV_BG      = "#000000"
-HEV_PANEL   = "#030200"
-HEV_BORDER  = "#3a2200"
-HEV_BORDER2 = "#5a3300"
-HEV_AMBER   = "#ff8c00"
-HEV_AMBER_B = "#ffb347"
-HEV_AMBER_D = "#7a4400"
-HEV_AMBER_DD= "#3a2200"
-HEV_WHITE   = "#d8d8d8"
-HEV_DIM     = "#5a3300"
-HEV_GREEN   = "#00c040"
-HEV_RED     = "#e03030"
-HEV_HAZARD  = "#ffcc00"
-HEV_BLOOD   = "#8b0000"
+HEV_BG      = "#080808"
+HEV_PANEL   = "#0C0C0C"
+HEV_BORDER  = "#242424"
+HEV_BORDER2 = "#5A5A5A"
+HEV_AMBER   = "#C8C8C8"   # primary accent — silver
+HEV_AMBER_B = "#F0F0F0"
+HEV_AMBER_D = "#6A6A6A"
+HEV_AMBER_DD= "#242424"
+HEV_WHITE   = "#E6E6E6"
+HEV_DIM     = "#707070"
+HEV_GREEN   = "#00D26A"
+HEV_RED     = "#FF4D4F"
+HEV_HAZARD  = "#D8D1A8"
+HEV_BLOOD   = "#7A6262"
 
 # Venue → planetary glyph
 VENUE_GLYPH = {

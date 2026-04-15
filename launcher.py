@@ -22,21 +22,21 @@ from core.persistence import atomic_write_json
 from core.transport import RequestSpec, TransportClient
 
 # ═══════════════════════════════════════════════════════════
-# BLOOMBERG PALETTE — amber on black, minimal color
+# NEUTRAL PALETTE — black, graphite and silver
 # ═══════════════════════════════════════════════════════════
-BG      = "#0a0a0a"
+BG      = "#080808"
 BG2     = "#101010"
 BG3     = "#181818"
-PANEL   = "#0c0c0c"
-BORDER  = "#1e1e1e"
-AMBER   = "#ff8c00"
-AMBER_D = "#7a4400"
-AMBER_B = "#ffaa33"
-WHITE   = "#c8c8c8"
-DIM     = "#4a4a4a"
-DIM2    = "#2a2a2a"
-GREEN   = "#00c040"
-RED     = "#e03030"
+PANEL   = "#0C0C0C"
+BORDER  = "#242424"
+AMBER   = "#C8C8C8"   # primary accent (silver)
+AMBER_D = "#6A6A6A"   # dim silver
+AMBER_B = "#F0F0F0"   # bright hover
+WHITE   = "#E6E6E6"
+DIM     = "#707070"
+DIM2    = "#2A2A2A"
+GREEN   = "#00D26A"   # vivid positive
+RED     = "#FF4D4F"   # vivid negative
 
 FONT    = "Consolas"
 
@@ -80,11 +80,14 @@ def engine_display_name(name) -> str:
     return ENGINE_NAMES.get(key, key.replace("_", " ").upper())
 
 # ─── BLOOMBERG 3D MENU — tile accents ────────────────────────
-TILE_MARKETS  = "#ff8c00"   # AMBER    — quote + dash
-TILE_EXECUTE  = "#00c864"   # GREEN    — strategies + arb + risk
-TILE_RESEARCH = "#33aaff"   # CYAN     — terminal + data
-TILE_CONTROL  = "#c864c8"   # MAGENTA  — connections + command + settings
-TILE_DIM_FACTOR = 0.3       # idle brightness multiplier
+# Muted saturated hues — distinct per desk, minimal but alive. Paired with
+# the silver/graphite structural palette so the accents read as signal and
+# the chrome reads as neutral.
+TILE_MARKETS  = "#6EB2E8"   # SOFT CYAN  — quote + dash (feed)
+TILE_EXECUTE  = "#6ADB8A"   # MUTED MINT — strategies + arb + risk (action)
+TILE_RESEARCH = "#E6C86A"   # WARM AMBER — terminal + data (inquiry)
+TILE_CONTROL  = "#D88EC8"   # DUSTY ROSE — connections + command + settings (config)
+TILE_DIM_FACTOR = 0.35      # idle brightness multiplier
 
 # ═══════════════════════════════════════════════════════════
 # VPS — remote control over SSH (passwordless key auth)
@@ -166,20 +169,31 @@ MAIN_MENU = [
 # ─── MAIN_GROUPS: 9 destinos agrupados em 4 tiles (Bloomberg 3D) ────
 # Format: (label, key_num, color, [(child_label, method_name), ...])
 # MAIN_MENU (above) kept for legacy Fibonacci fallback + descriptions.
+def _markets_children():
+    """Build MARKETS tile children dynamically from the MARKETS registry —
+    each market gets its own row (CRYPTO FUTURES / CRYPTO SPOT / FOREX /
+    EQUITIES / COMMODITIES / INDICES / ON-CHAIN). Click activates the
+    market + routes to its dashboard (or shows COMING SOON for stubs)."""
+    out = []
+    for mk in MARKETS:
+        method = f"_market_{mk}"
+        label = MARKETS[mk]["label"]
+        out.append((label, method))
+    return out
+
+
 MAIN_GROUPS = [
-    ("MARKETS",  "1", TILE_MARKETS, [
-        ("QUOTE BOARD", "_markets"),
-        ("CRYPTO DASH", "_crypto_dashboard"),
-    ]),
+    ("MARKETS",  "1", TILE_MARKETS, _markets_children()),
     ("EXECUTE",  "2", TILE_EXECUTE, [
-        ("STRATEGIES",  "_strategies"),
-        ("ARBITRAGE",   "_arbitrage_hub"),
-        ("MACRO BRAIN", "_macro_brain_menu"),
-        ("RISK",        "_risk_menu"),
+        ("BACKTEST",     "_strategies_backtest"),  # research · sem capital real
+        ("ENGINES LIVE", "_strategies_live"),      # futuros ao vivo · safety gates
+        ("ARBITRAGE",    "_arbitrage_hub"),
+        ("RISK",         "_risk_menu"),
     ]),
     ("RESEARCH", "3", TILE_RESEARCH, [
-        ("TERMINAL", "_terminal"),
-        ("DATA",     "_data_center"),
+        ("TERMINAL",    "_terminal"),
+        ("DATA",        "_data_center"),
+        ("MACRO BRAIN", "_macro_brain_menu"),
     ]),
     ("CONTROL",  "4", TILE_CONTROL, [
         ("CONNECTIONS", "_connections"),
@@ -187,6 +201,29 @@ MAIN_GROUPS = [
         ("SETTINGS",    "_config"),
     ]),
 ]
+
+BLOCK_DESCRIPTIONS = {
+    "_markets": "quotes, universe e mercado ativo",
+    "_crypto_dashboard": "snapshot visual do cripto book",
+    "_market_crypto_futures": "Binance · Bybit · OKX · Hyperliquid · Gate",
+    "_market_crypto_spot":    "Binance · Coinbase · Kraken (em breve)",
+    "_market_forex":          "Forex / CFDs via MetaTrader 5 (em breve)",
+    "_market_equities":       "Equities via IB / Alpaca (em breve)",
+    "_market_commodities":    "Gold · Oil · Nat Gas (em breve)",
+    "_market_indices":        "S&P · NASDAQ · DXY (em breve)",
+    "_market_onchain":        "DeFi · DEX data · on-chain (em breve)",
+    "_strategies": "engines · backtest · live",
+    "_strategies_backtest": "engines históricas · walkforward · MC",
+    "_strategies_live": "engines ao vivo · demo · testnet",
+    "_arbitrage_hub": "cex/cex, dex/dex e cex/dex routes",
+    "_macro_brain_menu": "cio autonomo, regime e thesis",
+    "_risk_menu": "portfolio, limites e kill-switch",
+    "_terminal": "charts, macro e research terminal",
+    "_data_center": "backtests, logs e reports",
+    "_connections": "exchanges, contas e credenciais",
+    "_command_center": "site, servers e operacao",
+    "_config": "settings, keys e telegram",
+}
 
 # Per-feature roadmap lines for the COMMAND CENTER coming-soon screens.
 COMMAND_ROADMAPS = {
@@ -977,6 +1014,61 @@ class App(tk.Tk):
             "<Leave>",
             lambda e: self.h_main_btn.configure(bg="#ff00a0", fg="#000000")
         )
+
+        # BACKTEST — verde neon · research seguro, sem capital real.
+        self.h_backtest_btn = tk.Label(
+            hc, text=" ◆ BACKTEST ", font=(FONT, 8, "bold"),
+            fg="#000000", bg="#00ff80", cursor="hand2", padx=6, pady=0,
+        )
+        self.h_backtest_btn.pack(side="left", padx=(4, 0))
+        self.h_backtest_btn.bind(
+            "<Button-1>", lambda e: self._strategies_backtest()
+        )
+        self.h_backtest_btn.bind(
+            "<Enter>",
+            lambda e: self.h_backtest_btn.configure(bg="#33ffa0", fg="#001505")
+        )
+        self.h_backtest_btn.bind(
+            "<Leave>",
+            lambda e: self.h_backtest_btn.configure(bg="#00ff80", fg="#000000")
+        )
+
+        # ENGINES — âmbar · futuros ao vivo rodando (capital real · safety gates).
+        self.h_engines_btn = tk.Label(
+            hc, text=" ▣ ENGINES ", font=(FONT, 8, "bold"),
+            fg="#000000", bg="#ff8c00", cursor="hand2", padx=6, pady=0,
+        )
+        self.h_engines_btn.pack(side="left", padx=(4, 0))
+        self.h_engines_btn.bind(
+            "<Button-1>", lambda e: self._strategies_live()
+        )
+        self.h_engines_btn.bind(
+            "<Enter>",
+            lambda e: self.h_engines_btn.configure(bg="#ffaa33", fg="#150a00")
+        )
+        self.h_engines_btn.bind(
+            "<Leave>",
+            lambda e: self.h_engines_btn.configure(bg="#ff8c00", fg="#000000")
+        )
+
+        # DATA — púrpura · runs · backtests · reports · trades DB
+        self.h_data_btn = tk.Label(
+            hc, text=" ▤ DATA ", font=(FONT, 8, "bold"),
+            fg="#000000", bg="#a855f7", cursor="hand2", padx=6, pady=0,
+        )
+        self.h_data_btn.pack(side="left", padx=(4, 0))
+        self.h_data_btn.bind(
+            "<Button-1>", lambda e: self._data_center()
+        )
+        self.h_data_btn.bind(
+            "<Enter>",
+            lambda e: self.h_data_btn.configure(bg="#c084fc", fg="#0a0010")
+        )
+        self.h_data_btn.bind(
+            "<Leave>",
+            lambda e: self.h_data_btn.configure(bg="#a855f7", fg="#000000")
+        )
+
         self.h_path = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_path.pack(side="left", padx=(8,0))
         self.h_stat = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_stat.pack(side="right")
         # Persistent badge that lights up while the COMMAND CENTER dev server is alive.
@@ -1218,8 +1310,15 @@ class App(tk.Tk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _menu_live_apply(self) -> None:
-        """Main-thread: redraw tile texts from self._menu_live if the main menu is shown."""
+        """Main-thread: redraw tile texts from self._menu_live if the main menu is shown.
+
+        Skip when a tile is expanded — the 4 isometric tiles are not on
+        screen, repainting them would draw over the desk panel and look
+        like a glitch.
+        """
         if self._menu_canvas is None:
+            return
+        if getattr(self, "_menu_expanded_tile", None) is not None:
             return
         try:
             self._menu_tiles_repaint_text()
@@ -1231,26 +1330,26 @@ class App(tk.Tk):
     # boxes built from lines/polygons; the CD at the center uses ovals/arcs.
 
     _TILE_SLOTS = [
-        ("nw", 180, 150),
-        ("ne", 640, 150),
-        ("sw", 180, 380),
-        ("se", 640, 380),
+        ("nw", 192, 150),
+        ("ne", 728, 150),
+        ("sw", 192, 380),
+        ("se", 728, 380),
     ]
     # Splash screen uses the same 2x2 grid but shifted DOWN ~100px so the
     # BANNER wordmark has room at the top of the canvas.
     _SPLASH_TILE_SLOTS = [
-        ("nw", 180, 250),
-        ("ne", 640, 250),
-        ("sw", 180, 480),
-        ("se", 640, 480),
+        ("nw", 192, 250),
+        ("ne", 728, 250),
+        ("sw", 192, 480),
+        ("se", 728, 480),
     ]
-    _TILE_W = 200
-    _TILE_H = 120
+    _TILE_W = 220
+    _TILE_H = 118
     _TILE_DEPTH = 16
 
     _CD_CX = 460
     _CD_CY = 265
-    _CD_R  = 68
+    _CD_R  = 52
     # CD center on the splash canvas — sits between the shifted 2x2 grid.
     _SPLASH_CD = (460, 365)
 
@@ -1278,22 +1377,49 @@ class App(tk.Tk):
         if r is None:
             r = self._CD_R
         canvas.delete("cd")
-        canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
-                           outline=AMBER, width=2, tags="cd")
-        canvas.create_oval(cx - r + 10, cy - r + 10, cx + r - 10, cy + r - 10,
-                           outline=AMBER_D, width=1, tags="cd")
-        canvas.create_oval(cx - 10, cy - 10, cx + 10, cy + 10,
-                           outline=AMBER, width=1, fill=BG, tags="cd")
-        angle = int((time.monotonic() * 40) % 360)
-        canvas.create_arc(cx - r + 4, cy - r + 4, cx + r - 4, cy + r - 4,
-                          start=angle, extent=30, outline=AMBER_B, width=2,
-                          style="arc", tags="cd")
-        canvas.create_text(cx, cy - 4, text="AURUM", font=(FONT, 8, "bold"),
+        canvas.create_rectangle(cx - r - 18, cy - r - 12, cx + r + 18, cy + r + 12,
+                                outline=BORDER, fill=PANEL, width=1, tags="cd")
+        canvas.create_rectangle(cx - r - 18, cy - r - 12, cx + r + 18, cy - r + 6,
+                                outline="", fill=BG2, tags="cd")
+        canvas.create_text(cx - r - 8, cy - r - 3, anchor="w",
+                           text="AURUM ROUTER", font=(FONT, 8, "bold"),
                            fill=AMBER, tags="cd")
-        canvas.create_text(cx, cy + 6, text="LASER", font=(FONT, 7),
+        canvas.create_text(cx + r + 10, cy - r - 3, anchor="e",
+                           text="MAIN HUB", font=(FONT, 7),
                            fill=DIM, tags="cd")
-        canvas.create_text(cx, cy + r + 10, text="φ = 1.618",
-                           font=(FONT, 7), fill=DIM2, tags="cd")
+        canvas.create_rectangle(cx - r + 8, cy - r + 18, cx + r - 8, cy + r - 8,
+                                outline=AMBER_D, fill=BG, width=1, tags="cd")
+        canvas.create_rectangle(cx - 24, cy - 24, cx + 24, cy + 24,
+                                outline=AMBER, fill=BG2, width=1, tags="cd")
+        self._draw_aurum_logo(canvas, cx, cy - 6, scale=15, tag="cd")
+        canvas.create_text(cx, cy + 20, text="A U R U M", font=(FONT, 8, "bold"),
+                           fill=WHITE, tags="cd")
+        canvas.create_text(cx, cy + r - 14, text="DESK ROUTER", font=(FONT, 7),
+                           fill=DIM, tags="cd")
+        canvas.create_line(cx - r + 16, cy - r + 30, cx + r - 16, cy - r + 30,
+                           fill=BORDER, width=1, tags="cd")
+        canvas.create_line(cx, cy + r - 8, cx, cy + r + 8,
+                           fill=AMBER_D, width=1, tags="cd")
+
+    def _draw_aurum_logo(self, canvas, cx: int, cy: int, scale: int = 18, tag: str = "logo") -> None:
+        s = scale
+        canvas.create_polygon(
+            cx, cy - s,
+            cx + s, cy + s,
+            cx + s * 0.46, cy + s,
+            cx + s * 0.24, cy + s * 0.30,
+            cx - s * 0.24, cy + s * 0.30,
+            cx - s * 0.46, cy + s,
+            cx - s, cy + s,
+            fill=AMBER, outline="", tags=tag,
+        )
+        canvas.create_polygon(
+            cx, cy - s,
+            cx + s, cy + s,
+            cx + s * 0.58, cy + s,
+            cx, cy - s * 0.10,
+            fill=WHITE, outline="", tags=tag,
+        )
 
     def _draw_warning_stripe(self, canvas, y: int, height: int, text: str) -> None:
         """Solid yellow bar with dark text — HL1 hazard stripe."""
@@ -1340,11 +1466,30 @@ class App(tk.Tk):
 
     def _draw_panel(self, canvas, x1: int, y1: int, x2: int, y2: int,
                     title: str = "", accent: str = AMBER, tag: str = "panel") -> None:
-        canvas.create_rectangle(x1, y1, x2, y2, outline=BORDER, fill=PANEL, width=1, tags=tag)
+        """Panel com enquadramento visível: perímetro completo em accent dim,
+        top rail accent vivo, corner brackets, title chip."""
+        perim = self._dim_color(accent, 0.45)
+        canvas.create_rectangle(x1, y1, x2, y2, outline=perim, fill=PANEL,
+                                width=1, tags=tag)
+        # Top accent rail
         canvas.create_line(x1, y1, x2, y1, fill=accent, width=2, tags=tag)
-        canvas.create_line(x1, y2, x2, y2, fill=DIM2, width=1, tags=tag)
+        # Corner brackets — dá vida sem poluir
+        L = 10
+        for (bx, by, dx, dy) in (
+            (x1, y1 + 2, +1, +1),
+            (x2, y1 + 2, -1, +1),
+            (x1, y2,     +1, -1),
+            (x2, y2,     -1, -1),
+        ):
+            canvas.create_line(bx, by, bx + dx * L, by,
+                               fill=accent, width=2, tags=tag)
+            canvas.create_line(bx, by, bx, by + dy * L,
+                               fill=accent, width=2, tags=tag)
+        # Bottom line (subtle)
+        canvas.create_line(x1 + L, y2, x2 - L, y2, fill=perim, width=1, tags=tag)
         if title:
-            canvas.create_rectangle(x1 + 14, y1 - 10, x1 + 168, y1 + 12,
+            tw = max(90, len(title) * 7 + 20)
+            canvas.create_rectangle(x1 + 14, y1 - 10, x1 + 14 + tw, y1 + 12,
                                     outline=accent, fill=BG, width=1, tags=tag)
             canvas.create_text(x1 + 22, y1 + 1, anchor="w",
                                text=title, font=(FONT, 8, "bold"),
@@ -1367,11 +1512,17 @@ class App(tk.Tk):
 
         head = tk.Frame(outer, bg=BG)
         head.pack(fill="x", pady=(0, 12))
-        tk.Label(head, text=title, font=(FONT, 14, "bold"),
+        strip = tk.Frame(head, bg=BG)
+        strip.pack(fill="x")
+        tk.Frame(strip, bg=AMBER, width=4, height=28).pack(side="left", padx=(0, 8))
+        title_wrap = tk.Frame(strip, bg=BG)
+        title_wrap.pack(side="left", fill="x", expand=True)
+        tk.Label(title_wrap, text=title, font=(FONT, 14, "bold"),
                  fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
         if subtitle:
-            tk.Label(head, text=subtitle, font=(FONT, 8),
+            tk.Label(title_wrap, text=subtitle, font=(FONT, 8),
                      fg=DIM, bg=BG, anchor="w").pack(anchor="w", pady=(3, 0))
+        tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
 
         body = tk.Frame(outer, bg=BG)
@@ -1403,38 +1554,44 @@ class App(tk.Tk):
         return outer, body
 
     def _ui_panel_frame(self, parent, title: str = "", subtitle: str = "") -> tk.Frame:
-        panel = tk.Frame(parent, bg=BG)
+        shell = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+        shell.pack(fill="x", pady=(0, 12))
+        panel = tk.Frame(shell, bg=BG)
         panel.pack(fill="x", pady=(0, 12))
 
         if title or subtitle:
             hdr = tk.Frame(panel, bg=BG)
-            hdr.pack(fill="x", pady=(2, 8))
+            hdr.pack(fill="x", pady=(8, 8), padx=10)
+            tk.Frame(hdr, bg=AMBER_D, width=3, height=28).pack(side="left", padx=(0, 8))
+            text_wrap = tk.Frame(hdr, bg=BG)
+            text_wrap.pack(side="left", fill="x", expand=True)
             if title:
-                tk.Label(hdr, text=title, font=(FONT, 8, "bold"),
+                tk.Label(text_wrap, text=title, font=(FONT, 8, "bold"),
                          fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w")
             if subtitle:
-                tk.Label(hdr, text=subtitle, font=(FONT, 8),
+                tk.Label(text_wrap, text=subtitle, font=(FONT, 8),
                          fg=DIM, bg=BG, anchor="w").pack(anchor="w", pady=(2, 0))
-            tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
+            tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 8))
 
         return panel
 
     def _ui_section(self, parent, title: str, note: str | None = None,
                     badge: str | None = None) -> tk.Frame:
-        wrap = tk.Frame(parent, bg=BG)
+        wrap = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
         wrap.pack(fill="x", pady=(0, 10))
 
-        head = tk.Frame(wrap, bg=BG)
-        head.pack(fill="x", pady=(0, 4))
+        head = tk.Frame(wrap, bg=BG2)
+        head.pack(fill="x", pady=(0, 4), padx=8)
+        tk.Frame(head, bg=AMBER_D, width=3, height=22).pack(side="left", padx=(0, 8))
         tk.Label(head, text=title, font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
+                 fg=AMBER_D, bg=BG2, anchor="w").pack(side="left")
         if badge:
             tk.Label(head, text=f" {badge} ", font=(FONT, 7, "bold"),
                      fg=BG, bg=AMBER_D, padx=3).pack(side="left", padx=8)
         if note:
             tk.Label(head, text=note, font=(FONT, 7),
-                     fg=DIM, bg=BG, anchor="e").pack(side="right")
-        tk.Frame(wrap, bg=DIM2, height=1).pack(fill="x", pady=(0, 6))
+                     fg=DIM, bg=BG2, anchor="e").pack(side="right")
+        tk.Frame(wrap, bg=DIM2, height=1).pack(fill="x", padx=8, pady=(0, 6))
         return wrap
 
     def _ui_action_row(self, parent, key_label: str, title: str, desc: str,
@@ -1444,12 +1601,14 @@ class App(tk.Tk):
                        key_bg: str | None = None) -> tuple[tk.Frame, tk.Label, tk.Label]:
         row = tk.Frame(parent, bg=BG, cursor="hand2" if command else "arrow")
         row.pack(fill="x", pady=1)
+        rail = tk.Frame(row, bg=key_bg or (AMBER_D if available else DIM2), width=3)
+        rail.pack(side="left", fill="y")
 
         key = tk.Label(row, text=f" {key_label} ", font=(FONT, 8, "bold"),
                        fg=BG if available else WHITE,
                        bg=key_bg or (AMBER if available else DIM2),
                        width=3)
-        key.pack(side="left")
+        key.pack(side="left", padx=(4, 0))
 
         title_l = tk.Label(row, text=f"  {title}", font=(FONT, 9, "bold"),
                            fg=WHITE if available else DIM, bg=BG3,
@@ -1469,10 +1628,14 @@ class App(tk.Tk):
         if command:
             def _enter(_e=None):
                 title_l.configure(fg=AMBER if available else DIM)
+                desc_l.configure(fg=WHITE if available else DIM)
+                rail.configure(bg=AMBER if available else DIM2)
             def _leave(_e=None):
                 title_l.configure(fg=WHITE if available else DIM)
+                desc_l.configure(fg=DIM)
+                rail.configure(bg=key_bg or (AMBER_D if available else DIM2))
                 row.configure(bg=BG)
-            for w in (row, key, title_l, desc_l):
+            for w in (row, rail, key, title_l, desc_l):
                 w.bind("<Button-1>", lambda e, c=command: c())
                 w.bind("<Enter>", _enter)
                 w.bind("<Leave>", _leave)
@@ -1503,8 +1666,10 @@ class App(tk.Tk):
             label,
             "Return to previous routing screen",
             command=command,
-            available=False,
-            tag=None,
+            available=True,
+            tag="BACK",
+            tag_fg=BG,
+            tag_bg=AMBER_D,
             title_width=20,
             key_bg=DIM2,
         )
@@ -1518,14 +1683,25 @@ class App(tk.Tk):
             x1, y1, x2, y2 = self._tile_rect(idx)
             _, cx, cy = slots[idx]
             anchor_x = x2 if cx < cd_cx else x1
-            anchor_y = y2 if cy < cd_cy else y1
+            anchor_y = cy
             _, _, color, _ = MAIN_GROUPS[idx]
             line_color = color if idx == focused_idx else DIM2
             width = 2 if idx == focused_idx else 1
+            mid_x = cd_cx - 68 if cx < cd_cx else cd_cx + 68
             canvas.create_line(
-                anchor_x, anchor_y, cd_cx, cd_cy,
-                fill=line_color, width=width, dash=(2, 4), tags="spokes",
+                anchor_x, anchor_y, mid_x, anchor_y,
+                fill=line_color, width=width, tags="spokes",
             )
+            canvas.create_line(
+                mid_x, anchor_y, mid_x, cd_cy,
+                fill=line_color, width=width, tags="spokes",
+            )
+            canvas.create_line(
+                mid_x, cd_cy, cd_cx, cd_cy,
+                fill=line_color, width=width, tags="spokes",
+            )
+            canvas.create_rectangle(mid_x - 2, anchor_y - 2, mid_x + 2, anchor_y + 2,
+                                    outline=line_color, fill=BG, width=1, tags="spokes")
 
     def _menu_tiles_repaint_text(self) -> None:
         if self._menu_canvas is None:
@@ -1560,12 +1736,32 @@ class App(tk.Tk):
         children = MAIN_GROUPS[tile_idx][3]
         if not (0 <= sub_idx < len(children)):
             return
-        _, method_name = children[sub_idx]
+        label, method_name = children[sub_idx]
         fn = getattr(self, method_name, None)
-        if callable(fn):
-            self._menu_expanded_tile = None
-            self._menu_canvas = None
+        if not callable(fn):
+            # Surface missing target — bug was silently failing before
+            try:
+                messagebox.showerror("Menu", f"{label}: method {method_name} not wired")
+            except Exception:
+                pass
+            return
+        self._menu_expanded_tile = None
+        self._menu_canvas = None
+        try:
             fn()
+        except Exception as exc:
+            try:
+                messagebox.showerror(
+                    "Menu",
+                    f"{label} failed:\n{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            # Restore main menu so user isn't stuck on a broken screen
+            try:
+                self._menu("main")
+            except Exception:
+                pass
 
     def _menu_tile_collapse(self) -> None:
         self._menu_expanded_tile = None
@@ -1573,9 +1769,20 @@ class App(tk.Tk):
         self._menu_main_bloomberg()
 
     def _menu_live_schedule(self) -> None:
-        """Re-arm the 5s live-data refresh while the Bloomberg menu is active."""
+        """Re-arm the 5s live-data refresh while the Bloomberg menu is active.
+
+        Pause while a tile is expanded — tiles aren't visible, the refresh
+        would just redraw them on top of the desk panel (the 'click bug').
+        """
         if self._menu_canvas is None:
             self._menu_live_after_id = None
+            return
+        if getattr(self, "_menu_expanded_tile", None) is not None:
+            # Re-check in 1s so it resumes quickly after ESC/collapse.
+            try:
+                self._menu_live_after_id = self.after(1000, self._menu_live_schedule)
+            except Exception:
+                self._menu_live_after_id = None
             return
         self._menu_live_fetch_async()
         try:
@@ -1592,6 +1799,10 @@ class App(tk.Tk):
             except Exception:
                 pass
             self._splash_pulse_after_id = None
+        try:
+            self.main.unbind("<Button-1>")
+        except Exception:
+            pass
         self._splash_canvas = None
         # Macro Brain cockpit é a intro — rich market data. User clica
         # "ENTER TERMINAL" pra ir pro main menu com as trade engines.
@@ -1687,8 +1898,11 @@ class App(tk.Tk):
         canvas.create_text(460, 208, anchor="center", text=SYSTEM_TAGLINE,
                            font=(FONT, 9, "bold"), fill=AMBER_D, tags="subtitle")
         canvas.create_text(460, 226, anchor="center",
-                           text="BLACK / GOLD / NEUTRAL  |  OPERATOR ENTRY",
+                           text="// NEON · VOID · SIGNAL //  ::  OPERATOR UPLINK",
                            font=(FONT, 7), fill=DIM, tags="subtitle")
+        # Neon scanline under tagline
+        canvas.create_line(200, 240, 720, 240, fill=AMBER_D, width=1, tags="subtitle")
+        canvas.create_line(230, 243, 690, 243, fill=AMBER, width=1, dash=(2, 6), tags="subtitle")
 
         try:
             st = _conn.status_summary()
@@ -1739,7 +1953,6 @@ class App(tk.Tk):
 
         click_handler = lambda e: self._splash_on_click()
         canvas.bind("<Button-1>", click_handler)
-        self.main.bind("<Button-1>", click_handler)
         self._kb("<Return>", self._splash_on_click)
         self._kb("<space>", self._splash_on_click)
         self._bind_global_nav()
@@ -1771,8 +1984,15 @@ class App(tk.Tk):
         self._clr()
         self._clear_kb()
         self.history.clear()
-        self._active_tile_slots = self._TILE_SLOTS
-        self._active_cd_center = (self._CD_CX, self._CD_CY)
+        # Edge-aligned 2x2: tiles extend to within 44px of the panel edge
+        # (52/868), leaving a 288px gap in the middle for the CD router.
+        self._active_tile_slots = [
+            ("nw", 192, 182),
+            ("ne", 728, 182),
+            ("sw", 192, 340),
+            ("se", 728, 340),
+        ]
+        self._active_cd_center = (460, 261)
         self.h_stat.configure(text="DESK SELECT", fg=AMBER_B)
         self.h_path.configure(text="> MAIN  |  DESK ROUTER")
         self.f_lbl.configure(text="1-4 open desk  |  arrows navigate  |  enter select  |  esc landing")
@@ -1786,44 +2006,124 @@ class App(tk.Tk):
         if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
             self._menu_live_fetch_async()
 
-        self._draw_panel(canvas, 52, 34, 868, 86, title="AURUM DESK", accent=AMBER, tag="menu")
-        canvas.create_text(78, 61, anchor="w", text="PRIMARY ROUTING",
-                           font=(FONT, 13, "bold"), fill=AMBER, tags="menu")
-        canvas.create_text(78, 78, anchor="w",
-                           text="Select a desk before entering strategy, research, market or control workflows",
-                           font=(FONT, 8), fill=DIM, tags="menu")
+        # Persistent outer frame (survives tile_expand so the screen stays enquadrada)
+        canvas.delete("frame")
+        # Double border + accent rail for a proper framed window
+        canvas.create_rectangle(24, 18, 896, 522, outline=AMBER_D,
+                                width=2, tags="frame")
+        canvas.create_rectangle(28, 22, 892, 518, outline=BORDER,
+                                width=1, tags="frame")
+        # Top title-bar with accent rail
+        canvas.create_rectangle(32, 24, 888, 40, outline="",
+                                fill=BG2, tags="frame")
+        canvas.create_line(32, 40, 888, 40, fill=AMBER, width=1, tags="frame")
+        canvas.create_text(42, 32, anchor="w", text="AURUM FINANCE",
+                           font=(FONT, 8, "bold"), fill=WHITE, tags="frame")
+        canvas.create_rectangle(170, 26, 260, 38, outline=AMBER,
+                                fill=BG, width=1, tags="frame")
+        canvas.create_text(215, 32, anchor="center", text="MAIN MENU",
+                           font=(FONT, 8, "bold"), fill=AMBER, tags="frame")
+        canvas.create_text(876, 32, anchor="e",
+                           text="DESK ROUTER / BLOOMBERG MODE",
+                           font=(FONT, 7), fill=DIM, tags="frame")
+        # Bottom rail so the frame reads as a single window
+        canvas.create_line(32, 510, 888, 510, fill=AMBER_D, width=1, tags="frame")
 
-        self._draw_cd_center(canvas)
+        # ROUTING HEADER — 3 colunas limpas (DESK · PROFILE · NAV), sem logo
+        # redundante (a brand já está na title bar do frame) e sem overlap.
+        self._draw_panel(canvas, 52, 58, 868, 108,
+                         title="  ROUTING HEADER  ", accent=AMBER, tag="menu")
+
+        def _col(x_lbl, label, x_val, value, value_fg=WHITE):
+            canvas.create_text(x_lbl, 78, anchor="w", text=label,
+                               font=(FONT, 7, "bold"), fill=DIM, tags="menu")
+            canvas.create_text(x_val, 78, anchor="w", text=value,
+                               font=(FONT, 9, "bold"), fill=value_fg, tags="menu")
+
+        # Col 1 — DESK ROUTER
+        _col(66, "DESK", 110, "AURUM ROUTER", AMBER)
+        canvas.create_text(66, 96, anchor="w",
+                           text="markets · execute · research · control",
+                           font=(FONT, 7), fill=DIM, tags="menu")
+        # Divider
+        canvas.create_line(296, 68, 296, 100,
+                           fill=self._dim_color(AMBER, 0.4), width=1, tags="menu")
+        # Col 2 — PROFILE
+        _col(310, "PROFILE", 364, "PAPER · LOCAL", GREEN)
+        canvas.create_text(310, 96, anchor="w",
+                           text="operator mode · kill-switch armed",
+                           font=(FONT, 7), fill=DIM, tags="menu")
+        canvas.create_line(556, 68, 556, 100,
+                           fill=self._dim_color(AMBER, 0.4), width=1, tags="menu")
+        # Col 3 — NAVIGATION
+        _col(570, "NAV", 604, "1-4 · ENTER · ESC", WHITE)
+        canvas.create_text(570, 96, anchor="w",
+                           text="click tile · number key · esc to landing",
+                           font=(FONT, 7), fill=DIM, tags="menu")
+
+        self._draw_cd_center(canvas, r=52)
+        # Subtle separator below ROUTING HEADER (bottom separator removed —
+        # SYSTEM CONTEXT title chip was overlapping it).
+        canvas.create_line(60, 118, 860, 118,
+                           fill=self._dim_color(AMBER, 0.3),
+                           width=1, tags="menu")
         self._draw_spokes(canvas, self._menu_focused_tile)
         for idx in range(4):
             self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
 
-        self._draw_panel(canvas, 52, 452, 868, 512, title="SYSTEM CONTEXT", accent=AMBER_D, tag="menu")
+        # SYSTEM CONTEXT — panel sits 10px below tile band (tiles end @ 399),
+        # panel 412-504 gives room for title chip (402-424) + KV rows (432-492)
+        self._draw_panel(canvas, 52, 412, 868, 504,
+                         title="  SYSTEM CONTEXT  ", accent=AMBER, tag="menu")
         try:
             market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNSET")
         except Exception:
             market_label = "UNSET"
-        self._draw_kv_rows(canvas, 78, 482, [
-            ("ENGINE", "DESK ROUTER", WHITE),
-            ("MODE", "OPERATOR", WHITE),
-            ("ACCOUNT", "PAPER", WHITE),
-            ("MARKET", market_label.upper(), AMBER_B),
-        ], value_x=218, tag="menu")
-        self._draw_kv_rows(canvas, 468, 482, [
-            ("BASKET", "DEFAULT", WHITE),
-            ("TIMEFRAME", "15M", WHITE),
-            ("ENVIRONMENT", "LOCAL", WHITE),
-            ("RISK", "KILL-SWITCH ARMED", RED),
-        ], value_x=630, tag="menu")
+        # Tight 16px line height fits 4 rows inside the panel body (432-492)
+        self._draw_kv_rows(canvas, 78, 434, [
+            ("ENGINE",  "DESK ROUTER",         TILE_MARKETS),
+            ("MODE",    "OPERATOR",            WHITE),
+            ("ACCOUNT", "PAPER",               GREEN),
+            ("MARKET",  market_label.upper(),  AMBER_B),
+        ], value_x=218, line_h=16, tag="menu")
+        self._draw_kv_rows(canvas, 468, 434, [
+            ("BASKET",      "DEFAULT",             WHITE),
+            ("TIMEFRAME",   "15M",                 TILE_EXECUTE),
+            ("ENVIRONMENT", "LOCAL",               TILE_RESEARCH),
+            ("RISK",        "KILL-SWITCH ARMED",   RED),
+        ], value_x=630, line_h=16, tag="menu")
 
         def _canvas_click(event):
-            ex, ey = event.x, event.y
-            for idx in range(4):
-                x1, y1, x2, y2 = self._tile_rect(idx)
-                if x1 <= ex <= x2 and y1 <= ey <= y2:
-                    self._menu_tile_focus(idx)
-                    self._menu_tile_expand(idx)
-                    return
+            try:
+                ex, ey = event.x, event.y
+                hit = None
+                for idx in range(4):
+                    x1, y1, x2, y2 = self._tile_rect(idx)
+                    if x1 <= ex <= x2 and y1 <= ey <= y2:
+                        hit = idx
+                        break
+                if hit is None:
+                    # Clicked outside any tile — show feedback so user knows
+                    # the click was registered (was confusing before).
+                    self.h_stat.configure(
+                        text=f"NO TILE @ ({ex},{ey})", fg=AMBER_D,
+                    )
+                    return "break"
+                label = MAIN_GROUPS[hit][0]
+                self.h_stat.configure(text=f"→ {label}", fg=AMBER_B)
+                self._menu_tile_focus(hit)
+                self._menu_tile_expand(hit)
+                return "break"
+            except Exception as exc:
+                import traceback
+                tb = traceback.format_exc()
+                try:
+                    messagebox.showerror(
+                        "Menu click",
+                        f"{type(exc).__name__}: {exc}\n\n{tb}",
+                    )
+                except Exception:
+                    pass
         canvas.bind("<Button-1>", _canvas_click)
 
         for n in (1, 2, 3, 4):
@@ -1839,42 +2139,92 @@ class App(tk.Tk):
         self._menu_live_schedule()
 
     def _menu_tile_expand(self, idx: int) -> None:
+        try:
+            self._menu_tile_expand_impl(idx)
+        except Exception as exc:
+            try:
+                messagebox.showerror(
+                    "Menu expand",
+                    f"{type(exc).__name__}: {exc}",
+                )
+                self._menu("main")
+            except Exception:
+                pass
+
+    def _menu_tile_expand_impl(self, idx: int) -> None:
         if not (0 <= idx <= 3) or self._menu_canvas is None:
             return
         self._menu_expanded_tile = idx
         self._menu_sub_focus = 0
 
         canvas = self._menu_canvas
+        # Clear everything except the persistent outer "frame"
         for i in range(4):
-            if i != idx:
-                canvas.delete(f"tile{i}")
+            canvas.delete(f"tile{i}")
         canvas.delete("cd")
         canvas.delete("spokes")
         canvas.delete("menu")
+        canvas.delete("submenu")
 
         label, key_num, color, children = MAIN_GROUPS[idx]
-        x1, y1, x2, y2 = 80, 56, 840, 486
-        canvas.delete(f"tile{idx}")
-        self._draw_panel(canvas, x1, y1, x2, y2, title=f"{label} DESK", accent=color, tag=f"tile{idx}")
-        canvas.create_text(110, 92, anchor="w", text=f"{label}  |  SELECT DESTINATION",
-                           font=(FONT, 12, "bold"), fill=color, tags=f"tile{idx}")
-        canvas.create_text(110, 112, anchor="w",
-                           text="Use number keys or arrows to route the operator flow",
-                           font=(FONT, 8), fill=DIM, tags=f"tile{idx}")
+        # Expand uses the full inner area (leaves room for outer frame + top bar)
+        x1, y1, x2, y2 = 52, 58, 868, 498
+        self._draw_panel(canvas, x1, y1, x2, y2,
+                         title=f"  {label} DESK · KEY {key_num}  ",
+                         accent=color, tag=f"tile{idx}")
+        # Compact desk header — single thin strip at the top
+        canvas.create_rectangle(x1 + 8, y1 + 16, x2 - 8, y1 + 46,
+                                outline=self._dim_color(color, 0.5),
+                                fill=BG2, width=1, tags=f"tile{idx}")
+        canvas.create_line(x1 + 8, y1 + 16, x2 - 8, y1 + 16,
+                           fill=color, width=1, tags=f"tile{idx}")
+        self._draw_aurum_logo(canvas, x1 + 22, y1 + 31, scale=6, tag=f"tile{idx}")
+        canvas.create_text(x1 + 34, y1 + 31, anchor="w",
+                           text=label,
+                           font=(FONT, 11, "bold"), fill=color, tags=f"tile{idx}")
+        canvas.create_text(x1 + 34 + len(label) * 8 + 16, y1 + 31, anchor="w",
+                           text="ROUTE SELECT  ·  click · arrows · enter",
+                           font=(FONT, 7), fill=DIM, tags=f"tile{idx}")
+        # BACK chip on the right (no overlap — moved above the rows band)
+        bx1, by1, bx2, by2 = x2 - 102, y1 + 20, x2 - 16, y1 + 42
+        canvas.create_rectangle(bx1, by1, bx2, by2,
+                                outline=self._dim_color(color, 0.6),
+                                fill=BG3, width=1, tags=f"tile{idx}")
+        canvas.create_line(bx1, by1, bx2, by1, fill=color, width=2, tags=f"tile{idx}")
+        canvas.create_text((bx1 + bx2) // 2, (by1 + by2) // 2,
+                           text="◂ BACK [ESC]",
+                           font=(FONT, 7, "bold"), fill=WHITE, tags=f"tile{idx}")
+        self._back_btn_rect = (bx1, by1, bx2, by2)
 
         self._menu_sub_render(idx)
 
+        # Footer — preenche o espaço abaixo das rows, não deixa o painel "vazio"
+        foot_y = y2 - 30
+        canvas.create_line(x1 + 16, foot_y, x2 - 16, foot_y,
+                           fill=self._dim_color(color, 0.35),
+                           width=1, tags=f"tile{idx}")
+        canvas.create_text((x1 + x2) // 2, foot_y + 14, anchor="center",
+                           text=f"◂ ESC  ·  press 1-{len(children)} or click a row  ·  ENTER confirms ▸",
+                           font=(FONT, 8, "bold"),
+                           fill=self._dim_color(color, 0.85),
+                           tags=f"tile{idx}")
+
         def _sub_click(event, _idx=idx):
             ex, ey = event.x, event.y
+            br = getattr(self, "_back_btn_rect", None)
+            if br and br[0] <= ex <= br[2] and br[1] <= ey <= br[3]:
+                self._menu_tile_collapse()
+                return "break"
             _children = MAIN_GROUPS[_idx][3]
-            start_y = 178
-            row_h = 58
-            for i in range(len(_children)):
-                y1 = start_y + i * row_h
-                y2 = y1 + 40
-                if 122 <= ex <= 798 and y1 <= ey <= y2:
+            n = len(_children)
+            row_h = 54 if n <= 5 else 44 if n <= 7 else 38
+            start_y = 118
+            for i in range(n):
+                ry1 = start_y + i * row_h
+                ry2 = ry1 + (row_h - 10)
+                if 72 <= ex <= 848 and ry1 <= ey <= ry2:
                     self._menu_sub_select(_idx, i)
-                    return
+                    return "break"
         canvas.bind("<Button-1>", _sub_click)
 
         self._clear_kb()
@@ -1895,60 +2245,142 @@ class App(tk.Tk):
         canvas = self._menu_canvas
         canvas.delete("submenu")
         _label, _key, color, children = MAIN_GROUPS[idx]
-        start_y = 178
-        row_h = 58
+        n = len(children)
+        # Adapt row height to child count so 7-item lists fit without overflow
+        row_h = 54 if n <= 5 else 44 if n <= 7 else 38
+        h_inner = row_h - 10
+        start_y = 118
+        row_x1, row_x2 = 72, 848
+        # Single-line vs two-line rows based on available height
+        compact = row_h < 50
         for i, (child_label, _method) in enumerate(children):
             y1 = start_y + i * row_h
-            y2 = y1 + 40
+            y2 = y1 + h_inner
             focused = i == self._menu_sub_focus
             fill = BG2 if focused else PANEL
-            outline = color if focused else BORDER
+            outline = color if focused else self._dim_color(color, 0.4)
             text_color = AMBER_B if focused else WHITE
-            canvas.create_rectangle(122, y1, 798, y2, outline=outline, fill=fill,
-                                    width=2 if focused else 1, tags="submenu")
-            canvas.create_text(154, y1 + 20, text=f"{i+1:02d}", anchor="center",
-                               font=(FONT, 11, "bold"), fill=(color if focused else DIM), tags="submenu")
-            canvas.create_text(198, y1 + 14, anchor="w", text=child_label,
-                               font=(FONT, 11, "bold"), fill=text_color, tags="submenu")
-            canvas.create_text(198, y1 + 28, anchor="w",
-                               text="ENTER to open",
-                               font=(FONT, 7), fill=DIM, tags="submenu")
+            band = color if focused else self._dim_color(color, 0.6)
+            canvas.create_rectangle(row_x1, y1, row_x2, y2, outline=outline,
+                                    fill=fill, width=2 if focused else 1,
+                                    tags="submenu")
+            canvas.create_rectangle(row_x1, y1, row_x1 + 22, y2,
+                                    outline="", fill=(BG3 if focused else BG2),
+                                    tags="submenu")
+            canvas.create_line(row_x1 + 22, y1, row_x1 + 22, y2,
+                               fill=band, width=3 if focused else 2,
+                               tags="submenu")
+            canvas.create_text(row_x1 + 11, (y1 + y2) // 2,
+                               text=f"{i+1:02d}", anchor="center",
+                               font=(FONT, 10, "bold"),
+                               fill=(color if focused else DIM),
+                               tags="submenu")
+            desc = BLOCK_DESCRIPTIONS.get(_method, "open module")
+            if compact:
+                # Single-line row with inline desc — saves vertical space
+                canvas.create_text(row_x1 + 34, (y1 + y2) // 2, anchor="w",
+                                   text=child_label,
+                                   font=(FONT, 11, "bold"), fill=text_color,
+                                   tags="submenu")
+                canvas.create_text(row_x1 + 220, (y1 + y2) // 2, anchor="w",
+                                   text=desc[:60], font=(FONT, 7), fill=DIM,
+                                   tags="submenu")
+            else:
+                canvas.create_text(row_x1 + 34, y1 + 14, anchor="w",
+                                   text=child_label,
+                                   font=(FONT, 12, "bold"), fill=text_color,
+                                   tags="submenu")
+                canvas.create_text(row_x1 + 34, y1 + 30, anchor="w",
+                                   text=desc, font=(FONT, 8), fill=DIM,
+                                   tags="submenu")
+            canvas.create_text(row_x2 - 12, (y1 + y2) // 2, anchor="e",
+                               text="ENTER ▸",
+                               font=(FONT, 9, "bold"),
+                               fill=(color if focused else DIM),
+                               tags="submenu")
 
     def _draw_isometric_tile(self, canvas, idx: int, focused: bool) -> None:
         label, key_num, color, _children = MAIN_GROUPS[idx]
         x1, y1, x2, y2 = self._tile_rect(idx)
-        d = self._TILE_DEPTH
         face_color = color if focused else self._dim_color(color, TILE_DIM_FACTOR)
         panel_fill = BG2 if focused else PANEL
-        text_color = WHITE if focused else "#a8a8a8"
+        text_color = WHITE if focused else "#b8b8b8"
         sub_color = AMBER_B if focused else DIM
         tag = f"tile{idx}"
 
         canvas.delete(tag)
-        canvas.create_polygon(
-            x1, y1, x2, y1, x2 + d, y1 - d, x1 + d, y1 - d,
-            outline=face_color, fill=BG, width=1, tags=tag,
-        )
-        canvas.create_polygon(
-            x2, y1, x2 + d, y1 - d, x2 + d, y2 - d, x2, y2,
-            outline=face_color, fill=BG, width=1, tags=tag,
-        )
         canvas.create_rectangle(x1, y1, x2, y2, outline=face_color,
                                 fill=panel_fill, width=2 if focused else 1, tags=tag)
-        canvas.create_rectangle(x1, y1, x2, y1 + 20, outline=face_color,
-                                fill=face_color if focused else BG3, width=0, tags=tag)
-        canvas.create_text(x1 + 10, y1 + 10, anchor="w",
-                           text=f" {key_num}  {label}",
-                           font=(FONT, 9, "bold"),
-                           fill=(BG if focused else WHITE), tags=tag)
-        live_key = label.lower()
-        live = self._menu_live.get(live_key, {}) if hasattr(self, "_menu_live") else {}
-        for i, line_key in enumerate(("line1", "line2", "line3", "line4")):
-            yy = y1 + 36 + i * 18
-            text = live.get(line_key, "-")
-            canvas.create_text(x1 + 12, yy, anchor="w", text=text,
-                               font=(FONT, 8, "bold" if i == 0 and focused else "normal"),
-                               fill=text_color if i < 2 else sub_color, tags=tag)
+        # Accent stripe on left edge (full height) — dá vida sem ruído
+        canvas.create_rectangle(x1, y1, x1 + 3, y2, outline="",
+                                fill=face_color, tags=tag)
+        # Header band
+        canvas.create_rectangle(x1 + 3, y1, x2, y1 + 22, outline="", fill=BG3, tags=tag)
+        canvas.create_line(x1, y1 + 22, x2, y1 + 22, fill=face_color, width=1, tags=tag)
+
+        # Key chip — always solid accent, bg-on-accent for strong contrast
+        canvas.create_rectangle(x1 + 9, y1 + 5, x1 + 27, y1 + 18,
+                                outline="",
+                                fill=(face_color if focused else self._dim_color(color, 0.55)),
+                                tags=tag)
+        canvas.create_text(x1 + 18, y1 + 11, anchor="center",
+                           text=key_num, font=(FONT, 8, "bold"),
+                           fill=BG, tags=tag)
+
+        # Tile label
+        canvas.create_text(x1 + 36, y1 + 11, anchor="w",
+                           text=label,
+                           font=(FONT, 10, "bold"),
+                           fill=text_color, tags=tag)
+        # Modules count pill (right aligned)
+        canvas.create_text(x2 - 10, y1 + 11, anchor="e",
+                           text=f"{len(_children)} MOD",
+                           font=(FONT, 6, "bold"),
+                           fill=(face_color if focused else DIM), tags=tag)
+
+        # Section divider
+        canvas.create_line(x1 + 10, y1 + 30, x2 - 10, y1 + 30, fill=BORDER, width=1, tags=tag)
+        canvas.create_text(x1 + 12, y1 + 40, anchor="w",
+                           text="MODULES",
+                           font=(FONT, 6, "bold"),
+                           fill=(face_color if focused else DIM), tags=tag)
+
+        # Module preview (up to 2 rows)
+        preview_y = y1 + 48
+        shown = _children[:2]
+        for child_idx, (child_label, _method) in enumerate(shown):
+            py1 = preview_y + child_idx * 17
+            py2 = py1 + 13
+            chip_fill = BG3 if focused else BG
+            canvas.create_rectangle(x1 + 12, py1, x2 - 12, py2,
+                                    outline=BORDER, fill=chip_fill, width=1, tags=tag)
+            canvas.create_rectangle(x1 + 12, py1, x1 + 16, py2,
+                                    outline="",
+                                    fill=(color if focused else self._dim_color(color, 0.55)),
+                                    tags=tag)
+            label_txt = child_label[:24]
+            canvas.create_text(x1 + 22, py1 + 6, anchor="w",
+                               text=label_txt,
+                               font=(FONT, 6, "bold"),
+                               fill=text_color, tags=tag)
+        if len(_children) > 2:
+            hint_y = preview_y + 2 * 17 + 4
+            canvas.create_text(x2 - 14, hint_y, anchor="e",
+                               text=f"+{len(_children) - 2} MORE",
+                               font=(FONT, 6, "bold"), fill=sub_color, tags=tag)
+
+        # Footer hint (no more LIVE STATUS — removido a pedido do usuário)
+        hint_y = y2 - 14
+        canvas.create_line(x1 + 12, hint_y - 4, x2 - 12, hint_y - 4,
+                           fill=BORDER, width=1, tags=tag)
+        canvas.create_text(x1 + 12, hint_y + 1, anchor="w",
+                           text="PRESS  " + key_num + "  /  CLICK",
+                           font=(FONT, 6, "bold"),
+                           fill=(face_color if focused else DIM), tags=tag)
+        canvas.create_text(x2 - 12, hint_y + 1, anchor="e",
+                           text="OPEN ▸",
+                           font=(FONT, 6, "bold"),
+                           fill=(face_color if focused else DIM2), tags=tag)
 
     def _bind_global_nav(self):
         """Bind global navigation keys available on all screens."""
@@ -1961,6 +2393,9 @@ class App(tk.Tk):
     # ─── MENU ────────────────────────────────────────────
     def _menu(self, key):
         # Route to specialized screens
+        if key == "main":
+            self._menu_main_bloomberg()
+            return
         if key in ("markets", "connections", "terminal", "risk", "settings", "alchemy", "data", "macro_brain"):
             {
                 "markets": self._markets,
@@ -1977,6 +2412,22 @@ class App(tk.Tk):
             self._strategies(); return
         if key == "command":
             self._command_center(); return
+        if key == "dash-backtest":
+            # Back-from-metrics: return to crypto dashboard BACKTEST tab.
+            self._crypto_dashboard()
+            try:
+                self._dash_render_tab("backtest")
+            except Exception:
+                pass
+            return
+        if key == "backtest":
+            # Legacy alias — same as dash-backtest for older call sites.
+            self._crypto_dashboard()
+            try:
+                self._dash_render_tab("backtest")
+            except Exception:
+                pass
+            return
 
         self._clr(); self._clear_kb()
         self.h_stat.configure(text="SELECIONAR", fg=AMBER_D)
@@ -2017,7 +2468,7 @@ class App(tk.Tk):
             for i, r in enumerate(fib_sizes):
                 opacity_hex = ["08", "06", "05", "04", "03", "02"][i]
                 fib_canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
-                    start=90 * i, extent=90, outline=f"#ff8c00",
+                    start=90 * i, extent=90, outline=f"#C8C8C8",
                     width=1, style="arc", dash=(2, 4 + i))
 
             # Corner ornaments — golden ratio rectangles
@@ -2304,6 +2755,296 @@ class App(tk.Tk):
         return
 
 
+    # ─── CALIBRATED CONFIG RESOLVER ───────────────────────
+    @staticmethod
+    def _best_calibrated_config(engine_name: str) -> dict:
+        """Resolve the best validated config for an engine.
+
+        Priority:
+          1. BRIEFINGS[name]["best_config"] — battery-validated (strongest signal)
+          2. ENGINE_INTERVALS / ENGINE_BASKETS fallbacks (longrun)
+          3. Generic defaults (360d / default / 1x / plots ON)
+
+        Returns dict with keys {period, basket, leverage, plots}. Period
+        is always the longest validated horizon (180d if briefing says so,
+        else 360d). Basket is the validated one (default vs bluechip etc).
+        """
+        import re
+        # Generic safe baseline
+        out = {"period": "360", "basket": "", "leverage": "", "plots": "s"}
+
+        # Layer 1 — BRIEFINGS best_config
+        try:
+            brief = BRIEFINGS.get(engine_name, {}) or {}
+            bc = brief.get("best_config", {}) or {}
+
+            # Period: parse "180 dias" / "360" / "90 days"
+            per = str(bc.get("Período") or bc.get("Period") or "").lower()
+            m = re.search(r"(\d+)", per)
+            if m:
+                out["period"] = m.group(1)
+
+            # Basket: extract first word ("default", "bluechip", "majors", etc)
+            bsk = str(bc.get("Basket") or bc.get("Cesta") or "").strip().lower()
+            m = re.match(r"([a-z0-9_-]+)", bsk)
+            if m:
+                token = m.group(1)
+                # Map to BASKET option codes
+                _basket_map = {
+                    "default": "", "top12": "2", "defi": "3", "l1": "4",
+                    "layer": "4", "l2": "5", "ai": "6", "meme": "7",
+                    "majors": "8", "bluechip": "9",
+                }
+                out["basket"] = _basket_map.get(token, "")
+        except Exception:
+            pass
+
+        # Layer 2 — fallback to ENGINE_INTERVALS/BASKETS for unknown engines
+        try:
+            from config.params import ENGINE_BASKETS
+            key = engine_name.upper().replace(" ", "")
+            if not out["basket"]:
+                bsk = str(ENGINE_BASKETS.get(key, "default")).lower()
+                _basket_map = {"default": "", "bluechip": "9", "majors": "8"}
+                out["basket"] = _basket_map.get(bsk, "")
+        except Exception:
+            pass
+        return out
+
+    # ─── INLINE LIVE EXEC (from picker RUN chip in LIVE mode) ──────
+    def _exec_live_inline(self, name, script, desc, mode_preset, cfg):
+        """Fire a strategy in live mode (paper/demo/testnet/live) directly
+        from the picker. Routes via engines/live.py for the unified live
+        runner; janestreet uses its own arbitrage script.
+
+        mode_preset ∈ {'paper','demo','testnet','live'}.
+        cfg may carry leverage/basket overrides (basket only relevant for
+        engines that filter their universe). Refuses to dispatch LIVE mode
+        without an explicit confirm dialog — capital safety gate.
+        """
+        if mode_preset == "live":
+            try:
+                ok = messagebox.askyesno(
+                    "LIVE EXECUTION — capital real",
+                    f"Você está prestes a rodar {name} em LIVE mode\n"
+                    f"com capital real. Confirma?",
+                    icon="warning",
+                )
+            except Exception:
+                ok = False
+            if not ok:
+                self.h_stat.configure(text="LIVE cancelado", fg=AMBER_D)
+                return
+
+        # JANESTREET = arbitrage.py uses its own modes (dashboard/paper/demo/live)
+        is_arb = "arbitrage" in (script or "")
+        if is_arb:
+            arb_mode_map = {"paper": "2", "demo": "3", "live": "4", "testnet": "2"}
+            inputs = [arb_mode_map.get(mode_preset, "1")]
+            self._exec(name, script, desc, "live", inputs)
+            return
+
+        # Default: route via engines/live.py with --mode + leverage CLI
+        live_script = "engines/live.py"
+        cli: list[str] = [mode_preset]
+        try:
+            lev = float(str(cfg.get("leverage", "")).replace("x", "").strip()) if cfg else 0
+            if 0.1 <= lev <= 125:
+                cli += ["--leverage", str(lev)]
+        except (ValueError, TypeError):
+            pass
+
+        # Hint + status — let the user know which strategy is being routed
+        self.h_stat.configure(
+            text=f"{name} → {mode_preset.upper()}",
+            fg={"paper": GREEN, "demo": AMBER, "testnet": AMBER_B, "live": RED}[mode_preset],
+        )
+        self._exec(name, live_script, desc, "live", [], cli_args=cli)
+
+    # ─── INLINE BACKTEST EXEC (from picker RUN chip) ──────
+    def _exec_backtest_inline(self, name, script, desc, parent_menu, cfg):
+        """Fire backtest directly from engine_picker RUN chip — no intermediate
+        pages. cfg = {preset, period, basket, leverage, plots}.
+        preset='calibrated' → use ENGINE_INTERVALS/ENGINE_BASKETS defaults for
+        the engine (just pass --days). preset='custom' → honor picker cfg."""
+        preset = (cfg or {}).get("preset", "custom")
+
+        if preset == "calibrated":
+            # CALIBRATED = best validated config per engine (BRIEFINGS) +
+            # ENGINE_INTERVALS / ENGINE_BASKETS for sweet-spot defaults.
+            # Always picks the longest validated period × the basket where
+            # the engine showed the strongest edge.
+            best_cfg = self._best_calibrated_config(name)
+            period   = best_cfg["period"]
+            basket   = best_cfg["basket"]
+            leverage = best_cfg["leverage"]
+            plots    = best_cfg["plots"]
+        else:
+            period   = str(cfg.get("period", "90") or "90")
+            basket   = str(cfg.get("basket", "") or "")
+            leverage = str(cfg.get("leverage", "") or "")
+            plots    = str(cfg.get("plots", "s") or "s")
+
+        # stdin auto-inputs (legacy engines with prompts)
+        inputs = [period, basket]
+        if name == "CITADEL":
+            inputs.append(plots)
+        inputs.append(leverage)
+        inputs.append("")  # enter to start
+
+        # CLI args (modern engines w/ argparse + --no-menu)
+        cli: list[str] = []
+        try:
+            _days = int(period.strip()) if period.strip() else 0
+            if _days >= 7:
+                cli += ["--days", str(_days)]
+        except (ValueError, TypeError):
+            pass
+        _bsk = basket.strip()
+        if _bsk and not _bsk.isdigit():
+            cli += ["--basket", _bsk]
+        elif _bsk.isdigit():
+            try:
+                from config.params import BASKETS
+                _bnames = [k for k in BASKETS if k != "custom"]
+                _idx = int(_bsk) - 1
+                if 0 <= _idx < len(_bnames):
+                    cli += ["--basket", _bnames[_idx]]
+            except Exception:
+                pass
+        try:
+            _lev = float(leverage.replace("x", "").strip()) if leverage.strip() else 0
+            if 0.1 <= _lev <= 125:
+                cli += ["--leverage", str(_lev)]
+        except (ValueError, TypeError):
+            pass
+        cli += ["--no-menu"]
+
+        if getattr(self, "_strategies_picker", None):
+            if self._strategies_spawn_inline_backtest(name, script, cli, inputs):
+                return
+
+        self._exec(name, script, desc, parent_menu, inputs, cli_args=cli)
+
+    def _strategies_progress_target(self, clean: str) -> tuple[float, str]:
+        low = (clean or "").strip().lower()
+        if not low:
+            return 0.0, ""
+        targets = [
+            (("iniciado", "started"), 10.0, "allocating launch package"),
+            (("dados", "fetch", "loading"), 24.0, "downloading candle archives"),
+            (("sentiment", "funding", "open interest", "long/short"), 40.0, "installing sentiment bundles"),
+            (("scan", "scanning"), 58.0, "building route graph and trade cache"),
+            (("total:", "resultados", "wr=", "pnl="), 74.0, "compiling execution manifests"),
+            (("metricas", "metrics", "sharpe", "sortino"), 86.0, "verifying institutional metrics"),
+            (("monte", "walk", "robust", "json"), 94.0, "packing report artifacts"),
+            (("backtest complete", "loading results dashboard"), 100.0, "installation complete"),
+        ]
+        for keys, pct, stage in targets:
+            if any(k in low for k in keys):
+                return pct, stage
+        return 0.0, low[:180]
+
+    def _strategies_spawn_inline_backtest(self, name, script, cli_args, auto_inputs) -> bool:
+        handle = getattr(self, "_strategies_picker", None)
+        if not handle:
+            return False
+        try:
+            from core.proc import spawn, _is_alive
+        except Exception:
+            return False
+
+        proc_key = self._exec_script_to_proc_key(script)
+        if proc_key is None:
+            return False
+
+        slug = canonical_engine_key(SCRIPT_TO_KEY.get(script.replace("\\", "/"), ""))
+        try:
+            handle["set_progress"](slug, 4.0, "preparing backtest runtime", True)
+        except Exception:
+            pass
+
+        info = spawn(proc_key, stdin_lines=auto_inputs or None, cli_args=cli_args or None)
+        if not info:
+            try:
+                handle["set_progress"](slug, 0.0, "engine already running or launch failed", False)
+            except Exception:
+                pass
+            return True
+
+        self._strategies_inline_runs = getattr(self, "_strategies_inline_runs", {})
+        self._strategies_inline_runs[slug] = {
+            "pid": int(info["pid"]),
+            "log_file": info["log_file"],
+            "pct": 8.0,
+            "tail": "background active",
+        }
+        try:
+            handle["set_progress"](slug, 8.0, f"managed pid {info['pid']} | background active", True)
+        except Exception:
+            pass
+
+        def _tail():
+            last = 0
+            pct = 8.0
+            tail = "background active"
+            log_path = Path(info["log_file"])
+            while True:
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(last)
+                        chunk = f.read()
+                        last = f.tell()
+                except OSError:
+                    chunk = ""
+
+                if chunk:
+                    for raw in chunk.splitlines():
+                        clean = raw.strip()
+                        if not clean:
+                            continue
+                        next_pct, stage = self._strategies_progress_target(clean)
+                        if next_pct > 0:
+                            pct = max(pct, next_pct)
+                            tail = stage
+                        else:
+                            pct = min(88.0, pct + 0.2)
+                            tail = clean[:180]
+                        self._strategies_inline_runs[slug]["pct"] = pct
+                        self._strategies_inline_runs[slug]["tail"] = tail
+                        try:
+                            self.after(0, lambda s=slug, p=pct, t=tail: handle["set_progress"](s, p, t, True))
+                        except Exception:
+                            return
+
+                if not _is_alive(int(info["pid"]), expected=info):
+                    try:
+                        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                            f.seek(last)
+                            chunk = f.read()
+                    except OSError:
+                        chunk = ""
+                    if chunk:
+                        for raw in chunk.splitlines():
+                            clean = raw.strip()
+                            if clean:
+                                tail = clean[:180]
+                    self._strategies_inline_runs[slug]["pct"] = 100.0
+                    self._strategies_inline_runs[slug]["tail"] = tail or "backtest complete"
+                    try:
+                        self.after(0, lambda s=slug, t=(tail or "backtest complete"): handle["set_progress"](s, 100.0, t, False))
+                    except Exception:
+                        pass
+                    try:
+                        self.after(1400, lambda: self._try_results("backtest"))
+                    except Exception:
+                        pass
+                    return
+                time.sleep(0.15)
+
+        threading.Thread(target=_tail, daemon=True).start()
+        return True
+
     # ─── BACKTEST CONFIG (clickable inputs) ──────────────
     def _config_backtest(self, name, script, desc, parent_menu):
         self._clr(); self._clear_kb()
@@ -2555,6 +3296,56 @@ class App(tk.Tk):
         back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
         self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
 
+    @staticmethod
+    def _normalize_summary(data: dict) -> dict:
+        """Return a unified `summary` dict regardless of report format.
+
+        CITADEL legacy reports embed metrics under ``data["summary"]``. Modern
+        engines (BRIDGEWATER, JUMP, DESHAW, RENAISSANCE) write them flat at
+        top level with different key names (``n_trades`` vs ``total_trades``,
+        ``roi`` vs ``ret``, etc). This helper merges both into a single dict
+        using the legacy keys so the overview code doesn't need to branch.
+        """
+        s = dict(data.get("summary") or {})
+        # Key aliases: (top-level source, normalized dest)
+        aliases = [
+            ("total_pnl",    "total_pnl"),
+            ("pnl",          "total_pnl"),
+            ("ret",          "ret"),
+            ("roi",          "ret"),
+            ("roi_pct",      "ret"),
+            ("sharpe",       "sharpe"),
+            ("sortino",      "sortino"),
+            ("calmar",       "calmar"),
+            ("win_rate",     "win_rate"),
+            ("total_trades", "total_trades"),
+            ("n_trades",     "total_trades"),
+            ("closed",       "closed"),
+            ("final_equity", "final_equity"),
+            ("max_dd_pct",   "max_dd_pct"),
+            ("max_dd",       "max_dd_pct"),
+        ]
+        for src, dst in aliases:
+            if dst in s and s[dst] not in (None, ""):
+                continue
+            if src in data and data[src] not in (None, ""):
+                s[dst] = data[src]
+        # Derive total_pnl if still missing but we have account+final_equity
+        if s.get("total_pnl") in (None, "") and "final_equity" in data and "account_size" in data:
+            try:
+                s["total_pnl"] = float(data["final_equity"]) - float(data["account_size"])
+            except (TypeError, ValueError):
+                pass
+        # Derive ret if missing but we have total_pnl + account_size
+        if s.get("ret") in (None, "") and s.get("total_pnl") is not None and "account_size" in data:
+            try:
+                acct = float(data["account_size"])
+                if acct > 0:
+                    s["ret"] = float(s["total_pnl"]) / acct * 100
+            except (TypeError, ValueError):
+                pass
+        return s
+
     def _try_results(self, parent, run_id=None):
         try:
             self._show_results(parent, run_id=run_id)
@@ -2734,7 +3525,7 @@ class App(tk.Tk):
     def _results_build_overview(self, parent):
         data = self._results_data
         report = self._results_report
-        s  = data.get("summary", {})
+        s  = self._normalize_summary(data)
         mc = data.get("monte_carlo", {})
         bm = data.get("bear_market", {})
         eq = data.get("equity", [])
@@ -3287,7 +4078,7 @@ class App(tk.Tk):
         target_p = float(trade.get("target", entry_p) or entry_p)
         exit_p   = float(trade.get("exit_p", entry_p) or entry_p)
 
-        ax.axhline(entry_p,  color="#ff8c00", linewidth=1.2)
+        ax.axhline(entry_p,  color="#C8C8C8", linewidth=1.2)
         ax.axhline(stop_p,   color="#e85d5d", linewidth=1.0, linestyle="--")
         ax.axhline(target_p, color="#26d47c", linewidth=1.0, linestyle="--")
         ax.axhline(exit_p,   color="#ffffff", linewidth=0.8, linestyle=":", alpha=0.7)
@@ -3303,7 +4094,7 @@ class App(tk.Tk):
             ax.annotate("",
                         xy=(local_entry, entry_p),
                         xytext=(local_entry, entry_p + dy),
-                        arrowprops=dict(arrowstyle="->", color="#ff8c00", lw=2))
+                        arrowprops=dict(arrowstyle="->", color="#C8C8C8", lw=2))
         except Exception:
             pass
 
@@ -3315,7 +4106,7 @@ class App(tk.Tk):
         # Right-side labels
         x_lbl = n + 0.5
         ax.text(x_lbl, entry_p,  f"E {entry_p:.4f}", fontsize=7,
-                color="#ff8c00", va="center", fontfamily="monospace")
+                color="#C8C8C8", va="center", fontfamily="monospace")
         ax.text(x_lbl, stop_p,   f"S {stop_p:.4f}",  fontsize=7,
                 color="#e85d5d", va="center", fontfamily="monospace")
         ax.text(x_lbl, target_p, f"T {target_p:.4f}", fontsize=7,
@@ -3335,7 +4126,7 @@ class App(tk.Tk):
         score  = float(trade.get("score", 0) or 0)
         fig.suptitle(
             f"{sym}  {side}  {result}  ${pnl:+,.2f}  Ω={score:.3f}",
-            fontsize=10, color="#ff8c00",
+            fontsize=10, color="#C8C8C8",
             fontfamily="monospace", fontweight="bold")
 
         fig.subplots_adjust(left=0.09, right=0.88, top=0.90, bottom=0.12)
@@ -3575,48 +4366,102 @@ class App(tk.Tk):
                 if proc_key is None:
                     self._p(f"FAILED: background mapping not found for {script}\n", "r")
                     return
-                from core.proc import spawn
-                info = spawn(proc_key, stdin_lines=auto_inputs or None,
-                             cli_args=cli_args or None)
-                if not info:
-                    self._p(f"FAILED: {name} already running in background or could not start\n", "r")
-                    self._p("Open TERMINAL > ENGINE LOGS to inspect existing managed runs.\n", "d")
-                    return
-                self._exec_managed_info = info
-                self.h_stat.configure(text="BACKGROUND", fg=GREEN)
-                self._p(f"  managed pid {info['pid']}  ·  background active\n", "g")
-                self._p(f"  log {info['log_file']}\n", "d")
-                threading.Thread(
-                    target=self._read_managed_log,
-                    args=(Path(info["log_file"]), info),
-                    daemon=True,
-                ).start()
-                self._poll()
+                # Spawn off the UI thread — Popen on Windows takes 100-500ms
+                # to create a Python subprocess; doing it inline freezes the
+                # window. Worker spawns then marshals back to main via after().
+                self.h_stat.configure(text="STARTING…", fg=AMBER)
+                self._p(f"  spawning {name} in background…\n", "d")
+
+                def _spawn_worker(_proc_key=proc_key,
+                                  _inputs=auto_inputs,
+                                  _cli=cli_args,
+                                  _name=name):
+                    try:
+                        from core.proc import spawn as _spawn
+                        info = _spawn(_proc_key,
+                                      stdin_lines=_inputs or None,
+                                      cli_args=_cli or None)
+                    except Exception as exc:
+                        info = None
+                        err = f"{type(exc).__name__}: {exc}"
+                    else:
+                        err = None
+
+                    def _apply(_info=info, _err=err, _name2=_name):
+                        if _info is None:
+                            self.h_stat.configure(text="FAILED", fg=RED)
+                            if _err:
+                                self._p(f"FAILED: {_err}\n", "r")
+                            else:
+                                self._p(f"FAILED: {_name2} already running or could not start\n", "r")
+                                self._p("Open TERMINAL > ENGINE LOGS to inspect existing managed runs.\n", "d")
+                            return
+                        self._exec_managed_info = _info
+                        self.h_stat.configure(text="BACKGROUND", fg=GREEN)
+                        self._p(f"  managed pid {_info['pid']}  ·  background active\n", "g")
+                        self._p(f"  log {_info['log_file']}\n", "d")
+                        threading.Thread(
+                            target=self._read_managed_log,
+                            args=(Path(_info["log_file"]), _info),
+                            daemon=True,
+                        ).start()
+                        self._poll()
+                    try:
+                        self.after(0, _apply)
+                    except (RuntimeError, tk.TclError):
+                        pass
+
+                threading.Thread(target=_spawn_worker, daemon=True).start()
                 return
 
             _cmd = [sys.executable, "-X", "utf8", "-u", str(path)]
             if cli_args:
                 _cmd.extend(cli_args)
-            self.proc = subprocess.Popen(
-                _cmd, cwd=str(ROOT),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE,
-                text=True, bufsize=1, encoding="utf-8", errors="replace",
-                startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW, env=env)
-            threading.Thread(target=self._read, daemon=True).start()
-            self._poll()
 
-            # Auto-send configured inputs (from clickable config)
-            if auto_inputs:
-                def _auto():
-                    time.sleep(0.8)
-                    for val in auto_inputs:
-                        if self.proc and self.proc.poll() is None and self.proc.stdin:
-                            try:
-                                self.proc.stdin.write(val + "\n")
-                                self.proc.stdin.flush()
-                                time.sleep(0.4)
-                            except: break
-                threading.Thread(target=_auto, daemon=True).start()
+            # Same UI-freeze concern as background spawn — Popen blocks the
+            # main loop. Move the spawn off the UI thread.
+            self.h_stat.configure(text="STARTING…", fg=AMBER)
+
+            def _fg_spawn_worker(_cmd_=_cmd, _env=env, _si=si,
+                                 _inputs=auto_inputs):
+                try:
+                    proc = subprocess.Popen(
+                        _cmd_, cwd=str(ROOT),
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        stdin=subprocess.PIPE,
+                        text=True, bufsize=1, encoding="utf-8", errors="replace",
+                        startupinfo=_si, creationflags=subprocess.CREATE_NO_WINDOW,
+                        env=_env)
+                except Exception as exc:
+                    err_msg = f"{type(exc).__name__}: {exc}"
+                    def _fail(msg=err_msg):
+                        self.h_stat.configure(text="FAILED", fg=RED)
+                        self._p(f"FAILED: {msg}\n", "r")
+                    try: self.after(0, _fail)
+                    except Exception: pass
+                    return
+
+                def _attach(p=proc, _ins=_inputs):
+                    self.proc = p
+                    self.h_stat.configure(text="RODANDO", fg=GREEN)
+                    threading.Thread(target=self._read, daemon=True).start()
+                    self._poll()
+                    if _ins:
+                        def _auto(p=p, ins=_ins):
+                            time.sleep(0.8)
+                            for val in ins:
+                                if p and p.poll() is None and p.stdin:
+                                    try:
+                                        p.stdin.write(val + "\n")
+                                        p.stdin.flush()
+                                        time.sleep(0.4)
+                                    except Exception:
+                                        break
+                        threading.Thread(target=_auto, daemon=True).start()
+                try: self.after(0, _attach)
+                except Exception: pass
+
+            threading.Thread(target=_fg_spawn_worker, daemon=True).start()
 
         except Exception as e:
             self._exec_progress_target = self._exec_progress_value
@@ -3980,6 +4825,41 @@ class App(tk.Tk):
             self._exec_managed_info = None
 
     # ─── MARKETS (Layer 2) ───────────────────────────────
+    # ─── MARKET ROUTES — direct entries from MARKETS tile ─────────
+    def _market_route(self, market_key: str) -> None:
+        """Activate `market_key` and route to its dashboard. Stubs (not yet
+        wired) show COMING SOON in h_stat instead of crashing."""
+        info = MARKETS.get(market_key, {})
+        label = info.get("label", market_key.upper())
+        if not info.get("available"):
+            self.h_stat.configure(text=f"{label} · COMING SOON", fg=AMBER_D)
+            try:
+                messagebox.showinfo(
+                    f"{label}",
+                    f"{label} ainda não está disponível.\n\n"
+                    f"Pendente: integração com {info.get('exchanges', [])}.",
+                )
+            except Exception:
+                pass
+            return
+        try:
+            _conn.active_market = market_key
+        except Exception:
+            pass
+        # Crypto futures has its own dashboard; others fall back to _markets
+        if market_key == "crypto_futures":
+            self._crypto_dashboard()
+        else:
+            self._markets()
+
+    def _market_crypto_futures(self): self._market_route("crypto_futures")
+    def _market_crypto_spot(self):    self._market_route("crypto_spot")
+    def _market_forex(self):          self._market_route("forex")
+    def _market_equities(self):       self._market_route("equities")
+    def _market_commodities(self):    self._market_route("commodities")
+    def _market_indices(self):        self._market_route("indices")
+    def _market_onchain(self):        self._market_route("onchain")
+
     def _markets(self):
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> MARKETS"); self.h_stat.configure(text="SELECT", fg=AMBER_D)
@@ -3993,35 +4873,36 @@ class App(tk.Tk):
             "MARKETS",
             "Select active market routing and environment context",
         )
+        panel = self._ui_panel_frame(
+            body,
+            "MARKET ROUTER",
+            "Routing contexts, venue clusters and dashboard entry points",
+        )
+
+        summary = tk.Frame(panel, bg=BG)
+        summary.pack(fill="x", padx=10, pady=(0, 8))
+        current_label = MARKETS.get(_conn.active_market, {}).get("label", "?")
+        tk.Label(summary, text=f"ACTIVE  {current_label}", font=(FONT, 8, "bold"),
+                 fg=AMBER_D, bg=BG).pack(side="left")
+        tk.Label(summary, text=f"  ROUTES  {len(MARKETS)}", font=(FONT, 8),
+                 fg=DIM, bg=BG).pack(side="left", padx=(12, 0))
+        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 8))
 
         for i, (mk, info) in enumerate(MARKETS.items()):
             num = i + 1
             is_active = mk == _conn.active_market
             avail = info["available"]
-            row = tk.Frame(body, bg=BG, cursor="hand2")
-            row.pack(fill="x", pady=1)
-            tk.Label(
-                row, text=f" {num} ", font=(FONT, 9, "bold"),
-                fg=BG, bg=AMBER if avail else DIM2, width=3
-            ).pack(side="left")
-            nl = tk.Label(
-                row, text=f"  {info['label']}", font=(FONT, 10, "bold"),
-                fg=AMBER if is_active else (WHITE if avail else DIM),
-                bg=BG3, anchor="w", padx=6, pady=4, width=18
+            row, nl, dl = self._ui_action_row(
+                panel,
+                str(num),
+                info["label"],
+                info["desc"],
+                available=avail,
+                tag=("ACTIVE" if is_active else ("COMING SOON" if not avail else "OPEN")),
+                tag_fg=(BG if is_active else (DIM if not avail else BG)),
+                tag_bg=(GREEN if is_active else (BG2 if not avail else AMBER_D)),
+                title_width=18,
             )
-            nl.pack(side="left")
-            dl = tk.Label(
-                row, text=info["desc"], font=(FONT, 8), fg=DIM,
-                bg=BG3, anchor="w", padx=6, pady=4
-            )
-            dl.pack(side="left", fill="x", expand=True)
-
-            if is_active:
-                tk.Label(row, text=" ACTIVE ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=GREEN, padx=4).pack(side="right", padx=4)
-            elif not avail:
-                tk.Label(row, text=" COMING SOON ", font=(FONT, 7),
-                         fg=DIM, bg=BG2, padx=4).pack(side="right", padx=4)
 
             if avail:
                 def sel_market(event=None, k=mk):
@@ -4042,12 +4923,8 @@ class App(tk.Tk):
                     w.bind("<Button-1>", show_coming)
                 self._kb(f"<Key-{num}>", show_coming)
 
-        tk.Frame(body, bg=BG, height=12).pack()
-        current_label = MARKETS.get(_conn.active_market, {}).get("label", "?")
-        tk.Label(body, text=f"Current market: {current_label}",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(anchor="w")
-        tk.Label(body, text="[enter] keep current    [0] return",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=(4, 0))
+        self._ui_note(panel, "[enter] keep current    [0] return", fg=DIM)
+        self._ui_back_row(panel, lambda: self._menu("main"))
 
     # ─── CONNECTIONS (Layer 2) ────────────────────────────
     def _connections(self):
@@ -4104,7 +4981,14 @@ class App(tk.Tk):
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
         sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+        def _wheel(event):
+            try:
+                canvas.yview_scroll(-1 * (event.delta // 120), "units")
+            except Exception:
+                pass
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        canvas.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         for section_name, items in sections:
             sec = self._ui_section(sf, section_name)
@@ -4445,10 +5329,13 @@ class App(tk.Tk):
                 stats = scanner.stats()
                 arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=5.0)
                 arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=5.0)
-                # snapshot top signed APR across all
                 top = opps[0] if opps else None
-                self.after(0, lambda: self._arb_hub_telem_update(
-                    stats, top, arb_dd, arb_cd))
+                try:
+                    self.after(0, lambda: self._arb_hub_telem_update(
+                        stats, top, arb_dd, arb_cd))
+                except (RuntimeError, tk.TclError):
+                    # Tk root gone (test teardown / app shutdown) — drop update
+                    pass
             except Exception as e:
                 def _fail(err=e):
                     rs = getattr(self, "_arb_hub_row_widgets", None)
@@ -4458,7 +5345,10 @@ class App(tk.Tk):
                                 text=f"scan failed: {str(err)[:40]}", fg=RED)
                         except Exception:
                             pass
-                self.after(0, _fail)
+                try:
+                    self.after(0, _fail)
+                except (RuntimeError, tk.TclError):
+                    pass
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -6014,57 +6904,350 @@ class App(tk.Tk):
             pass
 
     # ─── STRATEGIES (Layer 2) ─────────────────────────────
-    def _strategies(self):
+    def _strategies(self, filter_group: str | None = None):
+        """Engine picker. filter_group in {'BACKTEST','LIVE','TOOLS',None}.
+        None shows all groups; a value restricts the picker to that one."""
         self._clr(); self._clear_kb()
         market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
-        self.h_path.configure(text=f"> STRATEGIES"); self.h_stat.configure(text=market_label, fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  1-4 tabs  |  item key to open  |  H hub")
+
+        _titles = {
+            "BACKTEST": ("BACKTEST", "research · walkforward · Monte Carlo", "#00ff80"),
+            "LIVE":     ("ENGINES LIVE", "paper · demo · testnet · safety gates", "#ff8c00"),
+            "TOOLS":    ("TOOLS", "utilities · research labs", AMBER_D),
+            None:       ("STRATEGIES", "all engines across groups", AMBER),
+        }
+        title, subtitle, title_hue = _titles.get(filter_group, _titles[None])
+        self.h_path.configure(text=f"> {title}")
+        self.h_stat.configure(text=market_label, fg=AMBER_D)
+        self.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
 
-        _outer, body = self._ui_page_shell(
-            "STRATEGIES",
-            f"Execution and research engines routed for {market_label}",
-        )
-        panel = self._ui_panel_frame(body, "ENGINE ROUTER", "Backtest, testnet, live and meta-engine entry points")
-        summary = tk.Frame(panel, bg=BG)
-        summary.pack(fill="x", pady=(0, 8))
-        tk.Label(summary, text=f"MARKET  {market_label}", font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG, anchor="w").pack(side="left")
-        tk.Label(summary, text="LANES 4   ROUTES 4   ENGINES 11",
-                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(side="left", padx=(16, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
+        # Compact layout: ONE-LINE strip (rail · title · pills · counts) + picker.
+        # Subtitle e MARKET chip removidos — h_path/h_stat já mostram contexto.
+        root = tk.Frame(self.main, bg=BG)
+        root.pack(fill="both", expand=True, padx=14, pady=10)
 
-        live_items = SUB_MENUS.get("live", [])
-        self._strategies_sections = [
-            ("BACKTEST", SUB_MENUS.get("backtest", []), "backtest"),
-            ("TESTNET", [item for item in live_items if item[0] in {"PAPER", "DEMO", "TESTNET"}], "live"),
-            ("LIVE", [item for item in live_items if item[0] in {"LIVE", "JANE STREET"}], "live"),
-            ("META", SUB_MENUS.get("tools", []), "tools"),
+        # ── Single header strip: rail · title · pills · counts ──
+        strip = tk.Frame(root, bg=BG)
+        strip.pack(fill="x")
+        tk.Frame(strip, bg=title_hue, width=3, height=22).pack(
+            side="left", padx=(0, 8))
+        tk.Label(strip, text=title, font=(FONT, 12, "bold"),
+                 fg=title_hue, bg=BG).pack(side="left", padx=(0, 14))
+
+        # Segmented pills inline with title
+        segments = [
+            ("BACKTEST", "BACKTEST", "#00ff80"),
+            ("ENGINES",  "LIVE",     "#ff8c00"),
+            ("TOOLS",    "TOOLS",    AMBER_D),
+            ("ALL",      None,       AMBER),
         ]
-        self._strategies_tab_btns = {}
+        for seg_label, grp, hue in segments:
+            active = grp == filter_group
+            fg = "#000000" if active else hue
+            bg = hue if active else BG3
+            b = tk.Label(strip, text=f" {seg_label} ",
+                         font=(FONT, 7, "bold"),
+                         fg=fg, bg=bg, padx=8, pady=3,
+                         cursor="hand2")
+            b.pack(side="left", padx=(0, 3))
+            if not active:
+                b.bind("<Button-1>",
+                       lambda _e, _g=grp: self._strategies(filter_group=_g))
+                b.bind("<Enter>",
+                       lambda _e, _b=b, _h=hue: _b.configure(bg=_h, fg="#000000"))
+                b.bind("<Leave>",
+                       lambda _e, _b=b, _h=hue: _b.configure(bg=BG3, fg=_h))
 
-        strip = tk.Frame(panel, bg=BG, height=30)
-        strip.pack(fill="x", pady=(0, 6))
-        strip.pack_propagate(False)
-        for idx, (tab_id, _items, _parent_key) in enumerate(self._strategies_sections, start=1):
-            btn = tk.Label(
-                strip, text=f" {idx} {tab_id} ",
-                font=(FONT, 9, "bold"),
-                fg=DIM, bg=BG, padx=10, pady=5, cursor="hand2",
-            )
-            btn.pack(side="left", padx=(0, 10), pady=1)
-            btn.bind("<Button-1>", lambda e, t=tab_id: self._strategies_render_tab(t))
-            self._strategies_tab_btns[tab_id] = btn
-            self._kb(f"<Key-{idx}>", lambda t=tab_id: self._strategies_render_tab(t))
+        # Right-side counts pill (populated after tracks load)
+        counts_lbl = tk.Label(strip, text="", font=(FONT, 7, "bold"),
+                              fg=DIM, bg=BG, padx=6)
+        counts_lbl.pack(side="right")
 
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
-        self._strategies_inner = tk.Frame(panel, bg=BG)
-        self._strategies_inner.pack(fill="both", expand=True)
-        self._strategies_render_tab("BACKTEST")
+        tk.Frame(root, bg=title_hue, height=1).pack(fill="x", pady=(8, 8))
 
-        self._ui_back_row(panel, lambda: self._menu("main"))
+        # Picker host — takes the rest of the screen
+        picker_host = tk.Frame(root, bg=BG)
+        picker_host.pack(fill="both", expand=True)
+
+        # expose counts label so the later block can fill it in
+        self._strategies_counts_lbl = counts_lbl
+        # kept for compat with old code further down that expects `panel`
+        panel = root
+
+        try:
+            from config.engines import ENGINES
+            from core import engine_picker as ep
+            from core.proc import list_procs, stop_proc
+        except Exception as e:
+            tk.Label(picker_host, text=f"picker unavailable: {e}",
+                     font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
+            self._ui_back_row(panel, lambda: self._menu("main"))
+            return
+
+        _group_parent = {"BACKTEST": "backtest", "LIVE": "live", "TOOLS": "tools"}
+        _proc_to_slug = {
+            "backtest": "citadel",
+            "mercurio": "jump",
+            "thoth": "bridgewater",
+            "newton": "deshaw",
+            "multi": "millennium",
+            "prometeu": "twosigma",
+            "renaissance": "renaissance",
+            "live": "live",
+            "arb": "janestreet",
+            "darwin": "aqr",
+            "chronos": "winton",
+        }
+        running_map = {}
+        try:
+            for proc in list_procs():
+                if proc.get("status") != "running" or not proc.get("alive"):
+                    continue
+                slug = _proc_to_slug.get(proc.get("engine"))
+                if slug:
+                    running_map[slug] = proc
+        except Exception:
+            running_map = {}
+
+        def _run_for(slug, meta):
+            name = meta.get("display", slug.upper())
+            script = meta.get("script", "")
+            desc = meta.get("desc", "")
+            group = ep.DEFAULT_GROUPS.get(slug, "BACKTEST")
+            parent_key = _group_parent.get(group, "backtest")
+            is_live_view = filter_group == "LIVE"
+
+            def _run(cfg=None,
+                     n=name, s=script, d=desc, k=parent_key,
+                     live=is_live_view):
+                preset = (cfg or {}).get("preset", "custom")
+                # LIVE view — RUN chip produces preset in {paper,demo,testnet,live}
+                if live and preset in ("paper", "demo", "testnet", "live"):
+                    self._exec_live_inline(n, s, d, preset, cfg)
+                    return
+                # BACKTEST inline
+                if k == "backtest" and cfg:
+                    self._exec_backtest_inline(n, s, d, k, cfg)
+                    return
+                # Fallback — brief screen
+                self._brief(n, s, d, k)
+
+            return _run
+
+        def _stop_for(slug, _meta):
+            def _stop():
+                proc = running_map.get(slug)
+                inline = getattr(self, "_strategies_inline_runs", {}).get(slug)
+                try:
+                    if proc:
+                        stop_proc(int(proc["pid"]), expected=proc)
+                    elif inline:
+                        stop_proc(int(inline["pid"]))
+                except Exception:
+                    return
+                try:
+                    handle = getattr(self, "_strategies_picker", None)
+                    if handle:
+                        handle["set_progress"](slug, 0.0, "stopped by operator", False)
+                except Exception:
+                    pass
+            return _stop
+
+        def _brief_for(_slug, meta):
+            name = meta.get("display", _slug.upper())
+            return BRIEFINGS.get(name)
+
+        tracks = ep.build_tracks_from_registry(
+            ENGINES, on_run_for=_run_for, on_stop_for=_stop_for, brief_for=_brief_for,
+        )
+        for t in tracks:
+            if t.slug in running_map:
+                t.status = "running"
+        if filter_group == "LIVE":
+            # LIVE view shows every strategy that could run live (all
+            # backtest engines + dedicated live runner + janestreet), with
+            # a mode selector (PAPER/DEMO/TESTNET/LIVE) in the RUN chip.
+            # DEFAULT_GROUPS only has {live, janestreet} in LIVE — too narrow.
+            _live_slugs = {"citadel", "renaissance", "bridgewater", "jump",
+                           "deshaw", "live", "janestreet"}
+            tracks = [t for t in tracks if t.slug in _live_slugs]
+            for t in tracks:
+                t.group = "LIVE"
+        elif filter_group:
+            tracks = [t for t in tracks if t.group == filter_group]
+
+        # Counts pill — only RUNNING is meaningful, rest is noise
+        running_n = sum(1 for t in tracks if t.status == "running")
+        counts_txt = f"{len(tracks)} ENGINES" + (f"  ·  {running_n} RUNNING" if running_n else "")
+        try:
+            self._strategies_counts_lbl.configure(text=counts_txt, fg=AMBER_D)
+        except Exception:
+            pass
+
+        # ENGINES LIVE — "NOW PLAYING" strip above the picker. Each running
+        # engine is a clickable pill; clicking focuses it in the iPod list +
+        # opens the LOG chip so the user lands on the live tail.
+        if filter_group == "LIVE" and running_map:
+            self._engines_now_playing(picker_host, tracks, running_map)
+
+        picker_mode = "live" if filter_group == "LIVE" else "backtest"
+        handle = ep.render(picker_host, tracks, mode=picker_mode)
+        self._strategies_picker = handle
+
+        # Hydrate metrics in background so render is instant. The DB query
+        # is fast (<20ms) but doing it on the main thread before render
+        # makes the menu feel "travado" on slower disks/OneDrive sync.
+        import threading as _th
+        _th.Thread(
+            target=self._strategies_hydrate_metrics,
+            args=(tracks, handle),
+            daemon=True,
+        ).start()
+        for slug, proc in running_map.items():
+            try:
+                handle["set_progress"](slug, 6.0, f"managed pid {proc.get('pid')} | already running", True)
+            except Exception:
+                pass
+
+        self._kb("<Down>",   lambda: handle["delta"](+1))
+        self._kb("<Up>",     lambda: handle["delta"](-1))
+        self._kb("<Return>", lambda: handle["run_current"]())
+
+    def _engines_now_playing(self, host, tracks, running_map):
+        """NOW PLAYING strip — running live engines as clickable pills above
+        the picker. Clicking a pill: focuses that track + opens the LOG chip
+        on the right panel so the user lands on the live tail (iPod feel).
+        """
+        from datetime import datetime as _dt
+        bar = tk.Frame(host, bg=BG2,
+                       highlightbackground=BORDER, highlightthickness=1)
+        bar.pack(fill="x", pady=(0, 6))
+        tk.Label(bar, text="  NOW PLAYING ", font=(FONT, 7, "bold"),
+                 fg=BG, bg=GREEN, padx=6, pady=2).pack(side="left", padx=(4, 8), pady=4)
+
+        slug_to_idx = {t.slug: i for i, t in enumerate(tracks)}
+        for slug, proc in running_map.items():
+            idx = slug_to_idx.get(slug)
+            if idx is None:
+                continue
+            name = tracks[idx].name
+            mode = (proc.get("engine") or "").upper()
+            # Uptime — derive from started timestamp (ISO)
+            up_lbl = "—"
+            try:
+                started = proc.get("started")
+                if started:
+                    t0 = _dt.fromisoformat(started)
+                    secs = (_dt.now() - t0).total_seconds()
+                    h, rem = divmod(int(secs), 3600)
+                    m, _ = divmod(rem, 60)
+                    up_lbl = f"{h}h{m:02d}m" if h else f"{m}m"
+            except Exception:
+                pass
+
+            pill = tk.Frame(bar, bg=BG3,
+                            highlightbackground=GREEN, highlightthickness=1,
+                            cursor="hand2")
+            pill.pack(side="left", padx=2, pady=4)
+            tk.Label(pill, text="●", font=(FONT, 9, "bold"),
+                     fg=GREEN, bg=BG3, padx=4).pack(side="left")
+            tk.Label(pill, text=name, font=(FONT, 8, "bold"),
+                     fg=WHITE, bg=BG3).pack(side="left", padx=(0, 4))
+            tk.Label(pill, text=f" {up_lbl} ", font=(FONT, 7),
+                     fg=DIM, bg=BG3).pack(side="left")
+
+            def _focus(_e=None, _i=idx):
+                handle = getattr(self, "_strategies_picker", None)
+                if not handle:
+                    return
+                try:
+                    handle["select_index"](_i)
+                except Exception:
+                    pass
+                # Best-effort: open RUN chip (where progress + tail show)
+                try:
+                    cur = tracks[_i]
+                    handle["set_progress"](cur.slug, 100.0, "▶ live tail", True)
+                except Exception:
+                    pass
+            for w in (pill,) + tuple(pill.winfo_children()):
+                w.bind("<Button-1>", _focus)
+
+    def _strategies_hydrate_metrics(self, tracks, picker_handle=None) -> None:
+        """Populate track metrics from the DB. Runs in a background thread
+        so the picker renders immediately — metrics fill in shortly after."""
+        try:
+            import sqlite3
+            import threading
+            from pathlib import Path as _P
+            db = _P("data/aurum.db")
+            if not db.exists():
+                return
+            # Map slug → engine key in the runs table
+            slug_to_engine = {
+                "citadel":     "citadel",
+                "renaissance": "renaissance",
+                "jump":        "jump",
+                "bridgewater": "bridgewater",
+                "deshaw":      "deshaw",
+                "millennium":  "millennium",
+                "twosigma":    "twosigma",
+                "janestreet":  "janestreet",
+                "aqr":         "aqr",
+            }
+            conn = sqlite3.connect(str(db))
+            try:
+                # Latest row per engine, ordered by run_id DESC (timestamp-based)
+                rows = conn.execute(
+                    """
+                    SELECT engine, sharpe, sortino, max_dd, win_rate, roi, n_trades
+                    FROM runs r
+                    WHERE run_id = (
+                      SELECT run_id FROM runs r2
+                      WHERE r2.engine = r.engine
+                      ORDER BY run_id DESC LIMIT 1
+                    )
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+            by_engine = {r[0]: r for r in rows}
+            for t in tracks:
+                eng = slug_to_engine.get(t.slug)
+                if not eng:
+                    continue
+                r = by_engine.get(eng)
+                if not r:
+                    continue
+                _, sh, so, dd, wr, roi, nt = r
+                try:
+                    t.sharpe = float(sh) if sh is not None else None
+                    t.sortino = float(so) if so is not None else None
+                    t.max_dd = (float(dd) / 100.0) if dd is not None else None
+                    t.win_rate = (float(wr) / 100.0) if wr is not None else None
+                except (TypeError, ValueError):
+                    pass
+            # If a picker handle was passed, schedule a refresh on the UI
+            # thread so the OVERVIEW chip pulls in the freshly hydrated
+            # numbers without the user clicking anything.
+            if picker_handle is not None:
+                try:
+                    self.after(0, picker_handle.get("refresh", lambda: None))
+                except Exception:
+                    pass
+        except Exception:
+            return
+
+    def _strategies_backtest(self):
+        """Backtest-only entry point (research, no real money)."""
+        self._strategies(filter_group="BACKTEST")
+
+    def _strategies_live(self):
+        """Live/demo/testnet entry point — real execution paths with safety gates."""
+        self._strategies(filter_group="LIVE")
 
     def _strategies_render_tab(self, tab):
         if not hasattr(self, "_strategies_inner") or self._strategies_inner is None:
@@ -6588,13 +7771,12 @@ class App(tk.Tk):
         self._kb("<Escape>", self._dash_exit_to_markets)
         self._bind_global_nav()
         self._kb("<Key-r>", self._dash_force_refresh)  # override global R
-        # Keys 1-6 switch tabs
+        # Keys 1-5 switch tabs (MARKET removido — quotes ficam no HOME/QUOTE BOARD)
         self._kb("<Key-1>", lambda: self._dash_render_tab("home"))
-        self._kb("<Key-2>", lambda: self._dash_render_tab("market"))
-        self._kb("<Key-3>", lambda: self._dash_render_tab("portfolio"))
-        self._kb("<Key-4>", lambda: self._dash_render_tab("trades"))
-        self._kb("<Key-5>", lambda: self._dash_render_tab("backtest"))
-        self._kb("<Key-6>", lambda: self._dash_render_tab("cockpit"))
+        self._kb("<Key-2>", lambda: self._dash_render_tab("portfolio"))
+        self._kb("<Key-3>", lambda: self._dash_render_tab("trades"))
+        self._kb("<Key-4>", lambda: self._dash_render_tab("backtest"))
+        self._kb("<Key-5>", lambda: self._dash_render_tab("cockpit"))
 
         # Layout: sidebar + separator + main column (tab strip + body inner)
         root = tk.Frame(self.main, bg=BG); root.pack(fill="both", expand=True)
@@ -7100,11 +8282,10 @@ class App(tk.Tk):
 
         tabs = [
             ("home",      "HOME",      "1"),
-            ("market",    "MARKET",    "2"),
-            ("portfolio", "PORTFOLIO", "3"),
-            ("trades",    "TRADES",    "4"),
-            ("backtest",  "BACKTEST",  "5"),
-            ("cockpit",   "COCKPIT",   "6"),
+            ("portfolio", "PORTFOLIO", "2"),
+            ("trades",    "TRADES",    "3"),
+            ("backtest",  "BACKTEST",  "4"),
+            ("cockpit",   "COCKPIT",   "5"),
         ]
         self._dash_tab_btns = {}
         for tab_id, label, key in tabs:
@@ -7161,10 +8342,6 @@ class App(tk.Tk):
         if tab == "home":
             self._dash_build_home_tab(self._dash_inner)
             self._dash_home_fetch_async()
-        elif tab == "market":
-            self._dash_build_market_tab(self._dash_inner)
-            # Kick off background fetch — apply() schedules the next refresh.
-            self._dash_fetch_async()
         elif tab == "portfolio":
             self._dash_build_portfolio_tab(self._dash_inner)
             self._dash_portfolio_fetch_async()
@@ -8276,11 +9453,32 @@ class App(tk.Tk):
             return str(ts_raw)[:16].replace("T", " ")
 
     def _bt_read_json(self, path: Path) -> dict:
+        """Read a JSON file, cached by (path, mtime).
+
+        The backtest tab rebuilds its list on every switch and each row
+        needs its summary.json + config.json parsed — 70+ runs × 2 files ×
+        multi-ms parse per file adds visible lag. mtime-keyed cache means
+        we only pay the parse cost once until the file actually changes on
+        disk (e.g., after a new run completes).
+        """
+        cache = getattr(self, "_bt_json_cache", None)
+        if cache is None:
+            cache = self._bt_json_cache = {}
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return {}
+        key = str(path)
+        entry = cache.get(key)
+        if entry is not None and entry[0] == mtime:
+            return entry[1]
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError, TypeError):
             return {}
+        result = data if isinstance(data, dict) else {}
+        cache[key] = (mtime, result)
+        return result
 
     def _bt_legacy_engine_dirs(self) -> list[Path]:
         # Engine-specific run dirs use institutional names (post-rename
@@ -8949,10 +10147,21 @@ class App(tk.Tk):
 
     # ── COCKPIT TAB (VPS remote control over SSH) ─────────
     def _dash_backtest_metrics(self, run_id: str):
-        """Open the internal metrics/results view for a specific run."""
+        """Open the internal metrics/results view for a specific run.
+
+        Parent=\"dash-backtest\" so ESC/back returns to the crypto dashboard
+        backtest tab instead of falling through to the generic menu router.
+        """
         try:
-            self._show_results("backtest", run_id=run_id)
-        except Exception:
+            self._show_results("dash-backtest", run_id=run_id)
+        except Exception as exc:
+            try:
+                messagebox.showerror(
+                    "METRICS failed",
+                    f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
             self.h_stat.configure(text="METRICS FAILED", fg=RED)
             self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
 
@@ -9039,7 +10248,7 @@ class App(tk.Tk):
             btn.pack(side="left", padx=(0, 8))
             btn.bind("<Button-1>", lambda e, c=cmd: c())
             btn.bind("<Enter>", lambda e, b=btn, c=color:
-                     b.configure(bg=AMBER_B if c != AMBER_B else "#ffd166"))
+                     b.configure(bg=AMBER_B if c != AMBER_B else "#FFFFFF"))
             btn.bind("<Leave>", lambda e, b=btn, c=color: b.configure(bg=c))
             if label == "STREAM LOGS":
                 self._dash_widgets[("cp_stream_btn",)] = btn

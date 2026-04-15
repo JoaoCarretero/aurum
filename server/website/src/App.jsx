@@ -5,13 +5,14 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 // DESIGN TOKENS
 // ═══════════════════════════════════════════════════════════
 const C = {
-  bg:"#08090a", bg2:"#0e1011", bg3:"#141617",
-  brd:"rgba(255,255,255,0.06)", brd2:"rgba(255,255,255,0.10)",
-  t:"#f0ede6", t2:"rgba(255,255,255,0.50)", t3:"rgba(255,255,255,0.28)",
-  gold:"#c9a84c", gold2:"#e8cc5a", goldBg:"rgba(201,168,76,0.06)", goldBrd:"rgba(201,168,76,0.15)",
-  g:"#34d399", gBg:"rgba(52,211,153,0.08)",
-  r:"#f87171", rBg:"rgba(248,113,113,0.08)",
+  bg:"#080808", bg2:"#101010", bg3:"#181818",
+  brd:"rgba(255,255,255,0.08)", brd2:"rgba(255,255,255,0.16)",
+  t:"#E6E6E6", t2:"#A0A0A0", t3:"#707070",
+  gold:"#C8C8C8", gold2:"#F0F0F0", goldBg:"rgba(200,200,200,0.08)", goldBrd:"rgba(255,255,255,0.16)",
+  g:"#00D26A", gBg:"rgba(0,210,106,0.12)",
+  r:"#FF4D4F", rBg:"rgba(255,77,79,0.12)",
   glass:"rgba(255,255,255,0.02)", glass2:"rgba(255,255,255,0.04)",
+  panel:"rgba(14,14,14,0.88)", neon:"#C8C8C8", neonDeep:"#6A6A6A", cyan:"#A8A8A8",
 };
 const ADMIN_EMAIL = "admin@aurum.finance";
 
@@ -25,10 +26,10 @@ function Logo({ size = 24 }) {
     <svg width={size} height={size} viewBox="0 0 160 160" fill="none" style={{ display: "block" }}>
       <defs>
         <linearGradient id={a} x1="0" y1="0" x2=".7" y2="1">
-          <stop offset="0%" stopColor="#e8cc5a" /><stop offset="100%" stopColor="#8a6e1f" />
+          <stop offset="0%" stopColor="#F0F0F0" /><stop offset="100%" stopColor="#7A7A7A" />
         </linearGradient>
         <linearGradient id={b} x1="1" y1="0" x2=".2" y2="1">
-          <stop offset="0%" stopColor="#c9a84c" stopOpacity=".85" /><stop offset="100%" stopColor="#5c4a15" stopOpacity=".6" />
+          <stop offset="0%" stopColor="#C8C8C8" stopOpacity=".85" /><stop offset="100%" stopColor="#4A4A4A" stopOpacity=".6" />
         </linearGradient>
       </defs>
       <path d="M80 14 L42 142 L62 142 L72 104 L88 104 L98 142 L118 142 Z" fill={`url(#${a})`} />
@@ -149,7 +150,7 @@ function HexGrid() {
   return (
     <div style={{ position: "relative", width: "clamp(300px, 36vw, 440px)", aspectRatio: "1", flexShrink: 0 }}>
       {/* Ambient glow */}
-      <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "80%", height: "80%", borderRadius: "50%", background: `radial-gradient(circle, rgba(201,168,76,0.08) 0%, transparent 70%)` }} />
+      <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "80%", height: "80%", borderRadius: "50%", background: `radial-gradient(circle, rgba(200,200,200,0.12) 0%, rgba(255,255,255,0.03) 45%, transparent 70%)` }} />
 
       <svg viewBox="0 0 400 400" style={{ width: "100%", height: "100%", animation: "float 8s ease infinite" }}>
         {/* Outer ring */}
@@ -208,9 +209,9 @@ function Landing({ onEnter, lang }) {
   const gid = useId();
 
   const engines = [
-    { id: "AZOTH", name: "Systematic Momentum", color: "#7577D1", desc: t ? "Motor de momentum direcional com regime filter, scoring omega e sizing convexo. Opera em BULL e BEAR com sinais não-correlacionados." : "Directional momentum engine with regime filter, omega scoring and convex sizing. Operates in BULL and BEAR with uncorrelated signals." },
-    { id: "HERMES", name: "Statistical Arbitrage", color: "#c9a84c", desc: t ? "Arbitragem estatística delta-neutral de funding rates em 13 exchanges simultâneas. Captura spread sem exposição direcional." : "Delta-neutral statistical arbitrage of funding rates across 13 simultaneous exchanges. Captures spread without directional exposure." },
-    { id: "MERCURIO", name: "Order Flow Analysis", color: "#34d399", desc: t ? "Microestrutura e fluxo de ordens. Detecta divergências CVD, imbalance de volume e liquidações para antecipar movimentos." : "Microstructure and order flow. Detects CVD divergences, volume imbalance and liquidations to anticipate moves." },
+    { id: "AZOTH", name: "Systematic Momentum", color: "#C8C8C8", desc: t ? "Motor de momentum direcional com regime filter, scoring omega e sizing convexo. Opera em BULL e BEAR com sinais não-correlacionados." : "Directional momentum engine with regime filter, omega scoring and convex sizing. Operates in BULL and BEAR with uncorrelated signals." },
+    { id: "HERMES", name: "Statistical Arbitrage", color: "#A8A8A8", desc: t ? "Arbitragem estatística delta-neutral de funding rates em 13 exchanges simultâneas. Captura spread sem exposição direcional." : "Delta-neutral statistical arbitrage of funding rates across 13 simultaneous exchanges. Captures spread without directional exposure." },
+    { id: "MERCURIO", name: "Order Flow Analysis", color: "#8A8A8A", desc: t ? "Microestrutura e fluxo de ordens. Detecta divergências CVD, imbalance de volume e liquidações para antecipar movimentos." : "Microstructure and order flow. Detects CVD divergences, volume imbalance and liquidations to anticipate moves." },
   ];
 
   const stats = [
@@ -533,7 +534,7 @@ function MemberDash({ user, db, setDb, onLogout, lang }) {
 
       {/* Modal */}
       {dmod && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(8,9,10,0.92)", backdropFilter: "blur(24px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={e => { if (e.target === e.currentTarget) setDmod(null); }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(8,8,8,0.92)", backdropFilter: "blur(24px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={e => { if (e.target === e.currentTarget) setDmod(null); }}>
           <div className="glass" style={{ padding: 32, maxWidth: 400, width: "100%", margin: 16, position: "relative" }}>
             <button onClick={() => setDmod(null)} style={{ position: "absolute", top: 14, right: 16, background: "none", border: "none", color: C.t3, cursor: "pointer", fontSize: 18 }}>&times;</button>
             <div className="badge" style={{ marginBottom: 16 }}>{dmod === "withdraw" ? (t ? "SACAR" : "WITHDRAW") : dmod.toUpperCase()}</div>
@@ -636,8 +637,8 @@ function MemberDash({ user, db, setDb, onLogout, lang }) {
                 <span style={{ flex: "0 0 80px" }}>
                   <span className="mono" style={{
                     fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, letterSpacing: 0.5,
-                    background: tr.s === "AZOTH" ? "#7577D110" : tr.s === "HERMES" ? "#c9a84c10" : "#34d39910",
-                    color: tr.s === "AZOTH" ? "#7577D1" : tr.s === "HERMES" ? "#c9a84c" : "#34d399",
+                    background: tr.s === "AZOTH" ? "rgba(200,200,200,0.12)" : tr.s === "HERMES" ? "rgba(168,168,168,0.12)" : "rgba(138,138,138,0.12)",
+                    color: tr.s === "AZOTH" ? "#C8C8C8" : tr.s === "HERMES" ? "#A8A8A8" : "#8A8A8A",
                   }}>{tr.s}</span>
                 </span>
                 <span style={{ flex: 1 }} />
@@ -767,8 +768,8 @@ function AdminDash({ db, setDb, onLogout, lang }) {
                 <span style={{ flex: "0 0 80px" }}>
                   <span className="mono" style={{
                     fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, letterSpacing: 0.5,
-                    background: tr.s === "AZOTH" ? "#7577D110" : tr.s === "HERMES" ? "#c9a84c10" : "#34d39910",
-                    color: tr.s === "AZOTH" ? "#7577D1" : tr.s === "HERMES" ? "#c9a84c" : "#34d399",
+                    background: tr.s === "AZOTH" ? "rgba(200,200,200,0.12)" : tr.s === "HERMES" ? "rgba(168,168,168,0.12)" : "rgba(138,138,138,0.12)",
+                    color: tr.s === "AZOTH" ? "#C8C8C8" : tr.s === "HERMES" ? "#A8A8A8" : "#8A8A8A",
                   }}>{tr.s}</span>
                 </span>
                 <span style={{ flex: 1 }} />
@@ -782,7 +783,7 @@ function AdminDash({ db, setDb, onLogout, lang }) {
           <div className="glass" style={{ padding: 28 }}>
             <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, fontFamily: "var(--fd)" }}>{t ? "Configuracoes" : "Settings"}</div>
             <button onClick={() => { if (window.confirm(t ? "Tem certeza? Isto apaga todos os dados." : "Are you sure? This will delete all data.")) resetAll(); }}
-              style={{ background: C.rBg, color: C.r, border: `1px solid rgba(248,113,113,0.2)`, padding: "12px 24px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--f)" }}>
+              style={{ background: C.rBg, color: C.r, border: `1px solid rgba(255,77,79,0.35)`, padding: "12px 24px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--f)" }}>
               {t ? "Resetar Banco de Dados" : "Reset Database"}
             </button>
             <p style={{ fontSize: 11, color: C.t3, marginTop: 10 }}>{t ? "Remove todos os dados. Irreversivel." : "Removes all data. Irreversible."}</p>
@@ -827,8 +828,8 @@ export default function App() {
       {/* NAV */}
       <nav style={{
         position: "sticky", top: 0, zIndex: 100,
-        background: "rgba(8,9,10,0.85)", backdropFilter: "blur(20px)",
-        borderBottom: `1px solid ${C.brd}`, height: 56,
+        background: "rgba(8,8,8,0.88)", backdropFilter: "blur(20px)",
+        borderBottom: `1px solid rgba(255,255,255,0.08)`, boxShadow: "0 1px 24px rgba(0,0,0,0.35)", height: 56,
         display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px",
       }}>
         <div onClick={() => { if (!user) setPage("land"); }} style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>

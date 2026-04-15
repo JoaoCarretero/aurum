@@ -58,7 +58,7 @@ class HLWhaleBot(BotWatcher):
     label = "WHALE TRACKER"
     network = "HYPE"
     tagline = "top-PnL address monitor · HL public info"
-    color = "#1f7a8c"
+    color = "#06B6D4"
 
     @property  # type: ignore[override]
     def status(self):  # dynamic status

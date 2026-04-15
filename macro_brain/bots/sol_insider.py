@@ -30,7 +30,7 @@ class SolInsiderBot(BotWatcher):
     label = "INSIDER WALLET"
     network = "SOL"
     tagline = "follow smart-money wallets · helius"
-    color = "#5a2f88"
+    color = "#9945FF"
     status = "planned"
 
     def fetch(self, since: datetime | None = None) -> Iterable[dict]:

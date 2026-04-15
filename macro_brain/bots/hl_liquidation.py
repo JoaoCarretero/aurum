@@ -29,7 +29,7 @@ class HLLiquidationBot(BotWatcher):
     label = "LIQUIDATION BOT"
     network = "HYPE"
     tagline = "cascade detector · HL websocket"
-    color = "#1f7a8c"
+    color = "#06B6D4"
     status = "planned"
 
     def fetch(self, since: datetime | None = None) -> Iterable[dict]:

@@ -25,7 +25,7 @@ class SolSniperBot(BotWatcher):
     label = "SNIPER BOT"
     network = "SOL"
     tagline = "new token launches · pump.fun + raydium"
-    color = "#5a2f88"
+    color = "#9945FF"
     status = "planned"
 
     def fetch(self, since: datetime | None = None) -> Iterable[dict]:
