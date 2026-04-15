@@ -41,6 +41,18 @@ dist/
 # Claude Code superpowers runtime
 .superpowers/
 
+# Claude Code local runtime (lockfiles, settings locais, logs de sessao)
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+.claude/continuation_log.md
+
+# Pytest temp dirs (geradas em runtime, nao versionar)
+.pytest_cache/
+.pytest_tmp/
+.pytest_tmp_*/
+.pytest_local_tmp/
+.test_tmp/
+
 # Alchemy (ARBITRAGE) param files — generated at runtime, not versioned
 config/alchemy_params.json
 config/alchemy_params.json.reload
