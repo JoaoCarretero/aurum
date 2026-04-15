@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
 from core.evolution import DarwinAllocator, calc_fitness
+from core.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
 
 SEP = "=" * 60
@@ -174,14 +175,13 @@ if __name__ == "__main__":
     report_dir = DATA_DIR / "aqr"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"darwin_report_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json"
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "timestamp": datetime.now().isoformat(),
-            "generations": result["generations"],
-            "final_allocations": result["final_allocations"],
-            "eval_points": result["eval_points"],
-            "ratios": result["ratios"],
-            "mdd_pct": result["mdd_pct"],
-        }, f, indent=2, default=str)
+    atomic_write(report_path, json.dumps({
+        "timestamp": datetime.now().isoformat(),
+        "generations": result["generations"],
+        "final_allocations": result["final_allocations"],
+        "eval_points": result["eval_points"],
+        "ratios": result["ratios"],
+        "mdd_pct": result["mdd_pct"],
+    }, indent=2, default=str))
     print(f"\n  Report saved: {report_path}")
     print(f"\n{SEP}\n")

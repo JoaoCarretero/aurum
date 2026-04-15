@@ -25,6 +25,7 @@ INTERVAL = ENGINE_INTERVALS.get("RENAISSANCE", INTERVAL)
 from core import build_corr_matrix, detect_macro, fetch_all, validate
 from core.harmonics import scan_hermes
 from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
+from core.fs import atomic_write
 
 
 RUN_ID = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -106,7 +107,7 @@ def export_json(
         ],
     }
     out = RUN_DIR / "reports" / f"renaissance_{INTERVAL}_v1.json"
-    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    atomic_write(out, json.dumps(payload, indent=2, ensure_ascii=False, default=str))
     save_run_artifacts(RUN_DIR, config, all_trades, equity, summary, overfit_results=audit_results)
     append_to_index(RUN_DIR, summary, config, audit_results)
     return out

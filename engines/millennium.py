@@ -96,6 +96,7 @@ STRESS_MISS_RATE = 0.15  # % trades que não executam (latência)
 
 # ── RENAISSANCE (extracted to core/harmonics.py) ──────────────────
 from core.harmonics import scan_hermes
+from core.fs import atomic_write
 
 SEP = "─"*80
 
@@ -857,7 +858,7 @@ def export_ms_json(all_trades, eq, mc, ratios):
         "equity":eq,
     }
     fname=str(MS_RUN_DIR/"reports"/f"multistrategy_{INTERVAL}_v1.json")
-    with open(fname,"w",encoding="utf-8") as f: json.dump(payload,f,ensure_ascii=False,indent=2,default=str)
+    atomic_write(Path(fname), json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     print(f"  JSON -> {fname}")
     # Auto-persist to DB
     try:

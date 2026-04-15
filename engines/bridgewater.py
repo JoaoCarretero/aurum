@@ -39,6 +39,7 @@ from core.sentiment import (
     fetch_funding_rate, fetch_open_interest, fetch_long_short_ratio,
     funding_zscore, oi_delta_signal, ls_ratio_signal, composite_sentiment,
 )
+from core.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward
@@ -513,7 +514,7 @@ def export_json(all_trades, eq, mc, ratios):
     }
 
     out = RUN_DIR / "reports" / f"bridgewater_{INTERVAL}_v1.json"
-    out.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    atomic_write(out, json.dumps(data, indent=2, default=str))
     print(f"  json  ·  {out}")
 
     try:

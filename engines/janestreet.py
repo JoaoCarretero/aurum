@@ -52,6 +52,7 @@ from config.janestreet_defaults import (
 )
 from bot.telegram import TelegramNotifier
 from core.audit_trail import AuditTrail, OrderEvent
+from core.fs import atomic_write
 from core.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates,
 )
@@ -1452,16 +1453,12 @@ async def simulate_historical_report(capital: float = 1000.0) -> Path:
         "n_venues": len(active),
         "main_report": "reports/simulate_historical.json",
     }
-    (DIR / "config.json").write_text(
-        json.dumps(config, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    (DIR / "summary.json").write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
+    atomic_write(DIR / "config.json",
+        json.dumps(config, indent=2, ensure_ascii=False, default=str))
+    atomic_write(DIR / "summary.json",
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str))
     out = DIR / "reports" / "simulate_historical.json"
-    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write(out, json.dumps(payload, indent=2, ensure_ascii=False))
     append_to_index(DIR, summary, config)
     print(f"\n  simulate-historical → {out}\n")
     return out
@@ -1542,7 +1539,7 @@ class Engine:
                     "entry_px_b":p.entry_px_b,"open_ts":p.open_ts.isoformat(),"funding_collected":p.funding_collected,
                     "funding_payments":p.funding_payments} for p in s.positions],
                 "closed":s.closed,"ts":datetime.now(timezone.utc).isoformat()}
-            with open(s._state_file,"w") as f:json.dump(data,f,indent=2,default=str)
+            atomic_write(Path(s._state_file), json.dumps(data, indent=2, default=str))
         except Exception as e:log.debug(f"Save state: {e}")
 
     def _write_snapshot(s):
@@ -2395,13 +2392,15 @@ class Engine:
         finally:
             s.running=False
             if s.ws and s.ws._task:s.ws._task.cancel()
-            with open(DIR/"reports"/f"session_{_D}.json","w") as f:
-                json.dump({"trades":s.closed,"pnl":sum(t["pnl"] for t in s.closed),
+            atomic_write(
+                DIR/"reports"/f"session_{_D}.json",
+                json.dumps({"trades":s.closed,"pnl":sum(t["pnl"] for t in s.closed),
                            "latency":s.latency.all_summaries(),
                            "regime_final":s.regime._global,
                            "fill_stats":s.fill_model.venue_stats(),
                            "kelly_f":s.sizer._kelly(),
-                           "wins":len(s.sizer._wins),"losses":len(s.sizer._losses)},f,indent=2,default=str)
+                           "wins":len(s.sizer._wins),"losses":len(s.sizer._losses)},
+                           indent=2,default=str))
             await s._tg(f"Stopped. {len(s.closed)} trades PnL:${sum(t['pnl'] for t in s.closed):+.4f}")
             log.info("Engine stopped.")
 

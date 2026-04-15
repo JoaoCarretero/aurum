@@ -34,6 +34,7 @@ from core import (
     detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
     position_size,
 )
+from core.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
@@ -665,7 +666,7 @@ def export_json(all_trades, eq, mc, ratios, pairs):
     }
 
     out = RUN_DIR / "reports" / f"deshaw_{INTERVAL}_v1.json"
-    out.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    atomic_write(out, json.dumps(data, indent=2, default=str))
     print(f"  json  ·  {out}")
     log.info(f"JSON → {out}")
 

@@ -21,6 +21,7 @@ INTERVAL = ENGINE_INTERVALS.get("CITADEL", INTERVAL)
 
 # ── Core modules ──────────────────────────────────────────────
 from core.data import fetch, fetch_all, validate
+from core.fs import atomic_write
 from core.indicators import indicators, swing_structure, omega
 from core.chronos import enrich_with_regime
 from analysis.stats import regime_analysis as _hmm_regime_analysis
@@ -546,8 +547,7 @@ def export_json(all_trades, eq, mc, cond, ratios, price_data=None):
         payload["price_data"] = price_data
     fname = str(RUN_DIR / f"citadel_{INTERVAL}_v36.json")
     _Path(fname).parent.mkdir(parents=True, exist_ok=True)
-    with open(fname,"w",encoding="utf-8") as f:
-        json.dump(payload,f,ensure_ascii=False,indent=2,default=str)
+    atomic_write(_Path(fname), json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     print(f"  JSON → {fname}")
 
 
@@ -974,8 +974,8 @@ if __name__ == "__main__":
                 "close": [round(float(v), 6) for v in df["close"].values],
             }
     try:
-        with open(RUN_DIR / "price_data.json", "w", encoding="utf-8") as _pf:
-            json.dump(_price_data, _pf, separators=(",", ":"))
+        atomic_write(RUN_DIR / "price_data.json",
+                     json.dumps(_price_data, separators=(",", ":")))
     except Exception as _e:
         log.warning(f"Failed to persist price_data.json: {_e}")
 
