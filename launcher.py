@@ -22,23 +22,14 @@ from core.persistence import atomic_write_json
 from core.transport import RequestSpec, TransportClient
 
 # ═══════════════════════════════════════════════════════════
-# NEUTRAL PALETTE — black, graphite and silver
+# PALETTE — imported from core/ui_palette (SSOT)
 # ═══════════════════════════════════════════════════════════
-BG      = "#080808"
-BG2     = "#101010"
-BG3     = "#181818"
-PANEL   = "#0C0C0C"
-BORDER  = "#242424"
-AMBER   = "#C8C8C8"   # primary accent (silver)
-AMBER_D = "#6A6A6A"   # dim silver
-AMBER_B = "#F0F0F0"   # bright hover
-WHITE   = "#E6E6E6"
-DIM     = "#707070"
-DIM2    = "#2A2A2A"
-GREEN   = "#00D26A"   # vivid positive
-RED     = "#FF4D4F"   # vivid negative
-
-FONT    = "Consolas"
+from core.ui_palette import (
+    BG, BG2, BG3, PANEL, BORDER,
+    AMBER, AMBER_D, AMBER_B,
+    WHITE, DIM, DIM2, GREEN, RED,
+    FONT,
+)
 
 LEGACY_ENGINE_ALIASES = {
     "backtest": "citadel",
@@ -79,15 +70,10 @@ def engine_display_name(name) -> str:
     key = canonical_engine_key(name)
     return ENGINE_NAMES.get(key, key.replace("_", " ").upper())
 
-# ─── BLOOMBERG 3D MENU — tile accents ────────────────────────
-# Muted saturated hues — distinct per desk, minimal but alive. Paired with
-# the silver/graphite structural palette so the accents read as signal and
-# the chrome reads as neutral.
-TILE_MARKETS  = "#6EB2E8"   # SOFT CYAN  — quote + dash (feed)
-TILE_EXECUTE  = "#6ADB8A"   # MUTED MINT — strategies + arb + risk (action)
-TILE_RESEARCH = "#E6C86A"   # WARM AMBER — terminal + data (inquiry)
-TILE_CONTROL  = "#D88EC8"   # DUSTY ROSE — connections + command + settings (config)
-TILE_DIM_FACTOR = 0.35      # idle brightness multiplier
+# ─── 3D MENU — tile accents (SSOT: core/ui_palette) ────────
+from core.ui_palette import (
+    TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL, TILE_DIM_FACTOR,
+)
 
 # ═══════════════════════════════════════════════════════════
 # VPS — remote control over SSH (passwordless key auth)
@@ -2815,7 +2801,7 @@ class App(tk.Tk):
     def _exec_live_inline(self, name, script, desc, mode_preset, cfg):
         """Fire a strategy in live mode (paper/demo/testnet/live) directly
         from the picker. Routes via engines/live.py for the unified live
-        runner; janestreet uses its own arbitrage script.
+        runner; janestreet uses its own dedicated arbitrage runner.
 
         mode_preset ∈ {'paper','demo','testnet','live'}.
         cfg may carry leverage/basket overrides (basket only relevant for
@@ -2836,8 +2822,10 @@ class App(tk.Tk):
                 self.h_stat.configure(text="LIVE cancelado", fg=AMBER_D)
                 return
 
-        # JANESTREET = arbitrage.py uses its own modes (dashboard/paper/demo/live)
-        is_arb = "arbitrage" in (script or "")
+        script_l = (script or "").replace("\\", "/").lower()
+        # JANESTREET has its own menu/CLI and cannot be routed through the
+        # generic live runner.
+        is_arb = script_l.endswith("/janestreet.py") or "janestreet" in script_l
         if is_arb:
             arb_mode_map = {"paper": "2", "demo": "3", "live": "4", "testnet": "2"}
             inputs = [arb_mode_map.get(mode_preset, "1")]
@@ -7067,12 +7055,11 @@ class App(tk.Tk):
             if t.slug in running_map:
                 t.status = "running"
         if filter_group == "LIVE":
-            # LIVE view shows every strategy that could run live (all
-            # backtest engines + dedicated live runner + janestreet), with
-            # a mode selector (PAPER/DEMO/TESTNET/LIVE) in the RUN chip.
-            # DEFAULT_GROUPS only has {live, janestreet} in LIVE — too narrow.
-            _live_slugs = {"citadel", "renaissance", "bridgewater", "jump",
-                           "deshaw", "live", "janestreet"}
+            # Only expose engines with a concrete live entrypoint. Most
+            # backtest strategies do not accept a strategy selector when
+            # routed via engines/live.py, so listing them here would launch
+            # the wrong engine.
+            _live_slugs = {"citadel", "live", "janestreet"}
             tracks = [t for t in tracks if t.slug in _live_slugs]
             for t in tracks:
                 t.group = "LIVE"
@@ -7167,10 +7154,8 @@ class App(tk.Tk):
                     handle["select_index"](_i)
                 except Exception:
                     pass
-                # Best-effort: open RUN chip (where progress + tail show)
                 try:
-                    cur = tracks[_i]
-                    handle["set_progress"](cur.slug, 100.0, "▶ live tail", True)
+                    handle["open_chip"]("LOG")
                 except Exception:
                     pass
             for w in (pill,) + tuple(pill.winfo_children()):

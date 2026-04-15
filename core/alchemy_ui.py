@@ -10,22 +10,14 @@ from pathlib import Path
 from typing import Callable
 
 # ═══════════════════════════════════════════════════════════
-# PALETTE — neutral black/gray
+# PALETTE — imported from core/ui_palette (SSOT)
 # ═══════════════════════════════════════════════════════════
-HEV_BG      = "#080808"
-HEV_PANEL   = "#0C0C0C"
-HEV_BORDER  = "#242424"
-HEV_BORDER2 = "#5A5A5A"
-HEV_AMBER   = "#C8C8C8"   # primary accent — silver
-HEV_AMBER_B = "#F0F0F0"
-HEV_AMBER_D = "#6A6A6A"
-HEV_AMBER_DD= "#242424"
-HEV_WHITE   = "#E6E6E6"
-HEV_DIM     = "#707070"
-HEV_GREEN   = "#00D26A"
-HEV_RED     = "#FF4D4F"
-HEV_HAZARD  = "#D8D1A8"
-HEV_BLOOD   = "#7A6262"
+from core.ui_palette import (
+    HEV_BG, HEV_PANEL, HEV_BORDER, HEV_BORDER2,
+    HEV_AMBER, HEV_AMBER_B, HEV_AMBER_D, HEV_AMBER_DD,
+    HEV_WHITE, HEV_DIM, HEV_GREEN, HEV_RED,
+    HEV_HAZARD, HEV_BLOOD,
+)
 
 # Venue → planetary glyph
 VENUE_GLYPH = {
