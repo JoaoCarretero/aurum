@@ -202,23 +202,23 @@ def render_cockpit(app):
     root = app.main
     root.configure(bg=HEV_BG)
 
-    # Compact top bar — 22px
-    topbar = tk.Frame(root, bg=HEV_BG, height=22)
+    # Compact top bar — tighter 18px (was 22)
+    topbar = tk.Frame(root, bg=HEV_BG, height=18)
     topbar.pack(fill="x")
     topbar.pack_propagate(False)
 
-    tk.Label(topbar, text="ARBITRAGE", font=font("mono_px", 13, "bold"),
+    tk.Label(topbar, text="ARBITRAGE", font=font("mono_px", 10, "bold"),
              fg=HEV_AMBER_B, bg=HEV_BG).pack(side="left", padx=(8, 0))
 
     # Hidden hermetic detail — single tiny λ suffix (the only one in the whole UI).
-    tk.Label(topbar, text="λ", font=("Georgia", 8),
+    tk.Label(topbar, text="λ", font=("Georgia", 7),
              fg=HEV_AMBER_DD, bg=HEV_BG).pack(side="left", padx=(2, 6))
 
-    # Inline vitals (single StringVar-driven label)
+    # Inline vitals (single StringVar-driven label) — denser
     app._alch_vitals_var = tk.StringVar(value="—")
     app._alch_vitals_lbl = tk.Label(
         topbar, textvariable=app._alch_vitals_var,
-        font=font("mono_px", 11), fg=HEV_AMBER, bg=HEV_BG, anchor="w")
+        font=font("mono_px", 9), fg=HEV_AMBER, bg=HEV_BG, anchor="w")
     app._alch_vitals_lbl.pack(side="left", fill="x", expand=True, padx=(4, 8))
 
     # Thin amber separator below topbar
@@ -279,8 +279,8 @@ def render_cockpit(app):
 
     # Stale overlay — shown when snapshot is old AND engine is running
     overlay = tk.Label(root, text="SNAPSHOT STALE · engine not responding",
-                       font=font("mono_px", 14), fg=HEV_RED, bg="#1a0000",
-                       padx=16, pady=8)
+                       font=font("mono_px", 10, "bold"), fg=HEV_RED, bg="#1a0000",
+                       padx=12, pady=6)
     app._alch_overlay = overlay
 
     def update_overlay(snap):

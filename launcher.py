@@ -5135,28 +5135,28 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        # ── Title block ──
+        # ── Title block (compact, Bloomberg-density) ──
         title_frame = tk.Frame(outer, bg=BG)
-        title_frame.pack(fill="x", pady=(40, 0))
-        tk.Label(title_frame, text="A R B I T R A G E",
-                 font=(FONT, 18, "bold"), fg=AMBER, bg=BG).pack()
-        tk.Frame(title_frame, bg=AMBER_D, height=1, width=220).pack(pady=(4, 4))
+        title_frame.pack(fill="x", pady=(14, 0))
+        tk.Label(title_frame, text="ARBITRAGE",
+                 font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack()
+        tk.Frame(title_frame, bg=AMBER_D, height=1, width=120).pack(pady=(2, 2))
         tk.Label(title_frame, text="funding  \u00b7  basis  \u00b7  spread",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack()
+                 font=(FONT, 7), fg=DIM, bg=BG).pack()
 
-        # ── Rows area ──
+        # ── Summary strip (dense, right-aligned telemetry) ──
         summary = tk.Frame(outer, bg=BG)
-        summary.pack(fill="x", pady=(0, 10))
-        self._arb_hub_sum_cex = tk.Label(summary, text="CEX  OFFLINE", font=(FONT, 8, "bold"),
+        summary.pack(fill="x", pady=(8, 4), padx=28)
+        self._arb_hub_sum_cex = tk.Label(summary, text="CEX —", font=(FONT, 7, "bold"),
                                          fg=AMBER_D, bg=BG, anchor="w")
         self._arb_hub_sum_cex.pack(side="left")
-        self._arb_hub_sum_dex = tk.Label(summary, text="DEX  OFFLINE", font=(FONT, 8),
+        self._arb_hub_sum_dex = tk.Label(summary, text="DEX —", font=(FONT, 7),
                                          fg=DIM, bg=BG, anchor="w")
-        self._arb_hub_sum_dex.pack(side="left", padx=(20, 0))
-        self._arb_hub_sum_best = tk.Label(summary, text="TOP APR  WAITING", font=(FONT, 8),
+        self._arb_hub_sum_dex.pack(side="left", padx=(14, 0))
+        self._arb_hub_sum_best = tk.Label(summary, text="TOP —", font=(FONT, 7),
                                           fg=DIM, bg=BG, anchor="w")
-        self._arb_hub_sum_best.pack(side="left", padx=(20, 0))
-        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
+        self._arb_hub_sum_best.pack(side="left", padx=(14, 0))
+        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
 
         rows_frame = tk.Frame(outer, bg=BG)
         rows_frame.pack(fill="x", pady=(8, 0), padx=28)
@@ -5176,32 +5176,32 @@ class App(tk.Tk):
         ]
 
         for i, (parent, big_label, meta, sub) in enumerate(row_defs):
-            row_frame = tk.Frame(parent, bg=BG, cursor="hand2", height=62)
-            row_frame.pack(fill="x", pady=(0, 6))
+            row_frame = tk.Frame(parent, bg=BG, cursor="hand2", height=38)
+            row_frame.pack(fill="x", pady=(0, 2))
             row_frame.pack_propagate(False)
 
             top_line = tk.Frame(row_frame, bg=BG)
-            top_line.pack(fill="x", pady=(8, 0))
+            top_line.pack(fill="x", pady=(4, 0))
 
-            bullet_lbl = tk.Label(top_line, text=str(i + 1),
-                                  font=(FONT, 8, "bold"),
-                                  fg=AMBER_D, bg=BG, width=3, anchor="w")
+            bullet_lbl = tk.Label(top_line, text=f"{i+1:02d}",
+                                  font=(FONT, 7),
+                                  fg=DIM, bg=BG, width=3, anchor="w")
             bullet_lbl.pack(side="left")
 
             label_lbl = tk.Label(top_line, text=big_label,
-                                 font=(FONT, 11, "bold"),
+                                 font=(FONT, 10, "bold"),
                                  fg=WHITE, bg=BG, anchor="w")
             label_lbl.pack(side="left", padx=(2, 0))
 
             meta_lbl = tk.Label(top_line, text=meta,
-                                font=(FONT, 8, "bold"),
+                                font=(FONT, 7, "bold"),
                                 fg=AMBER_D, bg=BG, anchor="e")
             meta_lbl.pack(side="right", padx=(0, 8))
 
             sub_lbl = tk.Label(row_frame, text=sub,
-                               font=(FONT, 8), fg=DIM, bg=BG, anchor="w")
-            sub_lbl.pack(fill="x", padx=(28, 8), pady=(4, 0))
-            tk.Frame(row_frame, bg=DIM2, height=1).pack(fill="x", side="bottom", pady=(6, 0))
+                               font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
+            sub_lbl.pack(fill="x", padx=(28, 8), pady=(2, 0))
+            tk.Frame(row_frame, bg=BORDER, height=1).pack(fill="x", side="bottom", pady=(4, 0))
 
             widgets = {
                 "frame":  row_frame,
@@ -5499,11 +5499,11 @@ class App(tk.Tk):
         outer = tk.Frame(self.main, bg=BG)
         outer.pack(fill="both", expand=True, padx=24, pady=12)
 
-        tk.Label(outer, text="B A S I S    T R A D E", font=(FONT, 14, "bold"),
+        tk.Label(outer, text="BASIS TRADE", font=(FONT, 10, "bold"),
                  fg=AMBER, bg=BG).pack(anchor="center")
         tk.Label(outer, text="spot-perp basis  \u00b7  buy spot, short perp",
                  font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
-        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(6, 4))
+        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
 
         # Table
         cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("PERP", 10, "w"),
@@ -5511,9 +5511,9 @@ class App(tk.Tk):
                 ("BASIS", 8, "e"), ("APR", 8, "e")]
         hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
         for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
+            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
                      fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
 
         inner = tk.Frame(outer, bg=BG)
         inner.pack(fill="both", expand=True)
@@ -5581,20 +5581,20 @@ class App(tk.Tk):
         outer = tk.Frame(self.main, bg=BG)
         outer.pack(fill="both", expand=True, padx=24, pady=12)
 
-        tk.Label(outer, text="S P O T    S P R E A D", font=(FONT, 14, "bold"),
+        tk.Label(outer, text="SPOT SPREAD", font=(FONT, 10, "bold"),
                  fg=AMBER, bg=BG).pack(anchor="center")
         tk.Label(outer, text="cross-venue spot price divergence",
                  font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
-        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(6, 4))
+        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
 
         cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("VENUE A", 10, "w"),
                 ("VENUE B", 10, "w"), ("PRICE A", 12, "e"), ("PRICE B", 12, "e"),
                 ("SPREAD", 10, "e")]
         hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
         for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
+            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
                      fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
 
         inner = tk.Frame(outer, bg=BG)
         inner.pack(fill="both", expand=True)
@@ -5661,11 +5661,11 @@ class App(tk.Tk):
         self._funding_mode = mode
 
         if mode == "dex-dex":
-            title_text = "D E X    F U N D I N G"
+            title_text = "DEX FUNDING"
             subtitle = "pure cross-dex  \u00b7  hyperliquid  \u00b7  dydx  \u00b7  paradex"
             self.h_path.configure(text="> ARBITRAGE > DEX\u2194DEX")
         else:
-            title_text = "C E X    \u2194    D E X    S P R E A D"
+            title_text = "CEX \u2194 DEX SPREAD"
             subtitle = "cex/dex funding differential  \u00b7  biggest historical apr"
             self.h_path.configure(text="> ARBITRAGE > CEX\u2194DEX")
 
@@ -5685,18 +5685,18 @@ class App(tk.Tk):
         outer = tk.Frame(self.main, bg=BG)
         outer.pack(fill="both", expand=True, padx=24, pady=12)
 
-        # ── Title block ─────────────────────────────────────────
-        tk.Label(outer, text=title_text, font=(FONT, 14, "bold"),
+        # ── Title block (compact, Bloomberg-density) ─────────────
+        tk.Label(outer, text=title_text, font=(FONT, 10, "bold"),
                  fg=AMBER, bg=BG).pack(anchor="center")
         tk.Label(outer, text=subtitle, font=(FONT, 7),
-                 fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
+                 fg=DIM, bg=BG).pack(anchor="center", pady=(1, 2))
 
         self._funding_meta = tk.Label(
             outer, text="  last scan \u2014\u2014  \u00b7  \u2014 venues  ",
             font=(FONT, 7), fg=DIM2, bg=BG)
         self._funding_meta.pack(anchor="center")
 
-        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(6, 4))
+        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
 
         # ── Filter bar ──────────────────────────────────────────
         try:
