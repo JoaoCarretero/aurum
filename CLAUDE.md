@@ -84,6 +84,47 @@ Com este formato EXATO:
   risco), destacar em **ATENÇÃO:** no markdown
 - O log precisa ser autocontido — quem ler sem contexto deve entender
 
+### REGRA COMPLEMENTAR — DAILY LOG
+
+Além do session log, **sempre** gerar/atualizar o log do dia em:
+
+```
+docs/days/YYYY-MM-DD.md
+```
+
+Com este formato:
+
+```markdown
+# Daily Log — YYYY-MM-DD
+
+## Sessões do dia
+- HH:MM — [1 linha do que foi feito] — [link session log]
+- HH:MM — [...]
+
+## Entregas principais (consolidado)
+- [3-5 bullets do que ficou de valor no dia, não commits individuais]
+
+## Commits do dia: N
+
+## Estado final
+- Suite: X passed, Y skipped
+- Mudanças em CORE de trading? SIM/NÃO
+- Backlog top: [1-3 itens]
+
+## Pendências pra amanhã
+- [1-3 itens]
+
+## Nota do dia
+[1-2 frases livres — highlight, dor, ou celebração]
+```
+
+**Regras:**
+- Se já existe log do dia, **incrementar** (adicionar a sessão nova no
+  topo da lista de "Sessões do dia", atualizar consolidados)
+- Se não existe, criar do zero
+- Commitar junto com o session log do último trabalho do dia
+- O daily log é visão macro — session logs são os granulares
+
 ---
 
 ## Arquitectura Real (Estado Actual)
