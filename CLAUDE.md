@@ -186,15 +186,45 @@ Data (Binance OHLCV+tbb)
 
 ## Regras para Claude Code
 
+### ⚠️ CORE DE TRADING PROTEGIDO (qualquer agente: Claude, Codex, outros)
+
+**Estes 4 arquivos NÃO podem ser modificados sem aprovação explícita do Joao:**
+
+- `core/indicators.py` — EMA, RSI, ATR, BB, swing_structure, omega
+- `core/signals.py` — decide_direction, calc_levels, label_trade
+- `core/portfolio.py` — Kelly, position_size, check_aggregate_notional
+- `config/params.py` — SLIPPAGE, COMMISSION, SIZE_MULT, thresholds
+
+**Por quê:** backtests walk-forward calibrados (CITADEL, BRIDGEWATER,
+DE SHAW, JUMP — Sharpe +31% a +114%) dependem do comportamento exato
+desses módulos. Mudar a fórmula do RSI, o detector de pivots, ou os
+custos **invalida todas as calibrações** e requer re-rodar grid search
++ walk-forward 6/6 do zero.
+
+**Regra de ouro:** se um teste sintético não reproduz o comportamento
+esperado, **AJUSTE o teste** (threshold, fixture, skip com reason).
+NÃO ajuste o código real pra fazer teste passar. Isso é circular e
+destrutivo — o teste existe pra caracterizar o código, não o contrário.
+
+**Se for necessário tocar nesses 4 arquivos**, antes:
+1. Explicitar a mudança + motivação ao Joao.
+2. Apresentar plano de re-calibração dos backtests afetados.
+3. Só mexer após aprovação explícita.
+
+Incidente 2026-04-15: Codex tentou trocar RSI (EWM→rolling+tanh) e
+swing_structure (backward→centered pivots) pra fazer asserts de
+contract tests passarem. Claude detectou e reverteu. Pra nunca mais.
+
 ### NUNCA
 
 1. Reestruturar sem pedido explícito. O sistema funciona. Aprender primeiro.
 2. Renomear engines, loggers, ou variáveis. Os nomes têm história.
 3. Remover código "morto" sem confirmar — pode ser feature flag.
-4. Mudar `params.py` sem medir impacto no backtest.
+4. Mudar `params.py` sem medir impacto no backtest (ver regra CORE acima).
 5. Criar ficheiros paralelos (`utils2.py`). Usar estrutura existente.
 6. Ignorar o modelo de custos C1+C2. Backtest sem custos é mentira.
 7. **Tocar em código de live trading sem ler antes** (aprender > mexer).
+8. **Modificar código real pra fazer teste passar** (ver regra CORE acima).
 
 ### SEMPRE
 
