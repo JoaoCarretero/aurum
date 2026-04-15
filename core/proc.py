@@ -294,24 +294,45 @@ def spawn(engine: str, stdin_lines: list[str] | None = None,
             info["image_name"] = img
     state["procs"][str(proc.pid)] = info
     _save_state(state)
+    _LIST_CACHE["t"] = 0.0  # invalidate so UI sees the new proc immediately
     return info
 
 
-def list_procs() -> list[dict]:
+_LIST_CACHE: dict = {"t": 0.0, "val": None}
+_LIST_CACHE_TTL_S = 1.5
+
+
+def list_procs(max_age: float | None = None) -> list[dict]:
+    """Return all tracked proc entries (with identity-verified liveness).
+
+    Cached for ``_LIST_CACHE_TTL_S`` seconds. UI tabs + tile fetchers +
+    engine panels all call this from a handful of threads — without the
+    cache each of them re-reads the state file and runs OpenProcess per
+    tracked pid, which adds up. Pass ``max_age=0`` to force a fresh scan
+    (e.g., right after spawn/stop, when liveness changed).
+    """
+    ttl = _LIST_CACHE_TTL_S if max_age is None else float(max_age)
+    now = time.monotonic()
+    if ttl > 0 and _LIST_CACHE["val"] is not None and (now - _LIST_CACHE["t"]) < ttl:
+        # Return a shallow copy so callers can mutate the list without
+        # corrupting the cache entry (tests do this).
+        return [dict(p) for p in _LIST_CACHE["val"]]
+
     _cleanup()
     state = _load_state()
     result = []
     for pid_str, info in state["procs"].items():
         pid = int(pid_str)
-        # Identity-aware liveness — a recycled PID reads as False even if
-        # the OS has something running with that number.
         alive = _is_alive(pid, expected=info)
         info["alive"] = alive
         if not alive and info.get("status") == "running":
             info["status"] = "finished"
             info.setdefault("finished", datetime.now().isoformat())
         result.append(info)
-    return sorted(result, key=lambda x: x.get("started", ""), reverse=True)
+    result = sorted(result, key=lambda x: x.get("started", ""), reverse=True)
+    _LIST_CACHE["t"] = now
+    _LIST_CACHE["val"] = [dict(p) for p in result]
+    return result
 
 
 class PidRecycledError(RuntimeError):
@@ -372,6 +393,8 @@ def stop_proc(pid: int, expected: dict | None = None) -> bool:
             time.sleep(1)
             if _is_alive(pid):
                 os.kill(pid, signal.SIGKILL)
+        # Invalidate list_procs cache so the UI sees the state flip immediately.
+        _LIST_CACHE["t"] = 0.0
         return True
     except (OSError, subprocess.TimeoutExpired):
         return False
