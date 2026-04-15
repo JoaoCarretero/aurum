@@ -46,6 +46,10 @@ ARB_MODE=_ARGS.mode or "paper"
 
 sys.path.insert(0,str(Path(__file__).parent.parent))
 from config.params import safe_input
+from config.janestreet_defaults import (
+    MIN_SPREAD, MIN_APR, MAX_POS, POS_PCT, LEV,
+    SCAN_S, EXIT_H, MAX_DD_PCT, KILL_LOSSES,
+)
 from bot.telegram import TelegramNotifier
 from core.audit_trail import AuditTrail, OrderEvent
 from core.risk_gates import (
@@ -53,10 +57,11 @@ from core.risk_gates import (
 )
 from core.run_manager import append_to_index, snapshot_config
 
-ACCT=5000.0;MAX_POS=5;CROSS_MAX=3;LEV=2;POS_PCT=0.20;MAX_EXPO=3000.0
-SPLIT_N=5;SPLIT_DLY=0.5;SCAN_S=30;STATUS_N=3;WS_ON=True
-MIN_SPREAD=0.0015;MIN_APR=40.0;MIN_VOL=3_000_000;MAX_PX_SPREAD=0.02
-EXIT_H=8;EXIT_DECAY=0.30;MAX_HOLD_H=72;MAX_DD_PCT=0.05;KILL_LOSSES=3
+# Engine-local (nao runtime-tunaveis): ficam aqui
+ACCT=5000.0;CROSS_MAX=3;MAX_EXPO=3000.0
+SPLIT_N=5;SPLIT_DLY=0.5;STATUS_N=3;WS_ON=True
+MIN_VOL=3_000_000;MAX_PX_SPREAD=0.02
+EXIT_DECAY=0.30;MAX_HOLD_H=72
 _D=datetime.now().strftime("%Y-%m-%d");_T=datetime.now().strftime("%H%M")
 RUN_ID=_ARGS.run_id or f"{_D}_{_T}";DIR=Path(f"data/janestreet/{RUN_ID}")
 for d in("logs","state","reports"):(DIR/d).mkdir(parents=True,exist_ok=True)

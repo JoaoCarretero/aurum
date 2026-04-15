@@ -7,8 +7,7 @@ import json, sys, math
 import numpy as np
 from pathlib import Path
 
-LEVERAGE = 1.0
-COMMISSION = 0.0004
+from config.params import LEVERAGE, COMMISSION, FUNDING_PER_8H
 
 
 def _closed(trades):
@@ -282,7 +281,7 @@ def _test_slippage(trades, slippage_fn=None):
                 size = t["size"]
                 d = t["direction"]
                 dur = t.get("duration", 1)
-                funding = 0.0001 * dur / 32
+                funding = FUNDING_PER_8H * dur / 32
                 if d == "BULLISH":
                     pnl = size * (exit_p * (1 - COMMISSION - s) - entry * (1 + COMMISSION + s)) - size * entry * funding
                 else:

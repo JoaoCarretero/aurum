@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from core.persistence import atomic_write_text
+from config.janestreet_defaults import DEFAULTS as _JS_DEFAULTS
 
 EMPTY_SNAPSHOT = {
     "ts": "",
@@ -87,17 +88,7 @@ class AlchemyState:
         self._last_good = data
         return data
 
-    DEFAULT_PARAMS = {
-        "MIN_SPREAD": 0.0015,
-        "MIN_APR":    40.0,
-        "MAX_POS":    5,
-        "POS_PCT":    0.20,
-        "LEV":        2,
-        "SCAN_S":     30,
-        "EXIT_H":     8,
-        "MAX_DD_PCT": 0.05,
-        "KILL_LOSSES": 3,
-    }
+    DEFAULT_PARAMS = dict(_JS_DEFAULTS)  # SSOT: config/janestreet_defaults.py
 
     def read_params(self) -> dict:
         p = self._root / "config" / "alchemy_params.json"
