@@ -7906,13 +7906,19 @@ class App(tk.Tk):
     def _macro_brain_menu(self):
         """Macro Brain cockpit — intro screen + dense market data.
 
+        Auto-refreshes the view every 30s (re-reads the store so any
+        external cycle shows up) and kicks off a fresh run_once every
+        5 minutes in a worker thread so prices actually move when the
+        user leaves the cockpit open.
+
         ESC → main menu (trade engines).
         ENTER/space also → main menu (from splash click).
         """
         self._clr(); self._clear_kb()
         self.h_path.configure(text="")  # Cockpit is intro — no nav breadcrumb
         self.h_stat.configure(text="COCKPIT", fg=AMBER)
-        self.f_lbl.configure(text="ESC ou ENTER TERMINAL → main menu  |  R refresh  |  C run cycle")
+        self.f_lbl.configure(
+            text="ESC main menu  |  R refresh  |  C run cycle  |  auto 30s / cycle 5m")
         # Strong escape bindings — cockpit should never be a dead end
         self._kb("<Escape>",   lambda: self._menu("main"))
         self._kb("<Key-0>",    lambda: self._menu("main"))
@@ -7927,6 +7933,73 @@ class App(tk.Tk):
             tk.Label(self.main,
                      text=f"Macro Brain failed to render:\n{e}\n\nPress ESC → main menu",
                      font=(FONT, 10), fg=RED, bg=BG).pack(pady=40)
+            return
+
+        # Cancel any previous macro timers so switching in/out doesn't
+        # stack multiple schedulers.
+        for attr in ("_macro_render_after", "_macro_cycle_after"):
+            prev = getattr(self, attr, None)
+            if prev:
+                try:
+                    self.after_cancel(prev)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        # Tag the page so our timers know they're still on screen; any
+        # other _menu call replaces self.main contents and the tag check
+        # below fails, stopping the loops naturally.
+        self._macro_page_token = object()
+
+        def _still_here(tok):
+            try:
+                return getattr(self, "_macro_page_token", None) is tok
+            except Exception:
+                return False
+
+        # Auto re-render every 30s — shows any new data that landed in
+        # the macro store (from this process's cycles or any external
+        # daemon populating the same store path).
+        def _auto_render():
+            if not _still_here(tok):
+                return
+            try:
+                from macro_brain.dashboard_view import render as _rend
+                _rend(self.main, app=self)
+            except Exception:
+                pass
+            self._macro_render_after = self.after(30_000, _auto_render)
+
+        # Background cycle every 5 min — actively fetches new prices from
+        # the macro brain's configured sources. Runs in a daemon thread so
+        # Tk never blocks on network I/O.
+        def _auto_cycle():
+            if not _still_here(tok):
+                return
+            import threading
+            def _work():
+                try:
+                    from macro_brain.brain import run_once
+                    run_once(force=False)  # respects source-level cadences
+                except Exception:
+                    pass
+            threading.Thread(target=_work, daemon=True).start()
+            self._macro_cycle_after = self.after(300_000, _auto_cycle)
+
+        tok = self._macro_page_token
+        # Kick a cycle immediately so the user doesn't wait 5 min on first
+        # open — same worker pattern so it never blocks the UI.
+        import threading
+        def _kickoff():
+            try:
+                from macro_brain.brain import run_once
+                run_once(force=False)
+            except Exception:
+                pass
+        threading.Thread(target=_kickoff, daemon=True).start()
+
+        self._macro_render_after = self.after(30_000, _auto_render)
+        self._macro_cycle_after  = self.after(300_000, _auto_cycle)
 
     def _risk_menu(self):
         self._clr(); self._clear_kb()
