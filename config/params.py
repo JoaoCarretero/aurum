@@ -244,12 +244,12 @@ TRAIL_DISTANCE_MULT = 0.3    # trailing stop distance (grid 2026-04-14: 0.3 give
 
 SCORE_BY_REGIME: dict[str, float] = {
     "BEAR": 0.53,
-    "BULL": 0.55,
+    "BULL": 0.62,
     "CHOP": 0.63,
 }
 RISK_SCALE_BY_REGIME: dict[str, float] = {
     "BEAR": 1.00,
-    "BULL": 0.85,
+    "BULL": 0.50,
     "CHOP": 0.45,
 }
 BULL_LONG_MIN_PULLBACK_ATR = 0.15
