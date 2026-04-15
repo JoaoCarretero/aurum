@@ -18,7 +18,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent.parent
-PYTHON = Path(r"C:\Users\Joao\AppData\Local\Python\pythoncore-3.14-64\python.exe")
+PYTHON = Path(sys.executable)
 TODAY = datetime.now().strftime("%Y-%m-%d")
 VALIDATION_DIR = ROOT / "data" / "validation" / TODAY
 REPORT_PATH = VALIDATION_DIR / "REPORT.md"
