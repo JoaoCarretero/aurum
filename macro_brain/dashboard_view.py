@@ -62,6 +62,17 @@ PAD_COL_GAP     = 6    # gap between left/right columns
 
 _STATE = {"tab": "US MKTS", "news_filter": "ALL"}
 
+# In-place tick registry — populated on render(), read on tick_update().
+# Each key is a metric name (e.g. "BTC_SPOT"); value holds refs to the
+# widgets that display its value/change/spark, plus the format string so
+# we can re-format new values consistently. Cleared at the top of every
+# full render() so stale refs from previous screens don't leak.
+_TILE_REGISTRY: dict[str, dict] = {}
+
+
+def _clear_tile_registry() -> None:
+    _TILE_REGISTRY.clear()
+
 
 # ── DATA UTILS ───────────────────────────────────────────────
 
@@ -125,29 +136,51 @@ def _attach_hover(widget: tk.Widget, default_border: str = BORDER,
 
 
 def _tile(parent, label, value, change="", change_color=WHITE,
-          series=None, spark_color=AMBER):
+          series=None, spark_color=AMBER, metric_key: str | None = None,
+          fmt: str | None = None):
+    """Render one metric tile.
+
+    When ``metric_key`` is provided, the value/change/spark widget refs are
+    saved in _TILE_REGISTRY so tick_update() can refresh them in place.
+    """
     f = tk.Frame(parent, bg=PANEL,
                  highlightbackground=BORDER, highlightthickness=1)
     tk.Label(f, text=label, font=(FONT, 6, "bold"), fg=DIM, bg=PANEL,
              anchor="w").pack(fill="x",
                               padx=PAD_TILE_INNER, pady=(2, 0))
     body = tk.Frame(f, bg=PANEL); body.pack(fill="x", padx=PAD_TILE_INNER)
-    tk.Label(body, text=value, font=(FONT, 10, "bold"), fg=WHITE, bg=PANEL,
-             anchor="w").pack(side="left")
+    value_lbl = tk.Label(body, text=value, font=(FONT, 10, "bold"),
+                          fg=WHITE, bg=PANEL, anchor="w")
+    value_lbl.pack(side="left")
+    change_lbl = None
     if change:
-        tk.Label(body, text=change, font=(FONT, 7), fg=change_color,
-                 bg=PANEL, anchor="e").pack(side="right", padx=2)
+        change_lbl = tk.Label(body, text=change, font=(FONT, 7),
+                               fg=change_color, bg=PANEL, anchor="e")
+        change_lbl.pack(side="right", padx=2)
+    spark_cv = None
     if series and len(series) >= 2:
-        cv = tk.Canvas(f, bg=PANEL, highlightthickness=0, height=14, width=80)
-        cv.pack(fill="x", padx=PAD_TILE_INNER, pady=(0, 2))
-        def _r(evt=None, c=cv, s=series, col=spark_color):
+        spark_cv = tk.Canvas(f, bg=PANEL, highlightthickness=0,
+                              height=14, width=80)
+        spark_cv.pack(fill="x", padx=PAD_TILE_INNER, pady=(0, 2))
+        def _r(evt=None, c=spark_cv, s=series, col=spark_color):
             w = c.winfo_width() or 80
             _draw_spark(c, s, color=col, w=w, h=14)
-        cv.bind("<Configure>", _r)
-        cv.after(10, _r)
+        spark_cv.bind("<Configure>", _r)
+        spark_cv.after(10, _r)
     else:
         tk.Frame(f, bg=PANEL, height=4).pack()
     _attach_hover(f)
+
+    # Register this tile so tick_update can re-target its labels without
+    # rebuilding the layout. Ticker-style in-place refresh.
+    if metric_key:
+        _TILE_REGISTRY[metric_key] = {
+            "value": value_lbl,
+            "change": change_lbl,
+            "spark": spark_cv,
+            "fmt": fmt,
+            "spark_color": spark_color,
+        }
     return f
 
 
@@ -157,7 +190,8 @@ def _grid(parent, data, specs, spark_color=AMBER):
         info = data.get(metric) or {}
         val = info.get("value")
         if val is None:
-            t = _tile(row, label, "—", "no data", DIM)
+            t = _tile(row, label, "\u2014", "no data", DIM,
+                      metric_key=metric, fmt=fmt)
         else:
             try: vs = fmt.format(val)
             except (ValueError, TypeError): vs = str(val)
@@ -168,8 +202,89 @@ def _grid(parent, data, specs, spark_color=AMBER):
                 sc = GREEN if pct > 0 else (RED if pct < 0 else spark_color)
             else:
                 ch = ""; cc = DIM; sc = spark_color
-            t = _tile(row, label, vs, ch, cc, info.get("series", []), sc)
+            t = _tile(row, label, vs, ch, cc, info.get("series", []), sc,
+                      metric_key=metric, fmt=fmt)
         t.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
+
+
+def tick_update() -> int:
+    """Refresh the value/change/spark of every registered tile in place.
+
+    Reads the latest numbers from the macro store and pushes them to the
+    existing Tk widgets via ``configure(text=…)``. No destroy/rebuild, so
+    the screen updates like a terminal ticker instead of flashing every
+    tick. Returns the number of tiles that actually changed value.
+    """
+    try:
+        from macro_brain.persistence.store import macro_series
+    except Exception:
+        return 0
+
+    changed = 0
+    for metric, refs in list(_TILE_REGISTRY.items()):
+        value_lbl = refs.get("value")
+        # Prune registry entries whose widgets are gone (tab switched).
+        try:
+            if value_lbl is None or not value_lbl.winfo_exists():
+                _TILE_REGISTRY.pop(metric, None)
+                continue
+        except Exception:
+            _TILE_REGISTRY.pop(metric, None)
+            continue
+
+        try:
+            s = macro_series(metric)
+        except Exception:
+            continue
+        if not s:
+            continue
+        last = s[-1]
+        prev = s[-2] if len(s) > 1 else None
+        val = last.get("value")
+        if val is None:
+            continue
+
+        fmt = refs.get("fmt") or "{}"
+        try:
+            vs = fmt.format(val)
+        except (ValueError, TypeError):
+            vs = str(val)
+
+        try:
+            if value_lbl.cget("text") != vs:
+                value_lbl.configure(text=vs)
+                changed += 1
+        except Exception:
+            continue
+
+        # Change / direction chip
+        change_lbl = refs.get("change")
+        if change_lbl is not None:
+            try:
+                if change_lbl.winfo_exists():
+                    pct = _pct_change(val, (prev or {}).get("value"))
+                    if pct is not None:
+                        ch_text = f"{pct:+.2f}%"
+                        ch_color = (GREEN if pct > 0
+                                    else (RED if pct < 0 else DIM))
+                        if change_lbl.cget("text") != ch_text:
+                            change_lbl.configure(text=ch_text, fg=ch_color)
+            except Exception:
+                pass
+
+        # Spark series
+        spark_cv = refs.get("spark")
+        if spark_cv is not None:
+            try:
+                if spark_cv.winfo_exists():
+                    vals = [r["value"] for r in s[-30:]]
+                    w = spark_cv.winfo_width() or 80
+                    _draw_spark(spark_cv, vals,
+                                 color=refs.get("spark_color", AMBER),
+                                 w=w, h=14)
+            except Exception:
+                pass
+    return changed
 
 
 def _section(parent, title, color=None, pady_top=None):
@@ -1025,6 +1140,11 @@ _TABS = [
 def render(parent: tk.Widget, app=None) -> None:
     from macro_brain.persistence.store import init_db, latest_regime
     init_db()
+
+    # Full render rebuilds every tile, so any previously-registered refs
+    # are about to become stale. Drop them now so tick_update() doesn't
+    # try to configure dead widgets.
+    _clear_tile_registry()
 
     for w in parent.winfo_children():
         try: w.destroy()

@@ -399,8 +399,8 @@ MERCURIO_CVD_DIV_BARS   = 10       # lookback para detectar divergência
 MERCURIO_VIMB_WINDOW    = 10       # janela para volume imbalance
 MERCURIO_VIMB_LONG      = 0.60     # iter3 1080d: revertido — relaxar VIMB degradou quality; fix real é filtro counter-trend
 MERCURIO_VIMB_SHORT     = 0.40
-MERCURIO_LIQ_VOL_MULT   = 3.0     # spike volume > N× média = liquidação
-MERCURIO_LIQ_ATR_MULT   = 2.0     # spike ATR > N× média = liquidação
+MERCURIO_LIQ_VOL_MULT   = 2.5     # iter6 1080d: 3.0→2.5 pra ampliar LIQ FADE sample (iter5 só teve 9 trades)
+MERCURIO_LIQ_ATR_MULT   = 1.5     # iter6 1080d: 2.0→1.5
 MERCURIO_MIN_SCORE      = 0.50     # score mínimo para entrada
 MERCURIO_SIZE_MULT      = 0.30     # position size multiplier (grid 2026-04-14: 0.30 domina em Sharpe; padrão consistente com deshaw/bridgewater)
 

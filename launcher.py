@@ -8018,11 +8018,24 @@ class App(tk.Tk):
         def _still_here(t):
             return getattr(self, "_macro_page_token", None) is t
 
+        # ── Continuous flow: tick every 10s, no destroy/rebuild ──────
+        # dashboard_view.tick_update() reads the macro store and pushes
+        # fresh values to existing Tk labels in place. No flicker, no
+        # teleport, prices just "flow" like a ticker tape.
+        def _auto_tick():
+            if not _still_here(tok):
+                return
+            try:
+                from macro_brain.dashboard_view import tick_update
+                tick_update()
+            except Exception:
+                pass
+            self._macro_render_after = self.after(10_000, _auto_tick)
+
         # Background cycle every 5 min — actively fetches new prices from
         # the macro brain's configured sources. Runs in a daemon thread so
-        # Tk never blocks on network I/O. Critically: does NOT re-render
-        # the UI. User either presses R to refresh or waits for their
-        # next visit — the data is already fresh when they come back.
+        # Tk never blocks on network I/O. After fetch completes, the next
+        # tick picks up the new values. No UI rebuild involved.
         def _auto_cycle():
             if not _still_here(tok):
                 return
@@ -8047,7 +8060,8 @@ class App(tk.Tk):
                 pass
         threading.Thread(target=_kickoff, daemon=True).start()
 
-        self._macro_cycle_after = self.after(300_000, _auto_cycle)
+        self._macro_render_after = self.after(10_000, _auto_tick)
+        self._macro_cycle_after  = self.after(300_000, _auto_cycle)
 
     def _risk_menu(self):
         self._clr(); self._clear_kb()
