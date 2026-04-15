@@ -202,9 +202,28 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
                 "cvd_trend": 1.0 if cvd_trend == "BEAR" else 0.3,
             }
 
-        # iter4 reverted: LIQ-based entry via struct direction falhou em W3 (-8.76 exp)
-        # Hipótese: após liquidation spike, a reversão é FADE do movimento, não continuation
-        # Backlog: testar entrada contra struct (fade liquidation move) em iter futuro
+        # iter5 1080d: LIQ FADE entry — após liquidation spike, fade o movimento
+        # Lógica: liq aconteceu NA direção do struct (longs stopped na queda = struct DOWN)
+        # → entrar CONTRA o struct (BULLISH após cascade de longs = after shakeout)
+        # macro alignment mantido (não FADE contra o macro primário)
+        elif liq > 0 and struct == "DOWN" and vimb <= 0.50 and macro_b != "BEAR":
+            direction = "BULLISH"
+            score_components = {
+                "cvd_div": 1.0,
+                "vimb": float(1 - vimb),
+                "struct_align": 0.5,
+                "liq_boost": 1.0,
+                "cvd_trend": 1.0 if cvd_trend == "BULL" else 0.3,
+            }
+        elif liq > 0 and struct == "UP" and vimb >= 0.50:
+            direction = "BEARISH"
+            score_components = {
+                "cvd_div": 1.0,
+                "vimb": float(vimb),
+                "struct_align": 0.5,
+                "liq_boost": 1.0,
+                "cvd_trend": 1.0 if cvd_trend == "BEAR" else 0.3,
+            }
 
         if direction is None:
             continue

@@ -1154,6 +1154,20 @@ class App(tk.Tk):
             except Exception: pass
         self._dash_after_id = None
         self._dash_alive = False
+
+        # Macro Brain + Arbitrage cockpits each own their own timers —
+        # kill them before any screen change so refresh ticks from an
+        # abandoned page can't teleport the user back to it.
+        for attr in ("_macro_render_after", "_macro_cycle_after",
+                     "_arb_refresh_after"):
+            aid = getattr(self, attr, None)
+            if aid:
+                try: self.after_cancel(aid)
+                except Exception: pass
+            setattr(self, attr, None)
+        # Invalidate the page-token sentinels so any in-flight tick
+        # that got past the cancel no-ops instead of re-rendering.
+        self._macro_page_token = None
         # Site console poll loop self-terminates when this flag flips false.
         # The SiteRunner subprocess itself keeps running independently.
         self._site_screen_alive = False
@@ -5304,50 +5318,108 @@ class App(tk.Tk):
         for i, (_, w, _) in enumerate(cols):
             body.grid_columnconfigure(i, minsize=w * 7, weight=0, uniform="arb")
 
+        # In-place row cache: list of (cells, hover_bg) per current row.
+        # repaint() diffs rows against this cache and only mutates cells
+        # that actually changed, so a 15s scan refresh doesn't flicker —
+        # text just updates like a terminal ticker.
+        state = {"rows": [], "placeholder": None}
+
+        def _clear_placeholder():
+            if state["placeholder"] is not None:
+                state["placeholder"].destroy()
+                state["placeholder"] = None
+
+        def _set_placeholder(msg: str):
+            # Only replace the message if different — avoid flicker cycles.
+            ph = state["placeholder"]
+            if ph is not None:
+                try:
+                    if ph.cget("text") == msg:
+                        return
+                    ph.configure(text=msg)
+                    return
+                except Exception:
+                    pass
+            # Remove any rows first (placeholder = empty state)
+            for (cells, _) in state["rows"]:
+                for c in cells:
+                    c.destroy()
+            state["rows"] = []
+            state["placeholder"] = tk.Label(
+                body, text=msg, font=(FONT, 8),
+                fg=DIM2, bg=BG, justify="center")
+            state["placeholder"].grid(
+                row=0, column=0, columnspan=len(cols), pady=16)
+
+        def _make_row(ri: int, row, bg_row: str):
+            cells = []
+            for ci, ((txt, fg), (_, _, anchor)) in enumerate(zip(row, cols)):
+                sticky = "w" if anchor == "w" else "e"
+                cursor = "hand2" if on_click else "arrow"
+                cell = tk.Label(body, text=txt, font=(FONT, 8),
+                                 fg=fg, bg=bg_row, anchor=anchor,
+                                 cursor=cursor)
+                cell.grid(row=ri, column=ci,
+                          sticky=sticky + "nsew", padx=3, pady=1)
+                cells.append(cell)
+                if on_click is not None:
+                    cell.bind(
+                        "<Button-1>", lambda _e, _i=ri: on_click(_i))
+            if on_click is not None:
+                def _hover_in(_e, cells=cells):
+                    for c in cells:
+                        c.configure(bg=BG3)
+                def _hover_out(_e, cells=cells, bgx=bg_row):
+                    for c in cells:
+                        c.configure(bg=bgx)
+                for c in cells:
+                    c.bind("<Enter>", _hover_in)
+                    c.bind("<Leave>", _hover_out)
+            return cells
+
+        def _update_row(cells, row, bg_row):
+            for c, (txt, fg) in zip(cells, row):
+                # Only push changes — comparing beforehand keeps Tk from
+                # redrawing cells whose text/fg are identical to current.
+                try:
+                    if c.cget("text") != txt:
+                        c.configure(text=txt)
+                    if c.cget("fg") != fg:
+                        c.configure(fg=fg)
+                    if c.cget("bg") != bg_row:
+                        c.configure(bg=bg_row)
+                except Exception:
+                    pass
+
         def repaint(rows: list[list[tuple[str, str]]]):
-            """Each cell is (text, fg). Clear body and re-paint."""
-            for w in body.winfo_children():
-                w.destroy()
+            """Diff-update rows in place. No destroy+rebuild on normal
+            refresh, so the table reads like a ticker instead of blinking."""
             if not rows:
-                # Whether this is "still scanning" or "scan done but nothing
-                # matched filters" gets disambiguated by whether _arb_cache
-                # exists yet. Initial render → loading; post-scan empty →
-                # filtered out hint.
                 has_scan = getattr(self, "_arb_cache", None) is not None
                 msg = ("  \u2014 no pairs match current filters \u2014\n"
                        "  click filter chips above to relax"
                        if has_scan else
                        "  \u2014 scanning venues, hold on \u2014")
-                tk.Label(body, text=msg, font=(FONT, 8),
-                         fg=DIM2, bg=BG, justify="center").grid(
-                    row=0, column=0, columnspan=len(cols), pady=16)
+                _set_placeholder(msg)
                 return
+
+            _clear_placeholder()
+            # Update existing rows in place where possible
             for ri, row in enumerate(rows):
                 bg_row = BG if ri % 2 == 0 else BG2
-                row_cells = []
-                for ci, ((txt, fg), (_, _, anchor)) in enumerate(zip(row, cols)):
-                    sticky = "w" if anchor == "w" else "e"
-                    cursor = "hand2" if on_click else "arrow"
-                    cell = tk.Label(body, text=txt, font=(FONT, 8),
-                                     fg=fg, bg=bg_row, anchor=anchor,
-                                     cursor=cursor)
-                    cell.grid(row=ri, column=ci,
-                              sticky=sticky + "nsew", padx=3, pady=1)
-                    row_cells.append(cell)
-                    if on_click is not None:
-                        cell.bind(
-                            "<Button-1>", lambda _e, _i=ri: on_click(_i))
-                # Hover highlight on the whole row when clickable
-                if on_click is not None:
-                    def _hover_in(_e, cells=row_cells):
-                        for c in cells:
-                            c.configure(bg=BG3)
-                    def _hover_out(_e, cells=row_cells, bgx=bg_row):
-                        for c in cells:
-                            c.configure(bg=bgx)
-                    for c in row_cells:
-                        c.bind("<Enter>", _hover_in)
-                        c.bind("<Leave>", _hover_out)
+                if ri < len(state["rows"]):
+                    cells, _ = state["rows"][ri]
+                    _update_row(cells, row, bg_row)
+                    state["rows"][ri] = (cells, bg_row)
+                else:
+                    cells = _make_row(ri, row, bg_row)
+                    state["rows"].append((cells, bg_row))
+            # Trim excess rows (previous refresh had more data than this one)
+            while len(state["rows"]) > len(rows):
+                cells, _ = state["rows"].pop()
+                for c in cells:
+                    c.destroy()
+
         return body, repaint
 
     # ── Shared filter bar (click to cycle each chip) ─────────
@@ -7906,10 +7978,12 @@ class App(tk.Tk):
     def _macro_brain_menu(self):
         """Macro Brain cockpit — intro screen + dense market data.
 
-        Auto-refreshes the view every 30s (re-reads the store so any
-        external cycle shows up) and kicks off a fresh run_once every
-        5 minutes in a worker thread so prices actually move when the
-        user leaves the cockpit open.
+        Background cycle runs every 5 min in a daemon thread, keeping the
+        store fresh without touching the UI. Prices flow in naturally —
+        we never redraw the whole page (that would yank the user around
+        if they navigated elsewhere mid-tick). Pressing R gives a manual
+        refresh; the auto-render approach was removed after it caused
+        teleport-back bugs.
 
         ESC → main menu (trade engines).
         ENTER/space also → main menu (from splash click).
@@ -7918,7 +7992,7 @@ class App(tk.Tk):
         self.h_path.configure(text="")  # Cockpit is intro — no nav breadcrumb
         self.h_stat.configure(text="COCKPIT", fg=AMBER)
         self.f_lbl.configure(
-            text="ESC main menu  |  R refresh  |  C run cycle  |  auto 30s / cycle 5m")
+            text="ESC main menu  |  R refresh  |  C run cycle  |  bg cycle 5m")
         # Strong escape bindings — cockpit should never be a dead end
         self._kb("<Escape>",   lambda: self._menu("main"))
         self._kb("<Key-0>",    lambda: self._menu("main"))
@@ -7935,44 +8009,20 @@ class App(tk.Tk):
                      font=(FONT, 10), fg=RED, bg=BG).pack(pady=40)
             return
 
-        # Cancel any previous macro timers so switching in/out doesn't
-        # stack multiple schedulers.
-        for attr in ("_macro_render_after", "_macro_cycle_after"):
-            prev = getattr(self, attr, None)
-            if prev:
-                try:
-                    self.after_cancel(prev)
-                except Exception:
-                    pass
-                setattr(self, attr, None)
-
-        # Tag the page so our timers know they're still on screen; any
-        # other _menu call replaces self.main contents and the tag check
-        # below fails, stopping the loops naturally.
+        # Tag the page so the auto-cycle loop knows when to stop. _clr()
+        # resets this to None on any navigation, so out-of-page ticks
+        # no-op instead of re-entering the cockpit.
         self._macro_page_token = object()
+        tok = self._macro_page_token
 
-        def _still_here(tok):
-            try:
-                return getattr(self, "_macro_page_token", None) is tok
-            except Exception:
-                return False
-
-        # Auto re-render every 30s — shows any new data that landed in
-        # the macro store (from this process's cycles or any external
-        # daemon populating the same store path).
-        def _auto_render():
-            if not _still_here(tok):
-                return
-            try:
-                from macro_brain.dashboard_view import render as _rend
-                _rend(self.main, app=self)
-            except Exception:
-                pass
-            self._macro_render_after = self.after(30_000, _auto_render)
+        def _still_here(t):
+            return getattr(self, "_macro_page_token", None) is t
 
         # Background cycle every 5 min — actively fetches new prices from
         # the macro brain's configured sources. Runs in a daemon thread so
-        # Tk never blocks on network I/O.
+        # Tk never blocks on network I/O. Critically: does NOT re-render
+        # the UI. User either presses R to refresh or waits for their
+        # next visit — the data is already fresh when they come back.
         def _auto_cycle():
             if not _still_here(tok):
                 return
@@ -7986,7 +8036,6 @@ class App(tk.Tk):
             threading.Thread(target=_work, daemon=True).start()
             self._macro_cycle_after = self.after(300_000, _auto_cycle)
 
-        tok = self._macro_page_token
         # Kick a cycle immediately so the user doesn't wait 5 min on first
         # open — same worker pattern so it never blocks the UI.
         import threading
@@ -7998,8 +8047,7 @@ class App(tk.Tk):
                 pass
         threading.Thread(target=_kickoff, daemon=True).start()
 
-        self._macro_render_after = self.after(30_000, _auto_render)
-        self._macro_cycle_after  = self.after(300_000, _auto_cycle)
+        self._macro_cycle_after = self.after(300_000, _auto_cycle)
 
     def _risk_menu(self):
         self._clr(); self._clear_kb()
