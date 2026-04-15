@@ -389,7 +389,7 @@ NEWTON_HALFLIFE_MAX    = 500       # half-life máximo (candles) — ~5d em 15m
 NEWTON_SPREAD_WINDOW   = 90        # rolling window para z-score do spread
 NEWTON_RECALC_EVERY    = 120       # recalcular cointegração a cada N candles
 NEWTON_MAX_HOLD        = 96        # max candles por trade (2× o normal)
-NEWTON_SIZE_MULT       = 0.50      # position size relativo ao normal (pairs = menos risco)
+NEWTON_SIZE_MULT       = 0.30      # position size relativo ao normal (grid 2026-04-14: 0.30 domina 0.50/0.70 em Sharpe e DD)
 NEWTON_MIN_PAIRS       = 2         # mínimo de pares cointegrados para operar
 
 # ── MERCURIO — Order Flow / Microstructure ────────────────────
