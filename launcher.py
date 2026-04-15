@@ -5274,16 +5274,35 @@ class App(tk.Tk):
             pass
 
     # ── Table helper used by every tab ─────────────────────────
-    def _arb_make_table(self, parent, cols: list[tuple[str, int, str]]):
-        """Build a header + body pair. Returns (body_frame, repaint_fn)."""
-        hrow = tk.Frame(parent, bg=BG)
-        hrow.pack(fill="x")
-        for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
+    def _arb_make_table(self, parent, cols: list[tuple[str, int, str]],
+                         on_click=None):
+        """Build a grid-aligned header + body. Returns (body_frame, repaint_fn).
+
+        cols: list of (label, width_chars, anchor). Header and body share the
+        same grid column configuration, so cells stay perfectly aligned no
+        matter the row content. Previous pack-based implementation drifted
+        when cell text lengths varied.
+
+        on_click(row_idx): optional callback fired when the user clicks any
+        cell of a body row. Lets each tab attach a detail pane that reacts
+        to the selected pair.
+        """
+        # Header row
+        hdr = tk.Frame(parent, bg=BG)
+        hdr.pack(fill="x", padx=2)
+        for i, (label, w, anchor) in enumerate(cols):
+            hdr.grid_columnconfigure(i, minsize=w * 7, weight=0, uniform="arb")
+            sticky = "w" if anchor == "w" else "e"
+            tk.Label(hdr, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=BG, anchor=anchor).grid(
+                row=0, column=i, sticky=sticky + "ns", padx=3, pady=(0, 2))
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(0, 2))
+
+        # Body uses the same column config so each column lines up to header
         body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True)
+        body.pack(fill="both", expand=True, padx=2)
+        for i, (_, w, _) in enumerate(cols):
+            body.grid_columnconfigure(i, minsize=w * 7, weight=0, uniform="arb")
 
         def repaint(rows: list[list[tuple[str, str]]]):
             """Each cell is (text, fg). Clear body and re-paint."""
@@ -5291,33 +5310,311 @@ class App(tk.Tk):
                 w.destroy()
             if not rows:
                 tk.Label(body, text="  \u2014 no data \u2014",
-                         font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=16)
+                         font=(FONT, 8), fg=DIM2, bg=BG).grid(
+                    row=0, column=0, columnspan=len(cols), pady=16)
                 return
-            for i, row in enumerate(rows):
-                bg = BG if i % 2 == 0 else BG2
-                rf = tk.Frame(body, bg=bg)
-                rf.pack(fill="x")
-                for (txt, fg), (_, w, anchor) in zip(row, cols):
-                    tk.Label(rf, text=txt, font=(FONT, 8),
-                             fg=fg, bg=bg, width=w, anchor=anchor).pack(side="left")
+            for ri, row in enumerate(rows):
+                bg_row = BG if ri % 2 == 0 else BG2
+                row_cells = []
+                for ci, ((txt, fg), (_, _, anchor)) in enumerate(zip(row, cols)):
+                    sticky = "w" if anchor == "w" else "e"
+                    cursor = "hand2" if on_click else "arrow"
+                    cell = tk.Label(body, text=txt, font=(FONT, 8),
+                                     fg=fg, bg=bg_row, anchor=anchor,
+                                     cursor=cursor)
+                    cell.grid(row=ri, column=ci,
+                              sticky=sticky + "nsew", padx=3, pady=1)
+                    row_cells.append(cell)
+                    if on_click is not None:
+                        cell.bind(
+                            "<Button-1>", lambda _e, _i=ri: on_click(_i))
+                # Hover highlight on the whole row when clickable
+                if on_click is not None:
+                    def _hover_in(_e, cells=row_cells):
+                        for c in cells:
+                            c.configure(bg=BG3)
+                    def _hover_out(_e, cells=row_cells, bgx=bg_row):
+                        for c in cells:
+                            c.configure(bg=bgx)
+                    for c in row_cells:
+                        c.bind("<Enter>", _hover_in)
+                        c.bind("<Leave>", _hover_out)
         return body, repaint
 
+    # ── Shared filter bar (click to cycle each chip) ─────────
+    _ARB_APR_OPTS   = [5, 10, 20, 50, 100]
+    _ARB_VOL_OPTS   = [0, 100_000, 500_000, 1_000_000, 5_000_000]
+    _ARB_OI_OPTS    = [0, 50_000, 100_000, 500_000, 1_000_000]
+    _ARB_RISK_OPTS  = ["HIGH", "MED", "LOW"]
+    _ARB_GRADE_OPTS = ["SKIP", "MAYBE", "GO"]
+    _ARB_FILTER_DEFAULTS = {
+        "min_apr": 20.0, "min_volume": 500_000, "min_oi": 0,
+        "risk_max": "HIGH", "grade_min": "MAYBE",
+    }
+
+    def _arb_filter_state(self) -> dict:
+        if not hasattr(self, "_arb_filters"):
+            self._arb_filters = dict(self._ARB_FILTER_DEFAULTS)
+        return self._arb_filters
+
+    def _arb_fmt_filter(self, key: str, val) -> str:
+        if key == "min_apr":
+            return f"APR\u2265{int(val)}%"
+        if key == "min_volume":
+            if val == 0: return "VOL\u2265OFF"
+            if val >= 1_000_000: return f"VOL\u2265{int(val/1_000_000)}M"
+            return f"VOL\u2265{int(val/1_000)}K"
+        if key == "min_oi":
+            if val == 0: return "OI\u2265OFF"
+            if val >= 1_000_000: return f"OI\u2265{int(val/1_000_000)}M"
+            return f"OI\u2265{int(val/1_000)}K"
+        if key == "risk_max":
+            return f"RISK\u2264{val}"
+        if key == "grade_min":
+            return f"GRADE\u2265{val}"
+        return f"{key}={val}"
+
+    def _arb_build_filter_bar(self, parent):
+        """Render the shared filter chip strip. Click a chip to cycle its value.
+
+        Filters persist across tab switches via self._arb_filters. Any value
+        change re-renders the active tab from the cached scan (no network).
+        """
+        state = self._arb_filter_state()
+        bar = tk.Frame(parent, bg=BG2)
+        bar.pack(fill="x", pady=(0, 4))
+        tk.Label(bar, text=" FILTERS ", font=(FONT, 7, "bold"),
+                 fg=DIM, bg=BG2).pack(side="left", padx=(4, 4))
+
+        self._arb_filter_labels = {}
+        filter_defs = [
+            ("min_apr",    self._ARB_APR_OPTS),
+            ("min_volume", self._ARB_VOL_OPTS),
+            ("min_oi",     self._ARB_OI_OPTS),
+            ("risk_max",   self._ARB_RISK_OPTS),
+            ("grade_min",  self._ARB_GRADE_OPTS),
+        ]
+        for fkey, fopts in filter_defs:
+            cur = state.get(fkey)
+            lbl = tk.Label(bar, text=f" {self._arb_fmt_filter(fkey, cur)} ",
+                           font=(FONT, 7, "bold"), fg=AMBER, bg=BG3,
+                           cursor="hand2", padx=4)
+            lbl.pack(side="left", padx=2, pady=2)
+            self._arb_filter_labels[fkey] = lbl
+
+            def _cycle(_e=None, _k=fkey, _opts=fopts):
+                s = self._arb_filter_state()
+                cur = s.get(_k)
+                try:
+                    idx = _opts.index(cur)
+                except ValueError:
+                    idx = 0
+                nxt = _opts[(idx + 1) % len(_opts)]
+                s[_k] = nxt
+                self._arb_filter_labels[_k].configure(
+                    text=f" {self._arb_fmt_filter(_k, nxt)} ")
+                # Re-render the current tab with cached data
+                cache = getattr(self, "_arb_cache", None)
+                if cache:
+                    self._arb_hub_telem_update(
+                        cache.get("stats"), cache.get("top"),
+                        cache.get("opps", []), cache.get("arb_cc", []),
+                        cache.get("arb_dd", []), cache.get("arb_cd", []),
+                        cache.get("basis", []), cache.get("spot", []))
+            lbl.bind("<Button-1>", _cycle)
+
+    # ── Detail pane (populated on row click) ──────────────────
+    def _arb_build_detail_pane(self, parent):
+        """Reserve a detail panel below the table. Updated on row click with
+        the selected pair's factor breakdown + score."""
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 2))
+        title = tk.Label(parent, text="DETAIL",
+                          font=(FONT, 7, "bold"), fg=DIM, bg=BG)
+        title.pack(anchor="w")
+        body = tk.Frame(parent, bg=BG2)
+        body.pack(fill="x", pady=(2, 0))
+        default = tk.Label(body, text="  click a row to inspect the pair",
+                            font=(FONT, 7), fg=DIM2, bg=BG2)
+        default.pack(anchor="w", padx=6, pady=4)
+        self._arb_detail_body = body
+        self._arb_detail_default = default
+
+    def _arb_show_detail(self, pair: dict):
+        """Populate the detail pane with the factor breakdown of a pair."""
+        body = getattr(self, "_arb_detail_body", None)
+        if body is None:
+            return
+        for w in body.winfo_children():
+            w.destroy()
+
+        # Compute the factor breakdown via the same scorer used for filtering.
+        try:
+            from core.arb_scoring import score_opp
+            res = score_opp(pair)
+        except Exception:
+            res = None
+
+        header_txt = self._arb_pair_label(pair)
+        tk.Label(body, text=header_txt,
+                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG2,
+                 anchor="w").pack(fill="x", padx=6, pady=(4, 2))
+
+        # Factor table
+        if res is not None:
+            grid = tk.Frame(body, bg=BG2)
+            grid.pack(fill="x", padx=6, pady=(0, 4))
+            factor_rows = [
+                ("NET APR", res.factors.get("net_apr"),
+                    f"{float(pair.get('net_apr') or pair.get('apr') or 0):+.1f}%"),
+                ("VOLUME",  res.factors.get("volume"),
+                    self._fmt_vol(pair.get("volume_24h")
+                                  or self._pair_min(pair.get("volume_24h_short"),
+                                                     pair.get("volume_24h_long")))),
+                ("OI",      res.factors.get("oi"),
+                    self._fmt_vol(pair.get("open_interest")
+                                  or self._pair_min(pair.get("open_interest_short"),
+                                                     pair.get("open_interest_long")))),
+                ("RISK",    res.factors.get("risk"),   pair.get("risk", "\u2014")),
+                ("SLIP",    res.factors.get("slippage"), "\u2014"),
+                ("VENUE",   res.factors.get("venue"),
+                    self._arb_venue_label(pair)),
+            ]
+            for i, (label, score, value) in enumerate(factor_rows):
+                grid.grid_columnconfigure(1, weight=1)
+                tk.Label(grid, text=label, font=(FONT, 7, "bold"),
+                         fg=DIM, bg=BG2, width=8, anchor="w").grid(
+                    row=i, column=0, sticky="w", padx=(0, 6))
+                tk.Label(grid, text=value, font=(FONT, 8),
+                         fg=WHITE, bg=BG2, anchor="w").grid(
+                    row=i, column=1, sticky="w")
+                s_txt = "\u2014" if score is None else f"{score:.0f}/100"
+                s_fg = (GREEN if (score or 0) >= 70 else
+                        AMBER if (score or 0) >= 40 else DIM)
+                tk.Label(grid, text=s_txt, font=(FONT, 7),
+                         fg=s_fg, bg=BG2, width=10, anchor="e").grid(
+                    row=i, column=2, sticky="e")
+
+            tk.Frame(body, bg=BORDER, height=1).pack(
+                fill="x", padx=6, pady=(2, 2))
+            sum_line = tk.Frame(body, bg=BG2)
+            sum_line.pack(fill="x", padx=6, pady=(0, 4))
+            grade_fg = (GREEN if res.grade == "GO" else
+                        AMBER if res.grade == "MAYBE" else DIM)
+            tk.Label(sum_line, text=f"SCORE {res.score:.0f}/100",
+                     font=(FONT, 9, "bold"), fg=WHITE, bg=BG2).pack(side="left")
+            tk.Label(sum_line, text=f"  GRADE {res.grade}",
+                     font=(FONT, 9, "bold"), fg=grade_fg,
+                     bg=BG2).pack(side="left", padx=(8, 0))
+
+    @staticmethod
+    def _pair_min(a, b):
+        vals = [v for v in (a, b) if v is not None]
+        return min(vals) if vals else None
+
+    @staticmethod
+    def _fmt_vol(v):
+        if v is None:
+            return "\u2014"
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return "\u2014"
+        if v >= 1_000_000:
+            return f"${v / 1_000_000:.1f}M"
+        if v >= 1_000:
+            return f"${v / 1_000:.0f}K"
+        return f"${v:.0f}"
+
+    @staticmethod
+    def _arb_venue_label(pair: dict) -> str:
+        if pair.get("long_venue") and pair.get("short_venue"):
+            return f"{pair['long_venue']} \u2192 {pair['short_venue']}"
+        return str(pair.get("venue") or "\u2014")
+
+    @staticmethod
+    def _arb_pair_label(pair: dict) -> str:
+        sym = pair.get("symbol") or pair.get("sym") or "\u2014"
+        venue = (f"{pair.get('long_venue', '')} \u2194 {pair.get('short_venue', '')}"
+                 if pair.get("long_venue") else pair.get("venue", ""))
+        return f"{sym}  \u00b7  {venue.strip(' \u2194')}"
+
+    # ── Scoring filter ───────────────────────────────────────
+    def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
+        """Apply user filters + arb_scoring.score_opp to each pair.
+
+        Returns a list of (pair_dict, ScoreResult) in descending score order,
+        already filtered out of SKIP rows (unless the grade filter allows it).
+        """
+        from core.arb_scoring import score_opp
+        state = self._arb_filter_state()
+        min_apr    = state.get("min_apr", 0)
+        min_volume = state.get("min_volume", 0)
+        min_oi     = state.get("min_oi", 0)
+        risk_max   = state.get("risk_max", "HIGH")
+        grade_min  = state.get("grade_min", "SKIP")
+        _R = {"LOW": 0, "MED": 1, "HIGH": 2}
+        _G = {"GO": 0, "MAYBE": 1, "SKIP": 2}
+        risk_cap  = _R.get(risk_max, 2)
+        grade_cap = _G.get(grade_min, 2)
+
+        out = []
+        for p in (pairs or []):
+            # Cheap filters first
+            apr = abs(float(p.get("net_apr") or p.get("apr") or 0))
+            if apr < min_apr:
+                continue
+            vol = (p.get("volume_24h")
+                   or self._pair_min(p.get("volume_24h_short"),
+                                      p.get("volume_24h_long")) or 0)
+            if min_volume and float(vol) < min_volume:
+                continue
+            oi = (p.get("open_interest")
+                  or self._pair_min(p.get("open_interest_short"),
+                                     p.get("open_interest_long")) or 0)
+            if min_oi and float(oi) < min_oi:
+                continue
+            risk = p.get("risk", "HIGH")
+            if _R.get(risk, 2) > risk_cap:
+                continue
+            try:
+                sr = score_opp(p)
+            except Exception:
+                continue
+            if _G.get(sr.grade, 2) > grade_cap:
+                continue
+            out.append((p, sr))
+        out.sort(key=lambda t: t[1].score, reverse=True)
+        return out
+
     # ── Tab renderers ──────────────────────────────────────────
+    _ARB_PAIRS_COLS = [
+        ("#",     3,  "e"), ("SYM",    7, "w"),
+        ("LONG",  10, "w"), ("SHORT",  10, "w"),
+        ("APR",   8,  "e"), ("VOL",    8, "e"),
+        ("OI",    8,  "e"), ("RISK",   5, "e"),
+        ("GRADE", 8,  "e"),
+    ]
+
     def _arb_render_cex_cex(self, parent):
         """CEX↔CEX tab: paired funding arb opportunities + JANE STREET
         live positions (if the engine is running and writing snapshots)."""
-        hdr = tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
-                       font=(FONT, 8, "bold"), fg=AMBER, bg=BG)
-        hdr.pack(anchor="w", pady=(0, 4))
+        tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
+                 font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(
+            anchor="w", pady=(0, 4))
 
-        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 12, "w"),
-                ("SHORT", 12, "w"), ("NET APR", 10, "e"),
-                ("RISK", 6, "e")]
-        _, repaint = self._arb_make_table(parent, cols)
+        self._arb_build_filter_bar(parent)
+        self._arb_cex_selected = []  # filtered pairs, index-aligned with table rows
+
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_cex_selected):
+                self._arb_show_detail(self._arb_cex_selected[ri])
+        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
+                                           on_click=_on_click)
         self._arb_cex_repaint = repaint
-        repaint([])  # empty placeholder until scan returns
+        repaint([])
+        self._arb_build_detail_pane(parent)
 
-        # Live positions panel (shown only if engine has snapshot)
+        # Live JANE STREET positions (shown only if engine has a fresh snapshot)
         try:
             from core.alchemy_state import AlchemyState
             state = getattr(self, "_arb_alchemy_state", None)
@@ -5326,12 +5623,11 @@ class App(tk.Tk):
                 self._arb_alchemy_state = state
             snap = state.read()
             if not snap.get("_stale", True) and snap.get("positions"):
-                tk.Frame(parent, bg=BORDER, height=1).pack(
-                    fill="x", pady=(8, 4))
-                tk.Label(parent, text="LIVE POSITIONS (JANE STREET)",
-                         font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(anchor="w")
-                pcols = [("SYM", 8, "w"), ("L/S", 10, "w"),
-                         ("PNL", 10, "e"), ("DECAY", 8, "e"), ("EXIT", 8, "e")]
+                tk.Label(parent, text="LIVE POSITIONS",
+                         font=(FONT, 7, "bold"), fg=AMBER,
+                         bg=BG).pack(anchor="w", pady=(6, 2))
+                pcols = [("SYM", 7, "w"), ("L/S", 10, "w"),
+                         ("PNL", 9, "e"), ("DECAY", 8, "e"), ("EXIT", 8, "e")]
                 _, p_repaint = self._arb_make_table(parent, pcols)
                 pos_rows = []
                 for p in snap.get("positions", []):
@@ -5342,11 +5638,11 @@ class App(tk.Tk):
                     long_v = (p.get("long") or "")[:3].upper()
                     short_v = (p.get("short") or "")[:3].upper()
                     pos_rows.append([
-                        ((p.get("sym") or "—")[:6], WHITE),
+                        ((p.get("sym") or "\u2014")[:6], WHITE),
                         (f"{long_v}/{short_v}", AMBER_D),
                         (f"{pnl:+.2f}", GREEN if pnl >= 0 else RED),
                         (f"-{p.get('edge_decay_pct', 0):.0f}%", AMBER),
-                        (f"{h}h{m:02d}" if exit_s > 0 else "—", DIM),
+                        (f"{h}h{m:02d}" if exit_s > 0 else "\u2014", DIM),
                     ])
                 p_repaint(pos_rows)
         except Exception:
@@ -5355,42 +5651,60 @@ class App(tk.Tk):
     def _arb_render_dex_dex(self, parent):
         tk.Label(parent, text="DEX \u2194 DEX  \u00b7  funding diff across decentralized venues",
                  font=(FONT, 8, "bold"), fg="#00eaff", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 12, "w"),
-                ("SHORT", 12, "w"), ("NET APR", 10, "e"),
-                ("RISK", 6, "e")]
-        _, repaint = self._arb_make_table(parent, cols)
+        self._arb_build_filter_bar(parent)
+        self._arb_dex_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_dex_selected):
+                self._arb_show_detail(self._arb_dex_selected[ri])
+        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
+                                           on_click=_on_click)
         self._arb_dex_repaint = repaint
         repaint([])
+        self._arb_build_detail_pane(parent)
 
     def _arb_render_cex_dex(self, parent):
         tk.Label(parent, text="CEX \u2194 DEX  \u00b7  funding diff cex vs dex",
                  font=(FONT, 8, "bold"), fg="#c084fc", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 12, "w"),
-                ("SHORT", 12, "w"), ("NET APR", 10, "e"),
-                ("RISK", 6, "e")]
-        _, repaint = self._arb_make_table(parent, cols)
+        self._arb_build_filter_bar(parent)
+        self._arb_cdex_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_cdex_selected):
+                self._arb_show_detail(self._arb_cdex_selected[ri])
+        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
+                                           on_click=_on_click)
         self._arb_cdex_repaint = repaint
         repaint([])
+        self._arb_build_detail_pane(parent)
 
     def _arb_render_basis(self, parent):
         tk.Label(parent, text="BASIS  \u00b7  buy spot / short perp (or reverse) to lock basis",
                  font=(FONT, 8, "bold"), fg="#32bcad", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("PERP", 10, "w"),
-                ("SPOT", 10, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
-                ("BASIS", 8, "e"), ("APR", 8, "e")]
-        _, repaint = self._arb_make_table(parent, cols)
+        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("PERP", 9, "w"),
+                ("SPOT", 9, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
+                ("BASIS", 8, "e"), ("APR", 7, "e")]
+        self._arb_basis_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_basis_selected):
+                self._arb_show_detail(self._arb_basis_selected[ri])
+        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
         self._arb_basis_repaint = repaint
         repaint([])
+        self._arb_build_detail_pane(parent)
 
     def _arb_render_spot(self, parent):
         tk.Label(parent, text="SPOT \u2194 SPOT  \u00b7  same asset, different exchange",
                  font=(FONT, 8, "bold"), fg="#ff00a0", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("VENUE A", 10, "w"),
-                ("VENUE B", 10, "w"), ("PRICE A", 12, "e"),
-                ("PRICE B", 12, "e"), ("SPREAD", 10, "e")]
-        _, repaint = self._arb_make_table(parent, cols)
+        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("VENUE A", 9, "w"),
+                ("VENUE B", 9, "w"), ("PRICE A", 11, "e"),
+                ("PRICE B", 11, "e"), ("SPREAD", 9, "e")]
+        self._arb_spot_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_spot_selected):
+                self._arb_show_detail(self._arb_spot_selected[ri])
+        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
         self._arb_spot_repaint = repaint
         repaint([])
+        self._arb_build_detail_pane(parent)
 
     def _arb_render_engine(self, parent):
         """JANE STREET engine controls + live risk + log tail."""
@@ -5602,33 +5916,57 @@ class App(tk.Tk):
         # Route to the repaint callback for the active tab
         tab = getattr(self, "_arb_tab", "cex-cex")
         if tab == "cex-cex":
-            self._arb_paint_pairs(arb_cc, getattr(self, "_arb_cex_repaint", None))
+            self._arb_paint_pairs(arb_cc,
+                getattr(self, "_arb_cex_repaint", None), "_arb_cex_selected")
         elif tab == "dex-dex":
-            self._arb_paint_pairs(arb_dd, getattr(self, "_arb_dex_repaint", None))
+            self._arb_paint_pairs(arb_dd,
+                getattr(self, "_arb_dex_repaint", None), "_arb_dex_selected")
         elif tab == "cex-dex":
-            self._arb_paint_pairs(arb_cd, getattr(self, "_arb_cdex_repaint", None))
+            self._arb_paint_pairs(arb_cd,
+                getattr(self, "_arb_cdex_repaint", None), "_arb_cdex_selected")
         elif tab == "basis":
             self._arb_paint_basis(basis)
         elif tab == "spot":
             self._arb_paint_spot(spot)
         # ENGINE tab doesn't consume scanner data
 
-    def _arb_paint_pairs(self, pairs, repaint):
+    def _arb_paint_pairs(self, pairs, repaint, selected_attr: str):
+        """Render the 9-column pair table with scoring filter applied.
+
+        selected_attr: name of the instance attribute that holds the filtered
+        pair list, so click handlers can map row index → pair dict.
+        """
         if repaint is None:
             return
+        filtered = self._arb_filter_and_score(pairs)[:20]
+        # Expose filtered list so _on_click resolves correctly
+        setattr(self, selected_attr, [p for p, _ in filtered])
+
         rows = []
-        for i, a in enumerate((pairs or [])[:15], 1):
+        for i, (a, sr) in enumerate(filtered, 1):
             net_apr = float(a.get("net_apr", 0) or 0)
             apr_fg = GREEN if net_apr >= 20 else (AMBER if net_apr >= 10 else DIM)
-            risk = a.get("risk", "—")
+            risk = a.get("risk", "\u2014")
             risk_fg = RED if risk == "HIGH" else (AMBER if risk == "MED" else GREEN)
+            vol = (a.get("volume_24h") or
+                   self._pair_min(a.get("volume_24h_short"),
+                                   a.get("volume_24h_long")) or 0)
+            oi = (a.get("open_interest") or
+                  self._pair_min(a.get("open_interest_short"),
+                                  a.get("open_interest_long")) or 0)
+            grade_fg = (GREEN if sr.grade == "GO" else
+                        AMBER if sr.grade == "MAYBE" else DIM)
+            grade_txt = f"{int(sr.score):>2} {sr.grade}"
             rows.append([
                 (f"{i:>2}", DIM),
-                ((a.get("symbol", "—") or "—")[:7], WHITE),
-                ((a.get("long_venue") or "—")[:10].lower(), AMBER_D),
-                ((a.get("short_venue") or "—")[:10].lower(), AMBER_D),
+                ((a.get("symbol", "\u2014") or "\u2014")[:7], WHITE),
+                ((a.get("long_venue") or "\u2014")[:10].lower(), AMBER_D),
+                ((a.get("short_venue") or "\u2014")[:10].lower(), AMBER_D),
                 (f"{net_apr:+.1f}%", apr_fg),
+                (self._fmt_vol(vol), DIM),
+                (self._fmt_vol(oi), DIM),
                 (risk, risk_fg),
+                (grade_txt, grade_fg),
             ])
         repaint(rows)
 
@@ -5636,15 +5974,27 @@ class App(tk.Tk):
         repaint = getattr(self, "_arb_basis_repaint", None)
         if repaint is None:
             return
+        # Filter: basis pairs can be scored via arb_scoring — each leg has a
+        # net_apr-equivalent (basis_apr). Use the user's APR floor + grade
+        # filter; volume/OI filters don't apply (basis data is thinner).
+        state = self._arb_filter_state()
+        min_apr = state.get("min_apr", 0)
+        filtered_list = []
+        for p in (basis or []):
+            if abs(float(p.get("basis_apr", 0) or 0)) < min_apr:
+                continue
+            filtered_list.append(p)
+        filtered_list = filtered_list[:20]
+        self._arb_basis_selected = filtered_list
         rows = []
-        for i, p in enumerate((basis or [])[:15], 1):
+        for i, p in enumerate(filtered_list, 1):
             bps = p.get("basis_bps", 0)
             bps_fg = GREEN if abs(bps) >= 20 else (AMBER if abs(bps) >= 10 else DIM)
             rows.append([
                 (f"{i:>2}", DIM),
-                (p.get("symbol", "—")[:7], WHITE),
-                (p.get("venue_perp", "—")[:8].lower(), AMBER_D),
-                (p.get("venue_spot", "—")[:8].lower(), AMBER_D),
+                (p.get("symbol", "\u2014")[:7], WHITE),
+                (p.get("venue_perp", "\u2014")[:9].lower(), AMBER_D),
+                (p.get("venue_spot", "\u2014")[:9].lower(), AMBER_D),
                 (f"${p.get('mark_price', 0):,.2f}", DIM),
                 (f"${p.get('spot_price', 0):,.2f}", DIM),
                 (f"{bps:+.0f}bps", bps_fg),
@@ -5656,15 +6006,24 @@ class App(tk.Tk):
         repaint = getattr(self, "_arb_spot_repaint", None)
         if repaint is None:
             return
+        # Spot spreads have bps but no APR; apply a minimum-bps tripwire via
+        # the risk filter as a loose proxy — HIGH = ≥3bps, MED = ≥8, LOW = ≥15.
+        state = self._arb_filter_state()
+        risk_max = state.get("risk_max", "HIGH")
+        thresholds = {"HIGH": 3, "MED": 8, "LOW": 15}
+        min_bps = thresholds.get(risk_max, 3)
+        filtered_list = [p for p in (spot or [])
+                         if float(p.get("spread_bps", 0) or 0) >= min_bps][:20]
+        self._arb_spot_selected = filtered_list
         rows = []
-        for i, p in enumerate((spot or [])[:15], 1):
+        for i, p in enumerate(filtered_list, 1):
             bps = p.get("spread_bps", 0)
             bps_fg = GREEN if bps >= 15 else (AMBER if bps >= 8 else DIM)
             rows.append([
                 (f"{i:>2}", DIM),
-                (p.get("symbol", "—")[:7], WHITE),
-                (p.get("venue_a", "—")[:8].lower(), AMBER_D),
-                (p.get("venue_b", "—")[:8].lower(), AMBER_D),
+                (p.get("symbol", "\u2014")[:7], WHITE),
+                (p.get("venue_a", "\u2014")[:9].lower(), AMBER_D),
+                (p.get("venue_b", "\u2014")[:9].lower(), AMBER_D),
                 (f"${p.get('price_a', 0):,.4f}", DIM),
                 (f"${p.get('price_b', 0):,.4f}", DIM),
                 (f"{bps:.1f}bps", bps_fg),

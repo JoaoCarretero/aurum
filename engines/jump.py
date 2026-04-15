@@ -202,6 +202,28 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
                 "cvd_trend": 1.0 if cvd_trend == "BEAR" else 0.3,
             }
 
+        # iter4 1080d: LIQ-based alternative entry — liquidation spike + struct + macro
+        # Adiciona caminho ortogonal ao CVD div (zero overlap nos 78 iter3 trades)
+        # "cvd_div" slot recebe liq pra preservar score ~0.80+
+        elif liq > 0 and struct == "UP" and vimb >= 0.50 and macro_b != "BEAR":
+            direction = "BULLISH"
+            score_components = {
+                "cvd_div": 1.0,
+                "vimb": float(vimb),
+                "struct_align": 1.0,
+                "liq_boost": 1.0,
+                "cvd_trend": 1.0 if cvd_trend == "BULL" else 0.3,
+            }
+        elif liq > 0 and struct == "DOWN" and vimb <= 0.50:
+            direction = "BEARISH"
+            score_components = {
+                "cvd_div": 1.0,
+                "vimb": float(1 - vimb),
+                "struct_align": 1.0,
+                "liq_boost": 1.0,
+                "cvd_trend": 1.0 if cvd_trend == "BEAR" else 0.3,
+            }
+
         if direction is None:
             continue
 
