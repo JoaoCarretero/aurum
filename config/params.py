@@ -397,8 +397,8 @@ NEWTON_MIN_PAIRS       = 2         # mínimo de pares cointegrados para operar
 MERCURIO_CVD_WINDOW     = 20       # janela para CVD divergence
 MERCURIO_CVD_DIV_BARS   = 10       # lookback para detectar divergência
 MERCURIO_VIMB_WINDOW    = 10       # janela para volume imbalance
-MERCURIO_VIMB_LONG      = 0.60     # imbalance > N = bullish
-MERCURIO_VIMB_SHORT     = 0.40     # imbalance < N = bearish
+MERCURIO_VIMB_LONG      = 0.60     # iter3 1080d: revertido — relaxar VIMB degradou quality; fix real é filtro counter-trend
+MERCURIO_VIMB_SHORT     = 0.40
 MERCURIO_LIQ_VOL_MULT   = 3.0     # spike volume > N× média = liquidação
 MERCURIO_LIQ_ATR_MULT   = 2.0     # spike ATR > N× média = liquidação
 MERCURIO_MIN_SCORE      = 0.50     # score mínimo para entrada

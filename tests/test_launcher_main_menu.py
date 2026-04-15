@@ -334,7 +334,10 @@ def test_arbitrage_hub_telem_update_populates_status_strip(app):
     arb_cd = [{"symbol": "SOL", "net_apr": 95.2,
                "short_venue": "bybit", "long_venue": "paradex",
                "risk": "HIGH"}]
-    app._arb_hub_telem_update(stats, top, opps, arb_dd, arb_cd,
+    arb_cc = [{"symbol": "BTC", "net_apr": 12.4,
+               "short_venue": "binance", "long_venue": "bybit",
+               "risk": "LOW"}]
+    app._arb_hub_telem_update(stats, top, opps, arb_cc, arb_dd, arb_cd,
                               basis=[], spot=[])
     app.update_idletasks()
 
@@ -344,6 +347,7 @@ def test_arbitrage_hub_telem_update_populates_status_strip(app):
     assert "42" in app._arb_sum_best.cget("text")
     # Cache is populated for tab switches
     assert app._arb_cache["top"] is top
+    assert app._arb_cache["arb_cc"] == arb_cc
     assert app._arb_cache["arb_dd"] == arb_dd
 
 
@@ -355,13 +359,30 @@ def test_arb_engine_tab_renders_without_snapshot(app):
     assert app._arb_tab == "engine"
 
 
-def test_scanner_filter_bar_renders(app):
-    try:
-        app._funding_scanner_screen("dex-dex")
-        app.update_idletasks()
-        assert hasattr(app, "_arb_filters")
-        assert "min_apr" in app._arb_filters
-        assert hasattr(app, "_arb_filter_labels")
-        assert len(app._arb_filter_labels) == 5
-    finally:
-        app._funding_alive = False
+def test_funding_scanner_screen_redirects_to_hub_tab(app):
+    """Legacy entry point should land on the right tab of the new desk."""
+    app._funding_scanner_screen("dex-dex")
+    app.update_idletasks()
+    assert app._arb_tab == "dex-dex"
+
+    app._funding_scanner_screen("cex-dex")
+    app.update_idletasks()
+    assert app._arb_tab == "cex-dex"
+
+
+def test_arb_basis_screen_redirects_to_hub_tab(app):
+    app._arb_basis_screen()
+    app.update_idletasks()
+    assert app._arb_tab == "basis"
+
+
+def test_arb_spot_screen_redirects_to_hub_tab(app):
+    app._arb_spot_screen()
+    app.update_idletasks()
+    assert app._arb_tab == "spot"
+
+
+def test_alchemy_enter_redirects_to_engine_tab(app):
+    app._alchemy_enter()
+    app.update_idletasks()
+    assert app._arb_tab == "engine"

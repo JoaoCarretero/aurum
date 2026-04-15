@@ -180,7 +180,8 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
         cvd_trend = "BULL" if cvd_sum > 0 else "BEAR"
 
         # LONG signal: CVD bullish divergence + volume imbalance > threshold + struct UP
-        if div_bull > 0 and vimb >= MERCURIO_VIMB_LONG and struct == "UP":
+        # iter3 1080d: bloqueia longs em macro BEAR — combo tóxico (27% WR, -$746 em 101 trades)
+        if div_bull > 0 and vimb >= MERCURIO_VIMB_LONG and struct == "UP" and macro_b != "BEAR":
             direction = "BULLISH"
             score_components = {
                 "cvd_div": float(div_bull),

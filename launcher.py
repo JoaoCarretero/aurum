@@ -5039,32 +5039,15 @@ class App(tk.Tk):
 
     # ─── ARBITRAGE (Layer 2) ──────────────────────────────
     def _alchemy_enter(self):
-        """Render the ARBITRAGE cockpit inside the launcher main frame."""
-        self._clr()
-        self._clear_kb()
-        self.history.append("main")
+        """Redirect to the unified ARBITRAGE DESK (engine tab).
 
-        # Initialize state reader + tick driver
-        self._alch_state = AlchemyState(stale_seconds=10)
-        self._alch_tick = alchemy_ui.TickDriver(self, interval_ms=2000)
-        self._alch_log_buf = []
-        self._alch_engine_mode = None
-
-        # Load fonts
-        alchemy_ui.load_fonts(self)
-
-        # Paint cockpit in-terminal (inside self.main)
-        alchemy_ui.render_cockpit(self)
-
-        self.bind("<Escape>", self._alchemy_exit)
-        try:
-            self.h_path.configure(text="ARBITRAGE")
-            self.h_stat.configure(text="HEV ONLINE", fg=alchemy_ui.HEV_AMBER_B)
-        except Exception:
-            pass
-
-        # Start the tick
-        self._alch_tick.start(lambda: self._alch_state.read())
+        The old 9-panel ALCHEMY cockpit has been consolidated into the
+        tabbed desk. All JANE STREET controls, risk gauges and log tail
+        now live in the ENGINE tab of _arbitrage_hub. Keeping this
+        method as a thin redirect so existing entry points (main menu,
+        legacy shortcuts) still work.
+        """
+        self._arbitrage_hub(tab="engine")
 
     def _alchemy_exit(self, event=None):
         """Exit the cockpit. Confirm if engine is running."""
@@ -5219,8 +5202,76 @@ class App(tk.Tk):
         render_fn = render_map.get(tab, self._arb_render_cex_cex)
         render_fn(content)
 
-        # Kick off async scan (populates status strip + re-renders tab)
+        # If we have cached scan data from the previous tab visit, repaint
+        # immediately instead of waiting ~2s for the next scan to finish.
+        cache = getattr(self, "_arb_cache", None)
+        if cache:
+            try:
+                self._arb_hub_telem_update(
+                    cache["stats"], cache["top"], cache["opps"],
+                    cache["arb_cc"], cache["arb_dd"], cache["arb_cd"],
+                    cache["basis"], cache["spot"])
+            except Exception:
+                pass
+
+        # Kick off first async scan + schedule recurring refresh.
         self._arb_hub_scan_async()
+        self._arb_schedule_refresh()
+
+        # Live clock tick — updates every second while the hub is open.
+        self._arb_schedule_clock()
+
+    # ── Auto-refresh loop ─────────────────────────────────────
+    def _arb_schedule_refresh(self, delay_ms: int = 15_000):
+        """Re-scan every delay_ms while the arbitrage desk is on screen.
+
+        We identify "on screen" by checking that self._arb_tab_labels still
+        exists and isn't destroyed — the moment the user leaves the hub
+        (back to main menu, another page), that dict is replaced or the
+        widgets are gone, and the scheduled tick no-ops instead of trying
+        to repaint dead Tk widgets.
+        """
+        try:
+            # Cancel previous pending refresh if any
+            prev = getattr(self, "_arb_refresh_after", None)
+            if prev:
+                try:
+                    self.after_cancel(prev)
+                except Exception:
+                    pass
+            def _tick():
+                labels = getattr(self, "_arb_tab_labels", None)
+                if not labels:
+                    return
+                first = next(iter(labels.values()), None)
+                try:
+                    if first is None or not first.winfo_exists():
+                        return
+                except Exception:
+                    return
+                self._arb_hub_scan_async()
+                self._arb_refresh_after = self.after(delay_ms, _tick)
+            self._arb_refresh_after = self.after(delay_ms, _tick)
+        except Exception:
+            pass
+
+    def _arb_schedule_clock(self):
+        """Tick the status strip clock every second."""
+        def _tick():
+            lbl = getattr(self, "_arb_clock", None)
+            if lbl is None:
+                return
+            try:
+                if not lbl.winfo_exists():
+                    return
+                lbl.configure(text=datetime.now().strftime("%H:%M:%S UTC"))
+                self.after(1000, _tick)
+            except Exception:
+                pass
+        try:
+            self.after(1000, _tick)
+        except Exception:
+            pass
 
     # ── Table helper used by every tab ─────────────────────────
     def _arb_make_table(self, parent, cols: list[tuple[str, int, str]]):
@@ -5253,17 +5304,18 @@ class App(tk.Tk):
 
     # ── Tab renderers ──────────────────────────────────────────
     def _arb_render_cex_cex(self, parent):
-        """CEX↔CEX tab: live opportunities + JANE STREET snapshot (if running)."""
+        """CEX↔CEX tab: paired funding arb opportunities + JANE STREET
+        live positions (if the engine is running and writing snapshots)."""
         hdr = tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
                        font=(FONT, 8, "bold"), fg=AMBER, bg=BG)
         hdr.pack(anchor="w", pady=(0, 4))
 
-        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 9, "w"),
-                ("SHORT", 9, "w"), ("APR", 8, "e"),
-                ("VOL", 10, "e"), ("\u03a9", 6, "e")]
-        body, repaint = self._arb_make_table(parent, cols)
+        cols = [("#", 3, "e"), ("SYM", 8, "w"), ("LONG", 12, "w"),
+                ("SHORT", 12, "w"), ("NET APR", 10, "e"),
+                ("RISK", 6, "e")]
+        _, repaint = self._arb_make_table(parent, cols)
         self._arb_cex_repaint = repaint
-        repaint([[(" ", DIM)] * 7])  # placeholder until scan returns
+        repaint([])  # empty placeholder until scan returns
 
         # Live positions panel (shown only if engine has snapshot)
         try:
@@ -5472,6 +5524,7 @@ class App(tk.Tk):
             try:
                 opps = scanner.scan()
                 stats = scanner.stats()
+                arb_cc = scanner.arb_pairs(mode="cex-cex", min_spread_apr=5.0)
                 arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=5.0)
                 arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=5.0)
                 basis = []
@@ -5485,7 +5538,7 @@ class App(tk.Tk):
                 top = opps[0] if opps else None
                 try:
                     self.after(0, lambda: self._arb_hub_telem_update(
-                        stats, top, opps, arb_dd, arb_cd, basis, spot))
+                        stats, top, opps, arb_cc, arb_dd, arb_cd, basis, spot))
                 except (RuntimeError, tk.TclError):
                     # Tk root gone (test teardown / app shutdown) — drop update
                     pass
@@ -5507,14 +5560,15 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-    def _arb_hub_telem_update(self, stats, top, opps, arb_dd, arb_cd,
+    def _arb_hub_telem_update(self, stats, top, opps, arb_cc, arb_dd, arb_cd,
                                basis, spot):
         """Populate the status strip and the active tab's table.
 
         stats     : dict from FundingScanner.stats() — dex_online / cex_online
         top       : top FundingOpp across all venues (or None)
         opps      : full list of FundingOpp from scanner.scan()
-        arb_dd    : list of DEX↔DEX arb pairs (dict) from scanner.arb_pairs
+        arb_cc    : list of CEX↔CEX arb pairs (dict) — paired funding diff
+        arb_dd    : list of DEX↔DEX arb pairs
         arb_cd    : list of CEX↔DEX arb pairs
         basis     : list of basis (spot-perp) pairs from scanner.basis_pairs
         spot      : list of spot spread pairs from scanner.spot_arb_pairs
@@ -5541,14 +5595,14 @@ class App(tk.Tk):
         # Cache raw results so tab switches can repaint without rescanning
         self._arb_cache = {
             "stats": stats, "top": top, "opps": opps,
-            "arb_dd": arb_dd, "arb_cd": arb_cd,
+            "arb_cc": arb_cc, "arb_dd": arb_dd, "arb_cd": arb_cd,
             "basis": basis, "spot": spot,
         }
 
         # Route to the repaint callback for the active tab
         tab = getattr(self, "_arb_tab", "cex-cex")
         if tab == "cex-cex":
-            self._arb_paint_cex_cex(opps)
+            self._arb_paint_pairs(arb_cc, getattr(self, "_arb_cex_repaint", None))
         elif tab == "dex-dex":
             self._arb_paint_pairs(arb_dd, getattr(self, "_arb_dex_repaint", None))
         elif tab == "cex-dex":
@@ -5558,29 +5612,6 @@ class App(tk.Tk):
         elif tab == "spot":
             self._arb_paint_spot(spot)
         # ENGINE tab doesn't consume scanner data
-
-    def _arb_paint_cex_cex(self, opps):
-        repaint = getattr(self, "_arb_cex_repaint", None)
-        if repaint is None:
-            return
-        # Filter to CEX-only opportunities; top 15 by APR
-        cex_only = [o for o in (opps or [])
-                    if str(getattr(o, "venue_type", "")).lower() == "cex"][:15]
-        rows = []
-        for i, o in enumerate(cex_only, 1):
-            apr = float(getattr(o, "apr", 0) or 0)
-            apr_fg = GREEN if apr >= 50 else (AMBER if apr >= 20 else DIM)
-            vol = float(getattr(o, "volume_24h", 0) or 0) / 1e6
-            rows.append([
-                (f"{i:>2}", DIM),
-                (getattr(o, "symbol", "—")[:7], WHITE),
-                (str(getattr(o, "venue", ""))[:8].lower(), AMBER_D),
-                ("—", DIM),  # SHORT placeholder (arb_pairs has it; single-venue obs doesn't)
-                (f"{apr:+.1f}%", apr_fg),
-                (f"${vol:.1f}M", DIM),
-                (f"{getattr(o, 'omega', 0):.1f}", AMBER),
-            ])
-        repaint(rows)
 
     def _arb_paint_pairs(self, pairs, repaint):
         if repaint is None:
@@ -5641,9 +5672,16 @@ class App(tk.Tk):
         repaint(rows)
 
     # ═══════════════════════════════════════════════════════════════
-    # BASIS TRADE SCREEN — spot-perp basis opportunities
+    # LEGACY SCREENS — thin redirects to the unified ARBITRAGE DESK.
+    # The old standalone basis / spot / funding screens were folded into
+    # tabs. These stubs keep external call sites working until callers
+    # migrate to _arbitrage_hub(tab=…).
     # ═══════════════════════════════════════════════════════════════
     def _arb_basis_screen(self):
+        """Redirect: old basis screen → BASIS tab of the unified desk."""
+        self._arbitrage_hub(tab="basis")
+
+    def _arb_basis_screen_legacy(self):
         """Spot-perp basis trade screen — shows basis opportunities."""
         self._clr(); self._clear_kb()
         self.history.append("_arbitrage_hub")
@@ -5726,6 +5764,10 @@ class App(tk.Tk):
     # SPOT ↔ SPOT SCREEN — cross-venue spot price divergence
     # ═══════════════════════════════════════════════════════════════
     def _arb_spot_screen(self):
+        """Redirect: old spot screen → SPOT tab of the unified desk."""
+        self._arbitrage_hub(tab="spot")
+
+    def _arb_spot_screen_legacy(self):
         """Spot-spot spread screen — cross-venue spot price divergence."""
         self._clr(); self._clear_kb()
         self.history.append("_arbitrage_hub")
@@ -5803,6 +5845,11 @@ class App(tk.Tk):
     # FUNDING SCANNER SCREEN — shared between DEX-DEX and CEX-DEX modes
     # ═══════════════════════════════════════════════════════════════
     def _funding_scanner_screen(self, mode: str = "dex-dex"):
+        """Redirect: old funding scanner → DEX-DEX or CEX-DEX tab."""
+        tab = "cex-dex" if mode == "cex-dex" else "dex-dex"
+        self._arbitrage_hub(tab=tab)
+
+    def _funding_scanner_screen_legacy(self, mode: str = "dex-dex"):
         """Live cross-venue funding rate observer.
 
         mode:
