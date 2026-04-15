@@ -102,20 +102,41 @@ class ConnectionManager:
                 self.state["connections"][provider]["last_ping"] = datetime.now().isoformat()
             self.save()
 
-    def ping(self, provider: str) -> float | None:
-        """Ping an exchange and return latency in ms, or None on failure."""
+    _PING_CACHE_TTL_S = 8.0  # Avoid hammering the exchange — UI polls repeatedly
+
+    def ping(self, provider: str, max_age: float | None = None) -> float | None:
+        """Ping an exchange and return latency in ms, or None on failure.
+
+        Cached for ``_PING_CACHE_TTL_S`` seconds per provider. The dashboard
+        tabs + home tile + live engines can hit this from multiple threads
+        within a second of each other — the cache collapses those into one
+        actual network call per TTL window.
+
+        Pass ``max_age=0`` to force a fresh call (e.g., explicit user refresh).
+        """
+        ttl = self._PING_CACHE_TTL_S if max_age is None else float(max_age)
+        cache = getattr(self, "_ping_cache", None)
+        if cache is None:
+            cache = self._ping_cache = {}
+        now = time.monotonic()
+        entry = cache.get(provider)
+        if ttl > 0 and entry is not None and (now - entry["t"]) < ttl:
+            return entry["val"]
+
+        val: float | None = None
         if provider == "binance_futures":
             try:
                 import requests
                 t0 = time.time()
-                r = requests.get("https://fapi.binance.com/fapi/v1/ping", timeout=5)
+                r = requests.get("https://fapi.binance.com/fapi/v1/ping", timeout=3)
                 if r.status_code == 200:
                     ms = (time.time() - t0) * 1000
                     self.set_connected(provider, True, latency_ms=round(ms))
-                    return round(ms)
+                    val = round(ms)
             except Exception:
-                pass
-        return None
+                val = None
+        cache[provider] = {"t": now, "val": val}
+        return val
 
     def get_balance(self, provider: str) -> float | None:
         """Get account balance. Currently only works for Binance with keys."""
