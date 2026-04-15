@@ -11,7 +11,11 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta
 
-STATE_FILE = Path("data/.aurum_procs.json")
+from config.engines import PROC_ENGINES, PROC_NAMES as ENGINE_NAMES
+from config.paths import DATA_DIR, PROC_STATE_PATH
+from core.persistence import atomic_write_json
+
+STATE_FILE = PROC_STATE_PATH
 
 # How long finished entries stay visible in list_procs / state file before
 # _cleanup prunes them. Set to 1 day so a finished engine stays introspectable
@@ -20,21 +24,7 @@ STATE_FILE = Path("data/.aurum_procs.json")
 # and pollute the UI. [Fase 0.4 / D6]
 ZOMBIE_TTL = timedelta(days=1)
 
-from config.engines import PROC_NAMES as ENGINE_NAMES
-
-ENGINES = {
-    "backtest": {"script": "engines/citadel.py"},
-    "multi":    {"script": "engines/millennium.py"},
-    "live":     {"script": "engines/live.py"},
-    "arb":      {"script": "engines/janestreet.py"},
-    "newton":   {"script": "engines/deshaw.py"},
-    "mercurio": {"script": "engines/jump.py"},
-    "thoth":    {"script": "engines/bridgewater.py"},
-    "renaissance": {"script": "engines/renaissance.py"},
-    "prometeu": {"script": "engines/twosigma.py"},
-    "darwin":   {"script": "engines/aqr.py"},
-    "chronos":  {"script": "core/chronos.py"},
-}
+ENGINES = {k: {"script": v["script"]} for k, v in PROC_ENGINES.items()}
 
 
 def _load_state_raw() -> dict:
@@ -79,8 +69,7 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict):
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+    atomic_write_json(STATE_FILE, state)
 
 
 # Windows API constants
@@ -237,7 +226,7 @@ def spawn(engine: str, stdin_lines: list[str] | None = None,
             return None  # already running (identity-verified)
 
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    log_dir = Path("data/.proc_logs")
+    log_dir = DATA_DIR / ".proc_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{engine}_{ts}.log"
 

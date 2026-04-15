@@ -29,17 +29,64 @@ ENGINE_SCRIPTS = {k: v["script"] for k, v in ENGINES.items()}
 # Reverse lookup: script path -> canonical key
 SCRIPT_TO_KEY = {v["script"]: k for k, v in ENGINES.items()}
 
-# Process manager lookup (maps proc.py engine keys to display names)
-PROC_NAMES = {
-    "backtest": "CITADEL",
-    "multi":    "MILLENNIUM",
-    "live":     "LIVE",
-    "arb":      "JANE STREET",
-    "newton":   "DE SHAW",
-    "mercurio": "JUMP",
-    "thoth":    "BRIDGEWATER",
-    "renaissance": "RENAISSANCE",
-    "prometeu": "TWO SIGMA",
-    "darwin":   "AQR",
-    "chronos":  "WINTON",
+# Process-manager names are still legacy in some UI/API surfaces. Keep the
+# mapping here so every consumer resolves to the same script/display pair.
+PROC_ENGINES = {
+    "backtest": {
+        "script": ENGINES["citadel"]["script"],
+        "display": "CITADEL",
+        "canonical": "citadel",
+    },
+    "multi": {
+        "script": ENGINES["millennium"]["script"],
+        "display": "MILLENNIUM",
+        "canonical": "millennium",
+    },
+    "live": {
+        "script": ENGINES["live"]["script"],
+        "display": "LIVE",
+        "canonical": "live",
+    },
+    "arb": {
+        "script": ENGINES["janestreet"]["script"],
+        "display": "JANE STREET",
+        "canonical": "janestreet",
+    },
+    "newton": {
+        "script": ENGINES["deshaw"]["script"],
+        "display": "DE SHAW",
+        "canonical": "deshaw",
+    },
+    "mercurio": {
+        "script": ENGINES["jump"]["script"],
+        "display": "JUMP",
+        "canonical": "jump",
+    },
+    "thoth": {
+        "script": ENGINES["bridgewater"]["script"],
+        "display": "BRIDGEWATER",
+        "canonical": "bridgewater",
+    },
+    "renaissance": {
+        "script": "engines/renaissance.py",
+        "display": "RENAISSANCE",
+        "canonical": "renaissance",
+    },
+    "prometeu": {
+        "script": ENGINES["twosigma"]["script"],
+        "display": "TWO SIGMA",
+        "canonical": "twosigma",
+    },
+    "darwin": {
+        "script": ENGINES["aqr"]["script"],
+        "display": "AQR",
+        "canonical": "aqr",
+    },
+    "chronos": {
+        "script": ENGINES["winton"]["script"],
+        "display": "WINTON",
+        "canonical": "winton",
+    },
 }
+
+PROC_NAMES = {k: v["display"] for k, v in PROC_ENGINES.items()}
