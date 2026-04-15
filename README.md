@@ -31,11 +31,10 @@ aurum.finance/
 ├── bot/
 │   └── telegram.py            ← notificações + comandos Telegram
 ├── server/website/             ← React landing + dashboard (Vite)
-├── run_backtest.py             ← entry point
-├── run_live.py                 ← entry point
-├── run_arb.py                  ← entry point
-├── run_multi.py                ← entry point
-├── backtest.py                 ← backward compatibility (re-imports)
+├── aurum_cli.py                ← terminal entry point
+├── launcher.py                 ← desktop launcher / dashboard
+├── run_api.py                  ← API entry point
+├── __main__.py                 ← python -m support
 └── data/                       ← output de runs (gitignored)
 ```
 
@@ -43,10 +42,10 @@ aurum.finance/
 
 | Engine | Entry Point | Descrição |
 |---|---|---|
-| **AZOTH v3.6** | `python run_backtest.py` | Ω fractal 5D, ensemble Sortino + R-multiple + regime-aware |
-| **AZOTH×HERMES** | `python run_multi.py` | Multi-strategy: trend-following × harmónicos Fibonacci |
-| **Live Engine** | `python run_live.py` | Paper/Demo/Testnet/Live — Binance USDT Futures via WebSocket |
-| **Arbitrage** | `python run_arb.py` | Delta-neutral funding rate capture em 13 exchanges |
+| **CITADEL** | `python engines/citadel.py` | Ω fractal 5D, ensemble Sortino + R-multiple + regime-aware |
+| **MILLENNIUM** | `python engines/millennium.py` | Multi-strategy: trend-following × harmónicos Fibonacci |
+| **Live Engine** | `python engines/live.py` | Paper/Demo/Testnet/Live — Binance USDT Futures via WebSocket |
+| **JANE STREET** | `python engines/janestreet.py --mode paper` | Delta-neutral funding rate capture em 13 exchanges |
 
 ## Setup
 
@@ -71,10 +70,12 @@ cp config/keys.json.example config/keys.json
 ### Executar
 
 ```bash
-python run_backtest.py       # backtest AZOTH v3.6
-python run_multi.py          # multistrategy AZOTH×HERMES
-python run_live.py           # live engine (menu interactivo)
-python run_arb.py            # arbitrage engine
+python aurum_cli.py                 # terminal UI
+python launcher.py                  # desktop launcher
+python engines/citadel.py           # backtest CITADEL
+python engines/millennium.py        # multistrategy
+python engines/live.py              # live engine
+python engines/janestreet.py --mode paper
 ```
 
 ### Website

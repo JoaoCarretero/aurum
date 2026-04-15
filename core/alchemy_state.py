@@ -8,6 +8,8 @@ import json
 import time
 from pathlib import Path
 
+from core.persistence import atomic_write_text
+
 EMPTY_SNAPSHOT = {
     "ts": "",
     "run_id": "",
@@ -36,9 +38,15 @@ EMPTY_SNAPSHOT = {
 class AlchemyState:
     """Reader for the arbitrage engine's live snapshot."""
 
-    def __init__(self, stale_seconds: int = 10, run_dir: Path | None = None):
+    def __init__(
+        self,
+        stale_seconds: int = 10,
+        run_dir: Path | None = None,
+        root: Path | None = None,
+    ):
         self.stale_seconds = stale_seconds
         self._pinned_run = run_dir
+        self._root = Path(root) if root is not None else Path.cwd()
         self._last_good: dict = dict(EMPTY_SNAPSHOT)
 
     def pin_run(self, run_dir: Path):
@@ -52,7 +60,7 @@ class AlchemyState:
         if self._pinned_run is not None:
             p = self._pinned_run / "state" / "snapshot.json"
             return p if p.exists() else None
-        base = Path("data/janestreet")
+        base = self._root / "data" / "janestreet"
         if not base.exists():
             return None
         candidates = sorted(
@@ -92,11 +100,11 @@ class AlchemyState:
     }
 
     def read_params(self) -> dict:
-        p = Path("config/alchemy_params.json")
+        p = self._root / "config" / "alchemy_params.json"
         if not p.exists():
             return dict(self.DEFAULT_PARAMS)
         try:
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
             merged = dict(self.DEFAULT_PARAMS)
             merged.update(data)
             return merged
@@ -107,7 +115,7 @@ class AlchemyState:
         """Merge updates into alchemy_params.json and touch the reload flag."""
         current = self.read_params()
         current.update(updates)
-        p = Path("config/alchemy_params.json")
+        p = self._root / "config" / "alchemy_params.json"
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(current, indent=2))
+        atomic_write_text(p, json.dumps(current, indent=2))
         (p.parent / "alchemy_params.json.reload").touch()
