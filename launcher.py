@@ -2195,7 +2195,7 @@ class App(tk.Tk):
         # Expand uses the full inner area (leaves room for outer frame + top bar)
         x1, y1, x2, y2 = 52, 58, 868, 498
         self._draw_panel(canvas, x1, y1, x2, y2,
-                         title=f"  {label} DESK · KEY {key_num}  ",
+                         title=f"  {label} · DESK-{key_num}  ",
                          accent=color, tag=f"tile{idx}")
         # Compact desk header — single thin strip at the top
         canvas.create_rectangle(x1 + 8, y1 + 16, x2 - 8, y1 + 46,
@@ -2206,32 +2206,33 @@ class App(tk.Tk):
         self._draw_aurum_logo(canvas, x1 + 22, y1 + 31, scale=6, tag=f"tile{idx}")
         canvas.create_text(x1 + 34, y1 + 31, anchor="w",
                            text=label,
-                           font=(FONT, 11, "bold"), fill=color, tags=f"tile{idx}")
-        canvas.create_text(x1 + 34 + len(label) * 8 + 16, y1 + 31, anchor="w",
-                           text="ROUTE SELECT  ·  click · arrows · enter",
+                           font=(FONT, 9, "bold"), fill=color, tags=f"tile{idx}")
+        # Module count — discreet right-of-label, mono
+        canvas.create_text(x1 + 34 + len(label) * 7 + 14, y1 + 31, anchor="w",
+                           text=f"[ {len(children)} MOD ]",
                            font=(FONT, 7), fill=DIM, tags=f"tile{idx}")
         # BACK chip on the right (no overlap — moved above the rows band)
-        bx1, by1, bx2, by2 = x2 - 102, y1 + 20, x2 - 16, y1 + 42
+        bx1, by1, bx2, by2 = x2 - 92, y1 + 20, x2 - 16, y1 + 42
         canvas.create_rectangle(bx1, by1, bx2, by2,
                                 outline=self._dim_color(color, 0.6),
                                 fill=BG3, width=1, tags=f"tile{idx}")
-        canvas.create_line(bx1, by1, bx2, by1, fill=color, width=2, tags=f"tile{idx}")
+        canvas.create_line(bx1, by1, bx2, by1, fill=color, width=1, tags=f"tile{idx}")
         canvas.create_text((bx1 + bx2) // 2, (by1 + by2) // 2,
-                           text="◂ BACK [ESC]",
-                           font=(FONT, 7, "bold"), fill=WHITE, tags=f"tile{idx}")
+                           text="◂ BACK · ESC",
+                           font=(FONT, 6, "bold"), fill=WHITE, tags=f"tile{idx}")
         self._back_btn_rect = (bx1, by1, bx2, by2)
 
         self._menu_sub_render(idx)
 
-        # Footer — preenche o espaço abaixo das rows, não deixa o painel "vazio"
-        foot_y = y2 - 30
+        # Footer — terse, right-aligned like a terminal status line
+        foot_y = y2 - 22
         canvas.create_line(x1 + 16, foot_y, x2 - 16, foot_y,
-                           fill=self._dim_color(color, 0.35),
+                           fill=BORDER,
                            width=1, tags=f"tile{idx}")
-        canvas.create_text((x1 + x2) // 2, foot_y + 14, anchor="center",
-                           text=f"◂ ESC  ·  press 1-{len(children)} or click a row  ·  ENTER confirms ▸",
-                           font=(FONT, 8, "bold"),
-                           fill=self._dim_color(color, 0.85),
+        canvas.create_text(x2 - 16, foot_y + 10, anchor="e",
+                           text=f"ESC BACK · 1-{len(children)} SELECT · ⏎ OPEN",
+                           font=(FONT, 7),
+                           fill=DIM,
                            tags=f"tile{idx}")
 
         def _sub_click(event, _idx=idx):
@@ -2242,11 +2243,11 @@ class App(tk.Tk):
                 return "break"
             _children = MAIN_GROUPS[_idx][3]
             n = len(_children)
-            row_h = 54 if n <= 5 else 44 if n <= 7 else 38
+            row_h = 34 if n <= 5 else 30 if n <= 7 else 28
             start_y = 118
             for i in range(n):
                 ry1 = start_y + i * row_h
-                ry2 = ry1 + (row_h - 10)
+                ry2 = ry1 + (row_h - 6)
                 if 72 <= ex <= 848 and ry1 <= ey <= ry2:
                     self._menu_sub_select(_idx, i)
                     return "break"
@@ -2271,58 +2272,60 @@ class App(tk.Tk):
         canvas.delete("submenu")
         _label, _key, color, children = MAIN_GROUPS[idx]
         n = len(children)
-        # Adapt row height to child count so 7-item lists fit without overflow
-        row_h = 54 if n <= 5 else 44 if n <= 7 else 38
-        h_inner = row_h - 10
+        # Denser rows — Bloomberg uses ~28-34px per line, not 54.
+        row_h = 34 if n <= 5 else 30 if n <= 7 else 28
+        h_inner = row_h - 6
         start_y = 118
         row_x1, row_x2 = 72, 848
-        # Single-line vs two-line rows based on available height
-        compact = row_h < 50
+        # Two-line rows only when there's breathing room
+        compact = row_h < 32
+        dim_band = self._dim_color(color, 0.45)
         for i, (child_label, _method) in enumerate(children):
             y1 = start_y + i * row_h
             y2 = y1 + h_inner
             focused = i == self._menu_sub_focus
             fill = BG2 if focused else PANEL
-            outline = color if focused else self._dim_color(color, 0.4)
+            outline = self._dim_color(color, 0.55) if focused else BORDER
             text_color = AMBER_B if focused else WHITE
-            band = color if focused else self._dim_color(color, 0.6)
+            band = color if focused else dim_band
+            # Outer row frame — thin, uniform
             canvas.create_rectangle(row_x1, y1, row_x2, y2, outline=outline,
-                                    fill=fill, width=2 if focused else 1,
-                                    tags="submenu")
-            canvas.create_rectangle(row_x1, y1, row_x1 + 22, y2,
-                                    outline="", fill=(BG3 if focused else BG2),
-                                    tags="submenu")
-            canvas.create_line(row_x1 + 22, y1, row_x1 + 22, y2,
-                               fill=band, width=3 if focused else 2,
+                                    fill=fill, width=1, tags="submenu")
+            # Single accent stripe on the left (no filled gutter)
+            canvas.create_line(row_x1, y1, row_x1, y2,
+                               fill=band, width=2 if focused else 1,
                                tags="submenu")
-            canvas.create_text(row_x1 + 11, (y1 + y2) // 2,
+            # Index pill: quiet mono number, no color unless focused
+            canvas.create_text(row_x1 + 18, (y1 + y2) // 2,
                                text=f"{i+1:02d}", anchor="center",
-                               font=(FONT, 10, "bold"),
+                               font=(FONT, 8),
                                fill=(color if focused else DIM),
                                tags="submenu")
             desc = BLOCK_DESCRIPTIONS.get(_method, "open module")
             if compact:
-                # Single-line row with inline desc — saves vertical space
-                canvas.create_text(row_x1 + 34, (y1 + y2) // 2, anchor="w",
+                # Single line: label + inline desc, everything small and mono
+                canvas.create_text(row_x1 + 36, (y1 + y2) // 2, anchor="w",
                                    text=child_label,
-                                   font=(FONT, 11, "bold"), fill=text_color,
+                                   font=(FONT, 10, "bold"), fill=text_color,
                                    tags="submenu")
-                canvas.create_text(row_x1 + 220, (y1 + y2) // 2, anchor="w",
-                                   text=desc[:60], font=(FONT, 7), fill=DIM,
+                canvas.create_text(row_x1 + 210, (y1 + y2) // 2, anchor="w",
+                                   text=desc[:64], font=(FONT, 7), fill=DIM,
                                    tags="submenu")
             else:
-                canvas.create_text(row_x1 + 34, y1 + 14, anchor="w",
+                canvas.create_text(row_x1 + 36, y1 + 10, anchor="w",
                                    text=child_label,
-                                   font=(FONT, 12, "bold"), fill=text_color,
+                                   font=(FONT, 10, "bold"), fill=text_color,
                                    tags="submenu")
-                canvas.create_text(row_x1 + 34, y1 + 30, anchor="w",
-                                   text=desc, font=(FONT, 8), fill=DIM,
+                canvas.create_text(row_x1 + 36, y1 + 22, anchor="w",
+                                   text=desc, font=(FONT, 7), fill=DIM,
                                    tags="submenu")
-            canvas.create_text(row_x2 - 12, (y1 + y2) // 2, anchor="e",
-                               text="ENTER ▸",
-                               font=(FONT, 9, "bold"),
-                               fill=(color if focused else DIM),
-                               tags="submenu")
+            # ENTER affordance ONLY on the focused row — kills repeated noise
+            if focused:
+                canvas.create_text(row_x2 - 10, (y1 + y2) // 2, anchor="e",
+                                   text="⏎ OPEN",
+                                   font=(FONT, 7, "bold"),
+                                   fill=color,
+                                   tags="submenu")
 
     def _draw_isometric_tile(self, canvas, idx: int, focused: bool) -> None:
         label, key_num, color, _children = MAIN_GROUPS[idx]
