@@ -240,7 +240,7 @@ MAX_HOLD            = 48
 # Trailing stop phases
 TRAIL_BE_MULT       = 1.0    # move 1.0x risk → stop to breakeven
 TRAIL_ACTIVATE_MULT = 1.5    # move 1.5x risk → activate trailing
-TRAIL_DISTANCE_MULT = 0.5    # trailing stop distance = 0.5x risk
+TRAIL_DISTANCE_MULT = 0.3    # trailing stop distance (grid 2026-04-14: 0.3 gives Sharpe 5.60 vs 5.25 @ 0.5)
 
 SCORE_BY_REGIME: dict[str, float] = {
     "BEAR": 0.53,
