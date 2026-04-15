@@ -14,10 +14,16 @@ INDEX_PATH = RUN_INDEX_PATH
 
 _ENGINE_ALIASES = {
     "backtest": "citadel",
+    "citadel_backtest": "citadel",
     "thoth": "bridgewater",
     "mercurio": "jump",
     "newton": "deshaw",
+    "multi": "millennium",
+    "prometeu": "twosigma",
+    "darwin": "aqr",
+    "chronos": "winton",
     "arbitrage": "janestreet",
+    "arb": "janestreet",
     "jane_street": "janestreet",
     "jane street": "janestreet",
 }
@@ -406,12 +412,13 @@ def repair_run(json_path: str, engine: str | None = None) -> str | None:
 
 
 def list_runs(engine: str | None = None, limit: int = 20) -> list[dict]:
+    normalized_engine = _normalize_engine(engine) if engine else None
     conn = _connect()
     try:
-        if engine:
+        if normalized_engine:
             rows = conn.execute(
                 "SELECT * FROM runs WHERE engine=? ORDER BY timestamp DESC LIMIT ?",
-                (engine, limit),
+                (normalized_engine, limit),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -457,7 +464,7 @@ def delete_run(run_id: str, delete_files: bool = False) -> bool:
             import shutil
 
             folder = Path(row["json_path"]).parent.parent
-            _base = Path("data").resolve()
+            _base = DATA_DIR.resolve()
             if folder.resolve().is_relative_to(_base) and folder.exists():
                 shutil.rmtree(folder, ignore_errors=True)
         return True

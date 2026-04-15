@@ -26,6 +26,24 @@ def test_rooted_paths_contract():
     assert PROC_STATE_PATH == root / "data" / ".aurum_procs.json"
 
 
+def test_config_paths_anchored_to_config_dir():
+    from config.paths import (
+        CONFIG_DIR,
+        VPS_CONFIG_PATH,
+        PAPER_STATE_PATH,
+        ALCHEMY_PARAMS_PATH,
+        ALCHEMY_PARAMS_RELOAD_FLAG,
+        SITE_CONFIG_PATH,
+        CONNECTIONS_STATE_PATH,
+    )
+    assert VPS_CONFIG_PATH == CONFIG_DIR / "vps.json"
+    assert PAPER_STATE_PATH == CONFIG_DIR / "paper_state.json"
+    assert ALCHEMY_PARAMS_PATH == CONFIG_DIR / "alchemy_params.json"
+    assert ALCHEMY_PARAMS_RELOAD_FLAG == CONFIG_DIR / "alchemy_params.json.reload"
+    assert SITE_CONFIG_PATH == CONFIG_DIR / "site.json"
+    assert CONNECTIONS_STATE_PATH == CONFIG_DIR / "connections.json"
+
+
 def test_connections_default_state_is_not_mutated_across_instances(tmp_path, monkeypatch):
     monkeypatch.setattr("core.connections.STATE_FILE", tmp_path / "connections.json")
     baseline = DEFAULT_STATE["connections"]["binance_futures"]["connected"]

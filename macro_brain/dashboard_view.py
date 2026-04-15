@@ -803,7 +803,8 @@ def _render_network_tab(parent):
 
     vps_online = False; vps_detail = "not configured"
     try:
-        vps_path = Path("config/vps.json")
+        from config.paths import VPS_CONFIG_PATH
+        vps_path = VPS_CONFIG_PATH
         if vps_path.exists():
             cfg = json.loads(vps_path.read_text(encoding="utf-8"))
             host = (cfg.get("host") or "").strip()

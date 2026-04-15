@@ -1589,10 +1589,11 @@ class Engine:
     def _check_reload_params(s):
         """Called at top of each scan cycle. If reload flag file exists, re-read params and delete flag."""
         global MIN_SPREAD,MIN_APR,MAX_POS,POS_PCT,LEV,SCAN_S,EXIT_H,MAX_DD_PCT,KILL_LOSSES
-        flag=Path("config/alchemy_params.json.reload")
+        from config.paths import ALCHEMY_PARAMS_PATH, ALCHEMY_PARAMS_RELOAD_FLAG
+        flag=ALCHEMY_PARAMS_RELOAD_FLAG
         if not flag.exists():return
         try:
-            params=json.loads(Path("config/alchemy_params.json").read_text())
+            params=json.loads(ALCHEMY_PARAMS_PATH.read_text(encoding="utf-8"))
             MIN_SPREAD =float(params.get("MIN_SPREAD", MIN_SPREAD))
             MIN_APR    =float(params.get("MIN_APR",    MIN_APR))
             MAX_POS    =int(params.get("MAX_POS",      MAX_POS))

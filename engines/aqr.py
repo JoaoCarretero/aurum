@@ -170,7 +170,8 @@ if __name__ == "__main__":
         print(f"    {eng:<12} {alloc*100:>6.1f}%  {'█' * int(alloc * 40)}")
 
     # 6. Save report
-    report_dir = Path("data/aqr")
+    from config.paths import DATA_DIR
+    report_dir = DATA_DIR / "aqr"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"darwin_report_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json"
     with open(report_path, "w", encoding="utf-8") as f:

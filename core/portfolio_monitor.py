@@ -258,7 +258,8 @@ class PortfolioMonitor:
         return out
 
     # ── PAPER STATE (editable persistent file) ────────────────
-    PAPER_STATE_FILE = Path("config/paper_state.json")
+    from config.paths import PAPER_STATE_PATH as _PAPER_STATE_PATH
+    PAPER_STATE_FILE = _PAPER_STATE_PATH
     PAPER_DEFAULT_BALANCE = 10000.0
     # Class-level lock: every read/modify/write of paper_state.json goes
     # through this, protecting the file from concurrent mutations.
