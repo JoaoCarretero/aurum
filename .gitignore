@@ -52,6 +52,10 @@ dist/
 .pytest_tmp_*/
 .pytest_local_tmp/
 .test_tmp/
+tests/_tmp/
+pytest-cache-files-*/
+pytest-run-*/
+/tmp*/
 
 # Alchemy (ARBITRAGE) param files — generated at runtime, not versioned
 config/alchemy_params.json
