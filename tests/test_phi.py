@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from engines.phi import PhiParams, compute_features, compute_zigzag
+from engines.phi import PhiParams, compute_features, compute_fibs, compute_zigzag
 
 
 def _synthetic_df(n: int = 600, seed: int = 42) -> pd.DataFrame:
@@ -82,3 +82,67 @@ def test_zigzag_no_lookahead():
     p_short = z_short["last_pivot_price"].iloc[150]
     if not (np.isnan(p_full) and np.isnan(p_short)):
         assert abs(p_full - p_short) < 1e-6
+
+
+def test_fibs_math_up_swing():
+    # L@100 idx 10 → H@200 idx 50. Range = 100.
+    # Retracement 0.618 from H going down = 200 - 0.618*100 = 138.2.
+    # Extension 1.272 above H = 200 + 0.272*100 = 227.2.
+    n = 100
+    idx = pd.date_range("2024-01-01", periods=n, freq="5min")
+    df = pd.DataFrame({
+        "time": idx,
+        "open": np.full(n, 150.0), "high": np.full(n, 150.0), "low": np.full(n, 150.0),
+        "close": np.full(n, 150.0), "volume": np.full(n, 1000.0),
+        "atr": np.full(n, 1.0),
+        "last_pivot_idx": np.full(n, -1, dtype=np.int64),
+        "last_pivot_price": np.full(n, np.nan),
+        "last_pivot_type": np.array([""] * n, dtype=object),
+        "prev_pivot_idx": np.full(n, -1, dtype=np.int64),
+        "prev_pivot_price": np.full(n, np.nan),
+        "prev_pivot_type": np.array([""] * n, dtype=object),
+    })
+    df.loc[52:, "last_pivot_idx"] = 50
+    df.loc[52:, "last_pivot_price"] = 200.0
+    df.loc[52:, "last_pivot_type"] = "H"
+    df.loc[52:, "prev_pivot_idx"] = 10
+    df.loc[52:, "prev_pivot_price"] = 100.0
+    df.loc[52:, "prev_pivot_type"] = "L"
+
+    out = compute_fibs(df, PhiParams())
+    assert abs(out["fib_0.618"].iloc[60] - 138.2) < 1e-3
+    assert abs(out["fib_0.786"].iloc[60] - 121.4) < 1e-3
+    assert abs(out["fib_1.272"].iloc[60] - 227.2) < 1e-3
+    assert abs(out["fib_1.618"].iloc[60] - 261.8) < 1e-3
+    assert out["swing_direction"].iloc[60] == +1
+
+
+def test_fibs_math_down_swing():
+    # H@200 idx 10 → L@100 idx 50. Down swing.
+    # Retracement 0.618 from L going up = 100 + 0.618*100 = 161.8.
+    # Extension 1.272 below L = 100 - 0.272*100 = 72.8.
+    n = 100
+    idx = pd.date_range("2024-01-01", periods=n, freq="5min")
+    df = pd.DataFrame({
+        "time": idx,
+        "open": np.full(n, 150.0), "high": np.full(n, 150.0), "low": np.full(n, 150.0),
+        "close": np.full(n, 150.0), "volume": np.full(n, 1000.0),
+        "atr": np.full(n, 1.0),
+        "last_pivot_idx": np.full(n, -1, dtype=np.int64),
+        "last_pivot_price": np.full(n, np.nan),
+        "last_pivot_type": np.array([""] * n, dtype=object),
+        "prev_pivot_idx": np.full(n, -1, dtype=np.int64),
+        "prev_pivot_price": np.full(n, np.nan),
+        "prev_pivot_type": np.array([""] * n, dtype=object),
+    })
+    df.loc[52:, "last_pivot_idx"] = 50
+    df.loc[52:, "last_pivot_price"] = 100.0
+    df.loc[52:, "last_pivot_type"] = "L"
+    df.loc[52:, "prev_pivot_idx"] = 10
+    df.loc[52:, "prev_pivot_price"] = 200.0
+    df.loc[52:, "prev_pivot_type"] = "H"
+
+    out = compute_fibs(df, PhiParams())
+    assert abs(out["fib_0.618"].iloc[60] - 161.8) < 1e-3
+    assert abs(out["fib_1.272"].iloc[60] - 72.8) < 1e-3
+    assert out["swing_direction"].iloc[60] == -1

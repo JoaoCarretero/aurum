@@ -303,8 +303,59 @@ def compute_zigzag(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
 
 
 def compute_fibs(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
-    """Stub — implemented in Task 4."""
-    raise NotImplementedError
+    """Compute Fibonacci retracements (0.382/0.500/0.618/0.786) and
+    extensions (1.000/1.272/1.618/2.618) from the last two confirmed pivots.
+
+    Direction:
+      +1 = up-swing (prev=L, last=H). Retracements below H toward L.
+                                       Extensions above H.
+      -1 = down-swing (prev=H, last=L). Retracements above L toward H.
+                                         Extensions below L.
+       0 = insufficient or same-type pivots — all fib levels are NaN.
+    """
+    out = df.copy()
+    last_p = out["last_pivot_price"].to_numpy()
+    last_t = out["last_pivot_type"].to_numpy()
+    prev_p = out["prev_pivot_price"].to_numpy()
+    prev_t = out["prev_pivot_type"].to_numpy()
+    n = len(out)
+
+    retr = [0.382, 0.500, 0.618, 0.786]
+    ext = [1.000, 1.272, 1.618, 2.618]
+    direction = np.zeros(n, dtype=np.int8)
+    fib_cols: dict[str, np.ndarray] = {}
+    for r in retr:
+        fib_cols[f"fib_{r:.3f}"] = np.full(n, np.nan)
+    for e in ext:
+        fib_cols[f"fib_{e:.3f}"] = np.full(n, np.nan)
+
+    for t in range(n):
+        lp, lt = last_p[t], last_t[t]
+        pp, pt = prev_p[t], prev_t[t]
+        if np.isnan(lp) or np.isnan(pp) or lt == "" or pt == "":
+            continue
+        if lt == "H" and pt == "L":
+            direction[t] = +1
+            rng = lp - pp
+            base = lp
+            for r in retr:
+                fib_cols[f"fib_{r:.3f}"][t] = base - r * rng
+            for e in ext:
+                fib_cols[f"fib_{e:.3f}"][t] = base + (e - 1.0) * rng
+        elif lt == "L" and pt == "H":
+            direction[t] = -1
+            rng = pp - lp
+            base = lp
+            for r in retr:
+                fib_cols[f"fib_{r:.3f}"][t] = base + r * rng
+            for e in ext:
+                fib_cols[f"fib_{e:.3f}"][t] = base - (e - 1.0) * rng
+        # else: same-type pivots → direction stays 0, fibs stay NaN
+
+    for col, arr in fib_cols.items():
+        out[col] = arr
+    out["swing_direction"] = direction
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════
