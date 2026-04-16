@@ -125,9 +125,65 @@ class PhiParams:
 # Local feature computation
 # ════════════════════════════════════════════════════════════════════
 
+def _rma(series: pd.Series, length: int) -> pd.Series:
+    """Wilder's RMA (smoothed moving average)."""
+    return series.ewm(alpha=1.0 / length, adjust=False).mean()
+
+
+def _atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    h, l, c = df["high"], df["low"], df["close"]
+    tr = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    return _rma(tr, length)
+
+
+def _rsi(close: pd.Series, length: int = 14) -> pd.Series:
+    delta = close.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    avg_up = _rma(up, length)
+    avg_down = _rma(down, length)
+    rs = avg_up / avg_down.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+
+def _bb_width(close: pd.Series, length: int = 20, k: float = 2.0) -> pd.Series:
+    mid = close.rolling(length).mean()
+    sd = close.rolling(length).std(ddof=0)
+    return (2 * k * sd) / mid
+
+
+def _adx(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    h, l, c = df["high"], df["low"], df["close"]
+    up = h.diff()
+    down = -l.diff()
+    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+    tr = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    atr_ = _rma(tr, length)
+    plus_di = 100 * _rma(pd.Series(plus_dm, index=df.index), length) / atr_.replace(0, np.nan)
+    minus_di = 100 * _rma(pd.Series(minus_dm, index=df.index), length) / atr_.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    return _rma(dx, length)
+
+
 def compute_features(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
-    """Stub — implemented in Task 2."""
-    raise NotImplementedError
+    """Add local indicators to df. No lookahead."""
+    out = df.copy()
+    out["atr"] = _atr(out, 14)
+    out["rsi"] = _rsi(out["close"], 14)
+    out["bb_width"] = _bb_width(out["close"], 20, 2.0)
+    out["adx"] = _adx(out, 14)
+    out["ema200"] = out["close"].ewm(span=200, adjust=False).mean()
+    out["ema200_slope"] = out["ema200"].diff(20) / 20.0
+    body = (out["close"] - out["open"]).abs()
+    total_range = (out["high"] - out["low"]).replace(0, np.nan)
+    upper_wick = out["high"] - out[["open", "close"]].max(axis=1)
+    lower_wick = out[["open", "close"]].min(axis=1) - out["low"]
+    wick = pd.concat([upper_wick, lower_wick], axis=1).max(axis=1)
+    out["wick_ratio"] = (wick / total_range).clip(0, 1).fillna(0)
+    out["body_ratio"] = (body / total_range).fillna(0)
+    out["vol_ma20"] = out["volume"].rolling(20).mean()
+    return out
 
 
 def compute_zigzag(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
