@@ -208,6 +208,62 @@ STRATEGIES = {
             "TWO SIGMA       ML meta-ensemble (opcao 8)",
         ],
     },
+    "kepos": {
+        "name": "KEPOS",
+        "tag": "KEP",
+        "desc": "Critical endogeneity fade — Hawkes η reversal plays",
+        "methods": ["backtest"],
+        "info": [
+            "Fade de extensoes criticas via branching ratio de Hawkes.",
+            "",
+            "Signal          η >= eta_critical sustentado N barras",
+            "Entry           Contra o movimento (H1 fade)",
+            "Exit            η < eta_exit ou time-stop",
+            "Flag            --invert ride extension (H1-INV)",
+        ],
+    },
+    "graham": {
+        "name": "GRAHAM",
+        "tag": "GRH",
+        "desc": "Endogenous momentum — trend gated by Hawkes ENDO regime",
+        "methods": ["backtest"],
+        "info": [
+            "Trend-following so quando regime Hawkes e endogeno.",
+            "",
+            "Gate            eta_lower <= eta <= eta_upper",
+            "Trend           slope EMA + breakout de estrutura",
+            "Exit            eta fora da banda ou stop",
+            "Flag            --invert mean-reversion (H2-INV)",
+        ],
+    },
+    "twosigma": {
+        "name": "TWO SIGMA",
+        "tag": "TSG",
+        "desc": "ML meta-ensemble — LightGBM walk-forward (requires prior runs)",
+        "methods": ["backtest"],
+        "info": [
+            "Re-pondera trades de outros engines via LightGBM.",
+            "",
+            "Requer          backtests previos de citadel/jump/bridgewater",
+            "Features        regime HMM + Hurst + volatilidade + decay",
+            "Output          feature importance + static vs ML PnL",
+            "Standalone      imprime instrucoes se nao ha trades em disco",
+        ],
+    },
+    "aqr": {
+        "name": "AQR",
+        "tag": "AQR",
+        "desc": "Evolutionary allocation — fitness-driven strategy weighting",
+        "methods": ["backtest"],
+        "info": [
+            "Selecao natural entre engines ja testadas.",
+            "",
+            "Input           trades.json dos backtests em data/",
+            "Evolucao        fitness via Sortino + MaxDD + stability",
+            "Output          alocacao final de capital por engine",
+            "Report          data/aqr/darwin_report_YYYY-MM-DD_HHMM.json",
+        ],
+    },
 }
 
 def _resolve(strategy, method, config):
@@ -222,6 +278,10 @@ def _resolve(strategy, method, config):
         if strategy == "jump":        return "mercurio","engines/jump.py",[days,lev,"n",""]
         if strategy == "bridgewater": return "thoth","engines/bridgewater.py",[days,lev,""]
         if strategy == "millennium":  return "multi","engines/millennium.py",["1",days,"","","","","",plots,""]
+        if strategy == "kepos":       return "kepos","engines/kepos.py",["--days",days,"--no-menu"]
+        if strategy == "graham":      return "graham","engines/graham.py",["--days",days,"--no-menu"]
+        if strategy == "twosigma":    return "prometeu","engines/twosigma.py",[]
+        if strategy == "aqr":         return "darwin","engines/aqr.py",[]
     if method == "simulator":
         if strategy == "citadel":    return "live","engines/live.py",[mode]
         if strategy == "janestreet": return "arb","engines/janestreet.py",[mode]
@@ -327,7 +387,12 @@ def _sel(title, items, hotkeys=None, sub="", hdr=""):
 
 def _launch(ek, sc, stdin, sname="", mname="", foreground=True):
     from core.proc import spawn, _is_alive, get_log_path
-    info = spawn(ek, stdin_lines=stdin)
+    # Hawkes engines parse argv via argparse instead of reading interactive
+    # prompts from stdin, so route their payload through cli_args.
+    if ek in ("kepos", "graham"):
+        info = spawn(ek, cli_args=stdin)
+    else:
+        info = spawn(ek, stdin_lines=stdin)
     if not info:
         _head(sname, mname)
         print(f"\n  {Y}Ja esta a correr ou erro ao lancar.{Z}")
@@ -849,7 +914,7 @@ def main():
 
     # Real strategy names (must match keys in STRATEGIES dict and branches in _resolve).
     # backtest supports 6; simulator/live are limited to engines with a runtime mode.
-    BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium"]
+    BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium", "kepos", "graham", "twosigma", "aqr"]
     LIVE_STRATS = ["citadel", "janestreet"]
 
     p=sub.add_parser("backtest",aliases=["bt"]); p.add_argument("strategy",choices=BT_STRATS,nargs="?",default="citadel"); p.add_argument("--days",type=int,default=90); p.add_argument("--plots",action="store_true"); p.add_argument("--leverage",type=float,default=None)
