@@ -855,6 +855,177 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
 
 # ════════════════════════════════════════════════════════════════════
+# Multi-symbol orchestration + summary + persistence
+# ════════════════════════════════════════════════════════════════════
+
+def prepare_symbol_frames(symbol: str, params: PhiParams) -> Optional[pd.DataFrame]:
+    """Fetch all 5 TFs, compute features+zigzag+fibs per TF, merge HTFs
+    onto the 5m base, and run cluster/regime/trigger/scoring.
+    Returns the fully-prepared base df, or None on data failure."""
+    tfs = [params.tf_omega5, params.tf_omega4, params.tf_omega3,
+           params.tf_omega2, params.tf_omega1]
+    n_candles_map = {
+        params.tf_omega1: 800,
+        params.tf_omega2: 4_000,
+        params.tf_omega3: 16_000,
+        params.tf_omega4: 70_000,
+        params.tf_omega5: params.n_candles_5m,
+    }
+    frames: dict[str, pd.DataFrame] = {}
+    for tf in tfs:
+        got = fetch_all([symbol], interval=tf, n_candles=n_candles_map[tf], futures=True)
+        df = got.get(symbol)
+        if df is None or len(df) < 300:
+            log.warning("%s: insufficient data on %s (have=%s)",
+                        symbol, tf, 0 if df is None else len(df))
+            return None
+        df = compute_features(df, params)
+        df = compute_zigzag(df, params)
+        df = compute_fibs(df, params)
+        frames[tf] = df
+    base = frames[params.tf_omega5]
+    htfs = {
+        params.tf_omega1: frames[params.tf_omega1],
+        params.tf_omega2: frames[params.tf_omega2],
+        params.tf_omega3: frames[params.tf_omega3],
+        params.tf_omega4: frames[params.tf_omega4],
+    }
+    merged = align_htfs_to_base(base, htfs)
+    merged = detect_cluster(merged, params)
+    merged = check_regime_gates(merged, params)
+    merged = check_golden_trigger(merged, params)
+    merged = compute_scoring(merged, params)
+    return merged
+
+
+def run_backtest(symbols: list[str], params: Optional[PhiParams] = None,
+                 initial_equity: float = ACCOUNT_SIZE) -> tuple[list[dict], dict]:
+    """Run PHI across symbols. Returns (trades, summary)."""
+    params = params or PhiParams()
+    all_trades: list[dict] = []
+    all_vetos: dict[str, int] = defaultdict(int)
+    for sym in symbols:
+        log.info("Preparing %s ...", sym)
+        merged = prepare_symbol_frames(sym, params)
+        if merged is None:
+            continue
+        trades, vetos = scan_symbol(merged, sym, params, initial_equity)
+        all_trades.extend(trades)
+        for k, v in vetos.items():
+            all_vetos[k] += v
+        log.info("%s: %d trades", sym, len(trades))
+    summary = compute_summary(all_trades, initial_equity)
+    summary["vetos"] = dict(all_vetos)
+    return all_trades, summary
+
+
+def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE) -> dict:
+    """Sharpe, Sortino, Profit Factor, Win Rate, Max Drawdown, Expectancy (R)."""
+    if not trades:
+        return {
+            "total_trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
+            "sharpe": 0.0, "sortino": 0.0, "max_drawdown": 0.0,
+            "expectancy_r": 0.0,
+            "final_equity": float(initial_equity), "total_pnl": 0.0,
+        }
+    pnls = np.array([t["pnl"] for t in trades], dtype=float)
+    wins = pnls[pnls > 0]
+    losses = pnls[pnls < 0]
+    equity = initial_equity + np.cumsum(pnls)
+    peaks = np.maximum.accumulate(equity)
+    dd = (peaks - equity) / np.where(peaks > 0, peaks, 1.0)
+
+    ret_series = pnls / initial_equity
+    std_r = float(np.std(ret_series))
+    sharpe = (float(np.mean(ret_series)) / std_r * np.sqrt(len(ret_series))) if std_r > 0 else 0.0
+    downside = ret_series[ret_series < 0]
+    std_d = float(np.std(downside)) if len(downside) > 0 else 0.0
+    sortino = (float(np.mean(ret_series)) / std_d * np.sqrt(len(ret_series))) if std_d > 0 else 0.0
+
+    if len(losses) > 0 and losses.sum() < 0:
+        pf = float(wins.sum() / -losses.sum())
+    elif len(wins) > 0:
+        pf = float("inf")
+    else:
+        pf = 0.0
+
+    r_values = []
+    for t in trades:
+        risk = abs(t.get("entry", 0) - t.get("sl", 0)) * t.get("size", 0)
+        if risk > 0:
+            r_values.append(t["pnl"] / risk)
+    expectancy_r = float(np.mean(r_values)) if r_values else 0.0
+
+    return {
+        "total_trades": len(trades),
+        "win_rate": float(len(wins) / len(trades)),
+        "profit_factor": pf,
+        "sharpe": float(sharpe),
+        "sortino": float(sortino),
+        "max_drawdown": float(dd.max()),
+        "expectancy_r": expectancy_r,
+        "final_equity": float(equity[-1]),
+        "total_pnl": float(pnls.sum()),
+    }
+
+
+def _trades_to_serializable(trades: list[dict]) -> list[dict]:
+    """Convert pd.Timestamp / numpy scalars to JSON-safe primitives.
+    Preserves schema compatibility with overfit_audit (fix 1ff8b18)."""
+    out = []
+    for t in trades:
+        o = dict(t)
+        for k, v in list(o.items()):
+            if isinstance(v, pd.Timestamp):
+                o[k] = v.isoformat()
+            elif isinstance(v, np.integer):
+                o[k] = int(v)
+            elif isinstance(v, np.floating):
+                o[k] = float(v)
+            elif isinstance(v, list):
+                # Serialize list of dicts (e.g. partials)
+                new_list = []
+                for item in v:
+                    if isinstance(item, dict):
+                        new_item = dict(item)
+                        for ik, iv in list(new_item.items()):
+                            if isinstance(iv, pd.Timestamp):
+                                new_item[ik] = iv.isoformat()
+                            elif isinstance(iv, np.integer):
+                                new_item[ik] = int(iv)
+                            elif isinstance(iv, np.floating):
+                                new_item[ik] = float(iv)
+                        new_list.append(new_item)
+                    else:
+                        new_list.append(item)
+                o[k] = new_list
+        out.append(o)
+    return out
+
+
+def save_run(run_dir: Path, trades: list[dict], summary: dict,
+             params: PhiParams) -> None:
+    """Write trades.json, summary.json, config.json atomically."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write(run_dir / "trades.json",
+                 json.dumps(_trades_to_serializable(trades), indent=2))
+    atomic_write(run_dir / "summary.json",
+                 json.dumps(summary, indent=2))
+    atomic_write(run_dir / "config.json",
+                 json.dumps(asdict(params), indent=2))
+
+
+def _setup_logging(run_dir: Path) -> None:
+    (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(run_dir / "logs" / "phi.log", encoding="utf-8")
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s - %(message)s"
+    ))
+    logging.getLogger().addHandler(fh)
+    logging.getLogger().setLevel(logging.INFO)
+
+
+# ════════════════════════════════════════════════════════════════════
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 
