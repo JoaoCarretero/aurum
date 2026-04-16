@@ -10,7 +10,7 @@ the trading style each engine implements.
 
 ENGINES = {
     "citadel":     {"script": "engines/citadel.py",      "display": "CITADEL",     "desc": "Systematic momentum — trend-following + fractal alignment"},
-    "renaissance": {"script": "core/harmonics.py",        "display": "RENAISSANCE", "desc": "Pattern recognition — harmonic geometry + Bayesian scoring"},
+    "renaissance": {"script": "engines/renaissance.py",   "display": "RENAISSANCE", "desc": "Pattern recognition — harmonic geometry + Bayesian scoring"},
     "jump":        {"script": "engines/jump.py",      "display": "JUMP",        "desc": "Order flow — CVD divergence + volume imbalance"},
     "bridgewater": {"script": "engines/bridgewater.py",         "display": "BRIDGEWATER", "desc": "Macro sentiment — funding + OI + LS ratio contrarian"},
     "deshaw":      {"script": "engines/deshaw.py",        "display": "DE SHAW",     "desc": "Statistical arb — pairs cointegration + mean reversion"},
