@@ -148,7 +148,7 @@ def test_fibs_math_down_swing():
     assert out["swing_direction"].iloc[60] == -1
 
 
-from engines.phi import align_htfs_to_base
+from engines.phi import align_htfs_to_base, detect_cluster
 
 
 def test_htf_alignment_no_lookahead():
@@ -173,3 +173,56 @@ def test_htf_alignment_no_lookahead():
     # At base 10:55, still inside the 10:00-11:00 HTF bar → latest closed HTF is still 09:00-10:00.
     row_10_55 = merged.loc[merged["time"] == pd.Timestamp("2024-01-01 10:55")].iloc[0]
     assert row_10_55["close_1h"] == 100.0
+
+
+def test_cluster_detects_confluence():
+    """When fib_0.618 in 3+ TFs lies within 0.5*ATR(5m) of price, cluster fires."""
+    # close=100, ATR=1.0, tolerance=0.5. fib values:
+    #   1d=99.8 (in), 4h=100.3 (in), 1h=100.1 (in), 15m=95.0 (out), 5m=107.0 (out)
+    # → 3 confluences → cluster fires.
+    n = 50
+    idx = pd.date_range("2024-01-01", periods=n, freq="5min")
+    base = pd.DataFrame({
+        "time": idx,
+        "close": np.full(n, 100.0),
+        "atr": np.full(n, 1.0),
+        "fib_0.618_1d": np.full(n, 99.8),
+        "fib_0.618_4h": np.full(n, 100.3),
+        "fib_0.618_1h": np.full(n, 100.1),
+        "fib_0.618_15m": np.full(n, 95.0),
+        "fib_0.618": np.full(n, 107.0),
+        "swing_direction_1d": np.full(n, +1, dtype=np.int8),
+        "swing_direction_4h": np.full(n, +1, dtype=np.int8),
+        "swing_direction_1h": np.full(n, +1, dtype=np.int8),
+        "swing_direction_15m": np.full(n, -1, dtype=np.int8),
+        "swing_direction": np.full(n, -1, dtype=np.int8),
+    })
+    out = detect_cluster(base, PhiParams())
+    assert out["cluster_confluences"].iloc[10] == 3
+    assert bool(out["cluster_active"].iloc[10]) == True
+    # Majority of the 3 in-range TFs have direction=+1 → cluster_direction=+1
+    assert out["cluster_direction"].iloc[10] == +1
+
+
+def test_cluster_below_threshold():
+    """If only 2 TFs agree, cluster is NOT active."""
+    n = 50
+    idx = pd.date_range("2024-01-01", periods=n, freq="5min")
+    base = pd.DataFrame({
+        "time": idx,
+        "close": np.full(n, 100.0),
+        "atr": np.full(n, 1.0),
+        "fib_0.618_1d": np.full(n, 99.9),    # in
+        "fib_0.618_4h": np.full(n, 100.1),   # in
+        "fib_0.618_1h": np.full(n, 95.0),    # out
+        "fib_0.618_15m": np.full(n, 110.0),  # out
+        "fib_0.618": np.full(n, 108.0),      # out
+        "swing_direction_1d": np.full(n, +1, dtype=np.int8),
+        "swing_direction_4h": np.full(n, +1, dtype=np.int8),
+        "swing_direction_1h": np.full(n, 0, dtype=np.int8),
+        "swing_direction_15m": np.full(n, 0, dtype=np.int8),
+        "swing_direction": np.full(n, 0, dtype=np.int8),
+    })
+    out = detect_cluster(base, PhiParams())
+    assert out["cluster_confluences"].iloc[10] == 2
+    assert bool(out["cluster_active"].iloc[10]) == False

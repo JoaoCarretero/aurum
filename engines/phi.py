@@ -394,6 +394,50 @@ def align_htfs_to_base(base: pd.DataFrame, htfs: dict[str, pd.DataFrame]) -> pd.
 
 
 # ════════════════════════════════════════════════════════════════════
+# Cluster detection (PHI_CLUSTER)
+# ════════════════════════════════════════════════════════════════════
+
+def detect_cluster(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
+    """Count TFs whose fib_0.618 is within cluster_atr_tolerance * ATR(5m)
+    of close. If count >= cluster_min_confluences, set cluster_active.
+    Direction is the sign of the sum of signed swing_direction values
+    across contributing TFs (majority vote; ties = 0 = no-go).
+
+    Assumes TF columns are suffixed: fib_0.618_{1d,4h,1h,15m}, with the
+    5m (base) using unsuffixed fib_0.618 / swing_direction columns.
+    """
+    out = df.copy()
+    n = len(out)
+    tolerance = params.cluster_atr_tolerance * out["atr"]
+    close = out["close"]
+
+    tf_keys = ["1d", "4h", "1h", "15m"]
+    fib_cols = [f"fib_0.618_{tf}" for tf in tf_keys] + ["fib_0.618"]
+    dir_cols = [f"swing_direction_{tf}" for tf in tf_keys] + ["swing_direction"]
+
+    confluences = np.zeros(n, dtype=np.int8)
+    signed_sum = np.zeros(n, dtype=np.int32)
+
+    for fc, dc in zip(fib_cols, dir_cols):
+        if fc not in out.columns:
+            continue
+        fib_vals = out[fc]
+        if dc in out.columns:
+            dir_vals = out[dc].astype(np.int32).to_numpy()
+        else:
+            dir_vals = np.zeros(n, dtype=np.int32)
+        within = (fib_vals.notna()) & ((close - fib_vals).abs() <= tolerance)
+        within_arr = within.astype(np.int8).to_numpy()
+        confluences = confluences + within_arr
+        signed_sum = signed_sum + (within_arr.astype(np.int32) * dir_vals)
+
+    out["cluster_confluences"] = confluences
+    out["cluster_active"] = confluences >= params.cluster_min_confluences
+    out["cluster_direction"] = np.sign(signed_sum).astype(np.int8)
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 
