@@ -99,6 +99,11 @@ PROC_ENGINES = {
         "display": "GRAHAM",
         "canonical": "graham",
     },
+    "prefetch": {
+        "script": "tools/prefetch.py",
+        "display": "PREFETCH",
+        "canonical": "prefetch",
+    },
 }
 
 PROC_NAMES = {k: v["display"] for k, v in PROC_ENGINES.items()}

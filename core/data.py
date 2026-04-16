@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from config.params import *
 from config.params import _TF_MINUTES
+from core import cache as _cache
 
 log = logging.getLogger("CITADEL")
 _vl = logging.getLogger("CITADEL.val")
@@ -13,6 +14,10 @@ def fetch(symbol: str, interval: str | None = None,
           futures: bool = False) -> pd.DataFrame | None:
     _iv  = interval  or INTERVAL
     _nc  = n_candles or N_CANDLES
+    cached = _cache.read(symbol, _iv, _nc, futures)
+    if cached is not None:
+        log.debug(f"[{symbol}] cache hit: {len(cached)} bars")
+        return cached
     # futures klines têm preço perp (mais próximo do que vai ser executado)
     base = "https://fapi.binance.com/fapi/v1" if futures else "https://api.binance.com/api/v3"
     url, frames, end_time = f"{base}/klines", [], None
@@ -62,7 +67,12 @@ def fetch(symbol: str, interval: str | None = None,
     for c in ["open","high","low","close","vol","tbb"]:
         df[c] = df[c].astype(float)
     df["time"] = pd.to_datetime(df["time"], unit="ms")
-    return df.drop_duplicates("time").sort_values("time").reset_index(drop=True)
+    df = df.drop_duplicates("time").sort_values("time").reset_index(drop=True)
+    try:
+        _cache.write(symbol, _iv, df, futures)
+    except Exception as _e:
+        log.debug(f"[{symbol}] cache write skipped: {_e}")
+    return df
 
 def fetch_all(symbols: list, interval: str | None = None,
               n_candles: int | None = None,

@@ -6958,7 +6958,7 @@ class App(tk.Tk):
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> DATA")
         self.h_stat.configure(text="CENTER", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  X export")
+        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P prefetch  |  X export")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
@@ -6988,12 +6988,26 @@ class App(tk.Tk):
             fg=DIM,
         )
 
+        try:
+            from core import cache as _cache_mod
+            _cache_info = _cache_mod.info()
+            _cache_tag = (f"{_cache_info['n_files']} syms · "
+                          f"{_cache_info['total_bytes']/1024/1024:.1f} MB"
+                          if _cache_info["n_files"]
+                          else "vazio — clique pra baixar")
+        except Exception:
+            _cache_tag = "indisponivel"
+
         sections = [
             ("PRIMARY ROUTES", [
                 ("B", "BACKTESTS", "validated runs, metrics and run-level inspection",
                  f"{bt_count} runs on disk", lambda: self._data_backtests()),
                 ("E", "ENGINE LOGS", "running and recent engines with live tail",
                  f"{eng_running} running · {eng_total} total", lambda: self._data_engines()),
+            ]),
+            ("HISTORICAL CACHE", [
+                ("P", "PREFETCH OHLCV", "baixa bluechip 3000d · 15m pra usar offline",
+                 _cache_tag, lambda: self._data_prefetch()),
             ]),
             ("ARTIFACTS", [
                 ("R", "REPORT INDEX", "raw JSON and persisted report artifact browser",
@@ -7024,6 +7038,38 @@ class App(tk.Tk):
                 self._kb(key_bind, cmd)
 
         self._ui_back_row(panel, lambda: self._menu("main"))
+
+    def _data_prefetch(self, basket: str = "bluechip", days: int = 3000,
+                       interval: str = "15m"):
+        """Dispara tools/prefetch.py via core.proc.spawn, em background.
+
+        Roda com args default (bluechip · 3000d · 15m futures). O tail do log
+        aparece na tela de ENGINE LOGS — mesma UX das engines.
+        """
+        try:
+            from core.proc import spawn
+        except Exception as e:
+            messagebox.showerror("Prefetch", f"indisponivel: {e}")
+            return
+        info = spawn("prefetch", cli_args=[
+            "--basket", basket,
+            "--days", str(days),
+            "--interval", interval,
+        ])
+        if not info:
+            messagebox.showwarning(
+                "Prefetch", "ja esta em execucao (ou falhou ao iniciar).")
+            return
+        pid = info.get("pid", "?")
+        messagebox.showinfo(
+            "Prefetch iniciado",
+            f"PID {pid}\nbasket  {basket}\ndepth   {days}d\ninterval {interval}\n\n"
+            "segue em background — veja ENGINE LOGS pro tail ao vivo.")
+        # refresh current screen so the cache-size pill updates after the run
+        try:
+            self.after(1500, self._data_center)
+        except Exception:
+            pass
 
     # ── Counts used by the DATA CENTER cards ──────────────────
     def _data_count_backtests(self) -> int:
