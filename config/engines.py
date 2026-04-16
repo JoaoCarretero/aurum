@@ -89,6 +89,16 @@ PROC_ENGINES = {
         "display": "WINTON",
         "canonical": "winton",
     },
+    "kepos": {
+        "script": ENGINES["kepos"]["script"],
+        "display": "KEPOS",
+        "canonical": "kepos",
+    },
+    "graham": {
+        "script": ENGINES["graham"]["script"],
+        "display": "GRAHAM",
+        "canonical": "graham",
+    },
 }
 
 PROC_NAMES = {k: v["display"] for k, v in PROC_ENGINES.items()}

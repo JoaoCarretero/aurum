@@ -108,6 +108,10 @@ class KeposParams:
     # Sizing (local fixed-risk-%)
     max_pct_equity: float = 0.02
 
+    # H1-INV: if True, ride the extension (go long into up-spike, short into
+    # down-spike) instead of fading. Tests the mirror hypothesis.
+    invert_direction: bool = False
+
     # Backtest metadata
     interval: str = field(default_factory=lambda: INTERVAL)
 
@@ -224,7 +228,9 @@ def decide_direction(df: pd.DataFrame, t: int, params: KeposParams) -> int:
     if atr_r <= params.atr_expansion_ratio:
         return 0
 
-    return -1 if ext > 0 else +1
+    # Default: fade the extension. invert_direction flips to "ride the spike".
+    direction = -1 if ext > 0 else +1
+    return -direction if params.invert_direction else direction
 
 
 def calc_levels(df: pd.DataFrame, t: int, direction: int,
@@ -540,6 +546,10 @@ def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE
     dd = (peak - equity_curve) / peak
     max_dd_pct = float(dd.max()) * 100.0
 
+    # Sharpe/Sortino are "information ratio" × sqrt(n), NOT annualized like
+    # citadel.py's reporting. Values are directly comparable across KEPOS
+    # variants but NOT to CITADEL's engine-reported Sharpe. For fair
+    # comparison use analysis/stats.calc_ratios on the trade list.
     mean_pnl = float(pnls.mean())
     std_pnl = float(pnls.std(ddof=1)) if n > 1 else 0.0
     sharpe = mean_pnl / std_pnl * np.sqrt(n) if std_pnl > 0 else 0.0
@@ -694,6 +704,8 @@ def main() -> int:
                     help="η threshold for regime exit (must be < eta-critical)")
     ap.add_argument("--eta-sustained", type=int, default=None,
                     help="Bars of sustained η>=critical required to fire entry")
+    ap.add_argument("--invert", action="store_true",
+                    help="Invert direction: ride the extension instead of fading (H1-INV)")
     args = ap.parse_known_args()[0]
 
     basket_name = args.basket or "default"
@@ -721,6 +733,8 @@ def main() -> int:
         params.eta_exit = float(args.eta_exit)
     if args.eta_sustained is not None:
         params.eta_sustained_bars = int(args.eta_sustained)
+    if args.invert:
+        params.invert_direction = True
     if params.eta_exit >= params.eta_critical:
         raise SystemExit(
             f"eta_exit ({params.eta_exit}) must be < eta_critical "

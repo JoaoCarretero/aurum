@@ -122,6 +122,10 @@ class GrahamParams:
     # Sizing
     max_pct_equity: float = 0.03
 
+    # H2-INV: if True, take the MEAN-REVERSION direction (short the uptrend,
+    # long the downtrend) when ENDO sustained — tests the mirror of momentum.
+    invert_direction: bool = False
+
     # Backtest metadata
     interval: str = field(default_factory=lambda: INTERVAL)
 
@@ -162,7 +166,12 @@ def _precompute_pivots(highs: np.ndarray, lows: np.ndarray
 
 def count_higher_highs(highs: np.ndarray, lookback: int) -> int:
     """Count pivots in last `lookback` bars strictly higher than the prior
-    pivot. Uses strict 3-bar fractal. Returns 0 if < 2 pivots in window."""
+    pivot. Uses strict 3-bar fractal. Returns 0 if < 2 pivots in window.
+
+    Exposed for unit-testing the pivot logic in isolation. The scan loop
+    uses `_compute_structure_arrays` (vectorised per-bar counts) — keep
+    both implementations aligned if modifying either.
+    """
     if len(highs) < 3:
         return 0
     is_hi, _ = _precompute_pivots(highs, highs)  # lows unused
@@ -177,7 +186,11 @@ def count_higher_highs(highs: np.ndarray, lookback: int) -> int:
 
 
 def count_lower_lows(lows: np.ndarray, lookback: int) -> int:
-    """Symmetric to count_higher_highs: pivots strictly lower than prior."""
+    """Symmetric to count_higher_highs: pivots strictly lower than prior.
+
+    See note on `count_higher_highs` — this is the test-exposed version;
+    the scan loop uses the vectorised `_compute_structure_arrays`.
+    """
     if len(lows) < 3:
         return 0
     _, is_lo = _precompute_pivots(lows, lows)  # highs unused
@@ -302,14 +315,16 @@ def decide_direction(df: pd.DataFrame, t: int, params: GrahamParams) -> int:
     if not _eta_sustained_endo(df, t, params):
         return 0
 
-    # LONG
+    # Default: momentum (ride the trend). invert_direction = mean-reversion
+    # (short uptrends, long downtrends) — H2-INV.
+    # LONG (uptrend qualified)
     if ef > es and close > ef and slope > params.slope_min_abs \
             and hh >= params.structure_min_count:
-        return +1
-    # SHORT
+        return -1 if params.invert_direction else +1
+    # SHORT (downtrend qualified)
     if ef < es and close < ef and slope < -params.slope_min_abs \
             and ll >= params.structure_min_count:
-        return -1
+        return +1 if params.invert_direction else -1
     return 0
 
 
@@ -629,6 +644,9 @@ def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE
     peak = np.maximum.accumulate(equity_curve)
     dd = (peak - equity_curve) / peak
     max_dd_pct = float(dd.max()) * 100.0
+    # NOTE: these Sharpe/Sortino are "information ratio" × sqrt(n), NOT
+    # annualized. Comparable across GRAHAM variants but NOT directly to
+    # engines that report annualized Sharpe (e.g. citadel.py).
     mean_pnl = float(pnls.mean())
     std_pnl = float(pnls.std(ddof=1)) if n > 1 else 0.0
     sharpe = mean_pnl / std_pnl * np.sqrt(n) if std_pnl > 0 else 0.0
@@ -764,6 +782,8 @@ def main() -> int:
     ap.add_argument("--eta-sustained", type=int, default=None)
     ap.add_argument("--slope-min", type=float, default=None,
                     help="Override slope_min_abs threshold")
+    ap.add_argument("--invert", action="store_true",
+                    help="Invert direction: mean-reversion instead of momentum (H2-INV)")
     ap.add_argument("--compare-baseline", action="store_true",
                     help="Also run GRAHAM with η gate bypassed and print comparison")
     args = ap.parse_known_args()[0]
@@ -798,6 +818,8 @@ def main() -> int:
         params.eta_sustained_bars = int(args.eta_sustained)
     if args.slope_min is not None:
         params.slope_min_abs = float(args.slope_min)
+    if args.invert:
+        params.invert_direction = True
     if params.eta_upper <= params.eta_lower:
         raise SystemExit("eta-upper must be > eta-lower")
 

@@ -293,6 +293,8 @@ SUB_MENUS = {
         ("MILLENNIUM",   "engines/millennium.py",  "Multi-strategy pod — ensemble orchestrator"),
         ("TWO SIGMA",    "engines/twosigma.py",       "ML meta-ensemble — LightGBM walk-forward"),
         ("RENAISSANCE",  "engines/renaissance.py", "Harmonic patterns — Bayesian + entropy + Hurst"),
+        ("KEPOS",        "engines/kepos.py",       "Critical endogeneity fade — Hawkes η reversal plays"),
+        ("GRAHAM",       "engines/graham.py",      "Endogenous momentum — trend + Hawkes ENDO regime gate"),
     ],
     "live": [
         ("PAPER",        "engines/live.py",           "Execução simulada — sem ordens reais"),
