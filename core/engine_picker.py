@@ -23,23 +23,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-# ── PALETTE (cyberpunk) ──────────────────────────────────────
-BG       = "#080808"
-PANEL    = "#0C0C0C"
-BG2      = "#101010"
-BG3      = "#181818"
-BORDER   = "#242424"
-BORDER_H = "#5A5A5A"
-WHITE    = "#E6E6E6"
-DIM      = "#707070"
-DIM2     = "#9A9A9A"
-AMBER    = "#C8C8C8"
-AMBER_H  = "#F0F0F0"
-GREEN    = "#00D26A"
-RED      = "#FF4D4F"
-CYAN     = "#A8A8A8"
-FONT     = "Consolas"
-GLOW     = "#141414"
+# ── PALETTE (HL2 VGUI, via SSOT) ─────────────────────────────
+from core.ui_palette import (
+    BG, BG2, BG3, PANEL,
+    BORDER, BORDER_H,
+    AMBER, AMBER_H,
+    WHITE, DIM, DIM2,
+    GREEN, RED, CYAN,
+    GLOW, FONT,
+)
 
 _STATE_COLORS = {
     "running": GREEN,

@@ -18,22 +18,20 @@ from collections import defaultdict
 from config.params import ACCOUNT_SIZE
 
 # ── Color Palette ────────────────────────────────────────────
-BG_WINDOW = "#0a0a0a"
-AMBER     = "#ff8c00"
-WHITE     = "#e0e0e0"
-DIM       = "#666666"
-FONT      = "Consolas"
+# UI chrome vem do SSOT (core/ui_palette) — alinha com launcher
+# e demais cockpits. Cores específicas de chart (GOLD, BLUE, TEAL,
+# LGRAY, DGRAY) ficam locais porque são paleta de matplotlib.
+from core.ui_palette import (
+    BG as BG_WINDOW, PANEL, AMBER, WHITE, DIM, GREEN, RED, FONT,
+)
 
-BG_CHART  = "#0a0a12"
-PANEL     = "#0f0f1a"
-GOLD      = "#e8b84b"
-GREEN     = "#26d47c"
-RED       = "#e85d5d"
-BLUE      = "#4a9eff"
-TEAL      = "#2dd4bf"
-LGRAY     = "#6b7280"
-DGRAY     = "#1f2937"
-WHITE_C   = "#f0f0f0"
+BG_CHART  = BG_WINDOW
+GOLD      = "#e8b84b"   # chart accent
+BLUE      = "#4a9eff"   # chart line (drawdown etc)
+TEAL      = "#2dd4bf"   # chart line (benchmark)
+LGRAY     = "#6b7280"   # grid lines
+DGRAY     = "#1f2937"   # chart pane inner
+WHITE_C   = "#f0f0f0"   # bright label on chart
 
 
 class ResultsDashboard(tk.Tk):

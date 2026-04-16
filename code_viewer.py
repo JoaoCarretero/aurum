@@ -22,14 +22,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
-# ─── Bloomberg palette (matches launcher.py) ──────────────────────────────
-BG      = "#0a0a0a"
-BG3     = "#181818"
-AMBER   = "#ff8c00"
-AMBER_D = "#7a4400"
-WHITE   = "#c8c8c8"
-DIM     = "#4a4a4a"
-FONT    = "Consolas"
+# ─── HL2 / Source Engine palette (via SSOT core/ui_palette) ──────────────
+from core.ui_palette import (
+    BG, BG3, AMBER, AMBER_D, WHITE, DIM, FONT,
+)
 
 # ─── Python syntax keywords ───────────────────────────────────────────────
 _KEYWORDS = frozenset({

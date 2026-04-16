@@ -1,21 +1,24 @@
-"""Macro Brain cockpit — minimalist Bloomberg-style terminal.
+"""Macro Brain cockpit — VGUI / Source Engine nostalgia.
 
-Design principles (v5 cleanup):
-  - Single accent colour (AMBER) for all section headers and primary chrome.
-  - Signal colours (GREEN/RED) only for directional P&L/sentiment.
-  - Secondary accent (CYAN) only for navigation / interactive affordances.
-  - DIM for metadata, WHITE for primary values.
-  - Uniform padding constants everywhere. No per-section colour bleed.
-  - Every interactive element gets a hover state.
+Design principles (v7 — HL2 / CS 1.6 palette):
+  - Warm cream text on charcoal gray (classic Source engine VGUI).
+  - Primary accent: HL2 orange. Hover brightens, never shifts hue.
+  - Sparklines removed — values + % change carry the signal.
+  - Section headers as utilitarian brackets: [ TITLE ] ──────
+  - Top bar reads "» MACRO BRAIN «" — MOTD / CS 1.6 scoreboard vibe.
+  - Tabs numbered 1-8 with plain separator (no fantasy glyphs).
+  - Signal colours (GREEN/RED) reserved for P&L / directional sentiment.
+  - Uniform padding constants. Every interactive element hovers.
 
-Tabs:
-  [1] US MKTS   rates + FX + equity + commodities + crypto T1/T2
-  [2] BR MKTS   IBOV + top B3 stocks + ADRs + BRL forex
-  [3] CRYPTO    by network — BTC, ETH, SOL, HYPE, DeFi cross-chain, bots
-  [4] INSIGHTS  analytics cards + COT + calendar + live news
-  [5] ANALYSIS  FRED econ indicators + banks/funds + insiders/13F
-  [6] NETWORK   BTC on-chain + processes + VPS
-  [7] BOOK      macro P&L + theses + positions + regime
+Tabs (agrupadas mkt / anl / ops no tab bar):
+  [1] EUA       US rates + FX + equity + commodities + crypto T1/T2
+  [2] BRASIL    IBOV + top B3 stocks + ADRs + BRL forex
+  [3] CRIPTO    by network — BTC, ETH, SOL, HYPE, DeFi cross-chain, bots
+  [4] SINAIS    analytics cards + COT + calendar + live news
+  [5] MACRO     FRED econ indicators + banks/funds + insiders/13F
+  [6] REDE      BTC on-chain + processes + VPS
+  [7] LIVRO     macro P&L + theses + positions + regime
+  [8] MOTORES   engine picker (shared with launcher)
 """
 from __future__ import annotations
 
@@ -28,28 +31,17 @@ import tkinter as tk
 
 log = logging.getLogger("macro_brain.dashboard")
 
-# ── PALETTE (NEUTRAL) ────────────────────────────────────────
-#   Backgrounds — black and graphite
-BG      = "#080808"
-PANEL   = "#0C0C0C"
-BG2     = "#101010"
-BG3     = "#181818"
-#   Borders — charcoal / steel
-BORDER  = "#242424"
-BORDER_H = "#5A5A5A"
-#   Text
-WHITE   = "#E6E6E6"
-DIM     = "#707070"
-DIM2    = "#9A9A9A"
-#   Primary accent — silver
-AMBER   = "#C8C8C8"
-AMBER_H = "#F0F0F0"
-#   Signal
-GREEN   = "#00D26A"
-RED     = "#FF4D4F"
-#   Secondary accent (interactive)
-CYAN    = "#A8A8A8"
-FONT    = "Consolas"
+# ── PALETTE (HL2 / CS 1.6 VGUI) ──────────────────────────────
+# Importado do SSOT core/ui_palette.py — muda lá, todo software
+# adota. Nomes mantidos pra compat com call-sites locais.
+from core.ui_palette import (
+    BG, BG2, BG3, PANEL,
+    BORDER, BORDER_H,
+    AMBER, AMBER_H,
+    WHITE, DIM, DIM2,
+    GREEN, RED, CYAN,
+    FONT,
+)
 
 # ── SPACING (consistent across all tabs) ─────────────────────
 PAD_OUT         = 8    # outer cockpit padding
@@ -60,7 +52,7 @@ PAD_TILE_X      = 2    # horizontal gap between tiles in a row
 PAD_TILE_INNER  = 4    # inner padding of a tile
 PAD_COL_GAP     = 6    # gap between left/right columns
 
-_STATE = {"tab": "US MKTS", "news_filter": "ALL"}
+_STATE = {"tab": "EUA", "news_filter": "ALL"}
 
 # In-place tick registry — populated on render(), read on tick_update().
 # Each key is a metric name (e.g. "BTC_SPOT"); value holds refs to the
@@ -138,46 +130,38 @@ def _attach_hover(widget: tk.Widget, default_border: str = BORDER,
 def _tile(parent, label, value, change="", change_color=WHITE,
           series=None, spark_color=AMBER, metric_key: str | None = None,
           fmt: str | None = None):
-    """Render one metric tile.
+    """Render one metric tile — stat-block style, no sparkline.
 
-    When ``metric_key`` is provided, the value/change/spark widget refs are
-    saved in _TILE_REGISTRY so tick_update() can refresh them in place.
+    ``series`` / ``spark_color`` kept in the signature for call-site
+    compatibility but ignored: v6 grimoire palette drops sparklines to
+    cut visual pollution. Registry stores ``spark=None`` so tick_update
+    skips the canvas-refresh branch cleanly.
     """
     f = tk.Frame(parent, bg=PANEL,
                  highlightbackground=BORDER, highlightthickness=1)
-    tk.Label(f, text=label, font=(FONT, 6, "bold"), fg=DIM, bg=PANEL,
+    tk.Label(f, text=label, font=(FONT, 6, "bold"), fg=DIM2, bg=PANEL,
              anchor="w").pack(fill="x",
-                              padx=PAD_TILE_INNER, pady=(2, 0))
-    body = tk.Frame(f, bg=PANEL); body.pack(fill="x", padx=PAD_TILE_INNER)
-    value_lbl = tk.Label(body, text=value, font=(FONT, 10, "bold"),
+                              padx=PAD_TILE_INNER, pady=(3, 0))
+    body = tk.Frame(f, bg=PANEL); body.pack(fill="x",
+                                             padx=PAD_TILE_INNER,
+                                             pady=(0, 4))
+    value_lbl = tk.Label(body, text=value, font=(FONT, 11, "bold"),
                           fg=WHITE, bg=PANEL, anchor="w")
     value_lbl.pack(side="left")
     change_lbl = None
     if change:
-        change_lbl = tk.Label(body, text=change, font=(FONT, 7),
+        change_lbl = tk.Label(body, text=change, font=(FONT, 7, "bold"),
                                fg=change_color, bg=PANEL, anchor="e")
         change_lbl.pack(side="right", padx=2)
-    spark_cv = None
-    if series and len(series) >= 2:
-        spark_cv = tk.Canvas(f, bg=PANEL, highlightthickness=0,
-                              height=14, width=80)
-        spark_cv.pack(fill="x", padx=PAD_TILE_INNER, pady=(0, 2))
-        def _r(evt=None, c=spark_cv, s=series, col=spark_color):
-            w = c.winfo_width() or 80
-            _draw_spark(c, s, color=col, w=w, h=14)
-        spark_cv.bind("<Configure>", _r)
-        spark_cv.after(10, _r)
-    else:
-        tk.Frame(f, bg=PANEL, height=4).pack()
     _attach_hover(f)
 
     # Register this tile so tick_update can re-target its labels without
-    # rebuilding the layout. Ticker-style in-place refresh.
+    # rebuilding the layout. spark=None → tick_update skips spark branch.
     if metric_key:
         _TILE_REGISTRY[metric_key] = {
             "value": value_lbl,
             "change": change_lbl,
-            "spark": spark_cv,
+            "spark": None,
             "fmt": fmt,
             "spark_color": spark_color,
         }
@@ -288,20 +272,26 @@ def tick_update() -> int:
 
 
 def _section(parent, title, color=None, pady_top=None):
-    """Section header — always amber bar. `color` param kept for back-compat
-    but ignored so palette stays uniform.
+    """Section header — VGUI bracket: ║ [ TITLE ] ─────────────.
 
-    `pady_top` can be passed as (0, 0) for the first section in a tab
-    (no gap above); defaults to the standard PAD_SECTION_TOP.
+    `color` kept for back-compat but ignored (palette is uniform
+    HL2 orange from the SSOT).
+    `pady_top=(0,0)` suppresses gap above the first section in a tab.
     """
     top = pady_top[0] if pady_top is not None else PAD_SECTION_TOP
     tk.Frame(parent, bg=BG, height=top).pack(fill="x")
     row = tk.Frame(parent, bg=BG); row.pack(fill="x")
+    # Left orange notch — VGUI panel hint.
     tk.Frame(row, bg=AMBER, width=3).pack(side="left", fill="y")
-    tk.Label(row, text=f"  {title}", font=(FONT, 8, "bold"),
+    # [ TITLE ] — utilitarian bracket label, Source Engine VGUI style.
+    tk.Label(row, text=f"  [ {title} ]",
+             font=(FONT, 8, "bold"),
              fg=AMBER, bg=BG, anchor="w", padx=2).pack(side="left")
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x",
-                                               pady=(2, PAD_SECTION_BAR))
+    # Rule fills to the right — separates section from body.
+    rule = tk.Frame(row, bg=BORDER, height=1)
+    rule.pack(side="left", fill="x", expand=True, padx=(10, 2),
+              pady=(7, 0))
+    tk.Frame(parent, bg=BG, height=PAD_SECTION_BAR).pack(fill="x")
 
 
 def _two_col(parent) -> tuple[tk.Frame, tk.Frame]:
@@ -1125,15 +1115,19 @@ def _render_engines_tab(parent):
     ep.render(parent, tracks)
 
 
+# Tabs in three functional groups — a thin divider is drawn between
+# groups in the tab bar so EUA / BRASIL / CRIPTO (mercados) is visually
+# separate from SINAIS / MACRO (análise), and from REDE / LIVRO /
+# MOTORES (operação). Labels are PT-BR / Valve-ish short.
 _TABS = [
-    ("US MKTS",  "1", _render_markets_tab),
-    ("BR MKTS",  "2", _render_br_tab),
-    ("CRYPTO",   "3", _render_crypto_tab),
-    ("INSIGHTS", "4", _render_insights_tab),
-    ("ANALYSIS", "5", _render_analysis_tab),
-    ("NETWORK",  "6", _render_network_tab),
-    ("BOOK",     "7", _render_book_tab),
-    ("ENGINES",  "8", _render_engines_tab),
+    ("EUA",      "1", _render_markets_tab,  "mkt"),
+    ("BRASIL",   "2", _render_br_tab,       "mkt"),
+    ("CRIPTO",   "3", _render_crypto_tab,   "mkt"),
+    ("SINAIS",   "4", _render_insights_tab, "anl"),
+    ("MACRO",    "5", _render_analysis_tab, "anl"),
+    ("REDE",     "6", _render_network_tab,  "ops"),
+    ("LIVRO",    "7", _render_book_tab,     "ops"),
+    ("MOTORES",  "8", _render_engines_tab,  "ops"),
 ]
 
 
@@ -1162,10 +1156,13 @@ def render(parent: tk.Widget, app=None) -> None:
 
     # ── TOP BAR ────────────────────────────────────────
     top = tk.Frame(outer, bg=BG); top.pack(fill="x")
-    tk.Label(top, text=" MACRO BRAIN ", font=(FONT, 11, "bold"),
-             fg=BG, bg=AMBER, padx=6, pady=1).pack(side="left")
-    tk.Label(top, text="  AURUM CIO · live cockpit",
-             font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=3)
+    # VGUI-style title — orange HL2 text on charcoal, guillemets as
+    # the Source Engine MOTD / scoreboard flair.
+    tk.Label(top, text="»  MACRO BRAIN  «",
+             font=(FONT, 11, "bold"),
+             fg=AMBER, bg=BG, padx=4, pady=1).pack(side="left")
+    tk.Label(top, text="  //  aurum cio · live cockpit",
+             font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=3)
 
     right = tk.Frame(top, bg=BG); right.pack(side="right")
 
@@ -1173,7 +1170,7 @@ def render(parent: tk.Widget, app=None) -> None:
         if app is not None: app._menu("main")
 
     enter_btn = tk.Label(
-        right, text=" ENTER TERMINAL [ESC] ",
+        right, text="  [ ENTER TERMINAL · ESC ]  ",
         font=(FONT, 8, "bold"), fg=BG, bg=AMBER,
         cursor="hand2", padx=8, pady=2,
     )
@@ -1207,16 +1204,35 @@ def render(parent: tk.Widget, app=None) -> None:
     content = tk.Frame(outer, bg=BG)
     content.pack(fill="both", expand=True, pady=(6, 0))
 
+    # Tab widget refs, keyed by tab_name — populated by _build_tabs
+    # so _switch_tab can repaint styling without rebuilding the bar.
+    _tab_refs: dict[str, tk.Label] = {}
+
+    def _repaint_tabs() -> None:
+        """Update active/inactive styling on existing tab widgets —
+        avoids the destroy+rebuild cycle of the whole tab bar every
+        time the user presses 1-8."""
+        for tn, w in _tab_refs.items():
+            try:
+                if not w.winfo_exists():
+                    continue
+            except Exception:
+                continue
+            active = (_STATE["tab"] == tn)
+            if active:
+                w.config(fg=BG, bg=AMBER)
+            else:
+                w.config(fg=DIM, bg=BG)
+
     def _switch_tab(name):
         _STATE["tab"] = name
-        for w in tab_bar.winfo_children():
-            try: w.destroy()
-            except Exception: pass
-        _build_tabs()
+        _repaint_tabs()
+        # Clear + re-render only the content pane, not the tab bar.
         for w in content.winfo_children():
             try: w.destroy()
             except Exception: pass
-        for tab_name, _k, renderer in _TABS:
+        _clear_tile_registry()
+        for tab_name, _k, renderer, _g in _TABS:
             if tab_name == name:
                 try: renderer(content)
                 except Exception as e:
@@ -1226,36 +1242,98 @@ def render(parent: tk.Widget, app=None) -> None:
                 break
 
     def _build_tabs():
-        for tab_name, key_num, _r in _TABS:
-            active = (_STATE["tab"] == tab_name)
-            if active:
-                fg, bg = BG, AMBER
-            else:
-                fg, bg = DIM2, BG2
-            tab = tk.Label(
-                tab_bar,
-                text=f"  {key_num} · {tab_name}  ",
-                font=(FONT, 10, "bold"),
-                fg=fg, bg=bg, cursor="hand2", padx=12, pady=5,
-            )
-            tab.pack(side="left", padx=(0, 1))
-            tab.bind("<Button-1>", lambda e, n=tab_name: _switch_tab(n))
-            if not active:
+        # Group tabs by their functional bucket so we can render a
+        # heading above each group (MERCADOS / ANÁLISE / OPERAÇÃO)
+        # — classic VGUI menu grouping, scannable at a glance.
+        group_labels = {
+            "mkt": "MERCADOS",
+            "anl": "ANÁLISE",
+            "ops": "OPERAÇÃO",
+        }
+        grouped: dict[str, list[tuple[str, str]]] = {}
+        order: list[str] = []
+        for tab_name, key_num, _r, group in _TABS:
+            if group not in grouped:
+                grouped[group] = []
+                order.append(group)
+            grouped[group].append((tab_name, key_num))
+
+        first_group = True
+        for group in order:
+            if not first_group:
+                # Thin rule between groups — aligned with the tab row
+                # (ignores the height of the group heading above).
+                tk.Frame(tab_bar, bg=BORDER, width=1).pack(
+                    side="left", fill="y", padx=8, pady=(16, 4))
+            first_group = False
+
+            g_box = tk.Frame(tab_bar, bg=BG)
+            g_box.pack(side="left", padx=(0, 2))
+
+            # Group heading — orange dim small-caps, ties to the
+            # accent colour so the eye reads the grouping as part
+            # of the same chrome, not a floating label.
+            tk.Label(
+                g_box, text=group_labels.get(group, group.upper()),
+                font=(FONT, 6, "bold"), fg=AMBER, bg=BG,
+                anchor="w", padx=4,
+            ).pack(fill="x", pady=(0, 2))
+
+            g_row = tk.Frame(g_box, bg=BG); g_row.pack(fill="x")
+
+            # VGUI tab styling:
+            #   inactive → flat, merges with the header bg, dim gray
+            #   active   → solid HL2 orange chip, dark text
+            #   hover    → lift to BG3, brighten text to WHITE
+            # No highlightthickness (kept Tk happier on resize and
+            # reads cleaner — the HL2 menu isn't about box outlines).
+            for tab_name, key_num in grouped[group]:
+                active = (_STATE["tab"] == tab_name)
+                if active:
+                    fg, bg = BG, AMBER
+                else:
+                    fg, bg = DIM, BG
+                tab = tk.Label(
+                    g_row,
+                    text=f"  [{key_num}]  {tab_name}  ",
+                    font=(FONT, 10, "bold"),
+                    fg=fg, bg=bg, cursor="hand2", padx=12, pady=5,
+                    bd=0, highlightthickness=0,
+                )
+                tab.pack(side="left", padx=(0, 1))
+                _tab_refs[tab_name] = tab
+                tab.bind("<Button-1>",
+                         lambda e, n=tab_name: _switch_tab(n))
+                # Hover handlers always read the current active state
+                # from _STATE so the effect is safe after _switch_tab
+                # has repainted this widget's bg/fg in place.
                 tab.bind(
                     "<Enter>",
-                    lambda e, t=tab: t.config(bg=BG3, fg=WHITE),
+                    lambda e, t=tab, n=tab_name: (
+                        None if _STATE["tab"] == n
+                        else t.config(bg=BG3, fg=WHITE)
+                    ),
                 )
                 tab.bind(
                     "<Leave>",
-                    lambda e, t=tab: t.config(bg=BG2, fg=DIM2),
+                    lambda e, t=tab, n=tab_name: (
+                        None if _STATE["tab"] == n
+                        else t.config(bg=BG, fg=DIM)
+                    ),
                 )
-            if app is not None:
-                try: app._kb(f"<Key-{key_num}>",
-                             lambda n=tab_name: _switch_tab(n))
-                except Exception: pass
+                if app is not None:
+                    try: app._kb(f"<Key-{key_num}>",
+                                 lambda n=tab_name: _switch_tab(n))
+                    except Exception: pass
 
+    # Build tab bar once — _switch_tab now repaints existing widgets
+    # instead of rebuilding the bar, so the initial render no longer
+    # pays the double-build cost.
     _build_tabs()
     _switch_tab(_STATE["tab"])
+    # Let the tab bar paint before we chain into content rendering —
+    # gives the user immediate feedback that the cockpit is loading.
+    outer.update_idletasks()
 
     # ── FOOTER ─────────────────────────────────────────
     foot = tk.Frame(outer, bg=BG)
@@ -1276,8 +1354,8 @@ def render(parent: tk.Widget, app=None) -> None:
     def _refresh(): render(parent, app)
 
     for label, cmd in [
-        ("RUN CYCLE [C]", _run_cycle),
-        ("REFRESH [R]",   _refresh),
+        ("[ RUN CYCLE · C ]", _run_cycle),
+        ("[ REFRESH · R ]",   _refresh),
     ]:
         b = tk.Label(
             foot, text=f"  {label}  ", font=(FONT, 8, "bold"),
@@ -1295,6 +1373,6 @@ def render(parent: tk.Widget, app=None) -> None:
 
     tk.Label(
         foot,
-        text="  ESC main menu  ·  1-7 switch tab  ·  R refresh  ·  C cycle",
-        font=(FONT, 7), fg=DIM, bg=BG,
+        text="  //  ESC main menu  ·  1-8 switch tab  ·  R refresh  ·  C cycle",
+        font=(FONT, 7), fg=DIM2, bg=BG,
     ).pack(side="right", padx=4)

@@ -46,7 +46,7 @@ from launcher_support.menu_data import (
 # PALETTE — imported from core/ui_palette (SSOT)
 # ═══════════════════════════════════════════════════════════
 from core.ui_palette import (
-    BG, BG2, BG3, PANEL, BORDER,
+    BG, BG2, BG3, PANEL, BORDER, BORDER_H,
     AMBER, AMBER_D, AMBER_B,
     WHITE, DIM, DIM2, GREEN, RED,
     FONT,
@@ -1948,19 +1948,22 @@ class App(tk.Tk):
         canvas.create_line(48, 48, 872, 48, fill=AMBER_D, width=1)
         canvas.create_line(48, 596, 872, 596, fill=DIM2, width=1)
 
-        self._active_cd_center = (86, 96)
-        self._draw_cd_center(canvas, r=30)
+        # Centered column: CD logo → wordmark → tagline. Single
+        # vertical axis (x=460) — the old layout had the logo pinned
+        # top-left while the title floated center, which read as
+        # misaligned. Stacking everything on the axis is cleaner.
+        self._active_cd_center = (460, 108)
+        self._draw_cd_center(canvas, r=28)
 
-        canvas.create_text(460, 162, anchor="center", text=BANNER_PREMIUM,
+        canvas.create_text(460, 186, anchor="center", text=BANNER_PREMIUM,
                            font=(FONT, 18, "bold"), fill=AMBER, tags="wordmark")
-        canvas.create_text(460, 208, anchor="center", text=SYSTEM_TAGLINE,
+        canvas.create_text(460, 232, anchor="center", text=SYSTEM_TAGLINE,
                            font=(FONT, 9, "bold"), fill=AMBER_D, tags="subtitle")
-        canvas.create_text(460, 226, anchor="center",
-                           text="// NEON · VOID · SIGNAL //  ::  OPERATOR UPLINK",
-                           font=(FONT, 7), fill=DIM, tags="subtitle")
-        # Neon scanline under tagline
-        canvas.create_line(200, 240, 720, 240, fill=AMBER_D, width=1, tags="subtitle")
-        canvas.create_line(230, 243, 690, 243, fill=AMBER, width=1, dash=(2, 6), tags="subtitle")
+        # Single thin rule under the tagline — separates brand stack
+        # from the session overview panel below without the old
+        # double-scanline clutter.
+        canvas.create_line(280, 258, 640, 258, fill=AMBER_D, width=1,
+                           tags="subtitle")
 
         try:
             st = _conn.status_summary()
@@ -1982,32 +1985,32 @@ class App(tk.Tk):
         tg_cell = "ONLINE" if has_tg else "OFFLINE"
         tg_col = GREEN if has_tg else DIM
 
-        self._draw_panel(canvas, 140, 286, 780, 404, title="SESSION OVERVIEW", accent=AMBER, tag="splash")
-        self._draw_kv_rows(canvas, 168, 320, [
+        # Single session overview panel, two tidy columns — divider
+        # removed, the visual hierarchy is carried by the panel border
+        # and the column spacing alone.
+        self._draw_panel(canvas, 140, 296, 780, 414, title="SESSION OVERVIEW",
+                         accent=AMBER, tag="splash")
+        self._draw_kv_rows(canvas, 168, 330, [
             ("ENGINE", "AURUM CORE", WHITE),
             ("MODE", "OPERATOR CONSOLE", AMBER_B),
-            ("ACCOUNT", "PAPER / MULTI-ACCOUNT", WHITE),
+            ("ACCOUNT", "PAPER · MULTI", WHITE),
             ("ENVIRONMENT", "LOCAL", WHITE),
         ], value_x=316, tag="splash")
-        self._draw_kv_rows(canvas, 472, 320, [
+        self._draw_kv_rows(canvas, 472, 330, [
             ("MARKET FEED", market_cell, market_col),
             ("CONNECTION", conn_cell, conn_col),
             ("TELEGRAM", tg_cell, tg_col),
             ("RISK", "KILL-SWITCH ARMED", RED),
         ], value_x=640, tag="splash")
-        canvas.create_line(452, 312, 452, 390, fill=DIM2, width=1, tags="splash")
 
-        canvas.create_text(460, 462, anchor="center",
-                           text="ENTER  |  ACCESS MAIN DESK",
-                           font=(FONT, 11, "bold"), fill=AMBER_B, tags="prompt")
-        canvas.create_text(460, 486, anchor="center",
-                           text="Review system state before routing to execution, research or control",
-                           font=(FONT, 7), fill=DIM, tags="prompt")
-
+        # One pulsing prompt, nothing else — the old layout had
+        # three stacked call-to-action lines which competed. The
+        # single blinking line reads like a terminal cursor.
         self._splash_cursor_on = True
-        canvas.create_text(460, 526, anchor="center",
+        canvas.create_text(460, 500, anchor="center",
                            text="[ ENTER TO ACCESS DESK ]_",
-                           font=(FONT, 10, "bold"), fill=AMBER_B, tags="prompt2")
+                           font=(FONT, 11, "bold"), fill=AMBER_B,
+                           tags="prompt2")
 
         click_handler = lambda e: self._splash_on_click()
         canvas.bind("<Button-1>", click_handler)
@@ -5152,45 +5155,116 @@ class App(tk.Tk):
             "All arbitrage modes in one place — scan, execute, monitor",
         )
 
-        # ── Status strip (clock + CEX/DEX/TOP telemetry) ──
-        status = tk.Frame(outer, bg=BG, height=18)
+        # ── Status strip ──
+        # Left: live-scan indicator + clock + ISO date, right: scanner
+        # telemetry (CEX/DEX counts, top APR). Dot turns green when the
+        # scanner has successfully populated the cache, stays dim while
+        # the first scan is pending.
+        status = tk.Frame(outer, bg=BG, height=20)
         status.pack(fill="x", padx=16, pady=(2, 4))
         status.pack_propagate(False)
+
+        dot_color = GREEN if getattr(self, "_arb_cache", None) else DIM
+        self._arb_live_dot = tk.Label(status, text="●",
+                                       font=(FONT, 9, "bold"),
+                                       fg=dot_color, bg=BG)
+        self._arb_live_dot.pack(side="left", padx=(0, 4))
+        tk.Label(status, text="LIVE", font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 8))
         self._arb_clock = tk.Label(status, text="", font=(FONT, 7),
-                                    fg=DIM, bg=BG)
+                                    fg=WHITE, bg=BG)
         self._arb_clock.pack(side="left")
         try:
+            now = datetime.now()
             self._arb_clock.configure(
-                text=datetime.now().strftime("%H:%M:%S UTC"))
+                text=f"{now.strftime('%H:%M:%S UTC')}  ·  "
+                     f"{now.strftime('%Y-%m-%d')}")
         except Exception:
             pass
-        self._arb_sum_best = tk.Label(status, text="TOP —", font=(FONT, 7),
-                                       fg=DIM, bg=BG)
+
+        # Right side — telemetry grouped by label·value chips.
+        self._arb_sum_best = tk.Label(status, text="TOP  —",
+                                       font=(FONT, 7, "bold"),
+                                       fg=AMBER, bg=BG)
         self._arb_sum_best.pack(side="right")
-        self._arb_sum_dex = tk.Label(status, text="DEX —", font=(FONT, 7),
-                                      fg=DIM, bg=BG)
-        self._arb_sum_dex.pack(side="right", padx=(0, 12))
-        self._arb_sum_cex = tk.Label(status, text="CEX —", font=(FONT, 7, "bold"),
-                                      fg=AMBER_D, bg=BG)
-        self._arb_sum_cex.pack(side="right", padx=(0, 12))
+        self._arb_sum_dex = tk.Label(status, text="DEX  —",
+                                      font=(FONT, 7), fg=DIM2, bg=BG)
+        self._arb_sum_dex.pack(side="right", padx=(0, 14))
+        self._arb_sum_cex = tk.Label(status, text="CEX  —",
+                                      font=(FONT, 7), fg=DIM2, bg=BG)
+        self._arb_sum_cex.pack(side="right", padx=(0, 14))
+        tk.Label(status, text="SCAN", font=(FONT, 7, "bold"),
+                 fg=DIM, bg=BG).pack(side="right", padx=(0, 8))
 
         # ── Tab strip ──
+        # Same grouping pattern as Macro Brain: three functional
+        # buckets rendered with a heading above and a bronze vertical
+        # rule between them. Same HL2 chip styling (bracket-prefixed,
+        # solid amber when active, flat BG with dim text when idle,
+        # BG3/WHITE on hover). Keys 1-6 preserved.
+        arb_group_of = {
+            "cex-cex": "PAIRS", "dex-dex": "PAIRS", "cex-dex": "PAIRS",
+            "basis":   "RATES", "spot":    "RATES",
+            "engine":  "EXECUTE",
+        }
+        grouped_tabs: list[tuple[str, list[tuple[str, str, str]]]] = []
+        for key, tid, label, _color in self._ARB_TAB_DEFS:
+            g = arb_group_of.get(tid, "OTHER")
+            if not grouped_tabs or grouped_tabs[-1][0] != g:
+                grouped_tabs.append((g, []))
+            grouped_tabs[-1][1].append((key, tid, label))
+
         tabs_frame = tk.Frame(outer, bg=BG)
         tabs_frame.pack(fill="x", padx=16, pady=(2, 0))
         self._arb_tab = tab
         self._arb_tab_labels = {}
-        for key, tid, label, color in self._ARB_TAB_DEFS:
-            is_active = (tid == tab)
-            fg = color if is_active else DIM
-            bg = BG2 if is_active else BG
-            txt = f" {key} {label} "
-            lbl = tk.Label(tabs_frame, text=txt, font=(FONT, 8, "bold"),
-                           fg=fg, bg=bg, cursor="hand2", padx=4, pady=2)
-            lbl.pack(side="left", padx=(0, 1))
-            lbl.bind("<Button-1>", lambda _e, _t=tid: self._arbitrage_hub(_t))
-            self._arb_tab_labels[tid] = lbl
+
+        first_group = True
+        for group_name, group_items in grouped_tabs:
+            if not first_group:
+                tk.Frame(tabs_frame, bg=BORDER, width=1).pack(
+                    side="left", fill="y", padx=8, pady=(16, 2))
+            first_group = False
+
+            g_box = tk.Frame(tabs_frame, bg=BG)
+            g_box.pack(side="left", padx=(0, 2))
+            tk.Label(
+                g_box, text=group_name,
+                font=(FONT, 6, "bold"), fg=AMBER, bg=BG,
+                anchor="w", padx=4,
+            ).pack(fill="x", pady=(0, 2))
+
+            g_row = tk.Frame(g_box, bg=BG); g_row.pack(fill="x")
+
+            for key, tid, label in group_items:
+                is_active = (tid == tab)
+                if is_active:
+                    fg, bg = BG, AMBER
+                else:
+                    fg, bg = DIM, BG
+                lbl = tk.Label(
+                    g_row,
+                    text=f"  [{key}]  {label}  ",
+                    font=(FONT, 9, "bold"),
+                    fg=fg, bg=bg, cursor="hand2",
+                    padx=10, pady=4, bd=0, highlightthickness=0,
+                )
+                lbl.pack(side="left", padx=(0, 1))
+                lbl.bind("<Button-1>",
+                         lambda _e, _t=tid: self._arbitrage_hub(_t))
+                if not is_active:
+                    lbl.bind(
+                        "<Enter>",
+                        lambda _e, w=lbl: w.config(bg=BG3, fg=WHITE),
+                    )
+                    lbl.bind(
+                        "<Leave>",
+                        lambda _e, w=lbl: w.config(bg=BG, fg=DIM),
+                    )
+                self._arb_tab_labels[tid] = lbl
+
         tk.Frame(outer, bg=BORDER, height=1).pack(
-            fill="x", padx=16, pady=(0, 6))
+            fill="x", padx=16, pady=(4, 6))
 
         # ── Content area (tab-specific render) ──
         content = tk.Frame(outer, bg=BG)
@@ -5468,7 +5542,10 @@ class App(tk.Tk):
         bar = tk.Frame(parent, bg=BG2)
         bar.pack(fill="x", pady=(0, 4))
         tk.Label(bar, text=" FILTERS ", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=BG2).pack(side="left", padx=(4, 4))
+                 fg=AMBER, bg=BG2).pack(side="left", padx=(4, 2))
+        tk.Label(bar, text="› click pra ciclar",
+                 font=(FONT, 6), fg=DIM, bg=BG2).pack(
+            side="left", padx=(0, 6))
 
         self._arb_filter_labels = {}
         filter_defs = [
@@ -5482,9 +5559,15 @@ class App(tk.Tk):
             cur = state.get(fkey)
             lbl = tk.Label(bar, text=f" {self._arb_fmt_filter(fkey, cur)} ",
                            font=(FONT, 7, "bold"), fg=AMBER, bg=BG3,
-                           cursor="hand2", padx=4)
+                           cursor="hand2", padx=6, pady=2)
             lbl.pack(side="left", padx=2, pady=2)
             self._arb_filter_labels[fkey] = lbl
+            # Hover signals "this is a chip you can click to cycle"
+            # — previously only the cursor changed, easy to miss.
+            lbl.bind("<Enter>",
+                     lambda _e, w=lbl: w.config(bg=BORDER_H, fg=AMBER_B))
+            lbl.bind("<Leave>",
+                     lambda _e, w=lbl: w.config(bg=BG3, fg=AMBER))
 
             def _cycle(_e=None, _k=fkey, _opts=fopts):
                 s = self._arb_filter_state()
@@ -5512,14 +5595,19 @@ class App(tk.Tk):
         """Reserve a detail panel below the table. Updated on row click with
         the selected pair's factor breakdown + score."""
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 2))
-        title = tk.Label(parent, text="DETAIL",
-                          font=(FONT, 7, "bold"), fg=DIM, bg=BG)
-        title.pack(anchor="w")
+        # Title row: DETAIL + hint so the user knows this panel fills
+        # from a row click — was easy to miss as a passive label.
+        title_row = tk.Frame(parent, bg=BG); title_row.pack(fill="x")
+        tk.Label(title_row, text="DETAIL",
+                 font=(FONT, 7, "bold"), fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(title_row, text="  › clique numa linha pra inspecionar",
+                 font=(FONT, 6), fg=DIM, bg=BG).pack(side="left")
         body = tk.Frame(parent, bg=BG2)
         body.pack(fill="x", pady=(2, 0))
-        default = tk.Label(body, text="  click a row to inspect the pair",
-                            font=(FONT, 7), fg=DIM2, bg=BG2)
-        default.pack(anchor="w", padx=6, pady=4)
+        default = tk.Label(body,
+                           text="  (nenhuma linha selecionada — clique pra abrir)",
+                           font=(FONT, 7), fg=DIM2, bg=BG2)
+        default.pack(anchor="w", padx=6, pady=6)
         self._arb_detail_body = body
         self._arb_detail_default = default
 
@@ -5983,7 +6071,13 @@ class App(tk.Tk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _arb_set_status_error(self, msg: str):
-        """Paint the right side of the status strip with an error tag."""
+        """Paint the right side of the status strip with an error tag
+        and flip the live dot to red so the scan state is obvious at a
+        glance (green = fresh data, red = scan failed, dim = pending)."""
+        dot = getattr(self, "_arb_live_dot", None)
+        if dot is not None:
+            try: dot.configure(fg=RED)
+            except Exception: pass
         lbl = getattr(self, "_arb_sum_best", None)
         if lbl is not None:
             try:
@@ -6007,19 +6101,25 @@ class App(tk.Tk):
         Each tab renderer registers a repaint callback (e.g. _arb_cex_repaint);
         we only call the one for the currently active tab.
         """
-        # Status strip
+        # Status strip — data flowed in, flip the live dot to green.
         dex_on = (stats or {}).get("dex_online", 0)
         cex_on = (stats or {}).get("cex_online", 0)
         try:
-            self._arb_sum_cex.configure(text=f"CEX {cex_on}")
-            self._arb_sum_dex.configure(text=f"DEX {dex_on}")
+            dot = getattr(self, "_arb_live_dot", None)
+            if dot is not None:
+                dot.configure(fg=GREEN)
+            self._arb_sum_cex.configure(text=f"CEX  {cex_on}", fg=WHITE)
+            self._arb_sum_dex.configure(text=f"DEX  {dex_on}", fg=WHITE)
             top_s = "—"
+            top_fg = DIM2
             if top is not None and getattr(top, "apr", None) is not None:
                 try:
-                    top_s = f"{float(top.apr):+.1f}%"
+                    apr_v = float(top.apr)
+                    top_s = f"{apr_v:+.2f}%"
+                    top_fg = GREEN if apr_v > 0 else (RED if apr_v < 0 else DIM2)
                 except Exception:
                     pass
-            self._arb_sum_best.configure(text=f"TOP {top_s}", fg=DIM)
+            self._arb_sum_best.configure(text=f"TOP  {top_s}", fg=top_fg)
         except Exception:
             pass
 
