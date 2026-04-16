@@ -1197,7 +1197,11 @@ class LiveEngine:
 
                     if consecutive_drift >= CONSECUTIVE_BREAK:
                         await self._kill_switch_trigger(
-                            f"reconciliation drift {consecutive_drift}x consecutive")
+                            f"reconciliation drift {consecutive_drift}x consecutive",
+                            gate="reconciliation_drift",
+                            metric=float(consecutive_drift),
+                            threshold=float(CONSECUTIVE_BREAK),
+                        )
                         break
                 else:
                     if consecutive_drift > 0:
@@ -1257,7 +1261,14 @@ class LiveEngine:
             return None
 
     # ── KILL SWITCH ORCHESTRATION (Fase 4-D) ──────────────────
-    async def _kill_switch_trigger(self, reason: str) -> None:
+    async def _kill_switch_trigger(
+        self,
+        reason: str,
+        *,
+        gate: str | None = None,
+        metric: float | None = None,
+        threshold: float | None = None,
+    ) -> None:
         """Emergency stop. Flatten first, cancel second, then halt.
 
         This is the nuclear option. Called either manually (via UI
@@ -1318,6 +1329,9 @@ class LiveEngine:
                 payload={
                     "mode":            self.orders._mode(),
                     "reason":          reason,
+                    "gate":            gate,
+                    "metric":          metric,
+                    "threshold":       threshold,
                     "n_open":          len(self.positions),
                     "account":         round(self.account, 2),
                     "peak_equity":     round(self.peak_equity, 2),
@@ -1535,7 +1549,12 @@ class LiveEngine:
                     "— triggering kill switch"
                 )
                 asyncio.ensure_future(
-                    self._kill_switch_trigger("api_error_gate_20_consecutive")
+                    self._kill_switch_trigger(
+                        "api_error_gate_20_consecutive",
+                        gate="api_error_gate",
+                        metric=float(self._consecutive_api_errors),
+                        threshold=20.0,
+                    )
                 )
             elif self._consecutive_api_errors >= 5:
                 log.warning(
@@ -1783,7 +1802,11 @@ class LiveEngine:
                 # Idempotent — subsequent fires of the same breach after
                 # the flatten are cheap no-ops.
                 await self._kill_switch_trigger(
-                    f"risk_gate {gate_decision.gate}: {gate_decision.reason}")
+                    f"risk_gate {gate_decision.gate}: {gate_decision.reason}",
+                    gate=gate_decision.gate,
+                    metric=gate_decision.metric,
+                    threshold=gate_decision.threshold,
+                )
             else:
                 log.info(f"  RISK-GATE SOFT: {gate_decision.reason}")
             return
