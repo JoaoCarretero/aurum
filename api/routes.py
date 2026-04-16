@@ -13,6 +13,7 @@ from pydantic import BaseModel, EmailStr
 
 from api.models import get_conn
 from api.auth import (
+    authenticate_websocket,
     hash_password,
     verify_password,
     create_token,
@@ -285,7 +286,7 @@ trading_router = APIRouter(prefix="/api/trading", tags=["trading"])
 
 
 @trading_router.get("/status")
-async def trading_status(user: dict = Depends(get_current_user)):
+async def trading_status(user: dict = Depends(require_admin)):
     """Get all engine states."""
     conn = get_conn()
     try:
@@ -319,7 +320,7 @@ async def trading_status(user: dict = Depends(get_current_user)):
 
 
 @trading_router.get("/positions")
-async def open_positions(user: dict = Depends(get_current_user)):
+async def open_positions(user: dict = Depends(require_admin)):
     """Get open positions from proc state files."""
     positions = []
     state_dir = DATA_DIR
@@ -357,7 +358,7 @@ async def open_positions(user: dict = Depends(get_current_user)):
 
 @trading_router.get("/trades")
 async def trade_history(
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_admin),
     engine: Optional[str] = Query(None),
     symbol: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
@@ -479,7 +480,7 @@ analytics_router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 @analytics_router.get("/equity")
 async def equity_curve(
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_admin),
     engine: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
 ):
@@ -501,7 +502,7 @@ async def equity_curve(
 
 
 @analytics_router.get("/darwin")
-async def darwin_state(user: dict = Depends(get_current_user)):
+async def darwin_state(user: dict = Depends(require_admin)):
     """Get Darwin evolutionary state — fitness, allocations, mutations."""
     conn = get_conn()
     try:
@@ -530,14 +531,14 @@ async def darwin_state(user: dict = Depends(get_current_user)):
 
 
 @analytics_router.get("/performance")
-async def per_engine_performance(user: dict = Depends(get_current_user)):
+async def per_engine_performance(user: dict = Depends(require_admin)):
     """Per-engine performance metrics from run history."""
     stats = trade_db.stats_summary()
     return {"performance": stats}
 
 
 @analytics_router.get("/benchmark")
-async def benchmark(user: dict = Depends(get_current_user)):
+async def benchmark(user: dict = Depends(require_admin)):
     """Comparison data across engines."""
     runs = trade_db.list_runs(limit=200)
 
@@ -578,6 +579,12 @@ async def benchmark(user: dict = Depends(get_current_user)):
 
 async def live_ws(websocket: WebSocket):
     """WebSocket endpoint streaming engine status every 5 seconds."""
+    try:
+        authenticate_websocket(websocket, require_admin_role=True)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     try:
         while True:

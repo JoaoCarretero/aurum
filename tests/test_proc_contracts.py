@@ -241,9 +241,14 @@ class TestStopProc:
             "123": {"engine": "x", "pid": 123, "status": "running",
                     "creation_time": 1111, "image_name": "python.exe"},
         }})
-        # Liveness true; identity also matches when expected is passed
-        monkeypatch.setattr(proc, "_is_alive",
-                            lambda pid, expected=None: True)
+        monkeypatch.setattr(proc, "_load_state", proc._load_state_raw)
+        calls = {"n": 0}
+
+        def fake_is_alive(pid, expected=None):
+            calls["n"] += 1
+            return calls["n"] <= 2
+
+        monkeypatch.setattr(proc, "_is_alive", fake_is_alive)
         ran = []
         monkeypatch.setattr(proc.subprocess, "run",
                             lambda *a, **kw: ran.append(a) or
@@ -252,6 +257,19 @@ class TestStopProc:
                             lambda pid, sig: ran.append(("kill", pid, sig)))
         assert proc.stop_proc(123) is True
         assert ran  # killed via taskkill/os.kill
+
+    def test_taskkill_failure_returns_false(self, isolated_state, monkeypatch):
+        proc._save_state({"procs": {
+            "123": {"engine": "x", "pid": 123, "status": "running",
+                    "creation_time": 1111, "image_name": "python.exe"},
+        }})
+        monkeypatch.setattr(proc, "_is_alive", lambda pid, expected=None: True)
+        monkeypatch.setattr(
+            proc.subprocess,
+            "run",
+            lambda *a, **kw: type("R", (), {"returncode": 1})(),
+        )
+        assert proc.stop_proc(123) is False
 
     def test_pid_recycled_raises(self, isolated_state, monkeypatch):
         proc._save_state({"procs": {

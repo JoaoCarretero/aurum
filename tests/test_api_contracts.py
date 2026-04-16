@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sqlite3
 
 import pytest
 from fastapi import HTTPException
+from fastapi.params import Depends
 
 from api import models
+from api.auth import require_admin
 from api.routes import (
     DepositRequest,
     EngineAction,
     WithdrawRequest,
+    benchmark,
     deposit,
+    equity_curve,
     get_account,
+    open_positions,
+    per_engine_performance,
     start_engine,
     stop_engine,
+    trade_history,
     trading_status,
     withdraw,
 )
@@ -155,3 +163,20 @@ def test_start_and_stop_engine_accept_canonical_names(nexus_db, monkeypatch):
     finally:
         conn.close()
     assert dict(row) == {"engine": "janestreet", "status": "stopped"}
+
+
+@pytest.mark.parametrize(
+    ("fn", "param_name"),
+    [
+        (trading_status, "user"),
+        (open_positions, "user"),
+        (trade_history, "user"),
+        (equity_curve, "user"),
+        (per_engine_performance, "user"),
+        (benchmark, "user"),
+    ],
+)
+def test_global_operational_routes_require_admin(fn, param_name):
+    dep = inspect.signature(fn).parameters[param_name].default
+    assert isinstance(dep, Depends)
+    assert dep.dependency is require_admin

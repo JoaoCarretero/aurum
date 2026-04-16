@@ -7,6 +7,7 @@ import sys
 import json
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -43,6 +44,9 @@ def _load_state_raw() -> dict:
 _CLEANUP_INTERVAL = 2.0
 _last_cleanup_ts = 0.0
 _in_cleanup = False
+# Guards the throttle decision so two concurrent list_procs()/_load_state()
+# callers don't both race through and fire _cleanup() on the same tick.
+_cleanup_lock = threading.Lock()
 
 
 def _load_state() -> dict:
@@ -60,9 +64,17 @@ def _load_state() -> dict:
     # has elapsed. No running entries = no-op. Frequent polls = 1 sweep / 2s.
     has_running = any(p.get("status") == "running"
                       for p in state.get("procs", {}).values())
-    now_ts = time.time()
-    if has_running and (now_ts - _last_cleanup_ts) >= _CLEANUP_INTERVAL:
-        _last_cleanup_ts = now_ts
+    if not has_running:
+        return state
+    # Lock-checked throttle: first thread through wins the slot, the rest
+    # short-circuit until the interval elapses again.
+    should_sweep = False
+    with _cleanup_lock:
+        now_ts = time.time()
+        if (now_ts - _last_cleanup_ts) >= _CLEANUP_INTERVAL:
+            _last_cleanup_ts = now_ts
+            should_sweep = True
+    if should_sweep:
         _cleanup()
         state = _load_state_raw()
     return state
@@ -262,6 +274,13 @@ def spawn(engine: str, stdin_lines: list[str] | None = None,
     except Exception:
         log_fh.close()
         return None
+    finally:
+        # The child inherits/duplicates stdout; keeping the parent's handle
+        # open needlessly locks the log file on Windows.
+        try:
+            log_fh.close()
+        except OSError:
+            pass
 
     info = {
         "engine": engine,
@@ -375,13 +394,20 @@ def stop_proc(pid: int, expected: dict | None = None) -> bool:
 
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                           capture_output=True, timeout=5)
+            result = subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return False
         else:
             os.kill(pid, signal.SIGTERM)
             time.sleep(1)
             if _is_alive(pid):
                 os.kill(pid, signal.SIGKILL)
+        if _is_alive(pid, expected=expected):
+            return False
         # Invalidate list_procs cache so the UI sees the state flip immediately.
         _LIST_CACHE["t"] = 0.0
         return True
