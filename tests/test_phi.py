@@ -340,3 +340,54 @@ def test_sizing_convex_with_phi_score():
     hi = phi_size(equity=10_000, entry=100.0, sl=95.0, phi_score=1.0, params=PhiParams())
     lo = phi_size(equity=10_000, entry=100.0, sl=95.0, phi_score=0.5, params=PhiParams())
     assert hi["risk_usd"] == pytest.approx(4.0 * lo["risk_usd"], rel=0.01)
+
+
+from engines.phi import calc_phi_levels, update_phi_trailing
+
+
+def test_calc_phi_levels_long():
+    """SL = fib_0.786(Ω3=1h) - 0.3*ATR(1h); TPs = fib_1.272/1.618/2.618."""
+    row = {
+        "close": 100.0,
+        "fib_0.786_1h": 95.0,
+        "fib_1.272_1h": 112.0,
+        "fib_1.618_1h": 120.0,
+        "fib_2.618_1h": 140.0,
+        "atr_1h": 2.0,
+    }
+    levels = calc_phi_levels(row, direction=+1, params=PhiParams())
+    assert abs(levels["sl"] - (95.0 - 0.3 * 2.0)) < 1e-6   # 94.4
+    assert levels["tp1"] == 112.0
+    assert levels["tp2"] == 120.0
+    assert levels["tp3"] == 140.0
+
+
+def test_calc_phi_levels_short():
+    row = {
+        "close": 100.0,
+        "fib_0.786_1h": 105.0,
+        "fib_1.272_1h": 88.0,
+        "fib_1.618_1h": 80.0,
+        "fib_2.618_1h": 60.0,
+        "atr_1h": 2.0,
+    }
+    levels = calc_phi_levels(row, direction=-1, params=PhiParams())
+    assert abs(levels["sl"] - (105.0 + 0.3 * 2.0)) < 1e-6   # 105.6
+    assert levels["tp1"] == 88.0
+
+
+def test_trailing_monotonic_long():
+    """Trailing SL only tightens in favor of the trade."""
+    trade = {"direction": +1, "sl": 90.0, "trailing_sl": 90.0}
+    update_phi_trailing(trade, new_trail_price=95.0)
+    assert trade["trailing_sl"] == 95.0
+    update_phi_trailing(trade, new_trail_price=93.0)
+    assert trade["trailing_sl"] == 95.0   # never loosens
+
+
+def test_trailing_monotonic_short():
+    trade = {"direction": -1, "sl": 110.0, "trailing_sl": 110.0}
+    update_phi_trailing(trade, new_trail_price=105.0)
+    assert trade["trailing_sl"] == 105.0
+    update_phi_trailing(trade, new_trail_price=107.0)
+    assert trade["trailing_sl"] == 105.0

@@ -536,6 +536,102 @@ def phi_size(equity: float, entry: float, sl: float,
 
 
 # ════════════════════════════════════════════════════════════════════
+# Trade lifecycle — levels, trailing, exit, PnL
+# ════════════════════════════════════════════════════════════════════
+
+def calc_phi_levels(row, direction: int, params: PhiParams) -> dict:
+    """Compute SL/TP1/TP2/TP3 from Ω3 (1h) Fib levels + ATR buffer.
+
+    SL = fib_0.786_1h ± sl_atr_buffer * atr_1h (below for long, above for short)
+    TP1 = fib_1.272_1h (partial exit 38.2%)
+    TP2 = fib_1.618_1h (partial exit 38.2%)
+    TP3 = fib_2.618_1h (runner 23.6% + trailing)
+
+    `row` can be a dict-like or a pandas Series. Must contain:
+      fib_0.786_1h, fib_1.272_1h, fib_1.618_1h, fib_2.618_1h, atr_1h
+    """
+    sl_base = float(row["fib_0.786_1h"])
+    atr_1h = float(row["atr_1h"])
+    if direction == +1:
+        sl = sl_base - params.sl_atr_buffer * atr_1h
+    else:
+        sl = sl_base + params.sl_atr_buffer * atr_1h
+    return {
+        "sl": float(sl),
+        "tp1": float(row["fib_1.272_1h"]),
+        "tp2": float(row["fib_1.618_1h"]),
+        "tp3": float(row["fib_2.618_1h"]),
+    }
+
+
+def update_phi_trailing(trade: dict, new_trail_price: float) -> None:
+    """Update trailing SL monotonically in favor of the trade.
+    Never loosens (never retreats against position)."""
+    cur = trade.get("trailing_sl", trade["sl"])
+    if trade["direction"] == +1:
+        trade["trailing_sl"] = max(cur, float(new_trail_price))
+    else:
+        trade["trailing_sl"] = min(cur, float(new_trail_price))
+
+
+def _resolve_phi_exit(df: pd.DataFrame, t: int, trade: dict,
+                      params: PhiParams) -> Optional[tuple[str, float]]:
+    """Return (reason, exit_price) if any exit triggers at bar t, else None.
+
+    Priority (per bar):
+      1. SL / trailing stop (worst case first)
+      2. Staged TP1, TP2 (partials)
+      3. TP3 (closes runner)
+      4. Time stop
+    """
+    high = float(df["high"].iloc[t])
+    low = float(df["low"].iloc[t])
+    close = float(df["close"].iloc[t])
+    d = trade["direction"]
+
+    stop = trade.get("trailing_sl", trade["sl"])
+    if d == +1 and low <= stop:
+        return "sl", stop
+    if d == -1 and high >= stop:
+        return "sl", stop
+
+    stage = trade.get("stage", 0)
+    if stage < 1:
+        tp = trade["tp1"]
+        if (d == +1 and high >= tp) or (d == -1 and low <= tp):
+            return "tp1_partial", tp
+    if stage < 2:
+        tp = trade["tp2"]
+        if (d == +1 and high >= tp) or (d == -1 and low <= tp):
+            return "tp2_partial", tp
+    tp = trade["tp3"]
+    if (d == +1 and high >= tp) or (d == -1 and low <= tp):
+        return "tp3", tp
+
+    if (t - trade["entry_idx"]) >= params.max_bars_in_trade:
+        return "time_stop", close
+    return None
+
+
+def _pnl_with_costs(direction: int, entry: float, exit_p: float, size: float,
+                    duration: int, funding_periods_per_8h: float) -> float:
+    """Cost model mirroring GRAHAM/KEPOS: slippage+spread on exit,
+    commission on both legs, funding over duration. Returns PnL in USD."""
+    slip_exit = SLIPPAGE + SPREAD
+    if direction == +1:
+        entry_cost = entry * (1 + COMMISSION)
+        exit_net = exit_p * (1 - COMMISSION - slip_exit)
+        funding = -(size * entry * FUNDING_PER_8H * duration / funding_periods_per_8h)
+        pnl = size * (exit_net - entry_cost) + funding
+    else:
+        entry_cost = entry * (1 - COMMISSION)
+        exit_net = exit_p * (1 + COMMISSION + slip_exit)
+        funding = +(size * entry * FUNDING_PER_8H * duration / funding_periods_per_8h)
+        pnl = size * (entry_cost - exit_net) + funding
+    return float(pnl * LEVERAGE)
+
+
+# ════════════════════════════════════════════════════════════════════
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 
