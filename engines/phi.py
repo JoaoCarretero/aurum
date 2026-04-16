@@ -359,6 +359,41 @@ def compute_fibs(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
 
 
 # ════════════════════════════════════════════════════════════════════
+# Multi-TF alignment
+# ════════════════════════════════════════════════════════════════════
+
+def _shift_htf_for_close(df: pd.DataFrame, tf: str) -> pd.DataFrame:
+    """Return HTF df with timestamps shifted forward by 1 period so that
+    each row's 'time' represents the instant the bar CLOSED (rather than
+    when it opened). This enables `merge_asof(direction='backward')` to
+    pick the most-recently-CLOSED HTF bar for a given base timestamp."""
+    period = pd.Timedelta(minutes=_TF_MINUTES.get(tf, 60))
+    shifted = df.copy()
+    shifted["time"] = shifted["time"] + period
+    return shifted
+
+
+def align_htfs_to_base(base: pd.DataFrame, htfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Merge HTF dataframes onto the base (5m) timeline using backward
+    as-of join with a 1-period shift. No lookahead: only CLOSED HTF bars
+    are visible.
+
+    Each HTF value is suffixed with '_<tf>' in the output columns.
+    `htfs` keys must be TF strings recognised by `_TF_MINUTES` in
+    config.params (e.g. '1d', '4h', '1h', '15m')."""
+    out = base.sort_values("time").reset_index(drop=True).copy()
+    for tf, htf_df in htfs.items():
+        if htf_df is None or len(htf_df) == 0:
+            continue
+        shifted = _shift_htf_for_close(htf_df, tf).sort_values("time").reset_index(drop=True)
+        suffix = f"_{tf}"
+        htf_cols = [c for c in shifted.columns if c != "time"]
+        shifted_ren = shifted.rename(columns={c: c + suffix for c in htf_cols})
+        out = pd.merge_asof(out, shifted_ren, on="time", direction="backward")
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 

@@ -146,3 +146,30 @@ def test_fibs_math_down_swing():
     assert abs(out["fib_0.618"].iloc[60] - 161.8) < 1e-3
     assert abs(out["fib_1.272"].iloc[60] - 72.8) < 1e-3
     assert out["swing_direction"].iloc[60] == -1
+
+
+from engines.phi import align_htfs_to_base
+
+
+def test_htf_alignment_no_lookahead():
+    """At base time t, HTF value must come from the HTF bar that CLOSED
+    strictly before or at t, not the one still open at t."""
+    # Base 5m from 10:00 to 11:00 (12 bars, 10:00 through 10:55)
+    base_idx = pd.date_range("2024-01-01 10:00", periods=12, freq="5min")
+    base = pd.DataFrame({"time": base_idx, "close": np.arange(12, dtype=float)})
+    # HTF 1h: a bar timestamped 10:00 covers 10:00-11:00 (closes at 11:00).
+    #         a bar timestamped 09:00 covers 09:00-10:00 (closes at 10:00).
+    # Fixture: 07:00→80, 08:00→90, 09:00→100, 10:00→110, 11:00→120
+    # The 09:00 bar (close=100) is the one that closed at 10:00.
+    htf_idx = pd.date_range("2024-01-01 07:00", periods=5, freq="1h")
+    htf = pd.DataFrame({"time": htf_idx, "close": [80.0, 90.0, 100.0, 110.0, 120.0]})
+    merged = align_htfs_to_base(base, {"1h": htf})
+
+    # At base 10:00, the 1h bar that JUST CLOSED is the 09:00→10:00 bar (close=100.0).
+    # The 10:00→11:00 bar is still OPEN at base 10:00, so it MUST NOT appear.
+    row_10_00 = merged.loc[merged["time"] == pd.Timestamp("2024-01-01 10:00")].iloc[0]
+    assert row_10_00["close_1h"] == 100.0
+
+    # At base 10:55, still inside the 10:00-11:00 HTF bar → latest closed HTF is still 09:00-10:00.
+    row_10_55 = merged.loc[merged["time"] == pd.Timestamp("2024-01-01 10:55")].iloc[0]
+    assert row_10_55["close_1h"] == 100.0
