@@ -516,7 +516,7 @@ if __name__ == "__main__":
     with open(path) as f:
         data = json.load(f)
 
-    trades = data.get("trades", data if isinstance(data, list) else [])
+    trades = data if isinstance(data, list) else data.get("trades", [])
     results = run_audit(trades)
     print_audit_box(results)
 
