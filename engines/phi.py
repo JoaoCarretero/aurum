@@ -438,6 +438,37 @@ def detect_cluster(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
 
 
 # ════════════════════════════════════════════════════════════════════
+# Regime gates + Golden Trigger
+# ════════════════════════════════════════════════════════════════════
+
+def check_regime_gates(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
+    """ADX > 23.6 AND BB_width > percentile_38.2(lookback 500) AND
+    |close - EMA200|/ATR > 0.618. All three must pass for regime_ok=True."""
+    out = df.copy()
+    adx_ok = out["adx"] > params.adx_min
+    bbw_p = out["bb_width"].rolling(params.bb_width_lookback, min_periods=50).quantile(
+        params.bb_width_percentile / 100.0
+    )
+    bbw_ok = out["bb_width"] > bbw_p
+    atr_safe = out["atr"].replace(0, np.nan)
+    dist_ok = ((out["close"] - out["ema200"]).abs() / atr_safe) > params.ema200_distance_atr
+    out["regime_ok"] = (adx_ok & bbw_ok & dist_ok).fillna(False)
+    return out
+
+
+def check_golden_trigger(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
+    """Wick >= 0.618 of range AND volume > MA20*1.272 AND
+    (RSI<38.2 for long / RSI>61.8 for short)."""
+    out = df.copy()
+    wick_ok = out["wick_ratio"] >= params.wick_ratio_min
+    vol_ok = out["volume"] > out["vol_ma20"] * params.volume_mult
+    base = wick_ok & vol_ok
+    out["trigger_long"] = (base & (out["rsi"] < params.rsi_long_max)).fillna(False)
+    out["trigger_short"] = (base & (out["rsi"] > params.rsi_short_min)).fillna(False)
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 

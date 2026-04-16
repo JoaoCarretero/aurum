@@ -226,3 +226,65 @@ def test_cluster_below_threshold():
     out = detect_cluster(base, PhiParams())
     assert out["cluster_confluences"].iloc[10] == 2
     assert bool(out["cluster_active"].iloc[10]) == False
+
+
+from engines.phi import check_regime_gates, check_golden_trigger
+
+
+def test_regime_gates_all_pass():
+    """All three gates pass → regime_ok True."""
+    n = 600
+    idx = pd.date_range("2024-01-01", periods=n, freq="5min")
+    df = pd.DataFrame({
+        "time": idx,
+        "close": np.full(n, 100.0),
+        "ema200": np.full(n, 99.0),            # distance = 1
+        "atr": np.full(n, 1.0),                # distance/ATR = 1 > 0.618 ✓
+        "adx": np.full(n, 30.0),               # > 23.6 ✓
+        # BB widening: rolling p38.2 over 500 bars sits ~0.003, tail is 0.05 → passes
+        "bb_width": np.concatenate([np.linspace(0.001, 0.01, 500), np.full(100, 0.05)]),
+    })
+    out = check_regime_gates(df, PhiParams())
+    assert bool(out["regime_ok"].iloc[-1]) == True
+
+
+def test_regime_gates_fail_on_adx():
+    n = 600
+    idx = pd.date_range("2024-01-01", periods=n, freq="5min")
+    df = pd.DataFrame({
+        "time": idx,
+        "close": np.full(n, 100.0),
+        "ema200": np.full(n, 99.0),
+        "atr": np.full(n, 1.0),
+        "adx": np.full(n, 10.0),  # < 23.6 ✗
+        "bb_width": np.full(n, 0.05),
+    })
+    out = check_regime_gates(df, PhiParams())
+    assert bool(out["regime_ok"].iloc[-1]) == False
+
+
+def test_golden_trigger_long():
+    """Long trigger: wick_ratio>=0.618, volume>MA20*1.272, RSI<38.2."""
+    n = 50
+    df = pd.DataFrame({
+        "wick_ratio": np.full(n, 0.7),
+        "volume": np.full(n, 2000.0),
+        "vol_ma20": np.full(n, 1000.0),   # 2000 > 1272 ✓
+        "rsi": np.full(n, 30.0),          # < 38.2 ✓
+    })
+    out = check_golden_trigger(df, PhiParams())
+    assert bool(out["trigger_long"].iloc[-1]) == True
+    assert bool(out["trigger_short"].iloc[-1]) == False
+
+
+def test_golden_trigger_neither():
+    n = 50
+    df = pd.DataFrame({
+        "wick_ratio": np.full(n, 0.4),   # < 0.618 ✗
+        "volume": np.full(n, 2000.0),
+        "vol_ma20": np.full(n, 1000.0),
+        "rsi": np.full(n, 50.0),
+    })
+    out = check_golden_trigger(df, PhiParams())
+    assert bool(out["trigger_long"].iloc[-1]) == False
+    assert bool(out["trigger_short"].iloc[-1]) == False
