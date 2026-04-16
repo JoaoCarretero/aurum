@@ -115,6 +115,12 @@ BASKETS = {
                   "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT", "ATOMUSDT", "NEARUSDT",
                   "INJUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "RENDERUSDT", "FETUSDT",
                   "SANDUSDT", "AAVEUSDT"],
+    # bluechip_active: bluechip sem MATIC (deprecado Binance Futures 2024-09, rebrand POL).
+    # Uso: pares cointegrados (DE SHAW), análises que exigem série contínua até 2026.
+    "bluechip_active":  ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
+                  "AVAXUSDT", "LINKUSDT", "DOTUSDT", "ATOMUSDT", "NEARUSDT",
+                  "INJUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "RENDERUSDT", "FETUSDT",
+                  "SANDUSDT", "AAVEUSDT"],
     "custom":    [],  # preenchido interativamente
 }
 
@@ -381,28 +387,28 @@ def _tf_params(interval: str) -> dict:
     }
 
 # ── NEWTON — Statistical Mean Reversion (Pairs Trading) ──────
-NEWTON_ZSCORE_ENTRY    = 2.0       # |z-score| > N para entrar
-NEWTON_ZSCORE_EXIT     = 0.0       # z-score cruza 0 para sair
-NEWTON_ZSCORE_STOP     = 3.5       # |z-score| > N para stop
-NEWTON_COINT_PVALUE    = 0.05      # p-value máximo para cointegração válida
+NEWTON_ZSCORE_ENTRY    = 2.0       # NÃO USAR EM LIVE — DE SHAW sem edge no universe crypto (18 iters, melhor -2.3%, overfit 2/6)
+NEWTON_ZSCORE_EXIT     = 0.3       # iter11 1080d WINNER: 0.0→0.3 (ROI -3.33%); 0.5 regrediu
+NEWTON_ZSCORE_STOP     = 3.5       # iter4 1080d: revertido (era 3.0 original, foi 4.0 iter3 que piorou)
+NEWTON_COINT_PVALUE    = 0.01      # iter4 1080d winner (ROI -7.7% com 791t); 0.001/0.005 filtram demais
 NEWTON_HALFLIFE_MIN    = 5         # half-life mínimo (candles)
-NEWTON_HALFLIFE_MAX    = 500       # half-life máximo (candles) — ~5d em 15m
-NEWTON_SPREAD_WINDOW   = 90        # rolling window para z-score do spread
-NEWTON_RECALC_EVERY    = 120       # recalcular cointegração a cada N candles
-NEWTON_MAX_HOLD        = 96        # max candles por trade (2× o normal)
+NEWTON_HALFLIFE_MAX    = 500       # revertido (300 exclui FET/NEAR HL=336); filtragem via pvalue 0.01 + SPREAD_WIN 60
+NEWTON_SPREAD_WINDOW   = 60        # iter13 1080d WINNER: 90→60 (ROI -2.3%, WR 77%, DD 4.2%); 30 regrediu
+NEWTON_RECALC_EVERY    = 60        # iter15 1080d: 120→60 — recomputar coint 2× mais rápido (catch regime shifts)
+NEWTON_MAX_HOLD        = 200       # iter9 1080d WINNER: 96→200; iter10 300 saturado (mesmo resultado)
 NEWTON_SIZE_MULT       = 0.30      # position size relativo ao normal (grid 2026-04-14: 0.30 domina 0.50/0.70 em Sharpe e DD)
 NEWTON_MIN_PAIRS       = 2         # mínimo de pares cointegrados para operar
 
 # ── MERCURIO — Order Flow / Microstructure ────────────────────
-MERCURIO_CVD_WINDOW     = 20       # janela para CVD divergence
-MERCURIO_CVD_DIV_BARS   = 10       # lookback para detectar divergência
+MERCURIO_CVD_WINDOW     = 20       # iter21 mostrou 15≈20 (ROI 88.35 vs 88.32, saturado); default mantido
+MERCURIO_CVD_DIV_BARS   = 3        # iter19 1080d WINNER: ROI +88.3%, Sharpe 4.07 — DIV=2 falha no rolling(min_periods=3)
 MERCURIO_VIMB_WINDOW    = 10       # janela para volume imbalance
-MERCURIO_VIMB_LONG      = 0.60     # iter7 reverted — 0.58 subiu DD 1%→3.6%; iter6 era sweet spot
+MERCURIO_VIMB_LONG      = 0.62     # iter15 1080d: 0.60→0.62 — confirmação mais restritiva (iter7 0.58 piorou, probe outro lado)
 MERCURIO_VIMB_SHORT     = 0.40
 MERCURIO_LIQ_VOL_MULT   = 2.5     # iter6 1080d: 3.0→2.5 pra ampliar LIQ FADE sample (iter5 só teve 9 trades)
 MERCURIO_LIQ_ATR_MULT   = 1.5     # iter6 1080d: 2.0→1.5
-MERCURIO_MIN_SCORE      = 0.50     # score mínimo para entrada
-MERCURIO_SIZE_MULT      = 0.50     # iter9 1080d: 0.40→0.50 — iter8 scaled linear (ROI +30%, Sharpe igual); testa ceiling
+MERCURIO_MIN_SCORE      = 0.50     # iter11 1080d: 0.65 igual a iter8 — todos 442 trades tinham score>=0.65, lever MORTO; revertido pra default
+MERCURIO_SIZE_MULT      = 0.47     # iter13 1080d WINNER: ROI +55.9%, Sharpe 3.10, MaxDD 1.4% — 0.49 caiu pra 40%, 0.50 caiu pra 37%
 
 # ── THOTH — Sentiment Quantificado ───────────────────────────
 THOTH_FUNDING_WINDOW    = 30       # períodos de 8h para z-score do funding
