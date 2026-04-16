@@ -187,8 +187,119 @@ def compute_features(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
 
 
 def compute_zigzag(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
-    """Stub — implemented in Task 3."""
-    raise NotImplementedError
+    """Add last_pivot_* and prev_pivot_* columns using confirmed-pivot zigzag.
+
+    Algorithm: walk forward tracking a running extreme. When price moves
+    against the running extreme by >= zigzag_atr_mult * ATR, the extreme
+    becomes a *candidate* pivot. After `pivot_confirm_bars` bars without
+    being superseded, it's *confirmed* and exposed at indices
+    >= (candidate_idx + pivot_confirm_bars). On confirmation, the prior
+    confirmed pivot rotates into prev_pivot_*.
+
+    No lookahead: the confirmed pivot visible at row t never depends on
+    data from rows > t.
+    """
+    out = df.copy()
+    n = len(out)
+    high = out["high"].to_numpy()
+    low = out["low"].to_numpy()
+    atr = out["atr"].to_numpy()
+
+    last_pivot_idx = np.full(n, -1, dtype=np.int64)
+    last_pivot_price = np.full(n, np.nan)
+    last_pivot_type = np.array([""] * n, dtype=object)
+    prev_pivot_idx_arr = np.full(n, -1, dtype=np.int64)
+    prev_pivot_price_arr = np.full(n, np.nan)
+    prev_pivot_type_arr = np.array([""] * n, dtype=object)
+
+    # Running extreme state
+    run_ext_idx = 0
+    run_ext_high = high[0]
+    run_ext_low = low[0]
+    run_dir = 0  # 0 = unknown; +1 = seeking new high (from low base); -1 = seeking new low (from high base)
+
+    # Candidate pivot queue (one at a time)
+    candidate_idx: Optional[int] = None
+    candidate_price: Optional[float] = None
+    candidate_type: Optional[str] = None
+
+    # Confirmed + prev state
+    confirmed_idx: int = -1
+    confirmed_price: float = np.nan
+    confirmed_type: str = ""
+    prev_idx: int = -1
+    prev_price: float = np.nan
+    prev_type: str = ""
+
+    for t in range(n):
+        if np.isnan(atr[t]) or atr[t] <= 0:
+            last_pivot_idx[t] = confirmed_idx
+            last_pivot_price[t] = confirmed_price
+            last_pivot_type[t] = confirmed_type
+            prev_pivot_idx_arr[t] = prev_idx
+            prev_pivot_price_arr[t] = prev_price
+            prev_pivot_type_arr[t] = prev_type
+            continue
+
+        thresh_abs = params.zigzag_atr_mult * atr[t]
+
+        # Promote candidate to confirmed after pivot_confirm_bars
+        if candidate_idx is not None and (t - candidate_idx) >= params.pivot_confirm_bars:
+            if confirmed_idx >= 0:
+                prev_idx = confirmed_idx
+                prev_price = confirmed_price
+                prev_type = confirmed_type
+            confirmed_idx = candidate_idx
+            confirmed_price = candidate_price  # type: ignore[assignment]
+            confirmed_type = candidate_type    # type: ignore[assignment]
+            candidate_idx = None
+            candidate_price = None
+            candidate_type = None
+
+        # Update running extremes
+        if high[t] > run_ext_high:
+            run_ext_high = high[t]
+            if run_dir >= 0:
+                run_ext_idx = t
+        if low[t] < run_ext_low:
+            run_ext_low = low[t]
+            if run_dir <= 0:
+                run_ext_idx = t
+
+        # Detect reversal → enqueue candidate pivot
+        if run_dir >= 0 and (run_ext_high - low[t]) >= thresh_abs and run_ext_high > 0:
+            # Was tracking up-moves; a high pivot candidate forms
+            candidate_idx = run_ext_idx
+            candidate_price = run_ext_high
+            candidate_type = "H"
+            # Flip: now track for lower lows
+            run_dir = -1
+            run_ext_high = high[t]
+            run_ext_low = low[t]
+            run_ext_idx = t
+        elif run_dir <= 0 and (high[t] - run_ext_low) >= thresh_abs and run_ext_low > 0:
+            candidate_idx = run_ext_idx
+            candidate_price = run_ext_low
+            candidate_type = "L"
+            run_dir = +1
+            run_ext_high = high[t]
+            run_ext_low = low[t]
+            run_ext_idx = t
+
+        last_pivot_idx[t] = confirmed_idx
+        last_pivot_price[t] = confirmed_price
+        last_pivot_type[t] = confirmed_type
+        prev_pivot_idx_arr[t] = prev_idx
+        prev_pivot_price_arr[t] = prev_price
+        prev_pivot_type_arr[t] = prev_type
+
+    out["last_pivot_idx"] = last_pivot_idx
+    out["last_pivot_price"] = last_pivot_price
+    out["last_pivot_type"] = last_pivot_type
+    out["prev_pivot_idx"] = prev_pivot_idx_arr
+    out["prev_pivot_price"] = prev_pivot_price_arr
+    out["prev_pivot_type"] = prev_pivot_type_arr
+    return out
 
 
 def compute_fibs(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
