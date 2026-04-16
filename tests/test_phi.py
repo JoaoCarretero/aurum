@@ -342,7 +342,31 @@ def test_sizing_convex_with_phi_score():
     assert hi["risk_usd"] == pytest.approx(4.0 * lo["risk_usd"], rel=0.01)
 
 
-from engines.phi import calc_phi_levels, update_phi_trailing
+from engines.phi import KillSwitchState, calc_phi_levels, update_phi_trailing
+
+
+def test_kill_switch_daily():
+    ks = KillSwitchState(params=PhiParams())
+    ks.on_equity(pd.Timestamp("2024-01-01 00:00"), 10_000.0)
+    assert not ks.daily_blocked
+    # Drop 3% same day → exceeds 2.618% → blocks
+    ks.on_equity(pd.Timestamp("2024-01-01 12:00"), 9_700.0)
+    assert ks.daily_blocked
+    # Next day resets
+    ks.on_equity(pd.Timestamp("2024-01-02 00:00"), 9_700.0)
+    assert not ks.daily_blocked
+
+
+def test_kill_switch_weekly():
+    ks = KillSwitchState(params=PhiParams())
+    # Mon Jan 1 2024 (weekday=0)
+    ks.on_equity(pd.Timestamp("2024-01-01 00:00"), 10_000.0)
+    # Thu drop 7% → > 6.18% weekly → weekly blocked
+    ks.on_equity(pd.Timestamp("2024-01-04 12:00"), 9_300.0)
+    assert ks.weekly_blocked
+    # Next Monday resets
+    ks.on_equity(pd.Timestamp("2024-01-08 00:00"), 9_300.0)
+    assert not ks.weekly_blocked
 
 
 def test_calc_phi_levels_long():

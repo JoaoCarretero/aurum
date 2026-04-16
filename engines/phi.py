@@ -632,6 +632,229 @@ def _pnl_with_costs(direction: int, entry: float, exit_p: float, size: float,
 
 
 # ════════════════════════════════════════════════════════════════════
+# Kill-switch
+# ════════════════════════════════════════════════════════════════════
+
+class KillSwitchState:
+    """Track daily/weekly equity highs and block new entries when drawdown
+    from the respective high exceeds kill_daily / kill_weekly. Does NOT
+    force-close open positions — spec §11 explicitly states open trades
+    follow natural management."""
+
+    def __init__(self, params: PhiParams):
+        self.params = params
+        self.day_high: float = 0.0
+        self.week_high: float = 0.0
+        self.day_key: Optional[pd.Timestamp] = None
+        self.week_key: Optional[pd.Timestamp] = None
+        self.daily_blocked: bool = False
+        self.weekly_blocked: bool = False
+
+    def on_equity(self, ts: pd.Timestamp, equity: float) -> None:
+        day = ts.normalize()
+        week = (ts - pd.Timedelta(days=ts.weekday())).normalize()
+        if self.day_key != day:
+            self.day_key = day
+            self.day_high = equity
+            self.daily_blocked = False
+        if self.week_key != week:
+            self.week_key = week
+            self.week_high = equity
+            self.weekly_blocked = False
+        self.day_high = max(self.day_high, equity)
+        self.week_high = max(self.week_high, equity)
+        day_dd = (self.day_high - equity) / self.day_high if self.day_high > 0 else 0.0
+        week_dd = (self.week_high - equity) / self.week_high if self.week_high > 0 else 0.0
+        if day_dd >= self.params.kill_daily:
+            self.daily_blocked = True
+        if week_dd >= self.params.kill_weekly:
+            self.weekly_blocked = True
+
+    @property
+    def blocked(self) -> bool:
+        return self.daily_blocked or self.weekly_blocked
+
+
+# ════════════════════════════════════════════════════════════════════
+# Symbol scan loop
+# ════════════════════════════════════════════════════════════════════
+
+def scan_symbol(df: pd.DataFrame, symbol: str,
+                params: Optional[PhiParams] = None,
+                initial_equity: float = ACCOUNT_SIZE) -> tuple[list, dict]:
+    """Run the PHI scan on a fully-prepared merged dataframe for one symbol.
+
+    The df must already have features, zigzag, fibs (per-TF merged with
+    _1d/_4h/_1h/_15m suffixes), cluster, regime, trigger, and scoring
+    columns applied. See `prepare_symbol_frames` (Task 11) for the full
+    assembly pipeline.
+
+    Returns (trades list, vetos counter dict).
+    """
+    params = params or PhiParams()
+    trades: list[dict] = []
+    vetos: dict[str, int] = defaultdict(int)
+
+    if len(df) < 300:
+        return [], {"too_few_bars": 1}
+
+    account = float(initial_equity)
+    kill = KillSwitchState(params)
+    n = len(df)
+    funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(params.tf_omega5, 5)
+    open_trade: Optional[dict] = None
+    cluster_armed_until: int = -1
+
+    for t in range(200, n - 1):
+        row = df.iloc[t]
+        ts = row["time"]
+        kill.on_equity(ts, account)
+
+        # ── Manage open trade ────────────────────────────────────
+        if open_trade is not None:
+            # After TP2, update trailing using new fib_0.618 of base TF
+            if open_trade.get("stage", 0) >= 2:
+                trail_px = row.get("fib_0.618", np.nan)
+                if trail_px is not None and not (isinstance(trail_px, float) and np.isnan(trail_px)):
+                    update_phi_trailing(open_trade, float(trail_px))
+
+            resolved = _resolve_phi_exit(df, t, open_trade, params)
+            if resolved is not None:
+                reason, exit_px = resolved
+                if reason in ("tp1_partial", "tp2_partial"):
+                    frac = params.tp1_partial if reason == "tp1_partial" else params.tp2_partial
+                    sz = open_trade["size"] * frac
+                    pnl = _pnl_with_costs(
+                        open_trade["direction"], open_trade["entry"], exit_px,
+                        sz, t - open_trade["entry_idx"], funding_periods_per_8h,
+                    )
+                    account = max(account + pnl, 0.0)
+                    open_trade["size"] -= sz
+                    open_trade["stage"] = open_trade.get("stage", 0) + 1
+                    open_trade.setdefault("partials", []).append({
+                        "reason": reason, "price": round(exit_px, 6),
+                        "size": sz, "pnl": pnl, "idx": t,
+                    })
+                else:  # sl / tp3 / time_stop → close remainder
+                    duration = t - open_trade["entry_idx"]
+                    pnl = _pnl_with_costs(
+                        open_trade["direction"], open_trade["entry"], exit_px,
+                        open_trade["size"], duration, funding_periods_per_8h,
+                    )
+                    account = max(account + pnl, 0.0)
+                    open_trade.update({
+                        "exit_idx": t,
+                        "exit_time": ts,
+                        "exit_price": round(exit_px, 6),
+                        "exit_reason": reason,
+                        "pnl": float(pnl),
+                        "duration_bars": duration,
+                        "account_after": float(account),
+                    })
+                    trades.append(open_trade)
+                    open_trade = None
+            continue
+
+        # ── Look for new entry ───────────────────────────────────
+        if kill.blocked:
+            vetos["kill_switch"] += 1
+            continue
+
+        if bool(row.get("cluster_active", False)):
+            cluster_armed_until = t + params.cluster_window_bars
+
+        if t > cluster_armed_until:
+            continue
+
+        direction = int(row.get("cluster_direction", 0))
+        if direction == 0:
+            vetos["no_direction"] += 1
+            continue
+
+        if not bool(row.get("regime_ok", False)):
+            vetos["regime_block"] += 1
+            continue
+
+        # Macro filter: 1d slope sign
+        macro_slope = row.get("ema200_slope_1d", 0)
+        if isinstance(macro_slope, float) and np.isnan(macro_slope):
+            macro_slope = 0
+        macro = int(np.sign(macro_slope or 0))
+        if macro == +1 and direction == -1:
+            vetos["macro_mismatch"] += 1
+            continue
+        if macro == -1 and direction == +1:
+            vetos["macro_mismatch"] += 1
+            continue
+
+        omega = float(row.get("omega_phi", 0.0))
+        if omega < params.omega_phi_entry:
+            vetos["omega_low"] += 1
+            continue
+
+        trig_long = bool(row.get("trigger_long", False))
+        trig_short = bool(row.get("trigger_short", False))
+        if direction == +1 and not trig_long:
+            vetos["no_trigger"] += 1
+            continue
+        if direction == -1 and not trig_short:
+            vetos["no_trigger"] += 1
+            continue
+
+        size_scale = 1.0 if macro != 0 else params.range_size_scale
+
+        entry = float(df["open"].iloc[t + 1])
+        fib_786 = row.get("fib_0.786_1h", np.nan)
+        fib_1272 = row.get("fib_1.272_1h", np.nan)
+        fib_1618 = row.get("fib_1.618_1h", np.nan)
+        fib_2618 = row.get("fib_2.618_1h", np.nan)
+        atr_1h = row.get("atr_1h", row.get("atr", np.nan))
+        any_nan = any(
+            isinstance(v, float) and np.isnan(v)
+            for v in (fib_786, fib_1272, fib_1618, fib_2618, atr_1h)
+        )
+        if any_nan:
+            vetos["nan_levels"] += 1
+            continue
+
+        levels = calc_phi_levels({
+            "close": float(row["close"]),
+            "fib_0.786_1h": float(fib_786),
+            "fib_1.272_1h": float(fib_1272),
+            "fib_1.618_1h": float(fib_1618),
+            "fib_2.618_1h": float(fib_2618),
+            "atr_1h": float(atr_1h),
+        }, direction, params)
+
+        phi_score = float(row.get("phi_score", 0.0))
+        sz = phi_size(account, entry, levels["sl"], phi_score, params)
+        if sz["size_units"] <= 0:
+            vetos["zero_size"] += 1
+            continue
+
+        open_trade = {
+            "symbol": symbol,
+            "direction": direction,
+            "entry_idx": t + 1,
+            "entry_time": df["time"].iloc[t + 1],
+            "entry": round(entry, 6),
+            "sl": round(levels["sl"], 6),
+            "trailing_sl": round(levels["sl"], 6),
+            "tp1": round(levels["tp1"], 6),
+            "tp2": round(levels["tp2"], 6),
+            "tp3": round(levels["tp3"], 6),
+            "size": sz["size_units"] * size_scale,
+            "notional": sz["notional"] * size_scale,
+            "phi_score": phi_score,
+            "omega_phi": omega,
+            "stage": 0,
+            "partials": [],
+        }
+
+    return trades, dict(vetos)
+
+
+# ════════════════════════════════════════════════════════════════════
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 
