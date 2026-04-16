@@ -3,13 +3,16 @@ import random
 import numpy as np
 from config.params import ACCOUNT_SIZE, MC_N, MC_BLOCK
 
-def monte_carlo(pnl_list):
+def monte_carlo(pnl_list, seed=None):
+    # seed=None keeps the legacy stochastic behavior; pass an int to make
+    # walk-forward/robustness audits reproducible run-to-run.
     if len(pnl_list) < MC_BLOCK*2: return None
+    rng = random.Random(seed) if seed is not None else random
     n, finals, dds, paths, pos = len(pnl_list), [], [], [], 0
     for sim in range(MC_N):
         sh = []
         while len(sh) < n:
-            s = random.randint(0, n-MC_BLOCK); sh.extend(pnl_list[s:s+MC_BLOCK])
+            s = rng.randint(0, n-MC_BLOCK); sh.extend(pnl_list[s:s+MC_BLOCK])
         sh  = sh[:n]; eq = [ACCOUNT_SIZE]
         for p in sh: eq.append(eq[-1]+p)
         finals.append(eq[-1])

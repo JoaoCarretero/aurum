@@ -2,6 +2,7 @@
 AURUM Finance — NEXUS API server.
 FastAPI app with CORS, rate limiting, and all route groups.
 """
+import os
 import time
 from collections import defaultdict
 
@@ -27,11 +28,20 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ── CORS (dev: allow all origins) ─────────────────────────────
+# ── CORS ──────────────────────────────────────────────────────
+# Browsers reject ``allow_origins=["*"]`` with ``allow_credentials=True``,
+# so we never ship that combo. Configure via AURUM_ALLOWED_ORIGINS
+# (comma-separated) — falls back to local dev hosts only.
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+_allowed_origins = [
+    o.strip()
+    for o in os.environ.get("AURUM_ALLOWED_ORIGINS", _default_origins).split(",")
+    if o.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

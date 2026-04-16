@@ -5,6 +5,8 @@ from datetime import datetime
 from collections import defaultdict
 import numpy as np
 
+from core.persistence import atomic_write_json
+
 log = logging.getLogger("darwin")
 
 # ── FITNESS CALCULATION ──────────────────────────────────────
@@ -363,25 +365,15 @@ class DarwinAllocator:
         return "\n".join(lines)
 
     def _save_state(self):
-        """Persist population and logs."""
-        # Population
-        pop_path = self.data_dir / "population.json"
-        with open(pop_path, "w", encoding="utf-8") as f:
-            # Convert numpy types for JSON serialization
-            state = {
-                "generation": self.generation,
-                "population": self.population,
-                "allocations": self.allocations,
-                "saved_at": datetime.now().isoformat(),
-            }
-            json.dump(state, f, indent=2, default=str)
-
-        # Evolution log (append-only)
-        log_path = self.data_dir / "evolution_log.json"
-        with open(log_path, "w", encoding="utf-8") as f:
-            json.dump(self.evolution_log[-100:], f, indent=2, default=str)  # keep last 100 gens
-
-        # Mutations log
-        mut_path = self.data_dir / "mutations.json"
-        with open(mut_path, "w", encoding="utf-8") as f:
-            json.dump(self.mutations_log[-200:], f, indent=2, default=str)
+        """Persist population and logs. Atomic so a crash mid-write never
+        leaves truncated state — the generation either fully lands or
+        stays as whatever existed before."""
+        state = {
+            "generation": self.generation,
+            "population": self.population,
+            "allocations": self.allocations,
+            "saved_at": datetime.now().isoformat(),
+        }
+        atomic_write_json(self.data_dir / "population.json", state)
+        atomic_write_json(self.data_dir / "evolution_log.json", self.evolution_log[-100:])
+        atomic_write_json(self.data_dir / "mutations.json", self.mutations_log[-200:])

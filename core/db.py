@@ -461,12 +461,14 @@ def delete_run(run_id: str, delete_files: bool = False) -> bool:
         conn.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
         conn.commit()
         if delete_files and row["json_path"]:
-            import shutil
+            from core.fs import robust_rmtree
 
             folder = Path(row["json_path"]).parent.parent
             _base = DATA_DIR.resolve()
             if folder.resolve().is_relative_to(_base) and folder.exists():
-                shutil.rmtree(folder, ignore_errors=True)
+                # robust_rmtree handles OneDrive locks / Windows file-handle
+                # races that shutil.rmtree(ignore_errors=True) silently eats.
+                robust_rmtree(folder)
         return True
     finally:
         conn.close()

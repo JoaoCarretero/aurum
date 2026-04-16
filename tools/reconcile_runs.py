@@ -29,6 +29,13 @@ import time
 from collections import Counter
 from pathlib import Path
 
+# Ensure repo root on path when invoked as "python tools/reconcile_runs.py".
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from core.persistence import atomic_write_json
+
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "data" / "runs"
 INDEX_PATH = ROOT / "data" / "index.json"
@@ -389,10 +396,7 @@ def main() -> int:
 
     _p()
     _p(f"Writing {len(new_index)} rows to {INDEX_PATH}...")
-    INDEX_PATH.write_text(
-        json.dumps(new_index, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(INDEX_PATH, new_index)
     _p("done.")
     return 0
 

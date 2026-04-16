@@ -4262,9 +4262,17 @@ class App(tk.Tk):
                      fg=WHITE, bg=PANEL).pack(side="left", padx=6)
 
     def _open_file(self, path):
-        if sys.platform == "win32": os.startfile(str(path))
-        elif sys.platform == "darwin": subprocess.run(["open", str(path)])
-        else: subprocess.run(["xdg-open", str(path)])
+        # timeout=5 so a stuck ``open`` / ``xdg-open`` (e.g. DE not responding,
+        # file on a slow mount) never freezes the whole launcher UI.
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(path))
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(path)], timeout=5)
+            else:
+                subprocess.run(["xdg-open", str(path)], timeout=5)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
 
     def _select_basket(self, val):
         """Update basket selection — highlight button + show asset preview."""
