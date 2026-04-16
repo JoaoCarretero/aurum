@@ -58,6 +58,7 @@ from core import (
 from core.audit_trail import AuditTrail, OrderEvent
 from core.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates, load_gate_config,
+    gate_single_position,
 )
 from core.fixture_capture import write_capture
 from core.fs import atomic_write
@@ -1389,6 +1390,20 @@ class LiveEngine:
         )
         return check_gates(state, self.risk_cfg)
 
+    def _check_single_position_gate(self, proposed_notional: float) -> GateDecision:
+        """Run only gate_single_position with the proposed order notional.
+
+        The general gate sweep in _check_risk_gates() runs before signal
+        generation, so proposed_notional=0 there and gate_single_position
+        short-circuits to allow. This helper is called from _open_position
+        AFTER the signal is built (and after CANARY scaling), which is the
+        first point in the flow where the real order size is known."""
+        state = RiskState(
+            account_equity    = self.account,
+            proposed_notional = proposed_notional,
+        )
+        return gate_single_position(state, self.risk_cfg)
+
     def _audit_risk_gate(self, decision: GateDecision, severity: str):
         """Emit an audit row when a risk gate fires. Uses the reject
         event type so the trail remains searchable with a single filter
@@ -1444,6 +1459,19 @@ class LiveEngine:
                 f"  CANARY scaling {sig['symbol']}: "
                 f"{original_size:.4f} → {sig['size']:.4f} "
                 f"(× {CANARY_CAPITAL_PCT:.4f})")
+
+        # [Fase 4-C] Single-position sizing gate. The general gate sweep in
+        # _on_candle_closed ran before the signal existed, so gate_single_position
+        # was inert there. Now that we know the real notional (after CANARY), run
+        # the per-trade cap and abort before place_order if it blocks.
+        proposed_notional = float(sig["size"]) * float(sig["entry"])
+        single_decision = self._check_single_position_gate(proposed_notional)
+        if single_decision.severity != "allow":
+            self._audit_risk_gate(single_decision, severity=single_decision.severity)
+            log.info(
+                f"  RISK-GATE SINGLE ({single_decision.severity}) on {sig['symbol']}: "
+                f"{single_decision.reason}")
+            return
 
         # Intent — we want to open THIS trade, before asking the venue.
         self.audit.write(OrderEvent(

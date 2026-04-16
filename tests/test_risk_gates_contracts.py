@@ -348,3 +348,49 @@ class TestGateDecisionShape:
         assert d.metric > 0
         assert d.threshold == 5.0
         assert d.gate == "daily_dd"
+
+
+# ────────────────────────────────────────────────────────────
+# LiveEngine plumbing — _check_single_position_gate
+# ────────────────────────────────────────────────────────────
+# Bug histórico: gate_single_position existia mas nunca recebia
+# proposed_notional vindo de engines/live.py. Estes testes travam
+# o contrato do helper: account + risk_cfg in → GateDecision out,
+# com soft_block quando notional > cap, allow caso contrário.
+
+class TestLiveEnginePlumbing:
+    def _bind(self, account: float, cfg: RiskGateConfig):
+        from types import SimpleNamespace
+        from engines.live import LiveEngine
+        fake_self = SimpleNamespace(account=account, risk_cfg=cfg)
+        return lambda notional: LiveEngine._check_single_position_gate(fake_self, notional)
+
+    def test_allows_small_order(self):
+        check = self._bind(10_000, RiskGateConfig(max_single_position_pct=25.0))
+        # cap = 2500; 500 notional is well below
+        assert check(500).severity == "allow"
+
+    def test_soft_blocks_order_above_cap(self):
+        check = self._bind(10_000, RiskGateConfig(max_single_position_pct=25.0))
+        # cap = 2500; 3000 notional > cap
+        d = check(3_000)
+        assert d.severity == "soft_block"
+        assert d.gate == "single_position"
+        assert d.metric == 3_000.0
+        assert d.threshold == 2_500.0
+
+    def test_permissive_config_allows_any_size(self):
+        # paper/demo/testnet modes set max_single_position_pct=100,
+        # effectively disabling the cap until full equity is used.
+        check = self._bind(10_000, RiskGateConfig(max_single_position_pct=100.0))
+        assert check(9_999).severity == "allow"
+
+    def test_live_config_caps_at_25pct(self):
+        # Regression test for the config defaults shipped with live mode.
+        from core.risk_gates import load_gate_config
+        cfg = load_gate_config("live")
+        check = self._bind(10_000, cfg)
+        # 30% of 10k = 3000 > 25% cap = 2500 → soft_block
+        assert check(3_000).severity == "soft_block"
+        # 20% = 2000 < cap → allow
+        assert check(2_000).severity == "allow"
