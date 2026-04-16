@@ -190,7 +190,7 @@ LIVE_DIR     = Path(f"data/live/{LIVE_RUN_ID}")
 (LIVE_DIR / "reports").mkdir(parents=True, exist_ok=True)
 
 # ── LOGGING ───────────────────────────────────────────────────
-def _load_keys(mode: str) -> tuple[str, str]:
+def _load_keys(mode: str) -> tuple[str, str, str]:
     """Return (api_key, api_secret) for ``mode``.
 
     Preference order, first hit wins:
@@ -233,8 +233,9 @@ def _load_keys(mode: str) -> tuple[str, str]:
                 secret = block.get("api_secret", "")
                 ks.lock()
                 if key and secret and "COLE_AQUI" not in key:
-                    log.info(f"Keys loaded from encrypted store for mode '{mode}'")
-                    return key, secret
+                    log.info(
+                        f"Keys loaded from ENCRYPTED store for mode '{mode}' (secure)")
+                    return key, secret, "encrypted"
                 log.warning(
                     f"Encrypted store has no usable block for '{mode}' — "
                     f"falling back to plaintext")
@@ -272,7 +273,15 @@ def _load_keys(mode: str) -> tuple[str, str]:
         if not key or not secret or "COLE_AQUI" in key:
             print(f"\n  ⚠  Keys para modo '{mode}' não preenchidas em config/keys.json")
             sys.exit(1)
-        return key, secret
+        # Plaintext source — loud on live (operator may have intended encrypted
+        # and not noticed the fallback). Level chosen by mode: INFO in paper/demo/
+        # testnet (expected), WARNING in live (possible misconfiguration).
+        level = logging.WARNING if mode in _REAL_MONEY_MODES else logging.INFO
+        log.log(
+            level,
+            f"Keys loaded from PLAINTEXT store for mode '{mode}' "
+            f"(no encrypted store OR AURUM_KEY_PASSWORD unset)")
+        return key, secret, "plaintext"
     except Exception as e:
         print(f"\n  ⚠  Erro ao ler config/keys.json: {e}")
         sys.exit(1)
@@ -531,12 +540,12 @@ class OrderManager:
             mode = self._mode()
 
             if mode == "testnet":
-                api_key, api_secret = _load_keys("testnet")
+                api_key, api_secret, key_source = _load_keys("testnet")
                 self.client = Client(api_key, api_secret, testnet=True)
                 log.info("Binance client — TESTNET (testnet.binancefuture.com)")
 
             elif mode == "demo":
-                api_key, api_secret = _load_keys("demo")
+                api_key, api_secret, key_source = _load_keys("demo")
                 self.client = Client(api_key, api_secret, testnet=False)
                 # Override futures URL para o endpoint demo (base_url não suportado na versão actual)
                 self.client.FUTURES_URL        = "https://demo-fapi.binance.com/fapi/v1"
@@ -545,9 +554,14 @@ class OrderManager:
                 log.info("Binance client — DEMO (demo-fapi.binance.com, capital simulado)")
 
             else:  # live
-                api_key, api_secret = _load_keys("live")
+                api_key, api_secret, key_source = _load_keys("live")
                 self.client = Client(api_key, api_secret, testnet=False)
                 log.info("Binance client — LIVE (capital real)")
+
+            # Expose the key source so the audit trail can capture it on engine
+            # init. "encrypted" vs "plaintext" distinguishes whether a fallback
+            # happened silently without the operator noticing.
+            self._key_source = key_source
 
         except SystemExit:
             raise
@@ -949,7 +963,7 @@ class LiveEngine:
         }.get(mode, "https://fapi.binance.com")
 
         try:
-            api_key, api_secret = _load_keys(mode)
+            api_key, api_secret, _ = _load_keys(mode)
             loop = asyncio.get_running_loop()
 
             def _call():
