@@ -11,9 +11,10 @@ from collections import defaultdict
 from config.params import *
 
 # ── Paleta ────────────────────────────────────────────────────
-BG, PANEL = "#0a0a12", "#0f0f1a"
-GOLD, GREEN, RED, BLUE, PURPLE, TEAL = "#e8b84b", "#26d47c", "#e85d5d", "#4a9eff", "#9b7fe8", "#2dd4bf"
-LGRAY, DGRAY, WHITE = "#6b7280", "#1f2937", "#f0f0f0"
+# Shared chart palette — see analysis/_chart_palette.py for canonical hex.
+from analysis._chart_palette import (
+    BG, PANEL, GOLD, GREEN, RED, BLUE, PURPLE, TEAL, LGRAY, DGRAY, WHITE,
+)
 
 def _ax(ax, title="", xlabel="", ylabel=""):
     ax.set_facecolor(PANEL)

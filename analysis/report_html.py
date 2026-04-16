@@ -12,17 +12,12 @@ from config.params import ACCOUNT_SIZE, INTERVAL, MC_N, MC_BLOCK
 
 
 # ── Colour palette (Bloomberg dark) ─────────────────────────────
-_BG      = "#0a0a12"
-_PANEL   = "#0f0f1a"
-_GOLD    = "#e8b84b"
-_GREEN   = "#26d47c"
-_RED     = "#e85d5d"
-_BLUE    = "#4a9eff"
-_PURPLE  = "#9b7fe8"
-_TEAL    = "#2dd4bf"
-_GRAY    = "#9ca3af"
-_WHITE   = "#f0f0f0"
-_BORDER  = "#1e1e2e"
+# Shared chart palette — see analysis/_chart_palette.py for canonical hex.
+from analysis._chart_palette import (
+    BG as _BG, PANEL as _PANEL, GOLD as _GOLD, GREEN as _GREEN, RED as _RED,
+    BLUE as _BLUE, PURPLE as _PURPLE, TEAL as _TEAL, GRAY as _GRAY,
+    WHITE as _WHITE, BORDER as _BORDER,
+)
 
 
 # ── SVG helpers ──────────────────────────────────────────────────

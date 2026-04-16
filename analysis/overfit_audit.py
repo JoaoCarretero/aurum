@@ -371,15 +371,12 @@ def print_audit_box(results: dict):
 # ---------------------------------------------------------------------------
 def build_audit_html(results: dict) -> str:
     """Build HTML fragment for embedding in backtest report."""
-    _BG = "#0a0a12"
-    _PANEL = "#0f0f1a"
-    _GOLD = "#e8b84b"
-    _GREEN = "#26d47c"
-    _RED = "#e85d5d"
-    _GRAY = "#9ca3af"
-    _WHITE = "#f0f0f0"
-    _BORDER = "#1e1e2e"
-    _TEAL = "#2dd4bf"
+    # Shared chart palette — see analysis/_chart_palette.py.
+    from analysis._chart_palette import (
+        BG as _BG, PANEL as _PANEL, GOLD as _GOLD, GREEN as _GREEN,
+        RED as _RED, GRAY as _GRAY, WHITE as _WHITE, BORDER as _BORDER,
+        TEAL as _TEAL,
+    )
 
     def _status_color(s):
         if s == "PASS":
