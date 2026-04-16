@@ -870,7 +870,7 @@ def export_ms_json(all_trades, eq, mc, ratios):
 
 def _ask_periodo():
     global SCAN_DAYS, N_CANDLES, HTF_N_CANDLES_MAP
-    import backtest as _bt
+    from engines import citadel as _bt
     v=safe_input(f"\n  Periodo em dias [{SCAN_DAYS}] > ").strip()
     if v.isdigit() and 7<=int(v)<=1500:
         d=int(v)
@@ -884,7 +884,7 @@ def _ask_periodo():
 def _ask_config():
     """Pergunta conta, leverage e risk. Actualiza globals do backtest e do módulo."""
     global ACCOUNT_SIZE, LEVERAGE, BASE_RISK, MAX_RISK, CONVEX_ALPHA
-    import backtest as _bt
+    from engines import citadel as _bt
 
     # Conta
     v = safe_input(f"  Tamanho da conta USD [{int(_bt.ACCOUNT_SIZE):,}] > ").strip().replace(",","").replace("$","")
