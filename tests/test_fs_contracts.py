@@ -94,3 +94,20 @@ class TestAtomicWrite:
             atomic_write(target, b"not a string")  # type: ignore[arg-type]
         # Original sobrevive
         assert target.read_text(encoding="utf-8") == "original"
+
+    def test_creates_missing_parent_directory(self, tmp_path):
+        # Regressão — ordem de criação de dirs vs write não pode deixar .tmp órfão
+        target = tmp_path / "new" / "nested" / "path" / "state.json"
+        assert not target.parent.exists()
+        atomic_write(target, '{"ok": true}')
+        assert target.exists()
+        assert target.read_text(encoding="utf-8") == '{"ok": true}'
+
+    def test_creates_parent_is_idempotent(self, tmp_path):
+        # Parent já existindo não causa erro
+        parent = tmp_path / "existing"
+        parent.mkdir()
+        target = parent / "file.txt"
+        atomic_write(target, "first")
+        atomic_write(target, "second")
+        assert target.read_text(encoding="utf-8") == "second"

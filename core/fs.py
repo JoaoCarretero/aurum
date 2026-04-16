@@ -74,8 +74,15 @@ def robust_rmtree(target: Path, retries: int = 3, pause: float = 0.5) -> bool:
 
 
 def atomic_write(path: Path, data: str) -> None:
-    """Write data atomically via tmp+rename. Original survives mid-write crash."""
+    """Write data atomically via tmp+rename. Original survives mid-write crash.
+
+    Creates missing parent directories on demand — callers frequently target
+    run-specific dirs (data/{engine}/{run_id}/state/*.json) that may not exist
+    yet on first write. Without this, writes race with directory creation and
+    leave .tmp files orphaned.
+    """
     import os
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + '.tmp')
     tmp.write_text(data, encoding='utf-8')
     os.replace(str(tmp), str(path))
