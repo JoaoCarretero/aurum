@@ -20,6 +20,7 @@ ENGINES = {
     "aqr":         {"script": "engines/aqr.py",        "display": "AQR",         "desc": "Adaptive allocation — evolutionary parameter optimization"},
     "kepos":       {"script": "engines/kepos.py",      "display": "KEPOS",       "desc": "Critical endogeneity fade — Hawkes η≥0.95 reversal plays"},
     "graham":      {"script": "engines/graham.py",     "display": "GRAHAM",      "desc": "Endogenous momentum — trend-following gated by Hawkes ENDO regime"},
+    "phi":         {"script": "engines/phi.py",       "display": "PHI",         "desc": "Fibonacci fractal — multi-TF 0.618 confluence + Golden Trigger"},
     "winton":      {"script": "core/chronos.py",          "display": "WINTON",      "desc": "Time-series intelligence — HMM + GARCH + Hurst + seasonality"},
     "live":        {"script": "engines/live.py",          "display": "LIVE",        "desc": "Live execution — paper / demo / testnet / real"},
 }
