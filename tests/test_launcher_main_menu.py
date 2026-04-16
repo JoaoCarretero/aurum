@@ -52,10 +52,11 @@ def app(_shared_app):
 # ── Constants / shape tests (no Tk needed) ─────────────────────
 
 def test_tile_colors_defined(mod):
-    assert mod.TILE_MARKETS == "#6EB2E8"
-    assert mod.TILE_EXECUTE == "#6ADB8A"
-    assert mod.TILE_RESEARCH == "#E6C86A"
-    assert mod.TILE_CONTROL == "#D88EC8"
+    # Values live in core/ui_palette.py (HL2/CS 1.6 VGUI palette, 2026-04-15 refactor).
+    assert mod.TILE_MARKETS  == "#7FA0B0"   # steel blue
+    assert mod.TILE_EXECUTE  == "#7FA84A"   # HP green
+    assert mod.TILE_RESEARCH == "#D08F36"   # HL2 orange
+    assert mod.TILE_CONTROL  == "#C9B584"   # aged cream
 
 
 def test_main_groups_shape(mod):
