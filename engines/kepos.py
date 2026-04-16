@@ -281,7 +281,16 @@ def _resolve_exit(df: pd.DataFrame, bar_idx: int,
       2. Take-profit hit
       3. Regime exit (η fallback sustained low)
       4. Time stop (bars_in_trade ≥ MAX)
+
+    Never exits on the entry bar (bar_idx == entry_idx). See GRAHAM's
+    _resolve_exit for the same guard + reasoning — both engines record
+    entry_idx = t+1 and are revisited in the next loop iteration, so
+    without this we'd fire exits before the position had a full bar
+    to develop.
     """
+    if bar_idx <= entry_idx:
+        return None
+
     high = float(df["high"].iloc[bar_idx])
     low = float(df["low"].iloc[bar_idx])
     close = float(df["close"].iloc[bar_idx])

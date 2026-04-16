@@ -403,7 +403,17 @@ def _resolve_exit(df: pd.DataFrame, t: int, trade: dict,
       3. Regime-crit exit (η went above upper — cede to KEPOS-style fade)
       4. Trend break (EMA_fast cross EMA_slow against position)
       5. Time stop
+
+    Never exits on the entry bar itself. A trade is recorded with
+    entry_idx = t+1 (enters at next bar's open), and the main loop
+    visits t+1 on its next iteration — without this guard any exit
+    predicate that was already true at t+1 would fire before the
+    position even had a chance to breathe, producing 100% duration=0
+    phantom trades that only bleed C1+C2 costs.
     """
+    if t <= trade["entry_idx"]:
+        return None
+
     direction = trade["direction"]
     stop = trade["stop"]
     high = float(df["high"].iloc[t])

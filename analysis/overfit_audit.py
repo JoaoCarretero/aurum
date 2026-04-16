@@ -276,13 +276,16 @@ def _test_slippage(trades, slippage_fn=None):
             s = test_bp * 0.0001
             total = 0
             for t in trades:
-                entry = t["entry"]
-                exit_p = t["exit_p"]
-                size = t["size"]
-                d = t["direction"]
+                entry = t.get("entry") or t.get("entry_price")
+                exit_p = t.get("exit_p") or t.get("exit_price")
+                size = t.get("size", 0)
+                d = t.get("direction", "")
+                if entry is None or exit_p is None or not size:
+                    continue
                 dur = t.get("duration", 1)
                 funding = FUNDING_PER_8H * dur / 32
-                if d == "BULLISH":
+                long_side = d in ("BULLISH", "LONG", "long", "bull")
+                if long_side:
                     pnl = size * (exit_p * (1 - COMMISSION - s) - entry * (1 + COMMISSION + s)) - size * entry * funding
                 else:
                     pnl = size * (entry * (1 - COMMISSION - s) - exit_p * (1 + COMMISSION + s)) + size * entry * funding
