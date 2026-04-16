@@ -228,7 +228,7 @@ def test_cluster_below_threshold():
     assert bool(out["cluster_active"].iloc[10]) == False
 
 
-from engines.phi import check_regime_gates, check_golden_trigger
+from engines.phi import check_regime_gates, check_golden_trigger, compute_scoring, phi_size
 
 
 def test_regime_gates_all_pass():
@@ -288,3 +288,55 @@ def test_golden_trigger_neither():
     out = check_golden_trigger(df, PhiParams())
     assert bool(out["trigger_long"].iloc[-1]) == False
     assert bool(out["trigger_short"].iloc[-1]) == False
+
+
+def test_scoring_full_confluence():
+    """5/5 confluences, perfect wick, aligned trends, all weights = 1.0 → omega_phi = 1.0."""
+    n = 10
+    df = pd.DataFrame({
+        "cluster_confluences": np.full(n, 5, dtype=np.int8),
+        "cluster_active": np.full(n, True),
+        "wick_ratio": np.full(n, 1.0),
+        "ema200_slope_1d": np.full(n, 0.5),
+        "ema200_slope_4h": np.full(n, 0.3),
+        "volume": np.full(n, 2000.0),
+        "vol_ma20": np.full(n, 1000.0),
+        "regime_ok": np.full(n, True),
+    })
+    out = compute_scoring(df, PhiParams())
+    assert abs(out["phi_score"].iloc[0] - 1.0) < 1e-6
+    assert abs(out["omega_phi"].iloc[0] - 1.0) < 1e-6
+
+
+def test_scoring_no_cluster():
+    """Low confluence + opposite trends + no volume + no regime → low omega_phi."""
+    n = 10
+    df = pd.DataFrame({
+        "cluster_confluences": np.full(n, 1, dtype=np.int8),
+        "cluster_active": np.full(n, False),
+        "wick_ratio": np.full(n, 0.5),
+        "ema200_slope_1d": np.full(n, 0.5),
+        "ema200_slope_4h": np.full(n, -0.3),   # opposite
+        "volume": np.full(n, 500.0),
+        "vol_ma20": np.full(n, 1000.0),
+        "regime_ok": np.full(n, False),
+    })
+    out = compute_scoring(df, PhiParams())
+    assert out["phi_score"].iloc[0] < 0.3
+    assert out["omega_phi"].iloc[0] < 0.618
+
+
+def test_sizing_respects_cap():
+    """Notional capped at 2% of equity regardless of phi_score."""
+    sz = phi_size(equity=10_000, entry=100.0, sl=99.0, phi_score=1.0, params=PhiParams())
+    # risk=100, stop_dist=1, size_raw=100, notional_raw=10000 (100% of equity)
+    # cap = 0.02 * 10000 = 200 → capped notional 200 → size = 2.0
+    assert sz["size_units"] == pytest.approx(2.0, rel=0.01)
+    assert sz["notional"] == pytest.approx(200.0, rel=0.01)
+
+
+def test_sizing_convex_with_phi_score():
+    """risk = equity*0.01*phi_score² → 4x ratio for 1.0 vs 0.5."""
+    hi = phi_size(equity=10_000, entry=100.0, sl=95.0, phi_score=1.0, params=PhiParams())
+    lo = phi_size(equity=10_000, entry=100.0, sl=95.0, phi_score=0.5, params=PhiParams())
+    assert hi["risk_usd"] == pytest.approx(4.0 * lo["risk_usd"], rel=0.01)

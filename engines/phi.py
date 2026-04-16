@@ -469,6 +469,73 @@ def check_golden_trigger(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
 
 
 # ════════════════════════════════════════════════════════════════════
+# Scoring (Phi_Score + Ω_PHI) and sizing (Golden Convex)
+# ════════════════════════════════════════════════════════════════════
+
+def compute_scoring(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
+    """Compute Phi_Score and Ω_PHI per spec.
+
+    Requires input columns:
+      cluster_confluences, wick_ratio,
+      ema200_slope_1d, ema200_slope_4h,
+      volume, vol_ma20, regime_ok
+    """
+    out = df.copy()
+    confluences = out["cluster_confluences"].astype(float)
+    rejection = out["wick_ratio"].astype(float).clip(0, 1)
+
+    s1 = out["ema200_slope_1d"].fillna(0)
+    s2 = out["ema200_slope_4h"].fillna(0)
+    tol = 1e-6
+    same_sign = ((s1 > tol) & (s2 > tol)) | ((s1 < -tol) & (s2 < -tol))
+    opposite = ((s1 > tol) & (s2 < -tol)) | ((s1 < -tol) & (s2 > tol))
+    trend_align = pd.Series(0.5, index=out.index)
+    trend_align.loc[same_sign] = 1.0
+    trend_align.loc[opposite] = 0.0
+
+    out["trend_alignment"] = trend_align
+    out["phi_score"] = (confluences / 5.0) * rejection * trend_align
+
+    volume_ok = (out["volume"] > out["vol_ma20"] * params.volume_mult).astype(float)
+    regime_ok = out["regime_ok"].astype(float)
+
+    out["omega_phi"] = (
+        params.w_phi_score * out["phi_score"]
+        + params.w_rejection * rejection
+        + params.w_volume * volume_ok
+        + params.w_trend * trend_align
+        + params.w_regime * regime_ok
+    )
+    return out
+
+
+def phi_size(equity: float, entry: float, sl: float,
+             phi_score: float, params: PhiParams) -> dict:
+    """Golden Convex sizing.
+
+    risk_usd = equity * risk_per_trade * phi_score²
+    size_units = risk_usd / |entry - sl|
+    notional capped at equity * notional_cap (recompute size if breached).
+    """
+    phi_score = max(0.0, min(1.0, float(phi_score)))
+    risk_usd = equity * params.risk_per_trade * (phi_score ** 2)
+    stop_dist = abs(entry - sl)
+    if stop_dist <= 0 or entry <= 0:
+        return {"size_units": 0.0, "notional": 0.0, "risk_usd": 0.0}
+    size_units = risk_usd / stop_dist
+    notional = size_units * entry
+    cap_notional = equity * params.notional_cap
+    if notional > cap_notional:
+        size_units = cap_notional / entry
+        notional = cap_notional
+    return {
+        "size_units": float(size_units),
+        "notional": float(notional),
+        "risk_usd": float(risk_usd),
+    }
+
+
+# ════════════════════════════════════════════════════════════════════
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 
