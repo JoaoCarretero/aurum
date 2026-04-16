@@ -22,7 +22,7 @@ the Status column, and add a dated entry to the Changelog at the bottom.
 | 1 | Identity-verified process control (D5) | **CRÍTICO** | ~1.5h | — | ✅ done 2026-04-11 |
 | 2 | Process observability UI | ALTO | ~2h | Fase 1 | ✅ done 2026-04-11 |
 | 3 | Per-strategy audit + L6/L7 across all engines | ALTO | multi-session | — | ✅ done 2026-04-11 (3.1/3.2/3.3 + 7 backlog items) |
-| 4 | Live trading guardrails (design + impl) | **CRÍTICO** | multi-session | Fase 1, brainstorming | 🟡 scaffold done (risk_gates / audit_trail / key_store); wiring + reconciliation pending |
+| 4 | Live trading guardrails (design + impl) | **CRÍTICO** | multi-session | Fase 1, brainstorming | 🟠 scaffold done + 4 wiring fixes 2026-04-16 (see Changelog); retry logic + contract tests + globals refactor still pending |
 
 **Severity legend:**
 - **CRÍTICO** — blocks going live with real money. Must land before any production engine spawns with funded keys.
@@ -467,6 +467,54 @@ Applies to all phases:
 ---
 
 ## Changelog
+
+### 2026-04-16 — Phase 4 wiring batch + full-system audit
+
+Full-system audit dispatched in parallel (5 agents covering live readiness,
+engine hygiene, tests, SSOT/config, docs drift). 37 findings triaged by
+severity — several confirmed false positives (import random, newton alias,
+deshaw "debug" prints = intentional CLI output). Real fixes this session:
+
+**Phase 4 wiring (4 P0/P1 items closed):**
+- `2b8c2b4` **P0 #1**: `gate_single_position` now receives `proposed_notional`.
+  New `_check_single_position_gate` helper called from `_open_position`
+  after CANARY scaling, before `place_order`. `risk_gates.json` ganha
+  `max_single_position_pct` por modo (live/arb_live = 25%, paper/demo/
+  testnet = 100% permissive). 4 new contract tests.
+- `4988122` **P0 #3**: `_guard_real_money_gates(mode, cfg)` em live.py init —
+  recusa start se live/arbitrage_live entrar com `cfg.is_default()` (ou
+  seja, `risk_gates.json` sumiu/malformado). 5 new contract tests.
+- `fe8688f` **P1 #9**: `_kill_switch_trigger` ganha kwargs opcionais
+  `gate`, `metric`, `threshold`; audit payload agora registra qual gate
+  disparou com que valor. 3 callers atualizados.
+- `dc8c07b` **P1 #8**: `_load_keys` devolve `(key, secret, source)` com
+  source ∈ {"encrypted","plaintext"}. Plaintext fallback loga WARN no
+  modo live. `OrderManager._key_source` exposto pra audit trail futuro.
+
+**SSOT cleanup não-Phase-4 mas complementar:**
+- `45c7ae0` `atomic_write` cria dir pai on-demand (previne órfãos .tmp em
+  primeira escrita de run nova).
+- `6b2b0ad` `config/engines.py` registry sincronizado (RENAISSANCE split-
+  brain fix — ENGINES apontava pra `core/harmonics.py`, PROC_ENGINES pra
+  `engines/renaissance.py`).
+- `67e96ac` `analysis/diagnostics.py` importa COMMISSION/LEVERAGE/
+  FUNDING_PER_8H do SSOT `config/params.py`.
+- `3ef1476` chart palette compartilhada em `analysis/_chart_palette.py`
+  (plots/report_html/overfit_audit deixam de redefinir 11 hex cada).
+
+**Pendente em Phase 4:**
+- **P0 #2**: retry logic em `place_order`/`close_position` com exponential
+  backoff. Falhas de rede viram `status=FAILED` sem tentar de novo.
+- **P0 #4**: `LIVE_MODE / TESTNET_MODE / DEMO_MODE` como flags globais
+  mutáveis em `engines/live.py:104-106`. Refactor pra config object
+  imutável com setter que bloqueia flip se posições abertas.
+- **P0 #5**: contract tests pra `place_order`, `close_position`,
+  `_kill_switch_trigger`. Grep atual = zero matches.
+- **P1 #7**: Telegram `/trigger_kill` com 2FA (hoje `/kill` só lê status).
+  Requer refactor do dispatcher sync → async.
+- **P1 #12**: falso positivo parcial — cooldown real é 4h max (16 candles
+  × 15min hardcoded), não 24h. Mas o 15min é hardcoded em `live.py:1692`
+  independente de `INTERVAL` — cleanup pendente.
 
 ### 2026-04-11 — Plan created
 
