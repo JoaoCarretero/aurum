@@ -7,6 +7,8 @@ import numpy as np
 from collections import defaultdict
 from pathlib import Path
 
+from config.params import COMMISSION, LEVERAGE, FUNDING_PER_8H
+
 
 def score_calibration(trades, step=0.02):
     """Bucket fino do score -> WR, expectancy, monotonicity."""
@@ -165,15 +167,19 @@ def ablation_test(trades):
 
 
 def execution_realism_test(trades):
-    """Stress test de slippage progressivo + breakeven."""
-    LEVERAGE, COMMISSION = 1.0, 0.0004
+    """Stress test de slippage progressivo + breakeven.
+
+    Todos os custos (COMMISSION, LEVERAGE, FUNDING_PER_8H) vem de
+    config/params.py — SSOT. `dur` esta em candles de 15min; dividir
+    por 32 converte pra numero de janelas de funding (8h = 32 candles).
+    """
     scenarios = {"CURRENT": 0.0003, "MODERATE": 0.0006, "PESSIMIST": 0.0012, "ADVERSARIAL": 0.0020}
     results = {}
     for name, slip in scenarios.items():
         new_pnls = []; flipped = 0
         for t in trades:
             entry, exit_p, size, d, dur = t["entry"], t["exit_p"], t["size"], t["direction"], t["duration"]
-            funding = 0.0001 * dur / 32
+            funding = FUNDING_PER_8H * dur / 32
             if d == "BULLISH":
                 pnl = size * (exit_p * (1 - COMMISSION - slip) - entry * (1 + COMMISSION + slip)) - size * entry * funding
             else:
@@ -187,7 +193,7 @@ def execution_realism_test(trades):
         s = test_slip * 0.0001; total = 0
         for t in trades:
             entry, exit_p, size, d, dur = t["entry"], t["exit_p"], t["size"], t["direction"], t["duration"]
-            funding = 0.0001 * dur / 32
+            funding = FUNDING_PER_8H * dur / 32
             if d == "BULLISH":
                 pnl = size * (exit_p * (1 - COMMISSION - s) - entry * (1 + COMMISSION + s)) - size * entry * funding
             else:
