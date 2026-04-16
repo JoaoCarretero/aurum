@@ -39,6 +39,8 @@ ENGINES = {
     "deshaw":      ("engines/deshaw.py",      "data/deshaw",       ""),
     "jump":        ("engines/jump.py",        "data/jump",         ""),
     "bridgewater": ("engines/bridgewater.py", "data/bridgewater",  ""),
+    "kepos":       ("engines/kepos.py",       "data/kepos",        "kepos_"),
+    "graham":      ("engines/graham.py",      "data/graham",       "graham_"),
 }
 
 def _snapshot(parent: Path, prefix: str) -> set[str]:

@@ -162,15 +162,16 @@ aurum.finance/
 │   ├── exchange_api.py        ← Unified exchange REST API
 │   └── ...
 ├── engines/                    ← Execution engines
-│   ├── backtest.py            ← CITADEL systematic momentum
+│   ├── citadel.py             ← CITADEL systematic momentum
 │   ├── live.py                ← Live engine (paper/demo/testnet/live)
-│   ├── arbitrage.py           ← JANE STREET cross-venue arbitrage
-│   ├── multistrategy.py       ← MILLENNIUM ensemble orchestrator
-│   ├── newton.py              ← DE SHAW pair cointegration
-│   ├── thoth.py               ← BRIDGEWATER macro sentiment
-│   ├── mercurio.py            ← JUMP order flow / microstructure
-│   ├── prometeu.py            ← TWO SIGMA ML meta-ensemble
-│   └── darwin.py              ← AQR evolutionary allocation
+│   ├── janestreet.py          ← JANE STREET cross-venue arbitrage
+│   ├── millennium.py          ← MILLENNIUM ensemble orchestrator
+│   ├── deshaw.py              ← DE SHAW pair cointegration
+│   ├── bridgewater.py         ← BRIDGEWATER macro sentiment
+│   ├── jump.py                ← JUMP order flow / microstructure
+│   ├── twosigma.py            ← TWO SIGMA ML meta-ensemble
+│   ├── aqr.py                 ← AQR evolutionary allocation
+│   └── renaissance.py         ← RENAISSANCE harmonic patterns
 ├── analysis/                   ← Analytics, walkforward, MC, plots
 ├── bot/telegram.py            ← Telegram notifications + commands
 ├── launcher.py                ← Bloomberg-terminal TkInter GUI
@@ -194,7 +195,8 @@ aurum.finance/
 | `JUMP`        | JUMP                | Jump Trading   | CVD divergence, imbalance, liquidation |
 | `TWO_SIGMA`   | TWO SIGMA           | Two Sigma      | ML meta-ensemble LightGBM |
 | `AQR`         | AQR                 | AQR Capital    | Evolutionary fitness allocation |
-| `CHRONOS`     | CHRONOS             | —              | HMM + GARCH + Hurst |
+| `MILLENNIUM`  | MILLENNIUM          | Millennium Mgmt | Multi-strategy pod orchestrator |
+| `WINTON`      | WINTON              | Winton Group   | HMM + GARCH + Hurst + seasonality (meta) |
 
 ### Pipeline de Sinais (CITADEL)
 

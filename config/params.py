@@ -265,6 +265,11 @@ BULL_LONG_MIN_PULLBACK_ATR = 0.15
 # ENGINE_INTERVALS + ENGINE_BASKETS = sweet-spot por engine validado por bateria
 # longa (360d+, bluechip/default, 6 overfit tests robustness).
 # Ver docs/longrun_battery_report_2026-04-14.md.
+#
+# Nota: só engines direcionais com OHLCV tradicional consomem estes dicts
+# (CITADEL, RENAISSANCE, DESHAW, JUMP, BRIDGEWATER). JANE_STREET (arb),
+# MILLENNIUM (orquestrador), TWO_SIGMA (meta-ensemble) e AQR (allocator)
+# não leem estes dicts — by-design. Não é gap.
 ENGINE_INTERVALS: dict[str, str] = {
     "CITADEL":     "15m",  # Sharpe +1.38 @ 15m default (360d, longrun 2026-04-14)
     "RENAISSANCE": "15m",  # Sharpe +5.65 @ 15m bluechip (6/6 overfit PASS, longrun 2026-04-14)
@@ -494,7 +499,7 @@ ARB_POSITION_SIZE_REF = 1000.0
 # their prerequisites are met. PROMETEU needs 1000+ trades,
 # DARWIN needs performance data from other engines, RENAISSANCE
 # needs statistical validation of harmonic patterns.
-FROZEN_ENGINES = ["PROMETEU", "DARWIN", "RENAISSANCE"]
+FROZEN_ENGINES = ["TWOSIGMA", "AQR", "RENAISSANCE"]
 
 # ── Ablation testing ─────────────────────────────────────────
 # Set to a component name to disable it during ablation runs.
