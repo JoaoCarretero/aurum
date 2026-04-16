@@ -101,6 +101,24 @@ if CANARY_CAPITAL_PCT <= 0.0 or CANARY_CAPITAL_PCT > 1.0:
 # Legacy alias — config loading moved to core.risk_gates.load_gate_config
 _load_risk_gate_config = load_gate_config
 
+# Modes that trade real capital. If risk_gates.json is missing, malformed,
+# or its section for these modes is absent, load_gate_config silently falls
+# back to permissive defaults (every gate off). That is safe for paper/demo
+# but catastrophic for real-money — _guard_real_money_gates() refuses start.
+_REAL_MONEY_MODES = frozenset({"live", "arbitrage_live"})
+
+
+def _guard_real_money_gates(mode: str, cfg: RiskGateConfig) -> None:
+    """Abort if a real-money mode is starting with permissive (default)
+    risk gates. Called right after load_gate_config in __init__."""
+    if mode in _REAL_MONEY_MODES and cfg.is_default():
+        raise RuntimeError(
+            f"REFUSING to start in {mode!r} mode with permissive risk-gate "
+            f"defaults. config/risk_gates.json is missing, malformed, or its "
+            f"{mode!r} section is absent. Every circuit breaker would be "
+            f"effectively off — fix the config before retrying."
+        )
+
 # ── CONFIG ────────────────────────────────────────────────────
 LIVE_MODE         = False          # False = PAPER  |  True = LIVE/TESTNET
 TESTNET_MODE      = False          # True = Binance Futures Testnet (testnet.binancefuture.com)
@@ -846,6 +864,7 @@ class LiveEngine:
         # just skip the new entry for this bar.
         _mode = self.orders._mode()
         self.risk_cfg = _load_risk_gate_config(_mode)
+        _guard_real_money_gates(_mode, self.risk_cfg)
         log.info(f"Risk gates loaded for mode={_mode}: "
                  f"dd={self.risk_cfg.max_daily_dd_pct}%  "
                  f"streak={self.risk_cfg.max_consecutive_losses}  "

@@ -394,3 +394,45 @@ class TestLiveEnginePlumbing:
         assert check(3_000).severity == "soft_block"
         # 20% = 2000 < cap → allow
         assert check(2_000).severity == "allow"
+
+
+# ────────────────────────────────────────────────────────────
+# _guard_real_money_gates — fail-safe for missing/malformed config
+# ────────────────────────────────────────────────────────────
+# Regra: se risk_gates.json sumiu ou não tem seção pro modo, load_gate_config
+# silenciosamente devolve RiskGateConfig() com defaults permissivos (todos
+# os gates efetivamente off). Pra paper/demo/testnet é ok. Pra live/arb_live
+# precisa abortar — operar com circuit breakers off pode queimar a banca.
+
+class TestRealMoneyGuard:
+    def _guard(self):
+        from engines.live import _guard_real_money_gates
+        return _guard_real_money_gates
+
+    def test_paper_with_defaults_is_ok(self):
+        # Paper/demo/testnet NÃO dispara guard mesmo com defaults permissivos.
+        self._guard()("paper", RiskGateConfig())  # no raise
+        self._guard()("demo", RiskGateConfig())
+        self._guard()("testnet", RiskGateConfig())
+        self._guard()("arbitrage_paper", RiskGateConfig())
+
+    def test_live_with_defaults_raises(self):
+        with pytest.raises(RuntimeError, match="REFUSING"):
+            self._guard()("live", RiskGateConfig())
+
+    def test_arbitrage_live_with_defaults_raises(self):
+        with pytest.raises(RuntimeError, match="arbitrage_live"):
+            self._guard()("arbitrage_live", RiskGateConfig())
+
+    def test_live_with_configured_cfg_is_ok(self):
+        # Config com pelo menos um valor não-default = passa.
+        cfg = RiskGateConfig(max_daily_dd_pct=5.0)  # diverge do 100% default
+        self._guard()("live", cfg)  # no raise
+
+    def test_live_loads_real_config_from_disk(self):
+        # Integration-ish: load_gate_config("live") deve retornar config
+        # não-default a partir do risk_gates.json shipped.
+        from core.risk_gates import load_gate_config
+        cfg = load_gate_config("live")
+        assert not cfg.is_default(), "live mode needs non-default risk gates"
+        self._guard()("live", cfg)  # no raise
