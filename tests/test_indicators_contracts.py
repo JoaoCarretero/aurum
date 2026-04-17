@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+import warnings
 
 from config.params import (
     ATR_PERIOD,
@@ -169,6 +170,13 @@ class TestIndicators:
     def test_regime_transition_is_boolean(self, uptrend_df):
         out = indicators(uptrend_df)
         assert out["regime_transition"].dtype == bool
+
+    def test_regime_transition_emits_no_fillna_downcast_warning(self, uptrend_df):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", FutureWarning)
+            indicators(uptrend_df)
+        messages = [str(w.message) for w in caught]
+        assert not any("Downcasting object dtype arrays on .fillna" in msg for msg in messages)
 
     def test_does_not_mutate_input(self, uptrend_df):
         cols_before = set(uptrend_df.columns)

@@ -46,9 +46,13 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     sign_past = np.sign(s200.shift(REGIME_TRANS_WINDOW))
     slope_flip = (sign_now != sign_past) & (sign_past != 0)
 
-    calm           = df["vol_regime"].isin(["LOW", "NORMAL"])
-    hot            = df["vol_regime"].isin(["HIGH", "EXTREME"])
-    vol_escalation = hot & calm.shift(REGIME_TRANS_WINDOW).fillna(True)
+    calm = df["vol_regime"].isin(["LOW", "NORMAL"])
+    hot = df["vol_regime"].isin(["HIGH", "EXTREME"])
+    calm_prev = calm.shift(REGIME_TRANS_WINDOW)
+    # Keep the shifted regime mask explicitly boolean to avoid pandas
+    # object downcasting warnings on fillna(True).
+    calm_prev = calm_prev.where(calm_prev.notna(), True).astype(bool)
+    vol_escalation = hot & calm_prev
 
     atr_ratio = (df["atr_pct"] /
                  df["atr_pct"].shift(REGIME_TRANS_WINDOW).replace(0, np.nan))
