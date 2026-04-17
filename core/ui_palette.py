@@ -88,3 +88,12 @@ TILE_CONTROL    = "#C9B584"   # AGED CREAM   — connections + command + setting
 TILE_DIM_FACTOR = 0.35
 
 FONT = "Consolas"
+
+# ── Mode color aliases (engines_live_view) ─────────────────────
+# Semantic pointers into the HL2 palette. The view consumes these
+# instead of CYAN/GREEN/AMBER/RED directly so future retuning of
+# mode semantics happens here, not at call sites.
+MODE_PAPER   = CYAN    # neutral — local simulation, no exchange
+MODE_DEMO    = GREEN   # safe — exchange demo (fake money, real feed)
+MODE_TESTNET = AMBER   # warning — real infrastructure, fake money
+MODE_LIVE    = RED     # danger — real money, real orders

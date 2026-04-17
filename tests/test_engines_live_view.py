@@ -29,3 +29,15 @@ class TestLiveReadySlugs:
         for slug, meta in ENGINES.items():
             assert "live_ready" in meta, f"{slug} missing live_ready flag"
             assert isinstance(meta["live_ready"], bool)
+
+
+class TestModeColorAliases:
+    def test_mode_aliases_map_to_existing_tokens(self):
+        from core.ui_palette import (
+            MODE_PAPER, MODE_DEMO, MODE_TESTNET, MODE_LIVE,
+            CYAN, GREEN, AMBER, RED,
+        )
+        assert MODE_PAPER == CYAN
+        assert MODE_DEMO == GREEN
+        assert MODE_TESTNET == AMBER
+        assert MODE_LIVE == RED
