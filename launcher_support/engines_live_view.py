@@ -78,3 +78,18 @@ def save_mode(mode: Mode, *, state_path: Path | None = None) -> None:
     block["mode"] = mode
     data["engines_live"] = block
     atomic_write_json(path, data)
+
+
+def live_confirm_ok(*, engine_name: str, user_input: str) -> bool:
+    """Case-sensitive, whitespace-strict match used by the LIVE modal."""
+    return user_input == engine_name
+
+
+def format_uptime(*, seconds: float | int | None) -> str:
+    """Render uptime compactly for bucket rows and cockpit headers."""
+    if seconds is None:
+        return "—"
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, _ = divmod(rem, 60)
+    return f"{h}h{m:02d}m" if h else f"{m}m"

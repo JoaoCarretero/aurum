@@ -114,3 +114,43 @@ class TestModePersistence:
         loaded = json.loads(sp.read_text())
         assert loaded["other_view"] == {"foo": 1}
         assert loaded["engines_live"]["mode"] == "testnet"
+
+
+class TestLiveConfirmValidates:
+    def test_exact_match_confirms(self):
+        from launcher_support.engines_live_view import live_confirm_ok
+        assert live_confirm_ok(engine_name="CITADEL", user_input="CITADEL") is True
+
+    def test_case_sensitive(self):
+        from launcher_support.engines_live_view import live_confirm_ok
+        assert live_confirm_ok(engine_name="CITADEL", user_input="citadel") is False
+
+    def test_trailing_space_rejected(self):
+        from launcher_support.engines_live_view import live_confirm_ok
+        assert live_confirm_ok(engine_name="CITADEL", user_input="CITADEL ") is False
+
+    def test_empty_rejected(self):
+        from launcher_support.engines_live_view import live_confirm_ok
+        assert live_confirm_ok(engine_name="CITADEL", user_input="") is False
+
+
+class TestFormatUptime:
+    def test_minutes_only(self):
+        from launcher_support.engines_live_view import format_uptime
+        assert format_uptime(seconds=42 * 60) == "42m"
+
+    def test_hours_and_minutes(self):
+        from launcher_support.engines_live_view import format_uptime
+        assert format_uptime(seconds=2 * 3600 + 14 * 60) == "2h14m"
+
+    def test_zero_seconds(self):
+        from launcher_support.engines_live_view import format_uptime
+        assert format_uptime(seconds=0) == "0m"
+
+    def test_sub_minute_rounds_down(self):
+        from launcher_support.engines_live_view import format_uptime
+        assert format_uptime(seconds=45) == "0m"
+
+    def test_none_returns_em_dash(self):
+        from launcher_support.engines_live_view import format_uptime
+        assert format_uptime(seconds=None) == "—"
