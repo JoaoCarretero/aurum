@@ -182,7 +182,7 @@ def compute_features(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
     wick = pd.concat([upper_wick, lower_wick], axis=1).max(axis=1)
     out["wick_ratio"] = (wick / total_range).clip(0, 1).fillna(0)
     out["body_ratio"] = (body / total_range).fillna(0)
-    out["vol_ma20"] = out["volume"].rolling(20).mean()
+    out["vol_ma20"] = out["vol"].rolling(20).mean()
     return out
 
 
@@ -382,10 +382,14 @@ def align_htfs_to_base(base: pd.DataFrame, htfs: dict[str, pd.DataFrame]) -> pd.
     `htfs` keys must be TF strings recognised by `_TF_MINUTES` in
     config.params (e.g. '1d', '4h', '1h', '15m')."""
     out = base.sort_values("time").reset_index(drop=True).copy()
+    # Normalise to ms resolution to avoid dtype mismatch between cached (ms) and
+    # freshly computed (us) timestamps when pandas merge_asof enforces dtype equality.
+    out["time"] = out["time"].astype("datetime64[ms]")
     for tf, htf_df in htfs.items():
         if htf_df is None or len(htf_df) == 0:
             continue
         shifted = _shift_htf_for_close(htf_df, tf).sort_values("time").reset_index(drop=True)
+        shifted["time"] = shifted["time"].astype("datetime64[ms]")
         suffix = f"_{tf}"
         htf_cols = [c for c in shifted.columns if c != "time"]
         shifted_ren = shifted.rename(columns={c: c + suffix for c in htf_cols})
@@ -423,7 +427,8 @@ def detect_cluster(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
             continue
         fib_vals = out[fc]
         if dc in out.columns:
-            dir_vals = out[dc].astype(np.int32).to_numpy()
+            # fillna(0) before astype to handle NaN rows from merge_asof (no matching HTF bar)
+            dir_vals = out[dc].fillna(0).astype(np.int32).to_numpy()
         else:
             dir_vals = np.zeros(n, dtype=np.int32)
         within = (fib_vals.notna()) & ((close - fib_vals).abs() <= tolerance)
@@ -461,7 +466,7 @@ def check_golden_trigger(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
     (RSI<38.2 for long / RSI>61.8 for short)."""
     out = df.copy()
     wick_ok = out["wick_ratio"] >= params.wick_ratio_min
-    vol_ok = out["volume"] > out["vol_ma20"] * params.volume_mult
+    vol_ok = out["vol"] > out["vol_ma20"] * params.volume_mult
     base = wick_ok & vol_ok
     out["trigger_long"] = (base & (out["rsi"] < params.rsi_long_max)).fillna(False)
     out["trigger_short"] = (base & (out["rsi"] > params.rsi_short_min)).fillna(False)
@@ -496,7 +501,7 @@ def compute_scoring(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
     out["trend_alignment"] = trend_align
     out["phi_score"] = (confluences / 5.0) * rejection * trend_align
 
-    volume_ok = (out["volume"] > out["vol_ma20"] * params.volume_mult).astype(float)
+    volume_ok = (out["vol"] > out["vol_ma20"] * params.volume_mult).astype(float)
     regime_ok = out["regime_ok"].astype(float)
 
     out["omega_phi"] = (
@@ -1029,9 +1034,66 @@ def _setup_logging(run_dir: Path) -> None:
 # CLI entry
 # ════════════════════════════════════════════════════════════════════
 
+def _print_summary(summary: dict) -> None:
+    print(f"\n  PHI — AURUM Finance Fibonacci Fractal Engine")
+    print(f"  {'='*60}")
+    print(f"  Total trades       : {summary['total_trades']}")
+    print(f"  Win rate           : {summary['win_rate']*100:.2f}%")
+    pf = summary['profit_factor']
+    pf_str = "inf" if pf == float("inf") else f"{pf:.3f}"
+    print(f"  Profit factor      : {pf_str}")
+    print(f"  Sharpe             : {summary['sharpe']:.3f}")
+    print(f"  Sortino            : {summary['sortino']:.3f}")
+    print(f"  Max drawdown       : {summary['max_drawdown']*100:.2f}%")
+    print(f"  Expectancy (R)     : {summary['expectancy_r']:.3f}")
+    print(f"  Final equity       : ${summary['final_equity']:,.2f}")
+    print(f"  Total PnL          : ${summary['total_pnl']:,.2f}")
+    vetos = summary.get("vetos", {})
+    if vetos:
+        print(f"\n  Vetos:")
+        for k, v in sorted(vetos.items(), key=lambda x: -x[1]):
+            print(f"    {k:20s} {v:>8d}")
+
+
 def main() -> int:
-    """Stub — implemented in Task 12."""
-    raise NotImplementedError
+    ap = argparse.ArgumentParser(description="PHI — AURUM Fibonacci Fractal Engine")
+    ap.add_argument("--symbols", default=None,
+                    help="Comma-separated list (default: SYMBOLS from config.params)")
+    ap.add_argument("--out", default="data/phi",
+                    help="Output base dir (default: data/phi)")
+    ap.add_argument("--threshold-cluster", type=int, default=None,
+                    help="Minimum TF confluences (default: 3)")
+    ap.add_argument("--omega-entry", type=float, default=None,
+                    help="Ω_PHI entry threshold (default: 0.618)")
+    ap.add_argument("--no-kill-switch", action="store_true")
+    args = ap.parse_args()
+
+    symbols = [s.strip() for s in args.symbols.split(",")] if args.symbols else list(SYMBOLS)
+    params = PhiParams()
+    if args.threshold_cluster is not None:
+        params.cluster_min_confluences = args.threshold_cluster
+    if args.omega_entry is not None:
+        params.omega_phi_entry = args.omega_entry
+    if args.no_kill_switch:
+        params.kill_daily = 1.0
+        params.kill_weekly = 1.0
+
+    ts = datetime.now().strftime("%Y-%m-%d_%H%M")
+    run_dir = Path(args.out) / ts
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s - %(message)s"
+    )
+    _setup_logging(run_dir)
+    log.info("PHI run starting: symbols=%s run_dir=%s", symbols, run_dir)
+
+    trades, summary = run_backtest(symbols, params, ACCOUNT_SIZE)
+    save_run(run_dir, trades, summary, params)
+    _print_summary(summary)
+    print(f"\n  Run saved to: {run_dir}")
+    return 0
 
 
 if __name__ == "__main__":

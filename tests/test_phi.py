@@ -16,7 +16,7 @@ def _synthetic_df(n: int = 600, seed: int = 42) -> pd.DataFrame:
     idx = pd.date_range("2024-01-01", periods=n, freq="5min")
     return pd.DataFrame({
         "time": idx, "open": open_, "high": high, "low": low,
-        "close": close, "volume": vol,
+        "close": close, "vol": vol,
     })
 
 
@@ -49,7 +49,7 @@ def test_zigzag_detects_alternating_pivots():
     low = close - 0.5
     idx = pd.date_range("2024-01-01", periods=n, freq="5min")
     df = pd.DataFrame({"time": idx, "open": close, "high": high, "low": low,
-                       "close": close, "volume": np.ones(n) * 1000})
+                       "close": close, "vol": np.ones(n) * 1000})
     df = compute_features(df, PhiParams())
     z = compute_zigzag(df, PhiParams())
     # Columns should exist
@@ -71,7 +71,7 @@ def test_zigzag_no_lookahead():
     low = close - rng.uniform(0.1, 0.8, n)
     idx = pd.date_range("2024-01-01", periods=n, freq="5min")
     df = pd.DataFrame({"time": idx, "open": close, "high": high, "low": low,
-                       "close": close, "volume": np.ones(n) * 1000})
+                       "close": close, "vol": np.ones(n) * 1000})
     df_full = compute_features(df, PhiParams())
     z_full = compute_zigzag(df_full, PhiParams())
     df_short = compute_features(df.iloc[:160].copy(), PhiParams())
@@ -264,11 +264,11 @@ def test_regime_gates_fail_on_adx():
 
 
 def test_golden_trigger_long():
-    """Long trigger: wick_ratio>=0.618, volume>MA20*1.272, RSI<38.2."""
+    """Long trigger: wick_ratio>=0.618, vol>MA20*1.272, RSI<38.2."""
     n = 50
     df = pd.DataFrame({
         "wick_ratio": np.full(n, 0.7),
-        "volume": np.full(n, 2000.0),
+        "vol": np.full(n, 2000.0),
         "vol_ma20": np.full(n, 1000.0),   # 2000 > 1272 ✓
         "rsi": np.full(n, 30.0),          # < 38.2 ✓
     })
@@ -281,7 +281,7 @@ def test_golden_trigger_neither():
     n = 50
     df = pd.DataFrame({
         "wick_ratio": np.full(n, 0.4),   # < 0.618 ✗
-        "volume": np.full(n, 2000.0),
+        "vol": np.full(n, 2000.0),
         "vol_ma20": np.full(n, 1000.0),
         "rsi": np.full(n, 50.0),
     })
@@ -299,7 +299,7 @@ def test_scoring_full_confluence():
         "wick_ratio": np.full(n, 1.0),
         "ema200_slope_1d": np.full(n, 0.5),
         "ema200_slope_4h": np.full(n, 0.3),
-        "volume": np.full(n, 2000.0),
+        "vol": np.full(n, 2000.0),
         "vol_ma20": np.full(n, 1000.0),
         "regime_ok": np.full(n, True),
     })
@@ -309,7 +309,7 @@ def test_scoring_full_confluence():
 
 
 def test_scoring_no_cluster():
-    """Low confluence + opposite trends + no volume + no regime → low omega_phi."""
+    """Low confluence + opposite trends + no vol + no regime → low omega_phi."""
     n = 10
     df = pd.DataFrame({
         "cluster_confluences": np.full(n, 1, dtype=np.int8),
@@ -317,7 +317,7 @@ def test_scoring_no_cluster():
         "wick_ratio": np.full(n, 0.5),
         "ema200_slope_1d": np.full(n, 0.5),
         "ema200_slope_4h": np.full(n, -0.3),   # opposite
-        "volume": np.full(n, 500.0),
+        "vol": np.full(n, 500.0),
         "vol_ma20": np.full(n, 1000.0),
         "regime_ok": np.full(n, False),
     })
