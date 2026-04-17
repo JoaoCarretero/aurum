@@ -39,6 +39,27 @@ SCRIPT_TO_KEY = {v["script"]: k for k, v in ENGINES.items()}
 # after a run-paper smoke test confirms the live entrypoint works.
 LIVE_READY_SLUGS = frozenset(k for k, v in ENGINES.items() if v.get("live_ready"))
 
+# Engines em quarentena — rodáveis mas sem edge confirmado OOS ou com
+# bugs documentados. Não vão pra paper/live sem re-calibração genuína
+# + DSR. Bloco 1 do plano de alinhamento 2026-04-17.
+#
+# Critérios de inclusão:
+#   - OOS Sharpe < 0 em janela representativa (COLLAPSED)
+#   - 0 trades em janela representativa (NON_FUNCTIONAL) sem fix de
+#     threshold aplicado
+#   - Bug estrutural documentado sem fix aprovado
+#   - Arquivado por docstring mas ainda no registry
+#
+# Consumo: launcher filtra em view "experimental"; CLI aurum_cli emite
+# warning ao rodar; orquestrador OOS audit pode incluir/excluir via flag.
+EXPERIMENTAL_SLUGS: frozenset[str] = frozenset({
+    "deshaw",    # oos_sharpe=-1.73 BEAR 2022 (cointegração quebra em regime shifts)
+    "graham",    # arquivado per docstring (4h overfit)
+    # kepos e medallion: re-avaliação pendente após fixes 2026-04-17
+    # (cost asymmetry + KEPOS threshold). Adicionar aqui se OOS re-run
+    # confirmar colapso após fixes.
+})
+
 # Process-manager names are still legacy in some UI/API surfaces. Keep the
 # mapping here so every consumer resolves to the same script/display pair.
 PROC_ENGINES = {
