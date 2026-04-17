@@ -980,8 +980,6 @@ def print_portfolio_gate_stats(reweighted):
         print(f"\n  Blocked:")
         for reason, n in sorted(blocked.items(), key=lambda kv: kv[1], reverse=True)[:8]:
             print(f"    {reason:24s} {n:>5d}")
-    if not any_kill:
-        print(f"    Nenhum — Sortino(R) manteve-se > {KILL_SWITCH_SORTINO} durante todo o período")
 
     # decay events
     decay_events = {"CITADEL": [], "RENAISSANCE": []}
