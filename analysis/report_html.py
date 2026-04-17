@@ -100,11 +100,12 @@ def _svg_axis_labels(values: list[float], w: float, h: float,
         cy = pad_y + frac * (h - 2 * pad_y)
         lines.append(
             f'<line x1="{pad_x}" y1="{cy:.1f}" x2="{w - pad_x}" y2="{cy:.1f}" '
-            f'stroke="{_BORDER}" stroke-width="0.5"/>'
+            f'stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>'
         )
         lines.append(
-            f'<text x="{pad_x - 6}" y="{cy + 4:.1f}" text-anchor="end" '
-            f'font-size="10" fill="{_GRAY}">{val:,.0f}</text>'
+            f'<text x="{pad_x - 8}" y="{cy + 4:.1f}" text-anchor="end" '
+            f'font-size="9" fill="{_GRAY}" opacity="0.7" '
+            f'font-variant-numeric="tabular-nums">{val:,.0f}</text>'
         )
     return "\n".join(lines)
 
@@ -161,22 +162,40 @@ def _svg_equity(eq: list[float], w: int = 900, h: int = 300) -> str:
             f'font-size="10" fill="{_GRAY}">{i}</text>'
         )
 
+    # Area-fill polygon: equity line down to break-even baseline
+    area_pts = list(pts) + [(pts[-1][0], be_y), (pts[0][0], be_y)]
+    area_str = _polyline_str(area_pts)
+
     return f'''<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg"
-     style="width:100%;max-width:{w}px;height:auto;background:{_PANEL};border-radius:8px;">
+     style="width:100%;max-width:{w}px;height:auto;background:transparent;border-radius:12px;">
+  <defs>
+    <linearGradient id="eq-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="{_GOLD}" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="{_GOLD}" stop-opacity="0.0"/>
+    </linearGradient>
+    <linearGradient id="eq-line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="{_GOLD}" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="{_GOLD}" stop-opacity="1.0"/>
+    </linearGradient>
+  </defs>
   {axis}
   {"".join(x_labels)}
-  <polygon points="{dd_poly_str}" fill="{_RED}" opacity="0.10"/>
+  <polygon points="{dd_poly_str}" fill="{_RED}" opacity="0.08"/>
+  <polygon points="{area_str}" fill="url(#eq-fill)"/>
   <line x1="{pad_x}" y1="{be_y:.1f}" x2="{w - pad_x}" y2="{be_y:.1f}"
-        stroke="{_GRAY}" stroke-width="1" stroke-dasharray="6,4" opacity="0.5"/>
-  <text x="{w - pad_x + 4}" y="{be_y + 4:.1f}" font-size="9" fill="{_GRAY}">break-even</text>
-  <polyline points="{pts_str}" stroke="{_GOLD}" fill="none" stroke-width="1.8" stroke-linejoin="round"/>
-  <circle cx="{peak_pt[0]:.1f}" cy="{peak_pt[1]:.1f}" r="4" fill="{_GREEN}"/>
-  <text x="{peak_pt[0]:.1f}" y="{peak_pt[1] - 8:.1f}" text-anchor="middle"
-        font-size="10" fill="{_GREEN}">{_fmt_money(peak_val)}</text>
-  <circle cx="{trough_pt[0]:.1f}" cy="{trough_pt[1]:.1f}" r="4" fill="{_RED}"/>
-  <text x="{trough_pt[0]:.1f}" y="{trough_pt[1] + 16:.1f}" text-anchor="middle"
-        font-size="10" fill="{_RED}">{_fmt_money(trough_val)}</text>
-  <text x="{w / 2}" y="18" text-anchor="middle" font-size="12" fill="{_GRAY}">EQUITY CURVE</text>
+        stroke="{_GRAY}" stroke-width="1" stroke-dasharray="4,4" opacity="0.35"/>
+  <text x="{w - pad_x + 4}" y="{be_y + 4:.1f}" font-size="9" fill="{_GRAY}"
+        letter-spacing="0.1em">break-even</text>
+  <polyline points="{pts_str}" stroke="url(#eq-line)" fill="none"
+            stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="{peak_pt[0]:.1f}" cy="{peak_pt[1]:.1f}" r="5" fill="{_GREEN}" opacity="0.35"/>
+  <circle cx="{peak_pt[0]:.1f}" cy="{peak_pt[1]:.1f}" r="3" fill="{_GREEN}"/>
+  <text x="{peak_pt[0]:.1f}" y="{peak_pt[1] - 10:.1f}" text-anchor="middle"
+        font-size="10" font-weight="700" fill="{_GREEN}">{_fmt_money(peak_val)}</text>
+  <circle cx="{trough_pt[0]:.1f}" cy="{trough_pt[1]:.1f}" r="5" fill="{_RED}" opacity="0.35"/>
+  <circle cx="{trough_pt[0]:.1f}" cy="{trough_pt[1]:.1f}" r="3" fill="{_RED}"/>
+  <text x="{trough_pt[0]:.1f}" y="{trough_pt[1] + 18:.1f}" text-anchor="middle"
+        font-size="10" font-weight="700" fill="{_RED}">{_fmt_money(trough_val)}</text>
 </svg>'''
 
 
@@ -228,11 +247,10 @@ def _svg_mc_paths(mc: dict, eq: list[float], w: int = 900, h: int = 300) -> str:
             )
 
     return f'''<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg"
-     style="width:100%;max-width:{w}px;height:auto;background:{_PANEL};border-radius:8px;">
+     style="width:100%;max-width:{w}px;height:auto;background:transparent;border-radius:12px;">
   {axis}
   {"".join(lines)}
   {"".join(ref_lines)}
-  <text x="{w / 2}" y="18" text-anchor="middle" font-size="12" fill="{_GRAY}">MONTE CARLO &mdash; {len(paths)} PATHS</text>
 </svg>'''
 
 
@@ -313,12 +331,10 @@ def _svg_mc_histogram(mc: dict, w: int = 900, h: int = 250, n_bins: int = 40) ->
         )
 
     return f'''<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg"
-     style="width:100%;max-width:{w}px;height:auto;background:{_PANEL};border-radius:8px;">
+     style="width:100%;max-width:{w}px;height:auto;background:transparent;border-radius:12px;">
   {"".join(bars)}
   {"".join(ref_lines)}
   {"".join(x_labels)}
-  <text x="{w / 2}" y="18" text-anchor="middle" font-size="12"
-        fill="{_GRAY}">FINAL EQUITY DISTRIBUTION &mdash; {len(finals)} SIMULATIONS</text>
 </svg>'''
 
 
@@ -331,11 +347,11 @@ def _metric_card(label: str, value: str, color: str = _WHITE) -> str:
     </div>'''
 
 
-def _section(title: str, content: str, id_: str = "") -> str:
+def _section(title: str, content: str, id_: str = "", kicker: str = "AURUM") -> str:
     id_attr = f' id="{id_}"' if id_ else ""
     return f'''<section{id_attr} class="report-section">
   <div class="section-head">
-    <div class="section-kicker">AURUM</div>
+    <div class="section-kicker">{kicker}</div>
     <h2>{title}</h2>
   </div>
   <div class="section-body">{content}</div>
@@ -343,13 +359,14 @@ def _section(title: str, content: str, id_: str = "") -> str:
 
 
 def _details_block(title: str, content: str, subtitle: str = "",
-                   open_: bool = False, tone: str = "neutral") -> str:
+                   open_: bool = False, tone: str = "neutral",
+                   kicker: str = "AURUM") -> str:
     open_attr = " open" if open_ else ""
     subtitle_html = f'<span class="details-subtitle">{subtitle}</span>' if subtitle else ""
     return f'''<details class="details-block tone-{tone}"{open_attr}>
   <summary>
     <div class="details-head">
-      <span class="details-kicker">AURUM</span>
+      <span class="details-kicker">{kicker}</span>
       <span class="details-title">{title}</span>
       {subtitle_html}
     </div>
@@ -536,7 +553,9 @@ def _build_result_box(all_trades: list[dict], eq: list[float],
       {_metric_card("Max DD", f"-{mdd_pct:.1f}%", _RED)}
       {_metric_card("PnL", _fmt_money(pnl), pnl_color)}
     </div>
-    <div class="summary-verdict" style="color:{v_color};">{verdict}</div>
+    <div class="verdict-row">
+      <div class="summary-verdict" style="color:{v_color};">{verdict}</div>
+    </div>
   </div>
 </section>'''
 
@@ -698,21 +717,23 @@ def _build_veto_section(all_vetos: dict) -> str:
     rows = []
     for reason, count in sorted_vetos:
         pct = count / total * 100
-        bar_w = pct  # percentage width directly
-        rows.append(f'''<div style="display:flex;align-items:center;margin-bottom:6px;gap:10px;">
-      <div style="width:180px;font-size:12px;color:{_WHITE};text-align:right;flex-shrink:0;">
-        {reason}
+        # Gradient color: gold for dominant, fading to muted purple for rare
+        intensity = min(1.0, count / (sorted_vetos[0][1] or 1))
+        if intensity > 0.66:
+            bar_grad = f"linear-gradient(90deg, {_GOLD}, {_GOLD} 85%, rgba(232,184,75,0.5))"
+        elif intensity > 0.33:
+            bar_grad = f"linear-gradient(90deg, {_PURPLE}, {_GOLD})"
+        else:
+            bar_grad = f"linear-gradient(90deg, {_PURPLE}, {_PURPLE})"
+        rows.append(f'''<div class="veto-row">
+      <div class="veto-label">{reason}</div>
+      <div class="veto-track">
+        <div class="veto-bar" style="width:{pct:.1f}%;background:{bar_grad};"></div>
       </div>
-      <div style="flex:1;background:{_BG};border-radius:3px;height:18px;position:relative;">
-        <div style="width:{bar_w:.1f}%;height:100%;background:{_PURPLE};border-radius:3px;
-                    opacity:0.7;"></div>
-      </div>
-      <div style="width:80px;font-size:12px;color:{_GRAY};flex-shrink:0;">
-        {count} ({pct:.1f}%)
-      </div>
+      <div class="veto-count"><span class="veto-n">{count:,}</span><span class="veto-pct">{pct:.1f}%</span></div>
     </div>''')
 
-    return "".join(rows)
+    return f'<div class="veto-grid">{"".join(rows)}</div>'
 
 
 # ── SVG trade charts per symbol ──────────────────────────────────
@@ -1436,6 +1457,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
                 subtitle="reality checks and concentration diagnostics",
                 open_=False,
                 tone="risk",
+                kicker="Reality Check",
             )
         except Exception:
             pass
@@ -1451,7 +1473,7 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
             <div style="height:16px;"></div>
             {mc_hist_svg}
             {mc_stats}
-        """, subtitle="distribution and drawdown stress", open_=False)
+        """, subtitle="distribution and drawdown stress", open_=False, kicker="Risk")
 
     # Walk-forward regime summary
     wf_regime_html = ""
@@ -1531,9 +1553,9 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
   .hero {{
     background: rgba(15, 18, 28, 0.92);
     border: 1px solid var(--border);
-    border-radius: 22px;
-    padding: 28px 30px 24px 30px;
-    margin-bottom: 24px;
+    border-radius: 24px;
+    padding: 32px 34px 28px 34px;
+    margin-bottom: 28px;
     box-shadow: 0 24px 80px rgba(0,0,0,0.35);
     backdrop-filter: blur(10px);
   }}
@@ -1552,54 +1574,71 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
     margin-bottom: 10px;
   }}
   .hero h1 {{
-    font-size: 36px;
-    line-height: 1.05;
-    letter-spacing: -0.03em;
-    margin-bottom: 8px;
+    font-size: 44px;
+    line-height: 1.0;
+    letter-spacing: -0.04em;
+    margin-bottom: 10px;
+    font-weight: 800;
+    background: linear-gradient(90deg, {_WHITE} 0%, {_GOLD} 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    display: inline-block;
   }}
   .hero-subtitle {{
     color: {_GRAY};
-    font-size: 14px;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }}
   .hero-badge {{
-    color: {_WHITE};
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.08);
+    color: {_GOLD};
+    background: rgba(232,184,75,0.08);
+    border: 1px solid rgba(232,184,75,0.25);
     border-radius: 999px;
-    padding: 10px 14px;
-    font-size: 12px;
+    padding: 10px 16px;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 700;
     white-space: nowrap;
   }}
   .hero-meta {{
     display: flex;
-    gap: 12px;
+    gap: 14px;
     flex-wrap: wrap;
-    margin-bottom: 14px;
+    margin-bottom: 18px;
   }}
   .hero-meta-item {{
+    flex: 1;
     min-width: 220px;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.06);
+    background: linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.012) 100%);
+    border: 1px solid rgba(255,255,255,0.05);
     border-radius: 14px;
-    padding: 12px 14px;
+    padding: 14px 18px;
   }}
   .hero-meta-item span {{
     display: block;
     color: {_GRAY};
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    margin-bottom: 6px;
+    letter-spacing: 0.18em;
+    margin-bottom: 8px;
   }}
   .hero-meta-item strong {{
     color: {_WHITE};
     font-size: 14px;
     font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
   }}
   .hero-config {{
     color: var(--muted);
-    font-size: 12px;
-    line-height: 1.9;
+    font-size: 11px;
+    line-height: 2.0;
+    letter-spacing: 0.04em;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.04);
   }}
   .executive-strip {{
     margin-bottom: 22px;
@@ -1612,6 +1651,9 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
     margin-bottom: 12px;
     padding: 0 2px;
   }}
+  .strip-header .section-kicker {{
+    color: var(--accent);
+  }}
   .strip-header h2 {{
     font-size: 18px;
     letter-spacing: -0.02em;
@@ -1619,88 +1661,138 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
   .strip-grid {{
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
+    gap: 16px;
   }}
   .summary-shell {{
-    margin-bottom: 28px;
+    margin-bottom: 32px;
   }}
   .summary-card {{
+    position: relative;
     background: linear-gradient(180deg, rgba(15,18,28,0.94) 0%, rgba(13,15,22,0.94) 100%);
     border: 1px solid var(--border);
-    border-radius: 22px;
-    padding: 24px 26px;
+    border-radius: 24px;
+    padding: 38px 32px 32px 32px;
     box-shadow: 0 24px 80px rgba(0,0,0,0.28);
+    overflow: hidden;
+  }}
+  .summary-card::before {{
+    content: "";
+    position: absolute;
+    top: 0; left: 30%; right: 30%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.5;
   }}
   .summary-balance {{
-    margin-bottom: 18px;
+    margin-bottom: 26px;
+    text-align: center;
   }}
   .summary-balance-label {{
     color: {_GRAY};
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
-    margin-bottom: 8px;
+    letter-spacing: 0.22em;
+    margin-bottom: 12px;
   }}
   .summary-balance-main {{
     display: flex;
-    gap: 12px;
+    gap: 14px;
     align-items: baseline;
+    justify-content: center;
     flex-wrap: wrap;
-    font-size: 36px;
+    font-size: 48px;
     font-weight: 700;
     letter-spacing: -0.03em;
+    line-height: 1.05;
   }}
   .summary-balance-main .muted {{
     color: {_WHITE};
-    opacity: 0.76;
+    opacity: 0.45;
+    font-size: 26px;
+    font-weight: 600;
   }}
   .summary-balance-main .arrow {{
     color: {_GRAY};
-    font-size: 24px;
+    font-size: 22px;
+    opacity: 0.6;
   }}
   .summary-balance-roi {{
-    margin-top: 6px;
-    font-size: 15px;
-    font-weight: 600;
+    margin-top: 10px;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
   }}
   .summary-grid {{
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 12px;
+    gap: 16px;
   }}
   .metric-card {{
-    background: rgba(255,255,255,0.03);
-    border: 1px solid var(--border);
+    position: relative;
+    background: linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.012) 100%);
+    border: 1px solid rgba(255,255,255,0.05);
     border-radius: 16px;
-    padding: 14px 16px;
+    padding: 18px 16px;
     min-width: 0;
+    min-height: 82px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+  }}
+  .metric-card::before {{
+    content: "";
+    position: absolute;
+    top: 0; left: 20%; right: 20%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.35;
   }}
   .metric-label {{
     color: {_GRAY};
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    margin-bottom: 8px;
+    letter-spacing: 0.14em;
+    margin-bottom: 10px;
   }}
   .metric-value {{
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 700;
     letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }}
+  .verdict-row {{
+    margin-top: 22px;
+    text-align: center;
   }}
   .summary-verdict {{
-    margin-top: 18px;
-    font-size: 12px;
-    letter-spacing: 0.18em;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 22px;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    background: rgba(255,255,255,0.03);
+    font-size: 11px;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
     font-weight: 700;
   }}
+  .summary-verdict::before {{
+    content: "";
+    display: inline-block;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 10px currentColor;
+  }}
   .report-section {{
-    background: rgba(15, 18, 28, 0.82);
-    border: 1px solid var(--border);
-    border-radius: 22px;
-    padding: 22px 24px;
-    margin-bottom: 22px;
-    box-shadow: 0 18px 56px rgba(0,0,0,0.22);
+    background: rgba(15, 18, 28, 0.55);
+    border: 1px solid rgba(255,255,255,0.035);
+    border-radius: 20px;
+    padding: 28px 30px;
+    margin-bottom: 26px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.18);
   }}
   .section-head {{
     display: flex;
@@ -1725,17 +1817,57 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
   .section-body {{
     overflow-x: auto;
   }}
+  .report-section table,
+  .details-body table {{
+    font-variant-numeric: tabular-nums;
+  }}
+  .report-section th,
+  .details-body th {{
+    padding-top: 10px;
+    padding-bottom: 12px;
+  }}
+  .report-section thead tr,
+  .details-body thead tr {{
+    border-bottom: 1px solid rgba(232,184,75,0.28) !important;
+  }}
+  .report-section tbody tr,
+  .details-body tbody tr {{
+    border-bottom: 1px solid rgba(255,255,255,0.035) !important;
+    transition: background 0.15s;
+  }}
+  .report-section tbody tr:hover,
+  .details-body tbody tr:hover {{
+    background: rgba(232,184,75,0.04) !important;
+  }}
+  .report-section tbody tr:last-child,
+  .details-body tbody tr:last-child {{
+    border-bottom: none !important;
+  }}
+  .report-section tbody td,
+  .details-body tbody td {{
+    border-bottom: none !important;
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+  }}
   .details-block {{
-    background: rgba(15, 18, 28, 0.78);
-    border: 1px solid var(--border);
+    background: rgba(15, 18, 28, 0.55);
+    border: 1px solid rgba(255,255,255,0.035);
     border-radius: 20px;
-    margin-bottom: 18px;
+    margin-bottom: 20px;
     overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.16);
+    transition: border-color 0.2s;
+  }}
+  .details-block:hover {{
+    border-color: rgba(232,184,75,0.18);
+  }}
+  .details-block[open] {{
+    border-color: rgba(232,184,75,0.14);
   }}
   .details-block summary {{
     list-style: none;
     cursor: pointer;
-    padding: 18px 20px;
+    padding: 20px 26px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1775,14 +1907,102 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
     color: var(--text);
   }}
   .details-body {{
-    padding: 0 20px 20px 20px;
-    border-top: 1px solid var(--border);
+    padding: 4px 26px 24px 26px;
+    border-top: 1px solid rgba(255,255,255,0.04);
   }}
   .tone-risk {{
     border-color: rgba(232,93,93,0.24);
   }}
+  .veto-grid {{
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }}
+  .veto-row {{
+    display: grid;
+    grid-template-columns: 220px 1fr 130px;
+    align-items: center;
+    gap: 16px;
+  }}
+  .veto-label {{
+    font-size: 12px;
+    color: {_WHITE};
+    text-align: right;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    letter-spacing: 0.02em;
+  }}
+  .veto-track {{
+    background: rgba(255,255,255,0.035);
+    border-radius: 999px;
+    height: 10px;
+    overflow: hidden;
+    position: relative;
+  }}
+  .veto-bar {{
+    height: 100%;
+    border-radius: 999px;
+    box-shadow: 0 0 12px rgba(232,184,75,0.25);
+    transition: width 0.3s;
+  }}
+  .veto-count {{
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    justify-content: flex-start;
+    font-variant-numeric: tabular-nums;
+  }}
+  .veto-n {{
+    color: {_WHITE};
+    font-size: 13px;
+    font-weight: 700;
+  }}
+  .veto-pct {{
+    color: {_GRAY};
+    font-size: 11px;
+  }}
+  @media (max-width: 720px) {{
+    .veto-row {{ grid-template-columns: 1fr; gap: 4px; }}
+    .veto-label {{ text-align: left; }}
+  }}
   footer {{
     opacity: 0.9;
+  }}
+  .report-footer {{
+    position: relative;
+    text-align: center;
+    padding: 32px 0 16px 0;
+    margin-top: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }}
+  .report-footer::before {{
+    content: "";
+    position: absolute;
+    top: 0; left: 35%; right: 35%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, {_GOLD}, transparent);
+    opacity: 0.4;
+  }}
+  .footer-mark {{
+    color: {_GOLD};
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.4em;
+  }}
+  .footer-meta {{
+    color: {_GRAY};
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-variant-numeric: tabular-nums;
+  }}
+  .footer-dot {{
+    opacity: 0.4;
   }}
   @media (max-width: 960px) {{
     .container {{ padding: 20px 18px 40px 18px; }}
@@ -1811,25 +2031,29 @@ def generate_report(all_trades, eq, mc, cond, ratios, mdd_pct, wf, wf_regime,
 
 {institutional_html}
 
-{_section("Equity Curve", equity_svg, "equity")}
+{_section("Equity Curve", equity_svg, "equity", kicker="Capital Trajectory")}
 
-{_section("Performance by Symbol", symbol_table, "symbols")}
+{_section("Performance by Symbol", symbol_table, "symbols", kicker="Performance")}
 
 {audit_html}
 
 {mc_html}
 
-{_details_block("Trade Inspector", trade_inspector_html, subtitle="per-trade replay and execution context", open_=False) if trade_inspector_html else ""}
+{_details_block("Trade Inspector", trade_inspector_html, subtitle="per-trade replay and execution context", open_=False, kicker="Forensics") if trade_inspector_html else ""}
 
-{_details_block("Edge by Omega Score Range", omega_table, subtitle="score stratification and expectancy", open_=False)}
+{_details_block("Edge by Omega Score Range", omega_table, subtitle="score stratification and expectancy", open_=False, kicker="Edge Attribution")}
 
-{_details_block("Walk-Forward Analysis", wf_table + wf_regime_html, subtitle="stability outside the in-sample slice", open_=False)}
+{_details_block("Walk-Forward Analysis", wf_table + wf_regime_html, subtitle="stability outside the in-sample slice", open_=False, kicker="Stability")}
 
-{_details_block("Veto Filters", veto_html, subtitle="dominant rejection reasons during scan", open_=False)}
+{_details_block("Veto Filters", veto_html, subtitle="dominant rejection reasons during scan", open_=False, kicker="Diagnostics")}
 
-<footer style="text-align:center;padding:24px 0;border-top:1px solid {_BORDER};
-               margin-top:32px;font-size:11px;color:{_GRAY};">
-  AURUM Finance &middot; {engine_name} &middot; Generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+<footer class="report-footer">
+  <div class="footer-mark">AURUM</div>
+  <div class="footer-meta">
+    <span>{engine_name}</span>
+    <span class="footer-dot">&middot;</span>
+    <span>Generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</span>
+  </div>
 </footer>
 
 </div>
