@@ -95,20 +95,56 @@ O colapso desse run foi o sinal que tirou o BRIDGEWATER. Próxima baseline
 
 ---
 
+## Baseline 360d · config atual pós-grid (D_liberal)
+
+Commit `<TBD>` — gate afrouxado depois de sweep de 4 configs via
+`tools/millennium_gate_grid.py`.
+
+Comparação 360d native side-by-side:
+
+| Métrica    | A_baseline | D_liberal | Δ |
+|------------|-----------:|----------:|---:|
+| trades     | 117        | **136**   | +19 (+16 %) |
+| WR         | 84.6 %     | 82.4 %    | −2.2 pp |
+| Sharpe     | 5.69       | **6.08**  | +0.39 |
+| Sortino    | 7.85       | **8.89**  | +1.05 |
+| Calmar     | 28.6       | **29.9**  | +1.3 |
+| ROI        | 22.3 %     | **26.3 %**| +4.0 pp |
+| MDD        | 1.61 %     | 1.63 %    | +0.02 pp |
+| PnL        | $2 231     | **$2 633**| +18 % |
+| MC pct_pos | 100 %      | 100 %     | = |
+| MC worst_dd| 1.61 %     | 1.63 %    | = |
+| RoR        | 0 %        | 0 %       | = |
+
+Por engine em D_liberal:
+- CITADEL      n=16  WR=81.2 %  PnL +$490
+- JUMP         n=46  WR=73.9 %  PnL +$1 116
+- RENAISSANCE  n=74  WR=87.8 %  PnL +$1 027
+
+Parâmetros afrouxados (vs Codex original):
+- `JUMP_MIN_SCORE_BASE`      0.80 → 0.79
+- `JUMP_MIN_SCORE_WEAK`      0.82 → 0.80  (era kill-switch de facto)
+- `JUMP_MIN_SCORE_STRESSED`  0.84 → 0.81  (só 2 % de score passava)
+- `PORTFOLIO_MIN_WEIGHT.JUMP`        0.32 → 0.25
+- `PORTFOLIO_CHALLENGER_RATIO`       0.92 → 0.85
+- `PORTFOLIO_REGIME_COOLDOWN_MULT.CHOP` 2.0 → 1.5
+- `PORTFOLIO_MIN_ACCEPTED_SHARE.JUMP`  0.25 → 0.35
+
+---
+
 ## Próximos passos pra trabalhar no Millennium
 
-1. **Baseline fresh 60–90 d com pesos atuais** — em execução agora em
-   background (`echo '1\n60\n...' | python engines/millennium.py`).
-   Esperado: Sharpe positivo, sem domínio de uma engine só, MDD saudável.
-2. **Rodar shadow 24 h no VPS** — com MILLENNIUM CORE OPERATIONAL para
-   validar edge ao vivo sem capital real.
-3. **Refinar ENGINE_NATIVE_INTERVALS** se baseline mostrar alguma
-   engine colocando trades em intervalo não validado OOS.
-4. **Decidir fate dos pesos fantasmas (R3)** — remover
+1. **Rodar shadow 24 h no VPS com a config D_liberal** — validar
+   edge ao vivo sem capital real.
+2. **Refinar ENGINE_NATIVE_INTERVALS** se shadow mostrar engine
+   colocando trades em intervalo não validado OOS.
+3. **Decidir fate dos pesos fantasmas (R3)** — remover
    `CITADEL_CAPITAL_WEIGHT` + `RENAISSANCE_CAPITAL_WEIGHT` da seção
    legada de `ensemble_reweight`.
-5. **Avaliar streaming adapters pra JUMP e RENAISSANCE** — pré-requisito
+4. **Avaliar streaming adapters pra JUMP e RENAISSANCE** — pré-requisito
    pra shadow virar execução real.
+5. **Segundo grid fechado** se shadow apontar vazamento de edge
+   específico (apenas com hipótese escrita antes, anti-fishing).
 
 ---
 

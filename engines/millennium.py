@@ -120,12 +120,19 @@ ENGINE_DRAWDOWN_WARN_R = 2.0
 ENGINE_DRAWDOWN_HARD_R = 4.0
 ENGINE_DRAWDOWN_MIN_FACTOR = 0.45
 PORTFOLIO_EXECUTION_ENABLED = True
+# Gate config ajustada via tools/millennium_gate_grid.py 180d (2026-04-17):
+# config "D_liberal" dominou baseline em Sharpe (+1.53), Sortino (+3.17),
+# PnL 2.5x, +19 trades (JUMP +18, CIT +2, REN -1), custo MDD +0.5pp.
+# Pesos + thresholds afrouxados pra deixar JUMP trabalhar em janelas
+# curtas onde score recente ainda nao estabilizou.
 PORTFOLIO_MIN_WEIGHT = {
-    "JUMP":        0.32,
-    "RENAISSANCE": 0.22,
+    "JUMP":        0.25,   # antes 0.32 — JUMP raramente atingia 0.32 em
+    "RENAISSANCE": 0.22,   # stretches de REN dominante
     "CITADEL":     0.18,
 }
-PORTFOLIO_CHALLENGER_RATIO = 0.92
+PORTFOLIO_CHALLENGER_RATIO = 0.85      # antes 0.92 — menos strict pra
+                                        # challenger passar quando leader
+                                        # tem vantagem marginal
 PORTFOLIO_CHALLENGER_MAX_GAP = 0.06
 PORTFOLIO_GLOBAL_COOLDOWN_BARS = 1
 PORTFOLIO_STRATEGY_COOLDOWN_BARS = {
@@ -136,18 +143,20 @@ PORTFOLIO_STRATEGY_COOLDOWN_BARS = {
 PORTFOLIO_REGIME_COOLDOWN_MULT = {
     "BULL": 1.0,
     "BEAR": 1.5,
-    "CHOP": 2.0,
+    "CHOP": 1.5,            # antes 2.0 — CHOP cooldown 4 bars matava JUMP
+                            # (sinais order-flow tem validade curta)
 }
 PORTFOLIO_ACCEPTED_WINDOW = 80
 PORTFOLIO_MIN_ACCEPTED_SHARE = {
     "CITADEL": 0.12,
     "RENAISSANCE": 0.22,
-    "JUMP": 0.25,
+    "JUMP": 0.35,           # antes 0.25 — diversity_override mais generoso
+                            # pro JUMP quando fica tempo sem passar
 }
 JUMP_RECENT_QUALITY_WINDOW = 30
-JUMP_MIN_SCORE_BASE = 0.80
-JUMP_MIN_SCORE_WEAK = 0.82
-JUMP_MIN_SCORE_STRESSED = 0.84
+JUMP_MIN_SCORE_BASE = 0.79       # antes 0.80 — 1pp abaixo do p25 histórico
+JUMP_MIN_SCORE_WEAK = 0.80       # antes 0.82 — era kill-switch de facto
+JUMP_MIN_SCORE_STRESSED = 0.81   # antes 0.84 — idem, 2% passage
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 ENSEMBLE_WINDOW    = 30    # trades lookback para scoring rolling
