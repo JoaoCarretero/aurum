@@ -308,12 +308,171 @@ def _refresh_footer(state):
 
 
 def _render_master_list(state, launcher):
-    """Stub — filled in Task 8."""
+    """Mount the 3-bucket master list on state['master_host']."""
     host = state["master_host"]
     for w in host.winfo_children():
         w.destroy()
-    tk.Label(host, text="(master list — task 8)",
-             fg=DIM, bg=BG, font=(FONT, 8)).pack(pady=20)
+
+    from config.engines import ENGINES, LIVE_READY_SLUGS
+    try:
+        from core.proc import list_procs
+        procs = list_procs()
+    except Exception:
+        procs = []
+    running = running_slugs_from_procs(procs)
+
+    live_items: list[tuple[str, dict, dict]] = []
+    ready_items: list[tuple[str, dict]] = []
+    research_items: list[tuple[str, dict]] = []
+    for slug, meta in ENGINES.items():
+        live_ready = slug in LIVE_READY_SLUGS
+        bucket = assign_bucket(
+            slug=slug,
+            is_running=slug in running,
+            live_ready=live_ready,
+        )
+        if bucket == "LIVE":
+            live_items.append((slug, meta, running[slug]))
+        elif bucket == "READY":
+            ready_items.append((slug, meta))
+        else:
+            research_items.append((slug, meta))
+
+    # Scrollable container
+    canvas = tk.Canvas(host, bg=BG, highlightthickness=0)
+    vbar = tk.Scrollbar(host, orient="vertical", command=canvas.yview)
+    inner = tk.Frame(canvas, bg=BG)
+    inner.bind("<Configure>",
+               lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=inner, anchor="nw")
+    canvas.configure(yscrollcommand=vbar.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    vbar.pack(side="right", fill="y")
+
+    # Default selection: first LIVE, else first READY, else first RESEARCH
+    if state.get("selected_slug") is None:
+        if live_items:
+            state["selected_slug"] = live_items[0][0]
+            state["selected_bucket"] = "LIVE"
+        elif ready_items:
+            state["selected_slug"] = ready_items[0][0]
+            state["selected_bucket"] = "READY"
+        elif research_items:
+            state["selected_slug"] = research_items[0][0]
+            state["selected_bucket"] = "RESEARCH"
+
+    _render_bucket(inner, "LIVE", live_items, state)
+    _render_bucket(inner, "READY LIVE", ready_items, state)
+    _render_bucket(inner, "RESEARCH", research_items, state)
+
+    total = len(live_items) + len(ready_items) + len(research_items)
+    state["counts_lbl"].configure(
+        text=f"{total} engines  ·  {len(live_items)} live")
+
+
+def _render_bucket(parent, title, items, state):
+    if not items:
+        return
+    header = tk.Frame(parent, bg=BG)
+    header.pack(fill="x", pady=(8, 2))
+    tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
+    tk.Label(header, text=f"{title}", font=(FONT, 7, "bold"),
+             fg=AMBER, bg=BG).pack(side="left")
+    tk.Label(header, text=f"  · {len(items)}", font=(FONT, 7),
+             fg=DIM, bg=BG).pack(side="left")
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
+
+    is_live_bucket = title == "LIVE"
+    is_research = title == "RESEARCH"
+    for tup in items:
+        if is_live_bucket:
+            slug, meta, proc = tup
+            _render_row_live(parent, slug, meta, proc, state)
+        elif is_research:
+            slug, meta = tup
+            _render_row_research(parent, slug, meta, state)
+        else:
+            slug, meta = tup
+            _render_row_ready(parent, slug, meta, state)
+
+
+def _select_slug(state, slug, bucket):
+    """Update selection and re-render master + detail."""
+    state["selected_slug"] = slug
+    state["selected_bucket"] = bucket
+    state["refresh"]()
+
+
+def _row_base(parent, slug, state, is_selected):
+    bg = BG3 if is_selected else BG
+    row = tk.Frame(parent, bg=bg, cursor="hand2")
+    # left selection bar (3px amber when selected)
+    tk.Frame(row, bg=(AMBER_B if is_selected else BG), width=3).pack(side="left", fill="y")
+    row.pack(fill="x", pady=1)
+    return row
+
+
+def _render_row_live(parent, slug, meta, proc, state):
+    sel = state.get("selected_slug") == slug
+    row = _row_base(parent, slug, state, is_selected=sel)
+    bg = row["bg"]
+    tk.Label(row, text="●", fg=GREEN, bg=bg,
+             font=(FONT, 9, "bold"), padx=4).pack(side="left")
+    tk.Label(row, text=meta.get("display", slug.upper()),
+             fg=WHITE, bg=bg, font=(FONT, 9, "bold")).pack(side="left")
+    mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
+    if mode_key in _MODE_ORDER:
+        tk.Label(row, text=f" {mode_key.upper()} ",
+                 fg=BG, bg=_MODE_COLORS[mode_key],
+                 font=(FONT, 7, "bold"), padx=4, pady=1).pack(side="left", padx=(6, 0))
+    started = proc.get("started")
+    if started:
+        try:
+            from datetime import datetime as _dt
+            secs = (_dt.now() - _dt.fromisoformat(started)).total_seconds()
+            tk.Label(row, text=format_uptime(seconds=secs),
+                     fg=DIM2, bg=bg, font=(FONT, 8)).pack(side="left", padx=(8, 0))
+        except Exception:
+            pass
+    for w in (row,) + tuple(row.winfo_children()):
+        w.bind("<Button-1>", lambda _e, _s=slug: _select_slug(state, _s, "LIVE"))
+
+
+def _render_row_ready(parent, slug, meta, state):
+    sel = state.get("selected_slug") == slug
+    row = _row_base(parent, slug, state, is_selected=sel)
+    bg = row["bg"]
+    tk.Label(row, text=meta.get("display", slug.upper()),
+             fg=WHITE, bg=bg, font=(FONT, 9, "bold"),
+             padx=8).pack(side="left")
+    sub = _subtitle_for(slug, meta)
+    if sub:
+        tk.Label(row, text=sub, fg=DIM, bg=bg,
+                 font=(FONT, 7)).pack(side="left", padx=(4, 0))
+    for w in (row,) + tuple(row.winfo_children()):
+        w.bind("<Button-1>", lambda _e, _s=slug: _select_slug(state, _s, "READY"))
+
+
+def _render_row_research(parent, slug, meta, state):
+    sel = state.get("selected_slug") == slug
+    row = _row_base(parent, slug, state, is_selected=sel)
+    bg = row["bg"]
+    tk.Label(row, text="🔒", fg=DIM, bg=bg,
+             font=(FONT, 8), padx=4).pack(side="left")
+    tk.Label(row, text=meta.get("display", slug.upper()),
+             fg=DIM, bg=bg, font=(FONT, 9)).pack(side="left")
+    sub = _subtitle_for(slug, meta)
+    if sub:
+        tk.Label(row, text=sub, fg=DIM2, bg=bg,
+                 font=(FONT, 7)).pack(side="left", padx=(4, 0))
+    for w in (row,) + tuple(row.winfo_children()):
+        w.bind("<Button-1>", lambda _e, _s=slug: _select_slug(state, _s, "RESEARCH"))
+
+
+def _subtitle_for(slug, meta) -> str:
+    """Tagline fallback — extended later to read DB / BRIEFINGS."""
+    desc = meta.get("desc") or ""
+    return desc[:44]
 
 
 def _render_detail(state, launcher):
