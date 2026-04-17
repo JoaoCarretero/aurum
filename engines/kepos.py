@@ -86,19 +86,23 @@ class KeposParams:
     hawkes_min_events: int = 30
 
     # Regime trigger.
-    # Candle-level calibration (2026-04-16 sweep 730d / 15m / invert=True /
+    # Candle-level calibration (2026-04-16 sweep / invert=True /
     # k_sigma=1.0 / eta_critical=0.75):
-    #   bluechip (20 syms):
+    #   730d layer1 (10 syms):
     #     sustained_bars=3  → Sharpe 0.68, DD 24.6%
-    #     sustained_bars=5  → Sharpe 0.83, DD 16.5%
-    #     sustained_bars=10 → Sharpe 1.08, DD 11.6% (peak)
-    #     sustained_bars=15 → Sharpe 1.08, DD 15.5% (plateau)
-    #   layer1 (10 syms, no XRP/low-liq altcoins):
-    #     sustained_bars=7  → Sharpe 1.43, DD 10.87%
-    #     sustained_bars=10 → Sharpe 1.50, DD 10.75% (peak — recommended live)
-    #     sustained_bars=12 → Sharpe 1.44, DD 10.63%
-    # Default lifted 5 → 10. Recommended basket: layer1. SOL still carries
-    # ~51% of PnL (single-asset concentration warning stands).
+    #     sustained_bars=10 → Sharpe 1.50, DD 10.75% (tp=1.8 default)
+    #     sustained_bars=10 + tp_atr=3.0 → Sharpe 1.89, DD 12.8%
+    #     sustained_bars=10 + tp_atr=4.0 → Sharpe 2.37, DD 8.0% (730d peak)
+    #   1095d layer1 (3-year validation of the same configs):
+    #     default (tp=1.8)  → Sharpe 0.19, DD 18.9%
+    #     tp_atr=2.5        → Sharpe -0.03, DD 19.3%
+    #     tp_atr=3.0        → Sharpe 0.26, DD 22.5%
+    #     tp_atr=4.0        → Sharpe 0.88, DD 15.7% (3y best, 1/6 audit)
+    # Insight: the 730d tp=4.0 peak doesn't hold in 3 years — Sharpe collapses
+    # from 2.37 to 0.88. The default (sustained=10, tp=1.8) remains the most
+    # robust all-purpose config. Engine has marginal multi-year edge; SOL
+    # carries 51–73% of PnL depending on period (single-asset dependency).
+    # Do NOT register in FROZEN_ENGINES without walk-forward 6/6 in 3+ years.
     eta_critical: float = 0.95
     eta_exit: float = 0.85
     eta_sustained_bars: int = 10
@@ -728,6 +732,19 @@ def main() -> int:
                     help="Bars of sustained η>=critical required to fire entry")
     ap.add_argument("--invert", action="store_true",
                     help="Invert direction: ride the extension instead of fading (H1-INV)")
+    # Entry filter and exit knobs (for sweeps without touching config.params).
+    ap.add_argument("--price-ext-sigma", type=float, default=None,
+                    help="|cum_N return| / σ threshold for price extension filter")
+    ap.add_argument("--atr-ratio", type=float, default=None,
+                    help="atr_expansion_ratio threshold")
+    ap.add_argument("--stop-atr", type=float, default=None,
+                    help="stop_atr_mult (stop distance in ATR units)")
+    ap.add_argument("--tp-atr", type=float, default=None,
+                    help="tp_atr_mult (take-profit distance in ATR units)")
+    ap.add_argument("--max-bars", type=int, default=None,
+                    help="max_bars_in_trade (time stop)")
+    ap.add_argument("--risk-pct", type=float, default=None,
+                    help="max_pct_equity per trade (0.02 == 2 percent)")
     args = ap.parse_known_args()[0]
 
     basket_name = args.basket or "default"
@@ -757,6 +774,18 @@ def main() -> int:
         params.eta_sustained_bars = int(args.eta_sustained)
     if args.invert:
         params.invert_direction = True
+    if args.price_ext_sigma is not None:
+        params.price_ext_sigma = float(args.price_ext_sigma)
+    if args.atr_ratio is not None:
+        params.atr_expansion_ratio = float(args.atr_ratio)
+    if args.stop_atr is not None:
+        params.stop_atr_mult = float(args.stop_atr)
+    if args.tp_atr is not None:
+        params.tp_atr_mult = float(args.tp_atr)
+    if args.max_bars is not None:
+        params.max_bars_in_trade = int(args.max_bars)
+    if args.risk_pct is not None:
+        params.max_pct_equity = float(args.risk_pct)
     if params.eta_exit >= params.eta_critical:
         raise SystemExit(
             f"eta_exit ({params.eta_exit}) must be < eta_critical "

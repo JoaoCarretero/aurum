@@ -13,19 +13,28 @@ Pipeline:
 
 Edge status (2026-04-16)
 ------------------------
-Defaults (NEWTON_ZSCORE_ENTRY=2.0) are flagged "NÃO USAR EM LIVE" — 18 prior
-iterations and no edge in crypto universe. 730d sweep confirmed:
-  defaults:           1741t ROI -15.4% Sharpe -0.68 DD 29.5%  (2/6 PASS)
-  z=2.5 exit=0.5:     same scale, worse audit                 (3/6 PASS)
-  z=3.0 exit=0.0 pvalue=0.05:           1060t ROI +3.09% Sharpe +0.14  (3/6 PASS)
-  z=3.0 exit=0.5 pvalue=0.05 hl=300:    1063t ROI +1.21% Sharpe +0.055 (3/6 PASS)
-  z=3.5 pvalue=0.05:  worse (over-selective)
-  z=3.0 exit=0.8/1.0: worse (over-protective, misses convergence)
-  4h:                 still negative
-First break-even config ever found. CLI overrides --z-entry / --z-exit /
---pvalue / --hl-max / --max-hold / --size-mult enable further sweeps
-without touching config.params. Engine remains experimental — no live
-registration until walk-forward survives in 3+ years of data.
+Defaults (NEWTON_ZSCORE_ENTRY=2.0) flagged "NÃO USAR EM LIVE" — 18 prior
+iterations, no edge. 2026-04-16 sweep cracked it by loosening pvalue:
+  730d bluechip 1h:
+    defaults z=2.0:                  1741t ROI -15.4%  Sharpe -0.68   (2/6)
+    z=3.0 exit=0.0 pvalue=0.05:      1060t ROI  +3.1%  Sharpe +0.14   (3/6)
+    z=3.0 exit=0.0 pvalue=0.10 hl=300: 1487t ROI +27.3% Sharpe +1.01  (5/6 WARN)
+    z=3.0 exit=0.0 pvalue=0.15 hl=300: 1571t ROI +33.6% Sharpe +1.15  (5/6 WARN) ★
+    z=3.5 pvalue=0.05:               regress (over-selective)
+    4h / layer1 / majors:            fail (no pairs or catastrophic)
+  1095d bluechip 1h validation:
+    z=3.0 pvalue=0.10:                933t ROI +26.9%  Sharpe +1.02   (4/6 FAIL-A)
+    z=3.0 pvalue=0.15 hl=300:         933t ROI +29.8%  Sharpe +1.05   (4/6 FAIL-A) ★
+Walk-forward shows one negative window (W3) in 3y, others solid.
+ATOMUSDT concentration 59% in 1095d (was ARB 48% in 730d — different
+symbol carries depending on period).
+
+Recommended config: `--z-entry 3.0 --z-exit 0.0 --pvalue 0.15 --hl-max 300`.
+Engine is now a real candidate but not FROZEN-ready until walk-forward
+survives 6/6 formal; the W3 negative needs understanding.
+
+CLI overrides --z-entry / --z-exit / --z-stop / --pvalue / --hl-max /
+--max-hold / --size-mult enable sweeps without touching config.params.
 """
 import sys
 if sys.stdout.encoding != "utf-8":
