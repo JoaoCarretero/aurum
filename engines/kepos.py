@@ -85,10 +85,16 @@ class KeposParams:
     hawkes_smooth_span: int = 5
     hawkes_min_events: int = 30
 
-    # Regime trigger
+    # Regime trigger.
+    # Candle-level calibration (2026-04-16 sweep on 730d bluechip/15m/invert):
+    # sustained_bars=3 → Sharpe 0.68, DD 24.6%
+    # sustained_bars=5 → Sharpe 0.83, DD 16.5%
+    # sustained_bars=10 → Sharpe 1.08, DD 11.6% (peak)
+    # sustained_bars=15 → Sharpe 1.08, DD 15.5% (plateau)
+    # Default lifted from 5 → 10 after the sweep.
     eta_critical: float = 0.95
     eta_exit: float = 0.85
-    eta_sustained_bars: int = 5
+    eta_sustained_bars: int = 10
     eta_exit_sustained_bars: int = 2
 
     # Price extension filter

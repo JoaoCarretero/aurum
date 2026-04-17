@@ -30,6 +30,17 @@ Discipline
 - AURUM cost model imported from config.params.
 - Backtest-first; no ENGINE_INTERVALS / FROZEN registration until edge
   validated against the bypass baseline.
+
+Edge status (2026-04-16)
+------------------------
+- 1h (730d, default defaults): no edge. WR ~35-41% with symmetric R:R → EV<0.
+- 4h (1460d, relaxed η 0.65/0.90): η gate strictly beats baseline on all
+  metrics BUT both are catastrophically negative (baseline ROI -1380%,
+  gated ROI -144%). Trend-follow 4h crypto has no positive edge in this
+  universe.
+- H2-INV (mean-reversion in ENDO) already rejected in prior session.
+Engine remains experimental until a TF / trigger with positive baseline
+is found. Do NOT register in FROZEN_ENGINES.
 """
 
 from __future__ import annotations
