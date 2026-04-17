@@ -102,6 +102,9 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
     """
     funding_limit, oi_limit, ls_limit = _sentiment_limits(window_days)
     sentiment = {}
+    funding_ok = 0
+    oi_ok = 0
+    ls_ok = 0
     for sym in symbols:
         log.info(f"  fetching sentiment  ·  {sym}  "
                  f"(funding={funding_limit} oi={oi_limit} ls={ls_limit})")
@@ -112,18 +115,22 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
         if fr_df is not None and len(fr_df) >= 10:
             data["funding_df"] = fr_df
             data["funding_z"] = funding_zscore(fr_df, window=THOTH_FUNDING_WINDOW)
+            funding_ok += 1
         else:
             data["funding_z"] = None
 
         # Open Interest
         oi_df = fetch_open_interest(sym, period="15m", limit=oi_limit, end_time_ms=end_time_ms)
         data["oi_df"] = oi_df
+        if oi_df is not None and len(oi_df) >= 10:
+            oi_ok += 1
 
         # Long/Short ratio
         ls_df = fetch_long_short_ratio(sym, period="15m", limit=ls_limit, end_time_ms=end_time_ms)
         if ls_df is not None and len(ls_df) >= 5:
             data["ls_signal"] = ls_ratio_signal(ls_df)
             data["ls_df"] = ls_df
+            ls_ok += 1
         else:
             data["ls_signal"] = None
 
@@ -131,6 +138,18 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
         log.info(f"    funding={'✓' if data.get('funding_z') is not None else '✗'}  "
                  f"oi={'✓' if oi_df is not None else '✗'}  "
                  f"ls={'✓' if data.get('ls_signal') is not None else '✗'}")
+
+    if end_time_ms is not None:
+        if oi_ok == 0 or ls_ok == 0:
+            raise RuntimeError(
+                "historical OI/LS sentiment unavailable for OOS window; "
+                "refusing to run BRIDGEWATER with funding-only degraded inputs"
+            )
+        if funding_ok == 0:
+            raise RuntimeError(
+                "historical funding sentiment unavailable for OOS window; "
+                "refusing to run BRIDGEWATER without reproducible sentiment inputs"
+            )
 
     return sentiment
 

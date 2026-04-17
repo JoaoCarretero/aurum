@@ -33,11 +33,15 @@ forensic session that followed the checkpoint.
 ## Validation
 
 - Contract tests:
-  - `pytest tests/test_bridgewater_contracts.py -q` → `2 passed`
+  - `pytest tests/test_bridgewater_contracts.py -q` → `3 passed`
 - Comparable reruns executed with `--basket bluechip`:
   - `BEAR`: `--days 360 --end 2023-01-01`
   - `BULL`: `--days 360 --end 2021-07-01`
   - `CHOP`: `--days 300 --end 2020-03-01`
+- Fail-closed rerun executed after the hardening patch:
+  - `bridgewater.py --days 360 --end 2023-01-01 --basket bluechip --no-menu`
+  - Outcome: the engine now aborts with `historical OI/LS sentiment unavailable`
+    instead of silently degrading to funding-only OOS.
 
 ## Before vs After
 
@@ -73,6 +77,9 @@ justify the thesis.
 - It does not rehabilitate BRIDGEWATER, because the dominant problem now is the
   upstream OI/LS sentiment pipeline being absent or unusable for the tested
   windows.
+- The safe operational fix is fail-closed behavior for historical OOS windows:
+  if BRIDGEWATER cannot fetch reproducible OI/LS sentiment, it should refuse to
+  run instead of printing attractive but invalid metrics.
 - Without a functioning OI/LS path, the current OOS does not validate the
   intended strategy design.
 - No robust edge was established.

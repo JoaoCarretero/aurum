@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from engines import bridgewater
 
@@ -84,3 +85,25 @@ def test_collect_sentiment_propagates_end_time_to_all_fetchers(monkeypatch):
     assert seen["funding"][1] == 1234567890
     assert seen["oi"][1] == 1234567890
     assert seen["ls"][1] == 1234567890
+
+
+def test_collect_sentiment_fails_closed_when_historical_oi_ls_unavailable(monkeypatch):
+    def _funding(sym, limit=0, end_time_ms=None):
+        return pd.DataFrame(
+            {
+                "time": pd.date_range("2026-01-01", periods=10, freq="8h"),
+                "funding_rate": [0.001] * 10,
+            }
+        )
+
+    monkeypatch.setattr(bridgewater, "fetch_funding_rate", _funding)
+    monkeypatch.setattr(bridgewater, "fetch_open_interest", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bridgewater, "fetch_long_short_ratio", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        bridgewater,
+        "funding_zscore",
+        lambda df, window=30: pd.Series([0.0] * len(df), index=df.index),
+    )
+
+    with pytest.raises(RuntimeError, match="historical OI/LS sentiment unavailable"):
+        bridgewater.collect_sentiment(["BTCUSDT"], end_time_ms=1234567890, window_days=30)
