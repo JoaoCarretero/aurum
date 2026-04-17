@@ -476,9 +476,107 @@ def _subtitle_for(slug, meta) -> str:
 
 
 def _render_detail(state, launcher):
-    """Stub — filled in Task 9+."""
     host = state["detail_host"]
     for w in host.winfo_children():
         w.destroy()
-    tk.Label(host, text="(detail — task 9)",
-             fg=DIM, bg=BG, font=(FONT, 8)).pack(pady=20)
+
+    slug = state.get("selected_slug")
+    bucket = state.get("selected_bucket")
+    if not slug:
+        tk.Label(host, text="(no selection)", fg=DIM, bg=BG,
+                 font=(FONT, 8)).pack(pady=20)
+        return
+
+    from config.engines import ENGINES
+    meta = ENGINES.get(slug, {})
+
+    card = tk.Frame(host, bg=PANEL,
+                    highlightbackground=BORDER, highlightthickness=1)
+    card.pack(fill="both", expand=True)
+
+    if bucket == "RESEARCH":
+        _render_detail_research(card, slug, meta, state, launcher)
+    elif bucket == "READY":
+        _render_detail_ready(card, slug, meta, state, launcher)
+    elif bucket == "LIVE":
+        _render_detail_live(card, slug, meta, state, launcher)
+
+
+def _render_detail_research(parent, slug, meta, state, launcher):
+    name = meta.get("display", slug.upper())
+    desc = meta.get("desc", "")
+
+    head = tk.Frame(parent, bg=PANEL)
+    head.pack(fill="x", padx=12, pady=(10, 4))
+    tk.Label(head, text=name, fg=AMBER, bg=PANEL,
+             font=(FONT, 11, "bold")).pack(side="left")
+    tk.Label(head, text=" [ RESEARCH ONLY ] ",
+             fg=BG, bg=HAZARD, font=(FONT, 7, "bold"),
+             padx=6, pady=2).pack(side="right")
+
+    if desc:
+        tk.Label(parent, text=desc, fg=DIM, bg=PANEL,
+                 font=(FONT, 8), anchor="w", justify="left",
+                 wraplength=520).pack(fill="x", padx=12, pady=(0, 8))
+
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
+
+    note = tk.Frame(parent, bg=PANEL)
+    note.pack(fill="x", padx=12, pady=12)
+    tk.Label(note, text="⚠", fg=HAZARD, bg=PANEL,
+             font=(FONT, 12, "bold")).pack(side="left", padx=(0, 8))
+    tk.Label(
+        note,
+        text=("Essa engine ainda não tem entrypoint live validado.\n"
+              "Rode em backtest: EXECUTE → BACKTEST → " + name),
+        fg=HAZARD, bg=PANEL, font=(FONT, 8),
+        anchor="w", justify="left",
+    ).pack(side="left", fill="x", expand=True)
+
+    actions = tk.Frame(parent, bg=PANEL)
+    actions.pack(fill="x", padx=12, pady=(8, 12))
+    _action_btn(actions, "GO TO BACKTEST", AMBER,
+                lambda: _go_to_backtest(launcher, slug))
+    _action_btn(actions, "VIEW CODE", DIM,
+                lambda: _view_code(launcher, meta.get("script", "")))
+
+
+def _action_btn(parent, label, color, cmd):
+    b = tk.Label(parent, text=f"  {label}  ",
+                 fg=color, bg=BG3,
+                 font=(FONT, 8, "bold"),
+                 cursor="hand2", padx=4, pady=6)
+    b.pack(side="left", padx=(0, 8))
+    b.bind("<Button-1>", lambda _e: cmd())
+    b.bind("<Enter>", lambda _e, _b=b, _c=color: _b.configure(fg=BG, bg=_c))
+    b.bind("<Leave>", lambda _e, _b=b, _c=color: _b.configure(fg=_c, bg=BG3))
+    return b
+
+
+def _go_to_backtest(launcher, slug):
+    """Bounce to EXECUTE → BACKTEST, pre-selecting this engine if possible."""
+    fn = getattr(launcher, "_strategies_backtest", None)
+    if callable(fn):
+        fn()
+
+
+def _view_code(launcher, script_path):
+    if not script_path:
+        return
+    try:
+        from code_viewer import CodeViewer
+        CodeViewer(launcher, script_path)
+    except Exception:
+        pass
+
+
+def _render_detail_ready(parent, slug, meta, state, launcher):
+    """Stub — filled in Task 10."""
+    tk.Label(parent, text=f"(ready — task 10) {slug}",
+             fg=DIM, bg=PANEL, font=(FONT, 8)).pack(pady=20)
+
+
+def _render_detail_live(parent, slug, meta, state, launcher):
+    """Stub — filled in Task 11."""
+    tk.Label(parent, text=f"(live — task 11) {slug}",
+             fg=DIM, bg=PANEL, font=(FONT, 8)).pack(pady=20)
