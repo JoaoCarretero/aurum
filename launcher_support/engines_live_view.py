@@ -570,10 +570,169 @@ def _view_code(launcher, script_path):
         pass
 
 
+# Config defaults for the READY skin's inline config row.
+_PERIOD_OPTS   = [("30D", "30"), ("90D", "90"), ("180D", "180"), ("365D", "365")]
+_BASKET_OPTS   = [("DEFAULT", ""), ("TOP12", "2"), ("DEFI", "3"), ("L1", "4"),
+                  ("L2", "5"), ("AI", "6"), ("MEME", "7"), ("MAJORS", "8"),
+                  ("BLUECHIP", "9")]
+_LEVERAGE_OPTS = [("1x", "1.0"), ("2x", "2.0"), ("3x", "3.0"), ("5x", "5.0")]
+
+
 def _render_detail_ready(parent, slug, meta, state, launcher):
-    """Stub — filled in Task 10."""
-    tk.Label(parent, text=f"(ready — task 10) {slug}",
-             fg=DIM, bg=PANEL, font=(FONT, 8)).pack(pady=20)
+    name = meta.get("display", slug.upper())
+    desc = meta.get("desc", "")
+
+    head = tk.Frame(parent, bg=PANEL)
+    head.pack(fill="x", padx=12, pady=(10, 4))
+    tk.Label(head, text=name, fg=AMBER, bg=PANEL,
+             font=(FONT, 11, "bold")).pack(side="left")
+    tk.Label(head, text=" READY ", fg=BG, bg=GREEN,
+             font=(FONT, 7, "bold"), padx=6, pady=2).pack(side="right")
+
+    if desc:
+        tk.Label(parent, text=desc, fg=DIM, bg=PANEL,
+                 font=(FONT, 8), anchor="w", justify="left",
+                 wraplength=520).pack(fill="x", padx=12, pady=(0, 8))
+
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
+
+    cfg_store = state.setdefault("config", {})
+    cfg = cfg_store.setdefault(slug, {"period": "90", "basket": "", "leverage": "2.0"})
+
+    cfg_frame = tk.Frame(parent, bg=PANEL)
+    cfg_frame.pack(fill="x", padx=12, pady=(10, 8))
+    tk.Label(cfg_frame, text="CONFIG", fg=AMBER_D, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(anchor="w", pady=(0, 4))
+    _config_row(cfg_frame, "Period",   _PERIOD_OPTS,   cfg, "period", state)
+    _config_row(cfg_frame, "Basket",   _BASKET_OPTS,   cfg, "basket", state)
+    _config_row(cfg_frame, "Leverage", _LEVERAGE_OPTS, cfg, "leverage", state)
+
+    mode = state["mode"]
+    run_color = _MODE_COLORS[mode]
+    run_frame = tk.Frame(parent, bg=PANEL)
+    run_frame.pack(fill="x", padx=12, pady=(8, 10))
+    btn = tk.Label(
+        run_frame,
+        text=f"  RUN IN {mode.upper()} MODE  ",
+        fg=BG, bg=run_color,
+        font=(FONT, 11, "bold"),
+        cursor="hand2", padx=8, pady=10,
+    )
+    btn.pack(fill="x")
+    btn.bind("<Button-1>",
+             lambda _e: _run_engine(launcher, slug, meta, state))
+
+    actions = tk.Frame(parent, bg=PANEL)
+    actions.pack(fill="x", padx=12, pady=(0, 12))
+    _action_btn(actions, "VIEW CODE", DIM,
+                lambda: _view_code(launcher, meta.get("script", "")))
+    _action_btn(actions, "PAST RUNS", DIM,
+                lambda: _past_runs(launcher, slug))
+
+
+def _config_row(parent, label, opts, cfg_dict, cfg_key, state):
+    row = tk.Frame(parent, bg=PANEL)
+    row.pack(fill="x", pady=1)
+    tk.Label(row, text=f"  {label:<10}", fg=DIM, bg=PANEL,
+             font=(FONT, 8)).pack(side="left")
+    for disp, val in opts:
+        active = cfg_dict.get(cfg_key) == val
+        fg = BG if active else DIM2
+        bg = AMBER if active else BG3
+        pill = tk.Label(row, text=f" {disp} ",
+                        fg=fg, bg=bg, font=(FONT, 7, "bold"),
+                        cursor="hand2", padx=4, pady=1)
+        pill.pack(side="left", padx=(0, 3))
+        pill.bind("<Button-1>",
+                  lambda _e, _v=val, _k=cfg_key, _d=cfg_dict, _s=state:
+                      _set_cfg(_d, _k, _v, _s))
+
+
+def _set_cfg(cfg_dict, key, val, state):
+    cfg_dict[key] = val
+    refresh = state.get("refresh")
+    if callable(refresh):
+        refresh()
+
+
+def _run_engine(launcher, slug, meta, state):
+    mode = state["mode"]
+    cfg = (state.get("config") or {}).get(slug) or {}
+    name = meta.get("display", slug.upper())
+    script = meta.get("script", "")
+    desc = meta.get("desc", "")
+
+    def _spawn():
+        fn = getattr(launcher, "_exec_live_inline", None)
+        if callable(fn):
+            fn(name, script, desc, mode, cfg)
+
+    if mode == "live":
+        _confirm_live_modal(launcher, name, on_confirm=_spawn)
+    else:
+        _spawn()
+
+
+def _confirm_live_modal(launcher, engine_name, *, on_confirm):
+    """Ritual modal for LIVE mode — user must type the engine name."""
+    top = tk.Toplevel()
+    top.title("LIVE EXECUTION")
+    top.configure(bg=BG)
+    top.geometry("420x240")
+    top.resizable(False, False)
+    top.transient()
+    top.grab_set()
+
+    tk.Label(top, text=f"LIVE EXECUTION — {engine_name}",
+             fg=RED, bg=BG, font=(FONT, 10, "bold")).pack(pady=(14, 4))
+    tk.Label(
+        top,
+        text=(f"Você está prestes a ligar {engine_name} em modo LIVE.\n"
+              "Real money, real orders."),
+        fg=WHITE, bg=BG, font=(FONT, 8), justify="center",
+    ).pack(pady=(0, 10))
+    tk.Label(top, text=f"Digite  {engine_name}  pra confirmar:",
+             fg=DIM, bg=BG, font=(FONT, 8)).pack()
+
+    var = tk.StringVar()
+    entry = tk.Entry(top, textvariable=var, bg=BG3, fg=WHITE,
+                     insertbackground=WHITE, font=(FONT, 10),
+                     width=28, justify="center",
+                     highlightbackground=BORDER, highlightthickness=1)
+    entry.pack(pady=8)
+    entry.focus_set()
+
+    row = tk.Frame(top, bg=BG)
+    row.pack(pady=(6, 0))
+    cancel = tk.Label(row, text="  CANCEL  ", fg=DIM, bg=BG3,
+                      font=(FONT, 8, "bold"), cursor="hand2",
+                      padx=4, pady=6)
+    cancel.pack(side="left", padx=8)
+    cancel.bind("<Button-1>", lambda _e: top.destroy())
+
+    confirm = tk.Label(row, text="  CONFIRM & RUN  ",
+                       fg=DIM2, bg=BG3,
+                       font=(FONT, 8, "bold"), cursor="arrow",
+                       padx=4, pady=6)
+    confirm.pack(side="left", padx=8)
+
+    def _on_change(*_):
+        ok = live_confirm_ok(engine_name=engine_name, user_input=var.get())
+        if ok:
+            confirm.configure(fg=BG, bg=RED, cursor="hand2")
+            confirm.bind("<Button-1>",
+                         lambda _e: (top.destroy(), on_confirm()))
+        else:
+            confirm.configure(fg=DIM2, bg=BG3, cursor="arrow")
+            confirm.unbind("<Button-1>")
+    var.trace_add("write", _on_change)
+    top.bind("<Escape>", lambda _e: top.destroy())
+
+
+def _past_runs(launcher, slug):
+    fn = getattr(launcher, "_data_center", None)
+    if callable(fn):
+        fn()
 
 
 def _render_detail_live(parent, slug, meta, state, launcher):
