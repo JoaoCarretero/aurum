@@ -2,90 +2,62 @@
 
 ## Summary
 
-| Engine / File         | Hits | OK | REVIEW | LEAK |
-|-----------------------|------|----|--------|------|
-| engines/citadel.py    |   1  |  1 |   0    |   0  |
-| engines/kepos.py      |   4  |  4 |   0    |   0  |
-| engines/medallion.py  |   2  |  2 |   0    |   0  |
-| core/signals.py       |   2  |  2 |   0    |   0  |
-| **TOTAL**             | **9**|**9**|  **0** | **0**|
+| Engine / File | Hits | OK | REVIEW | LEAK |
+| --- | --- | --- | --- | --- |
+| engines/citadel.py | 1 | 1 | 0 | 0 |
+| engines/kepos.py | 4 | 4 | 0 | 0 |
+| engines/medallion.py | 2 | 2 | 0 | 0 |
+| core/signals.py | 2 | 2 | 0 | 0 |
+| TOTAL | 9 | 9 | 0 | 0 |
 
 **Verdict: NO LEAKS DETECTED.**
-All 9 hits are legitimate patterns. The `iloc[t+1]` pattern is consistently
-used only to read next-bar open price as the execution price (signal is
-decided at bar t, trade executes at open of bar t+1). This is the correct
-"decide-now, execute-next-bar" paradigm — not look-ahead bias.
 
----
+Todos os 9 hits continuam classificados como OK. O padrão dominante é
+`open[t+1]` usado para preço de execução da próxima barra, não para decisão na
+barra atual.
 
-## engines/citadel.py  — 1 hits
+## engines/citadel.py — 1 hit
 
-- line 854 `idx_plus_read`: `right = sym_rows[i+1] if i+1 < len(sym_rows) else ""`
-   → OK: loop over a display list (sym_rows), pairing rows for 2-column console print. Pure
-     reporting code — no price data, no decision logic. `i+1` is a list index guard, not
-     a future bar read.
+- line 868 `idx_plus_read`: `right = sym_rows[i+1] if i+1 < len(sym_rows) else ""`
+  -> OK: código de layout/reporting, sem leitura de preço futuro.
 
-## engines/renaissance.py  — clean
+## engines/renaissance.py — clean
 
-## engines/jump.py  — clean
+## engines/jump.py — clean
 
-## engines/deshaw.py  — clean
+## engines/deshaw.py — clean
 
-## engines/bridgewater.py  — clean
+## engines/bridgewater.py — clean
 
-## engines/kepos.py  — 4 hits
+## engines/kepos.py — 4 hits
 
-- line 216 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
-   → OK: reads a TRAILING window of `need` bars ENDING at bar `t` (inclusive). The slice
-     is `[t+1-need : t+1]` which is the standard pandas exclusive-end notation for
-     "bars [t-need+1 … t]". No future bar is accessed; `t+1` is purely the exclusive
-     upper bound of the slice. Function `_eta_sustained_critical` uses only data up to
-     bar t to generate the signal at bar t.
+- line 232 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
+  -> OK: janela trailing terminando em `t`; `t+1` é limite exclusivo do slice.
+- line 276 `iloc_plus`: `entry = float(df["open"].iloc[t + 1])`
+  -> OK: execução na próxima barra.
+- line 300 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
+  -> OK: mesmo caso do slice trailing.
+- line 460 `iloc_plus`: `"entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,`
+  -> OK: metadata de logging da barra de execução.
 
-- line 260 `iloc_plus`: `entry = float(df["open"].iloc[t + 1])`
-   → OK: docstring explicitly says "Entry is next-bar open". Decision is made at bar `t`
-     (signal, stop, tp based on `df[...].iloc[t]` values); execution price is the open
-     of bar `t+1`. This is correct next-bar execution, not look-ahead.
-
-- line 284 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
-   → OK: identical pattern to line 216, inside `_regime_exit_triggered`. Same reasoning:
-     trailing window ending at t, `t+1` is exclusive upper bound only.
-
-- line 444 `iloc_plus`: `"entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,`
-   → OK: recording the timestamp of the execution bar (bar t+1) for trade logging purposes.
-     This value is NEVER used in any signal or sizing decision — it is metadata stored in
-     the open_trade dict for reporting/audit only.
-
-## engines/medallion.py  — 2 hits
+## engines/medallion.py — 2 hits
 
 - line 438 `iloc_plus`: `entry = float(df["open"].iloc[t + 1])`
-   → OK: same pattern as kepos.py line 260. Function `calc_levels` docstring: "Entry is
-     next-bar open". Signal decided at bar t from bar-t indicators; entry price is
-     next-bar open. Correct execution model.
-
+  -> OK: execução na próxima barra.
 - line 615 `iloc_plus`: `"entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,`
-   → OK: same as kepos.py line 444. Logging the execution bar's timestamp as trade
-     metadata only. Not consumed by any decision function.
+  -> OK: metadata de logging.
 
-## core/signals.py  — 2 hits
+## core/signals.py — 2 hits
 
-- line 185 `iloc_plus`: `raw   = df["open"].iloc[idx+1]`
-   → OK: inside `calc_levels_chop`. Guard `if idx >= len(df)-1: return None` on line 182
-     prevents out-of-bounds. `raw` is the next-bar open — the execution price. Decision
-     inputs (atr, bb_mid, direction) all come from `iloc[idx]` or earlier. This is
-     canonical next-bar execution, not look-ahead.
+- line 185 `iloc_plus`: `raw = df["open"].iloc[idx+1]`
+  -> OK: `calc_levels_chop()` usa próxima barra como execução; decisão vem de `idx`.
+- line 210 `iloc_plus`: `raw = df["open"].iloc[idx+1]`
+  -> OK: mesmo padrão em `calc_levels()`.
 
-- line 210 `iloc_plus`: `raw  = df["open"].iloc[idx+1]`
-   → OK: inside `calc_levels`. Guard `if idx >= len(df)-1: return None` on line 207.
-     Same pattern: signal from bar `idx`, execution price from `open[idx+1]`. All stop
-     and target calculations use `atr` from `iloc[idx]` and swing structure from
-     `iloc[max(0,idx-30):idx]`. No future data in decision path.
+## core/indicators.py — clean
 
-## core/indicators.py  — clean
+## core/portfolio.py — clean
 
-## core/portfolio.py  — clean
+## core/htf.py — clean
 
-## core/htf.py  — clean
-
-## core/harmonics.py  — clean
-
+## core/harmonics.py — clean

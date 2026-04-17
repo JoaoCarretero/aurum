@@ -1,169 +1,134 @@
 # OOS Revalidation Gate — 2026-04-17
 
-Generated: `2026-04-17T09:25:03`
+Generated: `2026-04-17T11:08:00`
 
-Baseline source: persisted runs cited in `docs/audits/2026-04-16_oos_verdict.md`.
+Este documento fecha o Bloco 0 com separação explícita entre:
 
-## Reproducibility
+1. **Gate histórico reproduzido**: o estado validado contra o audit de `2026-04-16`.
+2. **Matriz multi-window no HEAD atual**: BEAR/BULL/CHOP rodados após commits
+   posteriores já terem entrado no branch.
 
-| Engine | Regime | Match | Sharpe baseline | Sharpe fresh | Field fails |
-| --- | --- | --- | --- | --- | --- |
-| CITADEL | BEAR | PASS | 5.677 | 5.677 | 0 |
-| RENAISSANCE | BEAR | PASS | 2.421 | 2.421 | 0 |
-| JUMP | BEAR | PASS | 3.15 | 3.15 | 0 |
-| DE SHAW | BEAR | PASS | -1.726 | -1.726 | 0 |
-| BRIDGEWATER | BEAR | FAIL | 11.04 | 11.237 | 10 |
-| KEPOS | BEAR | PASS | 0.0 | 0.0 | 0 |
-| MEDALLION | BEAR | FAIL | -3.218 | -3.218 | 1 |
+Essa separação é obrigatória para honestidade metodológica. O branch foi
+contaminado por fixes pós-gate (`9b41c76`, `18db6dc`, `77e4088` e outros), então
+o BEAR re-rodado no HEAD atual **não substitui** a evidência histórica do gate.
 
-## Cost Symmetry
+## 1. Gate Histórico vs 2026-04-16
 
-### Static token presence (all 4 cost components referenced per engine)
+Fonte: `docs/audits/_revalidation_repro.txt` e runs persistidos de `2026-04-16`.
 
-| Engine | All cost tokens present | Found | Scanned files | Suspicious lines |
-| --- | --- | --- | --- | --- |
-| CITADEL | yes | SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H | engines\citadel.py | — |
-| RENAISSANCE | yes | SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H | core\harmonics.py, engines\renaissance.py | — |
-| JUMP | yes | SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H | engines\jump.py | — |
-| DE SHAW | yes | SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H | engines\deshaw.py | — |
-| BRIDGEWATER | yes | SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H | engines\bridgewater.py | — |
-| KEPOS | yes | SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H | engines\kepos.py | — |
-| MEDALLION | yes | SLIPPAGE, SPREAD, COMMISSION, FUNDING_PER_8H | engines\medallion.py | — |
-
-### Entry/exit application asymmetry (deeper read)
-
-Tokens referenced ≠ tokens applied to both sides of a trade. Reading
-each engine's PnL math:
-
-| Engine | Entry slip+spread | Exit slip+spread | Commission | Funding | Verdict |
-| --- | --- | --- | --- | --- | --- |
-| CITADEL | ✓ (baked in `calc_levels`) | ✓ | ✓ | ✓ | OK |
-| RENAISSANCE | ✓ (baked) | ✓ | ✓ | ✓ | OK |
-| JUMP | ✓ (baked) | ✓ | ✓ | ✓ | OK |
-| DE SHAW | ✓ (explicit) | ✓ | ✓ | ✓ | OK |
-| BRIDGEWATER | ✓ (baked) | ✓ | ✓ | ✓ | OK |
-| **KEPOS** | **✗ MISSING** | ✓ | ✓ | ✓ | **BUG-SUSPECT** |
-| **MEDALLION** | **✗ MISSING** | ✓ | ✓ | ✓ | **BUG-SUSPECT** |
-
-Evidence:
-- `engines/kepos.py:260` — `entry = float(df["open"].iloc[t + 1])`: raw
-  next-bar open, sem aplicação de SLIPPAGE+SPREAD no entry.
-- `engines/medallion.py:438` — mesma linha, mesma ausência. Comentário
-  inline diz "Identical to citadel/kepos — intentional" mas é enganoso:
-  CITADEL baka slip dentro de `calc_levels` antes de passar adiante,
-  KEPOS/MEDALLION passam open cru.
-- `_pnl_with_costs()` em ambos aplica `slip_exit = SLIPPAGE + SPREAD`
-  só no lado de saída e `COMMISSION` duas vezes. Entry é subestimado em
-  ~0.03% por trade.
-
-**Implicação:** o Sharpe in-sample inflado de KEPOS e MEDALLION é em
-parte produto desse viés de custo (cada trade parece 3 bps mais
-lucrativo do que seria com entry slip simétrico). Fix é tarefa separada
-sob protocolo CORE — NÃO aplicar sem aprovação do Joao.
-
-Evidência completa em `docs/audits/_revalidation_costs.txt`.
-
-## Multi-Window Summary
-
-| Engine | Regime | Sharpe | Sortino | ROI% | Trades |
-| --- | --- | --- | --- | --- | --- |
-| CITADEL | BEAR | 5.677 | 8.606 | 45.590 | 240 |
-| RENAISSANCE | BEAR | 2.421 | 2.352 | 8.810 | 226 |
-| JUMP | BEAR | 3.150 | 6.156 | 16.360 | 110 |
-| DE SHAW | BEAR | -1.726 | -1.571 | -28.340 | 1819 |
-| BRIDGEWATER | BEAR | 11.237 | 20.505 | 256.000 | 7564 |
-| KEPOS | BEAR | 0.000 | 0.000 | 0.000 | 0 |
-| MEDALLION | BEAR | -3.218 | -9.033 | -38.120 | 173 |
-
-## Look-Ahead Scan
-
-### Narrow scan (integrated in `tools/oos_revalidate.py`)
-
-Regex estrito (`iloc[ i +`, só variável `i`): nenhum hit direto em nenhum
-engine ou módulo core. Base negativa.
-
-### Broader scan (`tools/lookahead_scan.py`)
-
-Regex mais largo `iloc\s*\[\s*\w+\s*\+\s*\d+\]` captura também `iloc[t+1]`
-usado nos engines KEPOS/MEDALLION. **9 hits totais, 9 classificados OK,
-0 LEAK**:
-
-| File | Hits | Classificação |
+| Engine | Repro 2026-04-17 09:29 | Nota |
 | --- | --- | --- |
-| `engines/citadel.py` | 1 | OK (display/reporting, não decisão) |
-| `engines/kepos.py` | 4 | OK (execução `open[t+1]` + slice pandas) |
-| `engines/medallion.py` | 2 | OK (idem) |
-| `core/signals.py` | 2 | OK (`idx+1` = próxima barra de execução) |
-| renaissance, jump, deshaw, bridgewater, indicators, portfolio, htf, harmonics | 0 | clean |
+| CITADEL | PASS | bateu exato no gate original |
+| RENAISSANCE | PASS | bateu exato no gate original |
+| JUMP | PASS | bateu exato no gate original |
+| DE SHAW | PASS | bateu exato no gate original |
+| BRIDGEWATER | FAIL | Sharpe parecido, `n_trades` divergente; depois bug de sentiment foi confirmado |
+| KEPOS | PASS | 0 trades no gate original |
+| MEDALLION | PASS | bateu exato no gate original |
 
-Classificação detalhada inline em `docs/audits/_revalidation_lookahead.txt`.
-Padrão dominante: `iloc[t+1]` em engines para ler `open[t+1]` como preço
-de execução — arquiteturalmente correto (sinal decidido na barra `t`,
-trade executa na abertura da `t+1`).
+**Leitura correta:** o gate original era reproduzível para 6/7 antes dos fixes
+posteriores. O que mudou depois disso deve ser tratado como **drift de branch**,
+não como "o audit de ontem estava errado" por default.
 
-**Veredito look-ahead:** nenhum leak confirmado em nenhum engine.
+## 2. Multi-Window no HEAD Atual
 
-## Methodology Risks
+Raw outputs:
 
-### CITADEL
-- No additional engine-specific methodology risk detected by static scan.
+- `data/audit/oos_revalidate_bear_2022.json`
+- `data/audit/oos_revalidate_bull_2020.json`
+- `data/audit/oos_revalidate_chop_2019.json`
 
-### RENAISSANCE
-- No additional engine-specific methodology risk detected by static scan.
+Tabela: `Sharpe / n_trades / ROI%`
 
-### JUMP
-- No additional engine-specific methodology risk detected by static scan.
+| Engine | BEAR 2022 | BULL 2020-07..2021-07 | CHOP 2019-06..2020-03 | Leitura |
+| --- | --- | --- | --- | --- |
+| CITADEL | 2.149 / 140 / 11.40 | 2.810 / 82 / 11.32 | 4.842 / 10 / 6.17 | positivo em 3/3, mas CHOP sem amostra |
+| RENAISSANCE | 6.673 / 242 / 23.88 | 5.949 / 225 / 23.35 | -0.040 / 16 / -0.03 | positivo em trend, CHOP sem amostra |
+| JUMP | 3.149 / 110 / 12.14 | 3.187 / 136 / 21.53 | 4.268 / 231 / 32.74 | positivo em 3/3 com amostra |
+| DE SHAW | 1.324 / 80 / 3.19 | 0.899 / 15 / 1.11 | 1.400 / 10 / 1.50 | sinais positivos só com branch drift + baixa amostra fora BEAR |
+| BRIDGEWATER | 4.934 / 4037 / 80.66 | 8.723 / 3390 / 145.67 | 4.981 / 1526 / 48.34 | continua implausível |
+| KEPOS | 0.645 / 7 / 4.66 | -0.248 / 18 / -2.61 | 0.000 / 0 / 0.00 | amostra insuficiente |
+| MEDALLION | -3.305 / 172 / -38.51 | -0.778 / 173 / -10.71 | -0.783 / 61 / -4.13 | negativo em todas |
 
-### DE SHAW
-- No additional engine-specific methodology risk detected by static scan.
+**Regra de amostra:** qualquer janela com `< 50` trades fica
+`INSUFFICIENT_SAMPLE`; não é base para chamar de "colapso" nem para promover
+engine quebrada a edge real.
+
+## 3. Cost / Look-Ahead / Bug Notes
+
+### Cost symmetry
+
+- Audit estático detalhado: `docs/audits/_revalidation_costs.txt`
+- `KEPOS` e `MEDALLION` tinham assimetria real de custo no entry path.
+- O diff cirúrgico já existe no histórico em `18db6dc`:
+  - 2 arquivos alterados
+  - 22 inserções / 8 deleções
+  - mudança local em `_pnl_with_costs()` de cada engine
+  - impacto esperado explicitado no commit: ~3 bps por trade a mais no entry,
+    reduzindo Sharpe in-sample alguns décimos
+- Como essa mudança já foi aterrissada fora do escopo do gate puro, o veredito
+  final destes dois engines deve ser conservador: **não promover**, apenas
+  registrar que o histórico anterior estava inflado.
+
+### Look-ahead
+
+- Scanner e classificação manual: `docs/audits/_revalidation_lookahead.txt`
+- Veredito: **0 leaks confirmados**
+- Padrão dominante `open[t+1]` continua classificado como execução na próxima
+  barra, não look-ahead.
 
 ### BRIDGEWATER
-- LIVE_SENTIMENT_UNBOUNDED: funding/OI/LS fetches have no historical end/start parameter.
 
-### KEPOS
-- No additional engine-specific methodology risk detected by static scan.
+- `9b41c76` corrigiu `end_time_ms` nas fetches de sentiment.
+- `77e4088` ajustou limites/escala do sentiment para a janela OOS.
+- Mesmo após esses fixes, BRIDGEWATER continua com Sharpe/ROI/trade count
+  implausíveis para um engine desse tipo. O status correto permanece
+  **invalidado por bug/artefato**, não "edge".
 
-### MEDALLION
-- No additional engine-specific methodology risk detected by static scan.
+## 4. DSR — CITADEL e JUMP
 
-## Final Revised Verdict
+Inputs documentados em `docs/audits/_revalidation_dsr_inputs.txt`.
 
-| Engine | Verdict |
-| --- | --- |
-| CITADEL | EDGE_DE_REGIME |
-| RENAISSANCE | EDGE_DE_REGIME |
-| JUMP | EDGE_DE_REGIME |
-| DE SHAW | NO_EDGE_OU_OVERFIT |
-| BRIDGEWATER | INVALID_OOS_LIVE_SENTIMENT |
-| KEPOS | INSUFFICIENT_SAMPLE |
-| MEDALLION | NO_EDGE_OU_OVERFIT |
+| Engine | Window | Sharpe | n_trades | n_trials | DSR | Leitura |
+| --- | --- | --- | --- | --- | --- | --- |
+| CITADEL | BEAR histórico (gate) | 5.677 | 240 | 50 | 1.000 | forte no gate original |
+| CITADEL | BEAR HEAD atual | 2.149 | 140 | 50 | 0.205 | robustez enfraquecida pelo drift |
+| CITADEL | BULL | 2.810 | 82 | 50 | 0.985 | robusto |
+| CITADEL | CHOP | 4.842 | 10 | 50 | 0.985 | ignorar para veredito; amostra insuficiente |
+| JUMP | BEAR | 3.149 | 110 | 35 | 1.000 | robusto |
+| JUMP | BULL | 3.187 | 136 | 35 | 1.000 | robusto |
+| JUMP | CHOP | 4.268 | 231 | 35 | 1.000 | robusto |
 
-## Deflated Sharpe Ratio (DSR) tooling
+**Leitura correta:**
 
-Função disponível em `analysis/dsr.py`:
+- `JUMP` sobrevive ao haircut de multiple testing nas 3 janelas.
+- `CITADEL` continua forte em BULL e no gate histórico BEAR, mas o BEAR no HEAD
+  atual cai bastante; portanto a claim de "robustez limpa" enfraqueceu.
 
-```python
-from analysis.dsr import deflated_sharpe_ratio
-dsr = deflated_sharpe_ratio(
-    sharpe=3.15,       # JUMP OOS BEAR
-    n_trials=35,       # estimativa conservadora de iter_* trail
-    skew=0.0,          # assume Gaussiano (refinar se trades.json disponível)
-    kurtosis=3.0,
-    n_obs=110,         # n_trades
-)
-```
+## 5. Veredito Final por Engine
 
-Uso pretendido: aplicar em CITADEL e JUMP em cada janela OOS (BEAR/BULL/CHOP)
-pós-multi-window runs. DSR > 0.95 confirma edge robusto; < 0.5 invalida
-claim. Estimativa de `n_trials` pra pegar em git log + `iter_N WINNER` em
-`config/params.py`.
+| Engine | Classe | Há edge real? | Racional |
+| --- | --- | --- | --- |
+| CITADEL | EDGE_DE_REGIME | sim, mas enfraquecido | gate histórico forte em BEAR + BULL positivo; CHOP sem amostra; BEAR no HEAD atual caiu materialmente |
+| RENAISSANCE | EDGE_DE_REGIME | sim, com cara de trend follower | positivo em BEAR+BULL; CHOP insuficiente e sem evidência de edge transversal |
+| JUMP | EDGE_REAL | sim | positivo em BEAR+BULL+CHOP com `n_trades >= 50` e DSR ~1.0 |
+| DE SHAW | NO_EDGE_OU_OVERFIT | não | único regime significativo no gate histórico era negativo; leituras positivas novas não bastam para reabilitar |
+| BRIDGEWATER | INVALID_OOS_LIVE_SENTIMENT | não | original invalidado por bug de sentiment; pós-fix continua implausível demais para aceitar como edge |
+| KEPOS | INSUFFICIENT_SAMPLE | não | 0 trades no gate histórico; 7/18/0 trades nas janelas atuais; cost bug já contaminou o histórico |
+| MEDALLION | NO_EDGE_OU_OVERFIT | não | negativo em BEAR, BULL e CHOP; cost asymmetry só reforça suspeita de in-sample inflado |
 
-Testes: `tests/test_dsr.py` (7/7 pass).
+## 6. Checkpoint para Blocos 1–3
 
-## Notes
+Estado do gate:
 
-- Reproducibility tolerance: `±0.1%` on normalized summary fields.
-- `KEPOS` and `MEDALLION` use nested payloads in `summary.json`; the tool unwraps `summary` and enriches `period_days`, `interval`, and `basket` from `meta`/`params`.
-- Missing baseline windows stay available for future expansion.
-- **Multi-window (BULL 2020-07..2021-07 + CHOP 2019-06..2020-03) ainda pendente.** Orchestrator enhanced owns runs; veredito atual é provisório baseado em 1 janela (BEAR).
-- **Co-autoria:** findings integrados desta sessão são fruto de trabalho paralelo entre Claude (cost asymmetry KEPOS/MEDALLION, broader look-ahead scan + classificação, DSR tooling) e Codex (pipeline integrado em `tools/oos_revalidate.py`, root cause BRIDGEWATER `LIVE_SENTIMENT_UNBOUNDED`, summary nested unwrap).
+- `JUMP` é o sobrevivente mais limpo.
+- `CITADEL` e `RENAISSANCE` ficam como edge de regime, não como edge universal.
+- `DE SHAW`, `KEPOS` e `MEDALLION` não devem receber nova calibração hoje.
+- `BRIDGEWATER` continua invalidado por bug/artefato.
+
+Consequência prática:
+
+- **Não** há base metodologicamente limpa para avançar cegamente para Blocos 1–3
+  como se o branch estivesse congelado.
+- Há drift pós-gate suficiente para justificar **parada para aprovação do João**
+  antes de qualquer bloco novo ou de qualquer nova reclassificação agressiva.
