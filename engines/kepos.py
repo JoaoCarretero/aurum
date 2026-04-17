@@ -486,21 +486,28 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
 def _pnl_with_costs(direction: int, entry: float, exit_p: float, size: float,
                     duration: int, funding_periods_per_8h: float) -> float:
-    """AURUM C1+C2 cost model. Matches citadel.py (see lines 336-349).
+    """AURUM C1+C2 cost model — simétrico entry/exit.
 
     C1: commission paid on entry and exit notional
-    C2: slippage + spread paid on exit (market-order exit assumption)
+    C2: slippage + spread paid on BOTH entry and exit (market-order assumption)
     Funding: accrued per bar, sign depends on direction (long pays funding)
     LEVERAGE: linearly scales the net P&L
+
+    Nota 2026-04-17: correção de assimetria — versão anterior aplicava slip
+    só no exit, subestimando custo em ~3 bps/trade (flagged em
+    docs/audits/2026-04-17_oos_revalidation.md seção cost symmetry).
+    Entry e exit em KEPOS/MEDALLION são ambos market orders (open[t+1]),
+    então ambos pagam slip+spread.
     """
+    slip_entry = SLIPPAGE + SPREAD
     slip_exit = SLIPPAGE + SPREAD
     if direction == +1:
-        entry_cost = entry * (1 + COMMISSION)
+        entry_cost = entry * (1 + COMMISSION + slip_entry)
         exit_net = exit_p * (1 - COMMISSION - slip_exit)
         funding = -(size * entry * FUNDING_PER_8H * duration / funding_periods_per_8h)
         pnl = size * (exit_net - entry_cost) + funding
     else:
-        entry_cost = entry * (1 - COMMISSION)
+        entry_cost = entry * (1 - COMMISSION - slip_entry)
         exit_net = exit_p * (1 + COMMISSION + slip_exit)
         funding = +(size * entry * FUNDING_PER_8H * duration / funding_periods_per_8h)
         pnl = size * (entry_cost - exit_net) + funding
