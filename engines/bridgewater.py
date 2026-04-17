@@ -68,7 +68,28 @@ log.addHandler(_fh)
 #  SENTIMENT DATA COLLECTION
 # ══════════════════════════════════════════════════════════════
 
-def collect_sentiment(symbols: list, end_time_ms: int | None = None) -> dict:
+def _sentiment_limits(window_days: int | None) -> tuple[int, int, int]:
+    """Return (funding_limit, oi_limit, ls_limit) sized to cover ``window_days``.
+
+    Historical Binance Futures coverage:
+      * Funding rate: emitted every 8h → 3 ticks/day. /fundingRate capped at 1000.
+      * Open interest (15m period): 96 ticks/day. /openInterestHist capped at 500.
+      * Long/short ratio (15m period): 96 ticks/day. Same cap as OI.
+
+    With a 20% buffer for weekends/outages. When ``window_days`` is None the
+    function falls back to the legacy 100/200/200 defaults (which cover
+    roughly a live session, not an OOS window).
+    """
+    if window_days is None or window_days <= 0:
+        return 100, 200, 200
+    funding = min(1000, max(100, int(window_days * 3 * 1.2)))
+    oi      = min(500,  max(200, int(window_days * 96 * 1.1)))
+    ls      = min(500,  max(200, int(window_days * 96 * 1.1)))
+    return funding, oi, ls
+
+
+def collect_sentiment(symbols: list, end_time_ms: int | None = None,
+                      window_days: int | None = None) -> dict:
     """
     Fetch all sentiment data for each symbol.
 
@@ -79,13 +100,15 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None) -> dict:
 
     Returns dict[symbol] = {funding_z: Series, oi_signal: Series, ls_signal: Series}
     """
+    funding_limit, oi_limit, ls_limit = _sentiment_limits(window_days)
     sentiment = {}
     for sym in symbols:
-        log.info(f"  fetching sentiment  ·  {sym}")
+        log.info(f"  fetching sentiment  ·  {sym}  "
+                 f"(funding={funding_limit} oi={oi_limit} ls={ls_limit})")
         data = {}
 
         # Funding rate
-        fr_df = fetch_funding_rate(sym, limit=100, end_time_ms=end_time_ms)
+        fr_df = fetch_funding_rate(sym, limit=funding_limit, end_time_ms=end_time_ms)
         if fr_df is not None and len(fr_df) >= 10:
             data["funding_df"] = fr_df
             data["funding_z"] = funding_zscore(fr_df, window=THOTH_FUNDING_WINDOW)
@@ -93,11 +116,11 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None) -> dict:
             data["funding_z"] = None
 
         # Open Interest
-        oi_df = fetch_open_interest(sym, period="15m", limit=200, end_time_ms=end_time_ms)
+        oi_df = fetch_open_interest(sym, period="15m", limit=oi_limit, end_time_ms=end_time_ms)
         data["oi_df"] = oi_df
 
         # Long/Short ratio
-        ls_df = fetch_long_short_ratio(sym, period="15m", limit=200, end_time_ms=end_time_ms)
+        ls_df = fetch_long_short_ratio(sym, period="15m", limit=ls_limit, end_time_ms=end_time_ms)
         if ls_df is not None and len(ls_df) >= 5:
             data["ls_signal"] = ls_ratio_signal(ls_df)
             data["ls_df"] = ls_df
@@ -140,11 +163,17 @@ def _align_series_to_candles(
     valid = pos >= 0
     if valid.any():
         aligned[valid] = values[pos[valid]]
-        first_valid = int(np.flatnonzero(valid)[0])
-        if first_valid > 0:
-            aligned[:first_valid] = values[0]
-    else:
-        aligned[:] = values[0]
+        # Bars that precede the first sentiment tick get ``default`` (0.0 by
+        # convention — "no signal"), not the first available value. Propagating
+        # values[0] leaks a single constant across the pre-series window, which
+        # in narrow-lookback runs (e.g. the legacy limit=100 = 33d of funding)
+        # fabricated a spurious deterministic signal across ~90% of bars in any
+        # longer OOS window.
+        #
+        # aligned was already initialised to ``default`` above, so the gap
+        # region is correct by construction — we intentionally do not rewrite
+        # aligned[:first_valid] here.
+    # When no candle is after any series point, every bar stays at ``default``.
     return aligned
 
 
@@ -619,6 +648,7 @@ if __name__ == "__main__":
     sentiment_data = collect_sentiment(
         [s for s in SYMBOLS if s in all_dfs],
         end_time_ms=END_TIME_MS,
+        window_days=SCAN_DAYS,
     )
 
     print_header()
