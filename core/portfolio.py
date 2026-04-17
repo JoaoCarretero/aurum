@@ -88,35 +88,12 @@ def check_aggregate_notional(new_notional: float, open_pos: list,
         return False, f"agg_cap({open_notional + new_notional:.0f}>{cap:.0f})"
     return True, "ok"
 
-def _omega_risk_mult(score: float) -> float:
-    """
-    [U1 v3.6] Multiplicador de risco baseado no score Ω.
-
-    Motivação: dados 1500 dias mostram:
-      Faixa 0.53-0.59: WR 58%  →  edge moderado   → size reduzido
-      Faixa 0.59-0.65: WR 78%  →  edge forte       → size aumentado
-    O sistema v3.5 tratava ambos com o mesmo risco — ineficiente.
-    Agora o risco escala com a qualidade do sinal, não apenas com Kelly.
-    """
-    for omega_min, mult in OMEGA_RISK_TABLE:
-        if score >= omega_min:
-            return mult
-    return 0.50
-
 def _wr(score: float) -> float:
     """Estimated win rate as continuous function of omega score.
     Maps [SCORE_THRESHOLD, 1.0] → [0.50, 0.65] linearly.
     Eliminates cliff effects from the old step function."""
     return max(0.50, min(0.65, 0.50 + (score - SCORE_THRESHOLD) *
                (0.15 / (1.0 - SCORE_THRESHOLD))))
-
-def _global_risk_mult(macro_bias: str, direction: str) -> float:
-    if (macro_bias == "BEAR" and direction == "BEARISH") or \
-       (macro_bias == "BULL" and direction == "BULLISH"):
-        return 1.25
-    if macro_bias == "CHOP":
-        return 0.75
-    return 0.90
 
 def position_size(account, entry, stop, score,
                   macro_bias="CHOP", direction="BEARISH",
@@ -133,6 +110,12 @@ def position_size(account, entry, stop, score,
       1. Kelly base (continuous _wr from score)
       2. regime_dd = RISK_SCALE_BY_REGIME × dd_scale  [0.2, 1.0]
       3. convex = (account/peak)^alpha                 [0.1, 1.5]
+
+    ``vol_regime``, ``direction`` and ``is_chop_trade`` are accepted for
+    backward compatibility with callers that still pass them positionally
+    — they are intentionally NOT factored into the sizing after v3.7.
+    ``VOL_RISK_SCALE`` survives in config but is used only as a VETO in
+    ``signals.decide_direction``, not for sizing.
     """
     dist = abs(entry - stop)
     if not dist: return 0.0

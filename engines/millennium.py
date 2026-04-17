@@ -1,3 +1,14 @@
+"""MILLENNIUM — multi-strategy pod orchestrator.
+
+Architecturally this is the **documented exception** to the rule stated in
+CLAUDE.md that engines must not import from one another. MILLENNIUM's whole
+reason for existence is to run CITADEL (and, lazily, DE SHAW / JUMP /
+BRIDGEWATER / TWO SIGMA) through a shared capital-allocation and kill-switch
+layer — it is the "multi-strategy" engine that the coding rule calls out by
+name. The static top-of-file ``from engines.citadel import ...`` below and
+the lazy ``from engines.<x> import ...`` sites further down are therefore
+intentional, not violations to refactor away.
+"""
 import sys, math, json, random, logging
 import numpy as np
 import pandas as pd

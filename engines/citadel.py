@@ -40,7 +40,7 @@ from core.signals import (
 )
 from core.portfolio import (
     detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
-    position_size, _omega_risk_mult,
+    position_size,
 )
 from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
 
@@ -83,12 +83,24 @@ def setup_run(engine_name: str = "citadel") -> tuple[str, _Path]:
     _sh = logging.StreamHandler(sys.stdout)
     _sh.setLevel(logging.WARNING)
     _sh.setFormatter(_fmt)
-    logging.basicConfig(level=logging.DEBUG, handlers=[_fh, _sh])
+    logging.basicConfig(level=logging.DEBUG, handlers=[_fh, _sh], force=True)
 
+    for _h in list(_tl.handlers):
+        try:
+            _h.close()
+        except Exception:
+            pass
+    _tl.handlers.clear()
     _th = logging.FileHandler(RUN_DIR / "trades.log", encoding="utf-8")
     _th.setFormatter(logging.Formatter("%(message)s"))
     _tl.addHandler(_th); _tl.setLevel(logging.DEBUG); _tl.propagate = False
 
+    for _h in list(_vl.handlers):
+        try:
+            _h.close()
+        except Exception:
+            pass
+    _vl.handlers.clear()
     _vh = logging.FileHandler(RUN_DIR / "log.txt", mode="a", encoding="utf-8")
     _vh.setFormatter(logging.Formatter("%(message)s"))
     _vl.addHandler(_vh); _vl.setLevel(logging.DEBUG); _vl.propagate = False
@@ -525,10 +537,9 @@ def export_json(all_trades, eq, mc, cond, ratios, price_data=None):
             "max_open_positions": MAX_OPEN_POSITIONS, "corr_threshold": CORR_THRESHOLD,
             "corr_soft_threshold": CORR_SOFT_THRESHOLD, "corr_soft_mult": CORR_SOFT_MULT,
             "macro_symbol": MACRO_SYMBOL,
-            "omega_risk_table": OMEGA_RISK_TABLE,
             "chop_bb_period": CHOP_BB_PERIOD, "chop_bb_std": CHOP_BB_STD,
             "chop_rsi_long": CHOP_RSI_LONG, "chop_rsi_short": CHOP_RSI_SHORT,
-            "chop_rr": CHOP_RR, "chop_size_mult": CHOP_SIZE_MULT,
+            "chop_rr": CHOP_RR,
             "regime_trans_window":    REGIME_TRANS_WINDOW,
             "regime_trans_atr_jump":  REGIME_TRANS_ATR_JUMP,
             "regime_trans_size_mult": REGIME_TRANS_SIZE_MULT,

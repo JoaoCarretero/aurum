@@ -61,9 +61,7 @@ The following functions define capital deployment and must not change:
 - `core.portfolio.build_corr_matrix`
 - `core.portfolio.portfolio_allows`
 - `core.portfolio.check_aggregate_notional`
-- `core.portfolio._omega_risk_mult`
 - `core.portfolio._wr`
-- `core.portfolio._global_risk_mult`
 - `core.portfolio.position_size`
 
 Protected behaviors:
@@ -71,10 +69,18 @@ Protected behaviors:
 - correlation vetoes and soft multipliers
 - aggregate notional limits
 - risk fraction mapping
-- drawdown scaling
-- volatility scaling
-- regime scaling
+- drawdown scaling (via ``dd_scale`` parameter)
+- regime scaling (via ``RISK_SCALE_BY_REGIME``)
+- convex sizing (via ``CONVEX_ALPHA``)
 - sizing output
+
+Note: the v3.7 simplification dropped ``_omega_risk_mult`` and
+``_global_risk_mult`` from the sizing pipeline after an ablation test
+showed the 8-factor stack produced an uncontrollable ~7,700× range. Both
+functions were removed from ``core/portfolio.py`` on 2026-04-17 after
+they had been dead code for several sessions. ``VOL_RISK_SCALE`` still
+exists but is used only as a veto in ``signals.decide_direction``, not
+as a sizing multiplier.
 
 ### 3. Backtest Decision Order
 
