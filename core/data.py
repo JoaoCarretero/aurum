@@ -9,13 +9,29 @@ from core import cache as _cache
 log = logging.getLogger("CITADEL")
 _vl = logging.getLogger("CITADEL.val")
 
+
+def _cache_max_age_seconds(interval: str) -> float | None:
+    minutes = _TF_MINUTES.get(str(interval))
+    if minutes is None:
+        return None
+    # Accept a cache snapshot only while it is plausibly still on the current bar.
+    return float(max(60, minutes * 120))
+
+
 def fetch(symbol: str, interval: str | None = None,
           n_candles: int | None = None,
           futures: bool = False,
           end_time_ms: int | None = None) -> pd.DataFrame | None:
     _iv  = interval  or INTERVAL
     _nc  = n_candles or N_CANDLES
-    cached = _cache.read(symbol, _iv, _nc, futures, end_time_ms=end_time_ms)
+    cached = _cache.read(
+        symbol,
+        _iv,
+        _nc,
+        futures,
+        end_time_ms=end_time_ms,
+        max_age_seconds=_cache_max_age_seconds(_iv),
+    )
     if cached is not None:
         log.debug(f"[{symbol}] cache hit: {len(cached)} bars")
         return cached
@@ -80,6 +96,7 @@ def fetch_all(symbols: list, interval: str | None = None,
               label: str = "", workers: int = 6,
               futures: bool = False,
               on_progress=None,
+              min_rows: int = 300,
               end_time_ms: int | None = None) -> dict:
     from concurrent.futures import ThreadPoolExecutor, as_completed
     _iv = interval or INTERVAL
@@ -100,7 +117,7 @@ def fetch_all(symbols: list, interval: str | None = None,
             except Exception as e:
                 df = None
                 log.warning(f"[{sym}] {e}")
-            ok = df is not None and len(df) >= 300
+            ok = df is not None and len(df) >= min_rows
             if ok:
                 results[sym] = df
             if on_progress:
@@ -144,4 +161,3 @@ def fetch_mt5(symbol: str, timeframe: str = "1h",
     df = bridge.fetch(symbol, timeframe, n_candles)
     bridge.disconnect()
     return df
-

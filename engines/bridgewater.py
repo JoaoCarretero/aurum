@@ -685,7 +685,14 @@ if __name__ == "__main__":
     _fetch_syms = list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms:
         _fetch_syms.insert(0, MACRO_SYMBOL)
-    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES, end_time_ms=END_TIME_MS)
+    all_dfs = fetch_all(
+        _fetch_syms,
+        INTERVAL,
+        N_CANDLES,
+        futures=True,
+        min_rows=min(300, N_CANDLES),
+        end_time_ms=END_TIME_MS,
+    )
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:

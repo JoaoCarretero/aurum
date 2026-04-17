@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.data import fetch, validate
+from core.data import fetch, fetch_all, validate
 
 
 # ────────────────────────────────────────────────────────────
@@ -86,6 +86,11 @@ def _make_mock_response(klines: list, status_code: int = 200):
 
 
 class TestFetch:
+    @pytest.fixture(autouse=True)
+    def _disable_cache_reads(self, monkeypatch):
+        monkeypatch.setattr("core.data._cache.read", lambda *args, **kwargs: None)
+        monkeypatch.setattr("core.data._cache.write", lambda *args, **kwargs: False)
+
     def test_success_returns_dataframe(self):
         # Single page of 500 candles fits under limit=1000
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
@@ -173,3 +178,17 @@ class TestFetch:
         url = mock_get.call_args_list[0].args[0]
         assert "api.binance.com" in url
         assert "fapi" not in url
+
+
+class TestFetchAll:
+    def test_min_rows_allows_short_window_results(self, monkeypatch):
+        df = _valid_df(n=72)
+        monkeypatch.setattr("core.data.fetch", lambda *args, **kwargs: df)
+        out = fetch_all(["BTCUSDT"], interval="1h", n_candles=72, workers=1, min_rows=72)
+        assert "BTCUSDT" in out
+
+    def test_default_min_rows_filters_short_results(self, monkeypatch):
+        df = _valid_df(n=72)
+        monkeypatch.setattr("core.data.fetch", lambda *args, **kwargs: df)
+        out = fetch_all(["BTCUSDT"], interval="1h", n_candles=72, workers=1)
+        assert out == {}
