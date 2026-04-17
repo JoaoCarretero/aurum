@@ -904,11 +904,14 @@ def prepare_symbol_frames(symbol: str, params: PhiParams) -> Optional[pd.DataFra
 
 
 def run_backtest(symbols: list[str], params: Optional[PhiParams] = None,
-                 initial_equity: float = ACCOUNT_SIZE) -> tuple[list[dict], dict]:
-    """Run PHI across symbols. Returns (trades, summary)."""
+                 initial_equity: float = ACCOUNT_SIZE) -> tuple[list[dict], dict, dict]:
+    """Run PHI across symbols. Returns (trades, summary, per_symbol)."""
     params = params or PhiParams()
     all_trades: list[dict] = []
     all_vetos: dict[str, int] = defaultdict(int)
+    per_symbol: dict[str, dict] = {}
+    sym_trades_map: dict[str, list[dict]] = {}
+    sym_vetos_map: dict[str, dict] = {}
     for sym in symbols:
         log.info("Preparing %s ...", sym)
         merged = prepare_symbol_frames(sym, params)
@@ -916,12 +919,20 @@ def run_backtest(symbols: list[str], params: Optional[PhiParams] = None,
             continue
         trades, vetos = scan_symbol(merged, sym, params, initial_equity)
         all_trades.extend(trades)
+        sym_trades_map[sym] = trades
+        sym_vetos_map[sym] = vetos
         for k, v in vetos.items():
             all_vetos[k] += v
         log.info("%s: %d trades", sym, len(trades))
     summary = compute_summary(all_trades, initial_equity)
-    summary["vetos"] = dict(all_vetos)
-    return all_trades, summary
+    all_vetos_dict = dict(all_vetos)
+    summary["vetos"] = all_vetos_dict
+    # Build per-symbol breakdown
+    for sym in sym_trades_map:
+        sym_sum = compute_summary(sym_trades_map[sym], initial_equity)
+        sym_sum["vetos"] = sym_vetos_map[sym]
+        per_symbol[sym] = sym_sum
+    return all_trades, summary, per_symbol
 
 
 def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE) -> dict:
@@ -1009,20 +1020,32 @@ def _trades_to_serializable(trades: list[dict]) -> list[dict]:
 
 
 def save_run(run_dir: Path, trades: list[dict], summary: dict,
-             params: PhiParams) -> None:
-    """Write trades.json, summary.json, config.json atomically."""
+             params: PhiParams, vetos: dict, per_sym: dict,
+             meta: dict) -> None:
+    """Write trades.json, summary.json (GRAHAM-envelope), config.json atomically."""
     run_dir.mkdir(parents=True, exist_ok=True)
     atomic_write(run_dir / "trades.json",
-                 json.dumps(_trades_to_serializable(trades), indent=2))
+                 json.dumps(_trades_to_serializable(trades),
+                            separators=(",", ":"), default=str))
+    payload = {
+        "engine": "PHI",
+        "version": "0.1.0",
+        "run_id": meta.get("run_id"),
+        "timestamp": datetime.now().isoformat(),
+        "params": asdict(params),
+        "summary": summary,
+        "per_symbol": per_sym,
+        "vetos": vetos,
+        "meta": meta,
+    }
     atomic_write(run_dir / "summary.json",
-                 json.dumps(summary, indent=2))
+                 json.dumps(payload, indent=2, default=str))
     atomic_write(run_dir / "config.json",
                  json.dumps(asdict(params), indent=2))
 
 
 def _setup_logging(run_dir: Path) -> None:
-    (run_dir / "logs").mkdir(parents=True, exist_ok=True)
-    fh = logging.FileHandler(run_dir / "logs" / "phi.log", encoding="utf-8")
+    fh = logging.FileHandler(run_dir / "log.txt", encoding="utf-8")
     fh.setFormatter(logging.Formatter(
         "%(asctime)s [%(name)s] %(levelname)s - %(message)s"
     ))
@@ -1089,9 +1112,16 @@ def main() -> int:
     _setup_logging(run_dir)
     log.info("PHI run starting: symbols=%s run_dir=%s", symbols, run_dir)
 
-    trades, summary = run_backtest(symbols, params, ACCOUNT_SIZE)
-    save_run(run_dir, trades, summary, params)
-    _print_summary(summary)
+    meta = {
+        "run_id": ts,
+        "symbols": symbols,
+        "initial_equity": float(ACCOUNT_SIZE),
+        "cli_args": vars(args),
+    }
+    trades, summary, per_sym = run_backtest(symbols, params, ACCOUNT_SIZE)
+    vetos = summary.pop("vetos", {})
+    save_run(run_dir, trades, summary, params, vetos, per_sym, meta)
+    _print_summary({**summary, "vetos": vetos})
     print(f"\n  Run saved to: {run_dir}")
     return 0
 
