@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox
 
 from code_viewer import CodeViewer
@@ -22,6 +23,14 @@ from core.persistence import atomic_write_json
 from launcher_support.bootstrap import (
     ENGINE_PREFIX_ALIASES as _BOOTSTRAP_ENGINE_PREFIX_ALIASES,
     NO_WINDOW as _BOOTSTRAP_NO_WINDOW,
+    build_vps_ssh_command as _BOOTSTRAP_BUILD_VPS_SSH_COMMAND,
+    build_vps_log_tail_command as _BOOTSTRAP_BUILD_VPS_LOG_TAIL_COMMAND,
+    build_vps_stop_command as _BOOTSTRAP_BUILD_VPS_STOP_COMMAND,
+    build_millennium_bootstrap_launch_command as _BOOTSTRAP_BUILD_MILLENNIUM_BOOTSTRAP_LAUNCH_COMMAND,
+    current_vps_host as _BOOTSTRAP_CURRENT_VPS_HOST,
+    current_vps_project as _BOOTSTRAP_CURRENT_VPS_PROJECT,
+    VPS_LIVE_SCREEN as _BOOTSTRAP_VPS_LIVE_SCREEN,
+    VPS_MILLENNIUM_SCREEN as _BOOTSTRAP_VPS_MILLENNIUM_SCREEN,
     VPS_HOST as _BOOTSTRAP_VPS_HOST,
     VPS_PROJECT as _BOOTSTRAP_VPS_PROJECT,
     canonical_engine_key as _bootstrap_canonical_engine_key,
@@ -167,6 +176,14 @@ engine_display_name = _bootstrap_engine_display_name
 _vps_cmd = _bootstrap_run_vps_cmd
 _fetch = _bootstrap_fetch_ticker_loop
 _ticker_str = _bootstrap_ticker_str
+_build_vps_ssh_command = _BOOTSTRAP_BUILD_VPS_SSH_COMMAND
+_build_vps_log_tail_command = _BOOTSTRAP_BUILD_VPS_LOG_TAIL_COMMAND
+_build_vps_stop_command = _BOOTSTRAP_BUILD_VPS_STOP_COMMAND
+_build_millennium_bootstrap_launch_command = _BOOTSTRAP_BUILD_MILLENNIUM_BOOTSTRAP_LAUNCH_COMMAND
+_vps_host = _BOOTSTRAP_CURRENT_VPS_HOST
+_vps_project = _BOOTSTRAP_CURRENT_VPS_PROJECT
+_vps_live_screen = _BOOTSTRAP_VPS_LIVE_SCREEN
+_vps_millennium_screen = _BOOTSTRAP_VPS_MILLENNIUM_SCREEN
 _conn = ConnectionManager()
 
 MAIN_MENU = [
@@ -1020,10 +1037,16 @@ _BT_COLS: list[tuple[str, int]] = [
 
 
 class App(tk.Tk):
+    _SPLASH_DESIGN_W = 920
+    _SPLASH_DESIGN_H = 640
+    _MENU_DESIGN_W = 920
+    _MENU_DESIGN_H = 540
+
     def __init__(self):
         super().__init__()
         self.title("AURUM Terminal")
         self.configure(bg=BG)
+        self._configure_windows_dpi()
         self.geometry("960x660")
         self.minsize(860, 560)
 
@@ -1071,6 +1094,10 @@ class App(tk.Tk):
         self._menu_live_after_id = None  # after() handle for 5s refresh
         self._active_tile_slots = self._TILE_SLOTS         # overridden by splash
         self._active_cd_center = (self._CD_CX, self._CD_CY)  # overridden by splash
+        self._splash_viewport = (0, 0, self._SPLASH_DESIGN_W, self._SPLASH_DESIGN_H)
+        self._menu_viewport = (0, 0, self._MENU_DESIGN_W, self._MENU_DESIGN_H)
+        self._splash_render_scale = 1.0
+        self._menu_render_scale = 1.0
 
         # ─── Splash HL1 gate state ────────────────────────
         self._splash_cursor_on = True
@@ -1082,6 +1109,19 @@ class App(tk.Tk):
         self._splash()
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self._quit)
+
+    def _configure_windows_dpi(self) -> None:
+        """Prefer per-monitor DPI awareness on Windows laptops with scaling."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
     # ─── CHROME ──────────────────────────────────────────
     def _chrome(self):
@@ -1431,10 +1471,94 @@ class App(tk.Tk):
         except Exception:
             return hex_color
 
+    @staticmethod
+    def _calc_centered_viewport(
+        canvas_w: int,
+        canvas_h: int,
+        design_w: int,
+        design_h: int,
+    ) -> tuple[int, int, int, int]:
+        """Return a centered design-space viewport within the live canvas."""
+        live_w = max(int(canvas_w or 0), design_w)
+        live_h = max(int(canvas_h or 0), design_h)
+        x0 = max((live_w - design_w) // 2, 0)
+        y0 = max((live_h - design_h) // 2, 0)
+        return x0, y0, x0 + design_w, y0 + design_h
+
+    def _center_canvas_items(self, canvas, design_w: int, design_h: int) -> tuple[int, int, int, int]:
+        """Center an already-rendered fixed-layout canvas within the live viewport."""
+        viewport = self._calc_centered_viewport(
+            canvas.winfo_width(),
+            canvas.winfo_height(),
+            design_w,
+            design_h,
+        )
+        items = canvas.find_all()
+        if not items:
+            return viewport
+        bbox = canvas.bbox(*items)
+        if not bbox:
+            return viewport
+        cur_cx = (bbox[0] + bbox[2]) / 2
+        cur_cy = (bbox[1] + bbox[3]) / 2
+        target_cx = viewport[0] + (design_w / 2)
+        target_cy = viewport[1] + (design_h / 2)
+        canvas.move("all", target_cx - cur_cx, target_cy - cur_cy)
+        return viewport
+
+    @staticmethod
+    def _scale_canvas_text_fonts(canvas, ratio: float) -> None:
+        if abs(ratio - 1.0) < 0.001:
+            return
+        for item in canvas.find_all():
+            if canvas.type(item) != "text":
+                continue
+            font_name = canvas.itemcget(item, "font")
+            if not font_name:
+                continue
+            try:
+                actual = tkfont.Font(font=font_name).actual()
+                size = int(actual.get("size", 8) or 8)
+                family = actual.get("family", FONT)
+                weight = actual.get("weight", "normal")
+                slant = actual.get("slant", "roman")
+                underline = int(actual.get("underline", 0) or 0)
+                overstrike = int(actual.get("overstrike", 0) or 0)
+                new_size = max(6, int(round(abs(size) * ratio)))
+                if size < 0:
+                    new_size = -new_size
+                canvas.itemconfigure(
+                    item,
+                    font=(family, new_size, weight, slant, underline, overstrike),
+                )
+            except Exception:
+                continue
+
+    def _apply_canvas_scale(self, canvas, design_w: int, design_h: int, previous_scale: float) -> tuple[tuple[int, int, int, int], float]:
+        live_w = max(canvas.winfo_width(), 1)
+        live_h = max(canvas.winfo_height(), 1)
+        scale = max(min(live_w / design_w, live_h / design_h), 1.0)
+        ratio = scale / max(previous_scale, 0.001)
+        if canvas.find_all():
+            canvas.scale("all", 0, 0, ratio, ratio)
+            self._scale_canvas_text_fonts(canvas, ratio)
+            scaled_w = int(round(design_w * scale))
+            scaled_h = int(round(design_h * scale))
+            x0 = max((live_w - scaled_w) // 2, 0)
+            y0 = max((live_h - scaled_h) // 2, 0)
+            bbox = canvas.bbox("all")
+            if bbox:
+                canvas.move("all", x0 - bbox[0], y0 - bbox[1])
+            return (x0, y0, x0 + scaled_w, y0 + scaled_h), scale
+        viewport = self._calc_centered_viewport(live_w, live_h, design_w, design_h)
+        return viewport, scale
+
     def _tile_rect(self, idx: int) -> tuple:
         slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
         _, cx, cy = slots[idx]
-        w, h = self._TILE_W, self._TILE_H
+        scale = max(getattr(self, "_menu_render_scale", 1.0), 1.0)
+        w = int(round(self._TILE_W * scale))
+        h = int(round(self._TILE_H * scale))
         return (cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2)
 
     def _draw_cd_center(self, canvas, r=None) -> None:
@@ -1570,6 +1694,15 @@ class App(tk.Tk):
             canvas.create_text(value_x, yy, anchor="w", text=value, font=(FONT, 8, "bold"),
                                fill=color, tags=tag)
 
+    def _bind_canvas_window_width(self, canvas, window_id, pad_x: int = 0, min_width: int = 0) -> None:
+        def _fit(_event=None):
+            live_w = max(canvas.winfo_width(), 1)
+            inner_w = max(live_w - pad_x, min_width)
+            canvas.coords(window_id, 0, 0)
+            canvas.itemconfigure(window_id, width=inner_w)
+        canvas.bind("<Configure>", _fit)
+        _fit()
+
     def _ui_page_shell(self, title: str, subtitle: str = "",
                        pad_x: int = 28, pad_y: int = 18,
                        content_width: int | None = None) -> tuple[tk.Frame, tk.Frame]:
@@ -1599,11 +1732,20 @@ class App(tk.Tk):
             inner = tk.Frame(canvas, bg=BG, width=content_width)
             inner.bind("<Configure>", lambda e: canvas.configure(
                 scrollregion=canvas.bbox("all")))
-            canvas.create_window((0, 0), window=inner, anchor="nw",
-                                 width=content_width)
+            window_id = canvas.create_window((0, 0), window=inner, anchor="nw",
+                                             width=content_width)
+            def _fit_inner(_event=None):
+                live_w = max(canvas.winfo_width(), 1)
+                gutter = 28
+                inner_w = max(content_width, live_w - gutter)
+                offset_x = max((live_w - inner_w) // 2, 0)
+                canvas.coords(window_id, offset_x, 0)
+                canvas.itemconfigure(window_id, width=inner_w)
+            canvas.bind("<Configure>", _fit_inner)
             canvas.configure(yscrollcommand=sb.set)
             canvas.pack(side="left", fill="both", expand=True)
             sb.pack(side="right", fill="y")
+            _fit_inner()
             def _on_wheel(event):
                 canvas.yview_scroll(-1 * (event.delta // 120), "units")
             def _enter_canvas(event):
@@ -1772,18 +1914,17 @@ class App(tk.Tk):
     def _menu_tiles_repaint_text(self) -> None:
         if self._menu_canvas is None:
             return
-        for idx in range(4):
-            self._draw_isometric_tile(self._menu_canvas, idx, idx == self._menu_focused_tile)
+        self._menu_main_bloomberg()
 
     def _menu_tile_focus(self, idx: int) -> None:
         if not (0 <= idx <= 3):
             return
-        prev = self._menu_focused_tile
         self._menu_focused_tile = idx
         if self._menu_canvas is None:
             return
-        self._draw_isometric_tile(self._menu_canvas, prev, False)
-        self._draw_isometric_tile(self._menu_canvas, idx, True)
+        if getattr(self, "_menu_expanded_tile", None) is None:
+            self._menu_main_bloomberg()
+            return
         self._draw_spokes(self._menu_canvas, idx)
 
     def _menu_tile_focus_delta(self, delta: int) -> None:
@@ -1948,10 +2089,18 @@ class App(tk.Tk):
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=640)
+        canvas = tk.Canvas(
+            f,
+            bg=BG,
+            highlightthickness=0,
+            width=self._SPLASH_DESIGN_W,
+            height=self._SPLASH_DESIGN_H,
+        )
         canvas.pack(fill="both", expand=True)
         self._menu_canvas = canvas
         self._splash_canvas = canvas
+        self._splash_render_scale = 1.0
+        canvas.bind("<Configure>", self._render_splash)
 
         canvas.create_line(48, 48, 872, 48, fill=AMBER_D, width=1)
         canvas.create_line(48, 596, 872, 596, fill=DIM2, width=1)
@@ -2039,11 +2188,23 @@ class App(tk.Tk):
         self._kb("<Return>", self._splash_on_click)
         self._kb("<space>", self._splash_on_click)
         self._bind_global_nav()
+        self._render_splash()
         try:
             self.focus_set()
         except Exception:
             pass
         self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
+
+    def _render_splash(self, _event=None) -> None:
+        canvas = self._splash_canvas
+        if canvas is None:
+            return
+        self._splash_viewport, self._splash_render_scale = self._apply_canvas_scale(
+            canvas,
+            self._SPLASH_DESIGN_W,
+            self._SPLASH_DESIGN_H,
+            self._splash_render_scale,
+        )
 
     def _splash_pulse_tick(self):
         canvas = self._splash_canvas
@@ -2082,9 +2243,17 @@ class App(tk.Tk):
 
         f = tk.Frame(self.main, bg=BG)
         f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=540)
+        canvas = tk.Canvas(
+            f,
+            bg=BG,
+            highlightthickness=0,
+            width=self._MENU_DESIGN_W,
+            height=self._MENU_DESIGN_H,
+        )
         canvas.pack(fill="both", expand=True)
         self._menu_canvas = canvas
+        self._menu_render_scale = 1.0
+        canvas.bind("<Configure>", self._render_main_menu)
 
         if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
             self._menu_live_fetch_async()
@@ -2219,7 +2388,29 @@ class App(tk.Tk):
         self._kb("<Return>", lambda: self._menu_tile_expand(self._menu_focused_tile))
         self._kb("<Escape>", self._splash)
         self._bind_global_nav()
+        self._render_main_menu()
         self._menu_live_schedule()
+
+    def _render_main_menu(self, _event=None) -> None:
+        canvas = self._menu_canvas
+        if canvas is None:
+            return
+        viewport, self._menu_render_scale = self._apply_canvas_scale(
+            canvas,
+            self._MENU_DESIGN_W,
+            self._MENU_DESIGN_H,
+            self._menu_render_scale,
+        )
+        self._menu_viewport = viewport
+        dx, dy = viewport[0], viewport[1]
+        scale = self._menu_render_scale
+        self._active_tile_slots = [
+            ("nw", int(round(192 * scale)) + dx, int(round(182 * scale)) + dy),
+            ("ne", int(round(728 * scale)) + dx, int(round(182 * scale)) + dy),
+            ("sw", int(round(192 * scale)) + dx, int(round(340 * scale)) + dy),
+            ("se", int(round(728 * scale)) + dx, int(round(340 * scale)) + dy),
+        ]
+        self._active_cd_center = (int(round(460 * scale)) + dx, int(round(261 * scale)) + dy)
 
     def _menu_tile_expand(self, idx: int) -> None:
         try:
@@ -2503,16 +2694,36 @@ class App(tk.Tk):
             self._crypto_dashboard()
             try:
                 self._dash_render_tab("backtest")
-            except Exception:
-                pass
+            except Exception as exc:
+                import traceback as _tb
+                _tb.print_exc()
+                try:
+                    self.h_stat.configure(
+                        text=f"BACKTEST RENDER FAIL: {type(exc).__name__}",
+                        fg=RED,
+                    )
+                except Exception:
+                    pass
             return
         if key == "backtest":
             # Legacy alias — same as dash-backtest for older call sites.
             self._crypto_dashboard()
             try:
                 self._dash_render_tab("backtest")
-            except Exception:
-                pass
+            except Exception as exc:
+                import traceback as _tb
+                _tb.print_exc()
+                try:
+                    self.h_stat.configure(
+                        text=f"BACKTEST RENDER FAIL: {type(exc).__name__}",
+                        fg=RED,
+                    )
+                except Exception:
+                    pass
+            return
+
+        if key == "live":
+            self._strategies_live()
             return
 
         self._clr(); self._clear_kb()
@@ -3635,7 +3846,8 @@ class App(tk.Tk):
         sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
         sf = tk.Frame(canvas, bg=BG)
         sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=sf, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=sf, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -3958,7 +4170,8 @@ class App(tk.Tk):
         self._results_list_inner.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self._results_list_inner, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=self._results_list_inner, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -5075,7 +5288,8 @@ class App(tk.Tk):
         sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
         sf = tk.Frame(canvas, bg=BG)
         sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=sf, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=sf, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=6)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
         sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
@@ -6658,7 +6872,8 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
 
         inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         inner.bind("<Configure>",
                    lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
 
@@ -7151,7 +7366,8 @@ class App(tk.Tk):
         bk_sb = tk.Scrollbar(bk_list_wrap, orient="vertical",
                              command=bk_canvas.yview)
         bk_rows_frame = tk.Frame(bk_canvas, bg=BG)
-        bk_canvas.create_window((0, 0), window=bk_rows_frame, anchor="nw")
+        window_id = bk_canvas.create_window((0, 0), window=bk_rows_frame, anchor="nw")
+        self._bind_canvas_window_width(bk_canvas, window_id, pad_x=4)
         bk_canvas.configure(yscrollcommand=bk_sb.set)
         bk_canvas.pack(side="left", fill="x", expand=True)
         bk_sb.pack(side="right", fill="y")
@@ -7180,7 +7396,8 @@ class App(tk.Tk):
         canvas = tk.Canvas(list_wrap, bg=BG, highlightthickness=0, height=420)
         sb = tk.Scrollbar(list_wrap, orient="vertical", command=canvas.yview)
         rows_frame = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -7727,10 +7944,13 @@ class App(tk.Tk):
 
         split = tk.Frame(outer, bg=BG)
         split.pack(fill="both", expand=True)
+        split.grid_columnconfigure(0, weight=3, uniform="bt_split")
+        split.grid_columnconfigure(1, weight=2, uniform="bt_split")
+        split.grid_rowconfigure(0, weight=1)
 
         # ── LEFT: run list ──
-        left = tk.Frame(split, bg=BG)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        left = tk.Frame(split, bg=BG, highlightbackground=BORDER, highlightthickness=1)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
         hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
         for label, width in _BT_COLS:
@@ -7748,7 +7968,8 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
 
         inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         inner.bind("<Configure>",
                    lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
 
@@ -7770,9 +7991,10 @@ class App(tk.Tk):
         self._dash_widgets[("bt_canvas",)] = canvas
 
         # ── RIGHT: detail panel ──
-        right = tk.Frame(split, bg=PANEL, width=340)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
+        right = tk.Frame(split, bg=PANEL, width=420,
+                         highlightbackground=BORDER, highlightthickness=1)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_propagate(False)
 
         tk.Label(right, text="DETAILS", font=(FONT, 7, "bold"),
                  fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw",
@@ -7795,8 +8017,9 @@ class App(tk.Tk):
         d_scroll.pack(side="right", fill="y")
 
         detail_body = tk.Frame(d_canvas, bg=PANEL)
-        d_canvas.create_window((0, 0), window=detail_body, anchor="nw",
-                               width=300)
+        window_id = d_canvas.create_window((0, 0), window=detail_body, anchor="nw",
+                                           width=300)
+        self._bind_canvas_window_width(d_canvas, window_id, pad_x=18, min_width=300)
         detail_body.bind("<Configure>",
                          lambda e, c=d_canvas:
                          c.configure(scrollregion=c.bbox("all")))
@@ -7897,7 +8120,8 @@ class App(tk.Tk):
         split.pack(fill="both", expand=True)
 
         # ── LEFT: proc list ──────────────────────────────────
-        left = tk.Frame(split, bg=BG, width=420)
+        left = tk.Frame(split, bg=BG, width=420,
+                        highlightbackground=BORDER, highlightthickness=1)
         left.pack(side="left", fill="y", padx=(0, 8))
         left.pack_propagate(False)
 
@@ -8017,7 +8241,8 @@ class App(tk.Tk):
             b.bind("<Button-1>", lambda e, c=cmd: c())
 
         # ── RIGHT: log tail viewer ───────────────────────────
-        right = tk.Frame(split, bg=PANEL)
+        right = tk.Frame(split, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1)
         right.pack(side="right", fill="both", expand=True)
 
         tk.Label(right, text="LOG TAIL", font=(FONT, 7, "bold"),
@@ -8030,7 +8255,7 @@ class App(tk.Tk):
         self._eng_log_header.pack(fill="x", padx=8)
 
         self._eng_log_text = tk.Text(
-            right, wrap="none", bg=BG, fg=WHITE, font=(FONT, 8),
+            right, wrap="word", bg=BG, fg=WHITE, font=(FONT, 8),
             insertbackground=WHITE, padx=6, pady=6,
             borderwidth=0, highlightthickness=0)
         self._eng_log_text.pack(fill="both", expand=True, padx=8, pady=(2, 8))
@@ -8859,7 +9084,8 @@ class App(tk.Tk):
         sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
         sf = tk.Frame(canvas, bg=BG)
         sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0,0), window=sf, anchor="nw")
+        window_id = canvas.create_window((0,0), window=sf, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=6)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
         sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
@@ -10755,10 +10981,13 @@ class App(tk.Tk):
 
         # Main split: list (left, 60%) + detail (right, 40%)
         split = tk.Frame(wrap, bg=BG); split.pack(fill="both", expand=True)
+        split.grid_columnconfigure(0, weight=3, uniform="bt_dash_split")
+        split.grid_columnconfigure(1, weight=2, uniform="bt_dash_split")
+        split.grid_rowconfigure(0, weight=1)
 
         # ── LEFT: run list ──
         left = tk.Frame(split, bg=BG)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
         # Column headers — widths pulled from _BT_COLS so header and row
         # widgets always render at the same character positions. Same
@@ -10782,7 +11011,8 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
 
         inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         def _on_configure(event, c=canvas): c.configure(scrollregion=c.bbox("all"))
         inner.bind("<Configure>", _on_configure)
 
@@ -10807,9 +11037,9 @@ class App(tk.Tk):
         # ── RIGHT: detail panel ──
         right = tk.Frame(split, bg=PANEL,
                          highlightbackground=BORDER, highlightthickness=1,
-                         width=300)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
+                         width=360)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_propagate(False)
 
         tk.Label(right, text=" [ DETAILS ] ",
                  font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
@@ -11004,18 +11234,22 @@ class App(tk.Tk):
                         run_id = str(row.get("run_id") or "").strip()
                         if not run_id:
                             continue
+                        explicit_run_dir = str(row.get("run_dir") or "").strip()
+                        if explicit_run_dir:
+                            run_dir = Path(explicit_run_dir)
+                        else:
                         # Resolve run_dir via engine slug — run_ids are now
                         # prefixed (e.g. "bridgewater_2026-04-14_1029")
-                        engine_slug = str(row.get("engine") or "").lower()
-                        base_dir = _SLUG_TO_DIR.get(engine_slug, ROOT / "data" / "runs")
-                        # Strip engine prefix from run_id to get folder name
-                        folder = run_id
-                        if engine_slug and folder.startswith(f"{engine_slug}_"):
-                            folder = folder[len(engine_slug) + 1:]
-                        run_dir = base_dir / folder
-                        # Citadel keeps the prefixed form as folder name
-                        if engine_slug == "citadel" and not run_dir.exists():
-                            run_dir = base_dir / run_id
+                            engine_slug = str(row.get("engine") or "").lower()
+                            base_dir = _SLUG_TO_DIR.get(engine_slug, ROOT / "data" / "runs")
+                            # Strip engine prefix from run_id to get folder name
+                            folder = run_id
+                            if engine_slug and folder.startswith(f"{engine_slug}_"):
+                                folder = folder[len(engine_slug) + 1:]
+                            run_dir = base_dir / folder
+                            # Citadel keeps the prefixed form as folder name
+                            if engine_slug == "citadel" and not run_dir.exists():
+                                run_dir = base_dir / run_id
                         entry = dict(row)
                         entry.setdefault("run_dir", str(run_dir))
                         entry.setdefault("summary_path", str(run_dir / "summary.json"))
@@ -11594,10 +11828,10 @@ class App(tk.Tk):
         tk.Label(vps_box, text=" VPS ", font=(FONT, 7, "bold"),
                  fg=BG, bg=AMBER).pack(side="top", anchor="nw", padx=8, pady=4)
         vps_inner = tk.Frame(vps_box, bg=PANEL); vps_inner.pack(fill="x", padx=12, pady=(0, 10))
-        tk.Label(vps_inner, text=f"host:     {VPS_HOST}",
+        tk.Label(vps_inner, text=f"host:     {_vps_host()}",
                  font=(FONT, 8), fg=WHITE, bg=PANEL,
                  anchor="w").pack(fill="x")
-        tk.Label(vps_inner, text=f"project:  {VPS_PROJECT}",
+        tk.Label(vps_inner, text=f"project:  {_vps_project()}",
                  font=(FONT, 8), fg=WHITE, bg=PANEL,
                  anchor="w").pack(fill="x")
         vps_check_l = tk.Label(vps_inner, text="last check: —",
@@ -11642,6 +11876,7 @@ class App(tk.Tk):
 
         buttons = [
             ("START DEMO", GREEN, self._dash_cockpit_start_demo),
+            ("START MLN", AMBER_B, self._dash_cockpit_start_millennium_bootstrap),
             ("STOP",       RED,   self._dash_cockpit_stop),
             ("DEPLOY",     AMBER, self._dash_cockpit_deploy),
             ("STREAM LOGS", AMBER_B, self._dash_cockpit_toggle_stream),
@@ -11702,10 +11937,11 @@ class App(tk.Tk):
 
         # Combine multiple checks into one SSH invocation — reduces latency
         # from ~3 round-trips to 1. Markers let us split stdout into sections.
+        project = _vps_project()
         combined = (
             "echo '---SCREEN---'; screen -ls 2>&1 || true; "
-            "echo '---LOG---'; tail -5 ~/aurum.finance/data/live/*/logs/live.log 2>/dev/null || true; "
-            "echo '---POS---'; cat ~/aurum.finance/data/live/*/state/positions.json 2>/dev/null || true; "
+            f"echo '---LOG---'; tail -5 {project}/data/live/*/logs/live.log {project}/data/millennium_live/bootstrap.latest.log 2>/dev/null || true; "
+            f"echo '---POS---'; cat {project}/data/live/*/state/positions.json 2>/dev/null || true; "
             "echo '---END---'"
         )
 
@@ -11733,7 +11969,9 @@ class App(tk.Tk):
                         parts[current] += line + "\n"
 
                 snap["screen_raw"] = parts["SCREEN"].strip()
-                snap["screen_running"] = "aurum" in parts["SCREEN"]
+                screen_raw = parts["SCREEN"]
+                snap["screen_running"] = _vps_live_screen in screen_raw
+                snap["millennium_bootstrap_running"] = _vps_millennium_screen in screen_raw
                 snap["log_lines"] = [l for l in parts["LOG"].splitlines() if l.strip()]
                 snap["positions_raw"] = parts["POS"].strip()
                 try:
@@ -11788,18 +12026,26 @@ class App(tk.Tk):
             if not snap.get("reachable"):
                 state_l.configure(text="○ UNKNOWN", fg=DIM)
                 sub_l.configure(text="VPS not reachable", fg=DIM2)
+            elif snap.get("millennium_bootstrap_running"):
+                state_l.configure(text="● MLN BOOTSTRAP", fg=AMBER_B)
+                first_line = next(
+                    (l for l in snap.get("screen_raw", "").splitlines()
+                     if _vps_millennium_screen in l), "")
+                sub_l.configure(
+                    text=f"screen: {first_line.strip() or _vps_millennium_screen}",
+                    fg=DIM)
             elif snap.get("screen_running"):
                 state_l.configure(text="● RUNNING", fg=GREEN)
                 # Extract PID/name from screen -ls output if possible
                 first_line = next(
                     (l for l in snap.get("screen_raw", "").splitlines()
-                     if "aurum" in l), "")
+                     if _vps_live_screen in l), "")
                 sub_l.configure(
-                    text=f"screen: {first_line.strip() or 'aurum'}",
+                    text=f"screen: {first_line.strip() or _vps_live_screen}",
                     fg=DIM)
             else:
                 state_l.configure(text="○ STOPPED", fg=AMBER_D)
-                sub_l.configure(text="no aurum screen session", fg=DIM)
+                sub_l.configure(text="no live/bootstrap screen session", fg=DIM)
 
         # ── positions ──
         pos_head  = self._dash_widgets.get(("cp_pos_head",))
@@ -11900,18 +12146,21 @@ class App(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _dash_cockpit_start_demo(self):
-        cmd = ("screen -dmS aurum bash -c "
-               "'cd ~/aurum.finance && python3 -m engines.live demo "
+        project = _vps_project()
+        cmd = (f"screen -dmS {_vps_live_screen} bash -c "
+               f"'cd {project} && python3 -m engines.live demo "
                "2>&1 | tee /tmp/aurum.log'")
         self._dash_cockpit_action("START DEMO", cmd, "engine spawned")
 
+    def _dash_cockpit_start_millennium_bootstrap(self):
+        cmd = _build_millennium_bootstrap_launch_command(_vps_project(), mode="diag")
+        self._dash_cockpit_action("START MLN", cmd, "bootstrap spawned")
+
     def _dash_cockpit_stop(self):
-        # $'\003' is bash ANSI-C quoting for Ctrl+C — graceful shutdown
-        cmd = r"screen -S aurum -X stuff $'\003'"
-        self._dash_cockpit_action("STOP", cmd, "Ctrl+C sent")
+        self._dash_cockpit_action("STOP", _build_vps_stop_command(), "Ctrl+C sent")
 
     def _dash_cockpit_deploy(self):
-        cmd = "cd ~/aurum.finance && git pull"
+        cmd = f"cd {_vps_project()} && git pull"
         self._dash_cockpit_action("DEPLOY", cmd, "git pull done", timeout=30)
 
     def _dash_cockpit_toggle_stream(self):
@@ -11934,11 +12183,9 @@ class App(tk.Tk):
 
         try:
             self._dash_cockpit_stream = subprocess.Popen(
-                ["ssh", "-o", "StrictHostKeyChecking=no",
-                 "-o", "ConnectTimeout=5",
-                 "-o", "BatchMode=yes",
-                 VPS_HOST,
-                 "tail -f ~/aurum.finance/data/live/*/logs/live.log 2>/dev/null"],
+                _build_vps_ssh_command(
+                    _build_vps_log_tail_command(_vps_project())
+                ),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
                 creationflags=_NO_WINDOW,
