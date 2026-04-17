@@ -138,6 +138,31 @@ class TestFetchOpenInterest:
         cached = pd.read_csv(Path(tmp_path) / "open_interest" / "BTCUSDT_15m.csv")
         assert len(cached) == 5
 
+    def test_live_fetch_returns_full_merged_cache_not_just_tail_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
+        cache_dir = Path(tmp_path) / "open_interest"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "time": pd.date_range("2026-01-01 00:00:00", periods=5, freq="15min"),
+                "oi": [1000, 1001, 1002, 1003, 1004],
+                "oi_value": [50000, 50010, 50020, 50030, 50040],
+            }
+        ).to_csv(cache_dir / "BTCUSDT_15m.csv", index=False)
+        payload = [
+            {
+                "timestamp": int(pd.Timestamp("2026-01-01 01:15:00").timestamp() * 1000),
+                "sumOpenInterest": "1005.0",
+                "sumOpenInterestValue": "50050.0",
+            }
+        ]
+        with patch("requests.get", return_value=_mock_resp(payload)):
+            df = fetch_open_interest("BTCUSDT", period="15m", limit=1)
+
+        assert df is not None
+        assert len(df) == 6
+        assert df["oi"].tolist() == [1000, 1001, 1002, 1003, 1004, 1005]
+
 
 # ────────────────────────────────────────────────────────────
 # fetch_long_short_ratio
@@ -182,6 +207,33 @@ class TestFetchLongShortRatio:
         assert mock_get.call_count == 0
         assert df is not None
         assert df["ls_ratio"].tolist() == [1.1, 1.2]
+
+    def test_live_fetch_returns_full_merged_cache_not_just_tail_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
+        cache_dir = Path(tmp_path) / "long_short_ratio"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "time": pd.date_range("2026-01-01 00:00:00", periods=4, freq="15min"),
+                "ls_ratio": [0.8, 0.9, 1.0, 1.1],
+                "long_pct": [0.44, 0.45, 0.46, 0.47],
+                "short_pct": [0.56, 0.55, 0.54, 0.53],
+            }
+        ).to_csv(cache_dir / "BTCUSDT_15m.csv", index=False)
+        payload = [
+            {
+                "timestamp": int(pd.Timestamp("2026-01-01 01:00:00").timestamp() * 1000),
+                "longShortRatio": "1.2",
+                "longAccount": "0.48",
+                "shortAccount": "0.52",
+            }
+        ]
+        with patch("requests.get", return_value=_mock_resp(payload)):
+            df = fetch_long_short_ratio("BTCUSDT", period="15m", limit=1)
+
+        assert df is not None
+        assert len(df) == 5
+        assert df["ls_ratio"].tolist() == [0.8, 0.9, 1.0, 1.1, 1.2]
 
 
 # ────────────────────────────────────────────────────────────

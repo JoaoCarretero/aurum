@@ -213,7 +213,7 @@ def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200,
         )
         if end_time_ms is not None:
             return _slice_cached_history(merged, period, limit, end_time_ms)
-        return merged.tail(limit).reset_index(drop=True) if merged is not None else None
+        return merged.reset_index(drop=True) if merged is not None else None
     except Exception as e:
         log.warning(f"OI {symbol} error: {e}")
         return None
@@ -264,7 +264,7 @@ def fetch_long_short_ratio(symbol: str, period: str = "15m",
         )
         if end_time_ms is not None:
             return _slice_cached_history(merged, period, limit, end_time_ms)
-        return merged.tail(limit).reset_index(drop=True) if merged is not None else None
+        return merged.reset_index(drop=True) if merged is not None else None
     except Exception as e:
         log.warning(f"LS ratio {symbol} error: {e}")
         return None
