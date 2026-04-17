@@ -201,9 +201,29 @@ Caps atuais do Codex C em `engines/millennium.py:88`:
 
 ## 9. Pendências
 
-- [ ] Rodar CITADEL em janela deslocada (`--end 2025-10-01 --days 180`) pra confirmar edge decay vs overfit histórico
+- [x] ~~Rodar CITADEL em janela deslocada (`--end 2025-10-01 --days 180`) pra confirmar edge decay vs overfit histórico~~ — **FEITO em 14:08, confirma decay**
 - [ ] Decisão MERCURIO_SIZE_MULT 0.47→0.35 (Codex) — Joao review
 - [ ] Rebalancear `ENGINE_WEIGHT_CAPS` na MILLENNIUM — atual está invertido vs números reais
+
+## 9.1 CITADEL displaced window evidence (2026-04-17 14:08)
+
+Run: `data/runs/citadel_2026-04-17_140751` (`--end 2025-10-01 --days 180 --basket bluechip_active`)
+
+| Janela | Overfit | Sharpe | WR% | MDD% | Walk-fwd | Decay |
+|---|:---:|---:|---:|---:|:---:|---:|
+| 180d recent (2026-04) | 3/6 PASS + 1W + 2F | 2.06 | 54.5 | 10.9 | 2/5 FAIL | +88% |
+| 180d displaced (2025-10) | 3/6 PASS + 2W + 1F | **2.79** | 63.3 | 8.59 | 1/5 WARN | **−703%** |
+
+**Interpretação:**
+- Sharpe 35% melhor em janela deslocada
+- Walk-forward só 1 window marginal (vs 2 full FAIL)
+- Decay negativo significa **edge se fortalecendo na segunda metade** (oposto do recent onde decay era 88%)
+- Sensitivity cliff persiste em ambas (score ≥0.55/0.56) — isso é problema intrínseco do modelo, não da janela
+- Concentração em 1 símbolo (SAND 42% em displaced, ETH 36% em recent) — fragilidade estrutural
+
+**Diagnóstico confirmado:** CITADEL não é overfit clássico — ele **funciona melhor em janelas passadas do que no atual regime BULL crypto sustentado**. Edge está decaindo no regime atual, mas histórico é real.
+
+**Recomendação final:** manter CITADEL em backlog com peso reduzido no MILLENNIUM (≤0.15), não excluir permanentemente. Se regime virar (bear ou chop), engine tende a voltar a funcionar.
 
 ---
 
