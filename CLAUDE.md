@@ -185,18 +185,22 @@ aurum.finance/
 
 ### Engines — Nomes e Identidades
 
-| Logger        | Nome                | Inspiração     | Conceito |
-|---------------|---------------------|----------------|---|
-| `CITADEL`     | CITADEL v3.6        | Citadel LLC    | Systematic momentum, Ω fractal 5D |
-| `RENAISSANCE` | RENAISSANCE         | RenTech        | Harmonic Bayesian + entropy + Hurst |
-| `JANE_STREET` | JANE STREET v5.0    | Jane Street    | Delta-neutral cross-venue arb |
-| `DE_SHAW`     | DE SHAW             | D.E. Shaw      | Engle-Granger cointegration pairs |
-| `BRIDGEWATER` | BRIDGEWATER         | Bridgewater    | Macro sentiment contrarian |
-| `JUMP`        | JUMP                | Jump Trading   | CVD divergence, imbalance, liquidation |
-| `TWO_SIGMA`   | TWO SIGMA           | Two Sigma      | ML meta-ensemble LightGBM |
-| `AQR`         | AQR                 | AQR Capital    | Evolutionary fitness allocation |
-| `MILLENNIUM`  | MILLENNIUM          | Millennium Mgmt | Multi-strategy pod orchestrator |
-| `WINTON`      | WINTON              | Winton Group   | HMM + GARCH + Hurst + seasonality (meta) |
+| Logger        | Nome                | Inspiração     | Status OOS (2026-04-17) | Conceito |
+|---------------|---------------------|----------------|-------------------------|---|
+| `CITADEL`     | CITADEL v3.6        | Citadel LLC    | ✅ EDGE_DE_REGIME       | Systematic momentum, Ω fractal 5D |
+| `RENAISSANCE` | RENAISSANCE         | RenTech        | ⚠️ inflado 2×, real ~2.4 | Harmonic Bayesian + entropy + Hurst |
+| `JANE_STREET` | JANE STREET v5.0    | Jane Street    | ⚪ arb, não direcional  | Delta-neutral cross-venue arb |
+| `DE_SHAW`     | DE SHAW             | D.E. Shaw      | 🔴 NO_EDGE              | Engle-Granger cointegration pairs |
+| `BRIDGEWATER` | BRIDGEWATER         | Bridgewater    | 🔴 BUG_SUSPECT          | Macro sentiment contrarian |
+| `JUMP`        | JUMP                | Jump Trading   | ✅ EDGE_DE_REGIME       | CVD divergence, imbalance, liquidation |
+| `TWO_SIGMA`   | TWO SIGMA           | Two Sigma      | ⚪ fora da bateria OOS  | ML meta-ensemble LightGBM |
+| `AQR`         | AQR                 | AQR Capital    | ⚪ fora da bateria OOS  | Evolutionary fitness allocation |
+| `MILLENNIUM`  | MILLENNIUM          | Millennium Mgmt| orquestrador (meta)     | Multi-strategy pod orchestrator |
+| `WINTON`      | WINTON              | Winton Group   | orquestrador (meta)     | HMM + GARCH + Hurst + seasonality |
+| `PHI`         | PHI                 | —              | 🆕 em overfit_audit     | Fibonacci fractal, clusters multi-TF |
+| `KEPOS`       | KEPOS               | Kepos Capital  | 🔴 INSUFFICIENT_SAMPLE  | Hawkes-based intensity |
+| `MEDALLION`   | MEDALLION           | Medallion Fund | 🔴 NO_EDGE              | Berlekamp-Laufer 7-signal |
+| `GRAHAM`      | GRAHAM              | Benjamin Graham| 🗄️ ARQUIVADO            | 4h value — overfit honesto |
 
 ### Pipeline de Sinais (CITADEL)
 
