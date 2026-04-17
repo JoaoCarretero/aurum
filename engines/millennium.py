@@ -119,7 +119,7 @@ ENGINE_DRAWDOWN_WINDOW = 30
 ENGINE_DRAWDOWN_WARN_R = 2.0
 ENGINE_DRAWDOWN_HARD_R = 4.0
 ENGINE_DRAWDOWN_MIN_FACTOR = 0.45
-PORTFOLIO_EXECUTION_ENABLED = True
+PORTFOLIO_EXECUTION_ENABLED = False  # TEMP: F_gate_off diagnostic — revert after
 # Gate config ajustada via tools/millennium_gate_grid.py 180d (2026-04-17):
 # config "D_liberal" dominou baseline em Sharpe (+1.53), Sortino (+3.17),
 # PnL 2.5x, +19 trades (JUMP +18, CIT +2, REN -1), custo MDD +0.5pp.
@@ -133,7 +133,12 @@ PORTFOLIO_MIN_WEIGHT = {
 PORTFOLIO_CHALLENGER_RATIO = 0.85      # antes 0.92 — menos strict pra
                                         # challenger passar quando leader
                                         # tem vantagem marginal
-PORTFOLIO_CHALLENGER_MAX_GAP = 0.06
+# CHALLENGER_MAX_GAP compara pontos percentuais de peso (leader - challenger).
+# Com ENGINE_WEIGHT_CAPS permitindo 0.50 pro leader, 0.06 gap era efetivo
+# kill-switch pra CITADEL + JUMP (REN costuma liderar em BULL/BEAR = 0.40-0.50,
+# gap vs CITADEL 0.20 = 0.20-0.30 >> 0.06). Elevado pra 0.25 permite
+# challenger real participar quando ratio passa.
+PORTFOLIO_CHALLENGER_MAX_GAP = 0.25
 PORTFOLIO_GLOBAL_COOLDOWN_BARS = 1
 PORTFOLIO_STRATEGY_COOLDOWN_BARS = {
     "JUMP":        2,
@@ -157,6 +162,16 @@ JUMP_RECENT_QUALITY_WINDOW = 30
 JUMP_MIN_SCORE_BASE = 0.79       # antes 0.80 — 1pp abaixo do p25 histórico
 JUMP_MIN_SCORE_WEAK = 0.80       # antes 0.82 — era kill-switch de facto
 JUMP_MIN_SCORE_STRESSED = 0.81   # antes 0.84 — idem, 2% passage
+
+# ── COOLDOWN GATES (independent of portfolio execution gate) ──────
+# Rodam mesmo com PORTFOLIO_EXECUTION_ENABLED=False. Miram o padrao
+# observado em 360d F_gate_off: CITADEL levou 4 LOSS consecutive em
+# XRP/SUI/RENDER em 2025-07-19..22, contribuindo para o worst_dd.
+SYMBOL_COOLDOWN_ENABLED = True
+SYMBOL_COOLDOWN_BARS_AFTER_LOSS = 24   # 24 × 15m = 6h sem retry no mesmo symbol
+ENGINE_LOSS_STREAK_ENABLED = True
+ENGINE_LOSS_STREAK_THRESHOLD = 3       # N LOSS consecutive na mesma engine
+ENGINE_LOSS_STREAK_SKIPS = 2           # pula proximos M trades da engine
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 ENSEMBLE_WINDOW    = 30    # trades lookback para scoring rolling
@@ -501,7 +516,7 @@ def _portfolio_execution_gate(trade, strat, final_w, dominant, last_portfolio_ts
             min_score = JUMP_MIN_SCORE_STRESSED
         elif recent_r and avg_recent_r < 0.08:
             min_score = JUMP_MIN_SCORE_WEAK
-        if score < min_score:
+        if min_score > 0.0 and score <= min_score:
             return False, "jump_quality_floor", {
                 "leader": leader,
                 "leader_w": leader_w,
@@ -699,6 +714,10 @@ def operational_core_reweight(all_trades):
     out = []
     last_portfolio_ts = None
     last_strategy_ts = {}
+    # Cooldown trackers (funcionam com ou sem portfolio gate).
+    last_symbol_loss_ts: dict[str, object] = {}
+    engine_loss_streak: dict[str, int] = {}
+    engine_cooldown_skips: dict[str, int] = {}
 
     for idx, t in enumerate(sorted_t):
         strat = t.get("strategy", "CITADEL")
@@ -763,6 +782,36 @@ def operational_core_reweight(all_trades):
         final_w = {name: (boosted_w[name] / total_r if total_r > 0 else BASE_CAPITAL_WEIGHTS[name]) for name in active_strats}
         final_w = _apply_engine_weight_caps(final_w, active_strats)
         leader = max(final_w, key=final_w.get)
+
+        # Symbol + engine-streak cooldowns rodam INDEPENDENTE do portfolio
+        # gate. Miram cluster de losses (ex: 4 LOSS em XRP em 48h) sem
+        # re-enable o gate inteiro.
+        sym = t.get("symbol")
+        cooldown_reason = None
+        if (SYMBOL_COOLDOWN_ENABLED and sym
+                and sym in last_symbol_loss_ts):
+            bars = _bars_since(last_symbol_loss_ts[sym], t["timestamp"])
+            if bars < SYMBOL_COOLDOWN_BARS_AFTER_LOSS:
+                cooldown_reason = "symbol_cooldown"
+        if (cooldown_reason is None and ENGINE_LOSS_STREAK_ENABLED
+                and engine_loss_streak.get(strat, 0) >= ENGINE_LOSS_STREAK_THRESHOLD
+                and engine_cooldown_skips.get(strat, 0) < ENGINE_LOSS_STREAK_SKIPS):
+            cooldown_reason = "engine_loss_streak"
+            engine_cooldown_skips[strat] = engine_cooldown_skips.get(strat, 0) + 1
+
+        if cooldown_reason is not None:
+            gate_blocked[cooldown_reason] += 1
+            if t["result"] in ("WIN", "LOSS"):
+                history[strat].append(_r_multiple(t))
+                if t["result"] == "LOSS":
+                    if sym:
+                        last_symbol_loss_ts[sym] = t["timestamp"]
+                    engine_loss_streak[strat] = engine_loss_streak.get(strat, 0) + 1
+                else:
+                    engine_loss_streak[strat] = 0
+                    engine_cooldown_skips[strat] = 0
+            continue
+
         allow_trade, gate_reason, gate_ctx = _portfolio_execution_gate(
             t, strat, final_w, dominant, last_portfolio_ts, last_strategy_ts,
             accepted_history, history,
@@ -777,6 +826,13 @@ def operational_core_reweight(all_trades):
                     log.append(t["timestamp"])
             if t["result"] in ("WIN", "LOSS"):
                 history[strat].append(_r_multiple(t))
+                if t["result"] == "LOSS":
+                    if sym:
+                        last_symbol_loss_ts[sym] = t["timestamp"]
+                    engine_loss_streak[strat] = engine_loss_streak.get(strat, 0) + 1
+                else:
+                    engine_loss_streak[strat] = 0
+                    engine_cooldown_skips[strat] = 0
             continue
 
         static_w = BASE_CAPITAL_WEIGHTS.get(strat, 1.0)
@@ -815,6 +871,13 @@ def operational_core_reweight(all_trades):
 
         if t["result"] in ("WIN", "LOSS"):
             history[strat].append(_r_multiple(t))
+            if t["result"] == "LOSS":
+                if sym:
+                    last_symbol_loss_ts[sym] = t["timestamp"]
+                engine_loss_streak[strat] = engine_loss_streak.get(strat, 0) + 1
+            else:
+                engine_loss_streak[strat] = 0
+                engine_cooldown_skips[strat] = 0
 
     if out:
         out[-1]["_kill_log"] = kill_log
