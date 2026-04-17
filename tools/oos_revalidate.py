@@ -72,7 +72,8 @@ def run_engine(spec: EngineSpec, window: Window, timeout_s: int = 900) -> dict:
     t0 = time.time()
     try:
         proc = subprocess.run(
-            cmd, cwd=str(REPO), capture_output=True, text=True, timeout=timeout_s,
+            cmd, cwd=str(REPO), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout_s,
         )
         elapsed = time.time() - t0
         after = _snapshot_runs(spec)
@@ -89,12 +90,15 @@ def run_engine(spec: EngineSpec, window: Window, timeout_s: int = 900) -> dict:
             return {
                 "engine": spec.key, "window": window.slug,
                 "status": "NO_SUMMARY", "run_id": latest,
+                "returncode": proc.returncode,
+                "stderr_tail": proc.stderr[-500:] if proc.stderr else "",
                 "elapsed_s": round(elapsed, 1),
             }
-        summary = json.loads(summary_path.read_text())
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
         return {
             "engine": spec.key, "window": window.slug,
             "status": "OK", "run_id": latest, "summary": summary,
+            "returncode": proc.returncode,
             "elapsed_s": round(elapsed, 1),
         }
     except subprocess.TimeoutExpired:
