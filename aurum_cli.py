@@ -196,17 +196,18 @@ STRATEGIES = {
         "name": "MILLENNIUM",
         "tag": "MLN",
         "desc": "Multi-strategy pod — meta portfolio orchestrator",
-        "methods": ["backtest"],
+        "methods": ["backtest","simulator","live"],
         "composite": True,
         "meta_engine": True,
-        "components": ["citadel","renaissance","jump","bridgewater"],
+        "components": ["citadel","renaissance","jump"],
         "info": [
             "Orquestrador multi-strategy sobre os engines validados.",
             "",
             "Aggregator      Signal-level merge",
             "Weighting       Sortino rolling + regime boost",
             "Kill-switch     Pausa se Sortino(20) < -0.5",
-            "Core            CITADEL + RENAISSANCE + JUMP + BRIDGEWATER",
+            "Core            CITADEL + RENAISSANCE + JUMP",
+            "Bootstrap live  runner dedicado prepara preflight; execucao real segue bloqueada",
         ],
     },
     "kepos": {
@@ -264,7 +265,7 @@ STRATEGIES = {
         "info": [
             "Re-pondera trades de outros engines via LightGBM.",
             "",
-            "Requer          backtests previos do core operacional",
+            "Requer          backtests previos do universo meta-engine",
             "Features        regime HMM + Hurst + volatilidade + decay",
             "Output          feature importance + static vs ML PnL",
             "Standalone      imprime instrucoes se nao ha trades em disco",
@@ -306,9 +307,11 @@ def _resolve(strategy, method, config):
     if method == "simulator":
         if strategy == "citadel":    return "live","engines/live.py",[mode]
         if strategy == "janestreet": return "arb","engines/janestreet.py",[mode]
+        if strategy == "millennium": return "multi","engines/millennium_live.py",[mode]
     if method == "live":
         if strategy == "citadel":    return "live","engines/live.py",[mode]
         if strategy == "janestreet": return "arb","engines/janestreet.py",[mode]
+        if strategy == "millennium": return "multi","engines/millennium_live.py",[mode]
     return "","",[]
 
 from config.engines import PROC_NAMES as ENGINE_NAMES
@@ -944,7 +947,7 @@ def main():
     # Real strategy names (must match keys in STRATEGIES dict and branches in _resolve).
     # backtest supports 6; simulator/live are limited to engines with a runtime mode.
     BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium", "kepos", "graham", "medallion", "twosigma", "aqr"]
-    LIVE_STRATS = ["citadel", "janestreet"]
+    LIVE_STRATS = ["citadel", "janestreet", "millennium"]
 
     p=sub.add_parser("backtest",aliases=["bt"]); p.add_argument("strategy",choices=BT_STRATS,nargs="?",default="citadel"); p.add_argument("--days",type=int,default=90); p.add_argument("--plots",action="store_true"); p.add_argument("--leverage",type=float,default=None)
     p=sub.add_parser("simulator",aliases=["sim"]); p.add_argument("strategy",choices=LIVE_STRATS,nargs="?",default="citadel"); p.add_argument("--mode",type=int,default=1)

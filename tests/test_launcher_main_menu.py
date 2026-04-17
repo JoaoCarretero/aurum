@@ -102,6 +102,11 @@ def test_main_groups_cover_all_legacy_destinations(mod):
     assert not missing, f"MAIN_GROUPS missing destinations: {missing}"
 
 
+def test_calc_centered_viewport(mod):
+    viewport = mod.App._calc_centered_viewport(1440, 900, 920, 540)
+    assert viewport == (260, 180, 1180, 720)
+
+
 # ── App / live-cache state ──────────────────────────────────────
 
 def test_app_has_menu_live_cache(app):
@@ -157,6 +162,15 @@ def test_menu_main_bloomberg_renders_without_exception(app):
     assert len(items) > 20, f"expected many canvas items, got {len(items)}"
 
 
+def test_menu_main_bloomberg_realigns_tile_slots_on_resize(app, monkeypatch):
+    app._menu_main_bloomberg()
+    monkeypatch.setattr(app._menu_canvas, "winfo_width", lambda: 1400)
+    monkeypatch.setattr(app._menu_canvas, "winfo_height", lambda: 900)
+    app._render_main_menu()
+    assert app._active_tile_slots[0][1:] == (292, 316)
+    assert app._active_cd_center == (700, 436)
+
+
 def test_focus_moves_with_arrow_right(app):
     app._menu_main_bloomberg()
     app.update_idletasks()
@@ -194,6 +208,13 @@ def test_sub_select_dispatches_to_method(app, monkeypatch):
     app._menu_tile_expand(0)
     app._menu_sub_select(0, 0)
     assert called == ["crypto_futures"]
+
+
+def test_menu_live_routes_to_cockpit(app, monkeypatch):
+    called = []
+    monkeypatch.setattr(app, "_strategies_live", lambda: called.append("live"))
+    app._menu("live")
+    assert called == ["live"]
 
 
 # ── Splash ──────────────────────────────────────────────────────

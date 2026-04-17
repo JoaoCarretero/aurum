@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from launcher_support.bootstrap import canonical_engine_key, engine_display_name
 from launcher_support.execution import live_launch_plan, script_to_proc_key, strategies_progress_target
+from launcher_support.engines_live_view import assign_bucket
 
 
 def test_bootstrap_engine_aliases_normalize_legacy_names():
@@ -19,6 +20,7 @@ def test_execution_script_to_proc_key_matches_expected_legacy_proc_keys():
     assert script_to_proc_key("engines/citadel.py") == "backtest"
     assert script_to_proc_key("engines/janestreet.py") is None
     assert script_to_proc_key("engines/bridgewater.py") == "thoth"
+    assert script_to_proc_key("engines/millennium_live.py") == "multi"
 
 
 def test_execution_live_launch_plan_routes_janestreet_to_dedicated_runner():
@@ -26,6 +28,13 @@ def test_execution_live_launch_plan_routes_janestreet_to_dedicated_runner():
     assert plan["uses_dedicated_runner"] is True
     assert plan["script"] == "engines/janestreet.py"
     assert plan["stdin_inputs"] == ["3"]
+
+
+def test_execution_live_launch_plan_routes_millennium_to_dedicated_runner():
+    plan = live_launch_plan("engines/millennium.py", "paper", {"leverage": "5x"})
+    assert plan["uses_dedicated_runner"] is True
+    assert plan["script"] == "engines/millennium_live.py"
+    assert plan["cli_args"] == ["paper"]
 
 
 def test_execution_live_launch_plan_routes_generic_live_with_cli_args():
@@ -38,3 +47,12 @@ def test_execution_live_launch_plan_routes_generic_live_with_cli_args():
 def test_execution_progress_target_keeps_existing_stage_contract():
     assert strategies_progress_target("loading candles")[0] == 24.0
     assert strategies_progress_target("wr=0.54 pnl=123")[0] == 74.0
+
+
+def test_live_cockpit_assigns_bootstrap_engine_to_ready_bucket():
+    assert assign_bucket(
+        slug="millennium",
+        is_running=False,
+        live_ready=False,
+        live_bootstrap=True,
+    ) == "READY"

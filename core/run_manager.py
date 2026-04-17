@@ -375,7 +375,7 @@ def create_run_dir(engine_name: str = "citadel") -> tuple[str, Path]:
     raise RuntimeError(f"could not allocate unique run directory for {engine_name} at {stamp}")
 
 
-def append_to_index(run_dir, summary, config, overfit_results=None):
+def append_to_index(run_dir, summary, config, overfit_results=None, entry_overrides=None):
     """Append this run to data/index.json with process-safe locking."""
     run_dir = Path(run_dir)
     raw_id = run_dir.name
@@ -429,6 +429,8 @@ def append_to_index(run_dir, summary, config, overfit_results=None):
     if overfit_results and isinstance(overfit_results, dict):
         entry["overfit_pass"] = overfit_results.get("passed")
         entry["overfit_warn"] = overfit_results.get("warnings")
+    if entry_overrides and isinstance(entry_overrides, dict):
+        entry.update({k: v for k, v in entry_overrides.items() if v is not None})
 
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _index_lock():

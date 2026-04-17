@@ -26,8 +26,10 @@ from core.engine_picker import (
     _bright,
     _format_track_subtitle,
     _safe,
+    _stage_badge,
     build_tracks_from_registry,
 )
+from config.engines import ENGINE_GROUPS, ENGINE_SORT_WEIGHTS
 
 
 # ────────────────────────────────────────────────────────────
@@ -118,6 +120,7 @@ class TestEngineTrack:
     def test_required_fields_only(self):
         t = EngineTrack(slug="x", name="X")
         assert t.group == "ENGINES"
+        assert t.stage == "research"
         assert t.status == "idle"
         assert t.sharpe is None
         assert t.brief is None
@@ -193,6 +196,10 @@ class TestBuildTracksFromRegistry:
 # ────────────────────────────────────────────────────────────
 
 class TestModuleMetadata:
+    def test_picker_defaults_follow_canonical_engine_registry(self):
+        assert DEFAULT_GROUPS == ENGINE_GROUPS
+        assert TRACK_SORT_WEIGHT == ENGINE_SORT_WEIGHTS
+
     def test_default_groups_only_uses_known_groups(self):
         assert set(DEFAULT_GROUPS.values()) <= set(GROUP_ORDER)
 
@@ -204,6 +211,36 @@ class TestModuleMetadata:
 
     def test_module_info_keys_are_subset_of_group_order(self):
         assert set(MODULE_INFO.keys()) <= set(GROUP_ORDER)
+
+    def test_registry_metadata_can_drive_group_and_sort_without_override(self):
+        reg = {
+            "zeta": {"display": "ZETA", "module": "LIVE", "sort_weight": 5},
+            "alpha": {"display": "ALPHA", "module": "BACKTEST", "sort_weight": 50},
+        }
+        tracks = build_tracks_from_registry(reg)
+        assert [t.slug for t in tracks] == ["alpha", "zeta"]
+
+    def test_registry_metadata_carries_stage(self):
+        reg = {
+            "millennium": {
+                "display": "MILLENNIUM",
+                "module": "BACKTEST",
+                "sort_weight": 60,
+                "stage": "bootstrap_staging",
+            }
+        }
+        tracks = build_tracks_from_registry(reg)
+        assert tracks[0].stage == "bootstrap_staging"
+
+
+class TestStageBadge:
+    def test_known_stage_uses_registry_style(self):
+        label, _color = _stage_badge("bootstrap_staging")
+        assert label == "BOOTSTRAP"
+
+    def test_unknown_stage_falls_back_to_uppercase(self):
+        label, _color = _stage_badge("shadow")
+        assert label == "SHADOW"
 
 
 # ────────────────────────────────────────────────────────────

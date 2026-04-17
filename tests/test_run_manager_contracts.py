@@ -226,6 +226,31 @@ class TestAppendToIndex:
         assert data[0]["overfit_pass"] is False
         assert data[0]["overfit_warn"] == ["x", "y"]
 
+    def test_entry_overrides_can_pin_paths_and_run_id(self, isolated_dirs):
+        runs, index = isolated_dirs
+        rd = self._mkrun(runs, "w90d")
+        explicit_dir = runs / "battery_2026-04-17_1800" / "w90d"
+        explicit_dir.mkdir(parents=True)
+        rm.append_to_index(
+            rd,
+            summary={"engine": "MILLENNIUM", "n_trades": 12},
+            config={"SCAN_DAYS": 90},
+            entry_overrides={
+                "run_id": "millennium_battery_2026-04-17_1800_w90d",
+                "run_dir": str(explicit_dir),
+                "summary_path": str(explicit_dir / "summary.json"),
+                "config_path": str(explicit_dir / "config.json"),
+                "report_html_path": str(explicit_dir / "report.html"),
+                "source": "millennium_battery",
+            },
+        )
+        data = json.loads(index.read_text(encoding="utf-8"))
+        assert data[0]["run_id"] == "millennium_battery_2026-04-17_1800_w90d"
+        assert data[0]["run_dir"] == str(explicit_dir)
+        assert data[0]["summary_path"] == str(explicit_dir / "summary.json")
+        assert data[0]["report_html_path"] == str(explicit_dir / "report.html")
+        assert data[0]["source"] == "millennium_battery"
+
     def test_concurrent_appends_do_not_drop_entries(self, isolated_dirs):
         runs, index = isolated_dirs
         start = threading.Barrier(8)

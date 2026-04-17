@@ -22,6 +22,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+from config.engines import ENGINE_GROUPS, ENGINE_SORT_WEIGHTS
 
 # ── PALETTE (HL2 VGUI, via SSOT) ─────────────────────────────
 from core.ui_palette import (
@@ -237,6 +238,7 @@ class EngineTrack:
     slug: str
     name: str
     group: str = "ENGINES"
+    stage: str = "research"
     tagline: str = ""
     script_path: str = ""            # absolute or repo-relative path
     status: str = "idle"             # idle | running | error | unknown
@@ -256,43 +258,13 @@ class EngineTrack:
 
 
 # ── DEFAULT GROUP MAPPING ────────────────────────────────────
-DEFAULT_GROUPS = {
-    "citadel":     "BACKTEST",
-    "renaissance": "BACKTEST",
-    "jump":        "BACKTEST",
-    "bridgewater": "BACKTEST",
-    "deshaw":      "BACKTEST",
-    "millennium":  "BACKTEST",
-    "twosigma":    "BACKTEST",
-    "kepos":       "BACKTEST",
-    "graham":      "BACKTEST",
-    "medallion":   "BACKTEST",
-    "live":        "LIVE",
-    "janestreet":  "LIVE",
-    "aqr":         "TOOLS",
-    "winton":      "TOOLS",
-}
+DEFAULT_GROUPS = dict(ENGINE_GROUPS)
 GROUP_ORDER = ("BACKTEST", "LIVE", "TOOLS")
 
 # Explicit sort weight per slug so we can promote validated engines (e.g.
 # RENAISSANCE just above MILLENNIUM) instead of relying on alphabetical.
 # Lower weight = appears earlier. Anything not listed falls back to alpha.
-TRACK_SORT_WEIGHT = {
-    "citadel":     10,
-    "bridgewater": 20,
-    "deshaw":      30,
-    "jump":        40,
-    "renaissance": 50,
-    "millennium":  60,
-    "twosigma":    70,
-    "kepos":       72,
-    "graham":      74,
-    "medallion":   76,
-    "live":        80,
-    "janestreet":  90,
-    "aqr":        100,
-    "winton":     110,
-}
+TRACK_SORT_WEIGHT = dict(ENGINE_SORT_WEIGHTS)
 MODULE_INFO = {
     "BACKTEST": {
         "label": "RESEARCH",
@@ -311,6 +283,21 @@ MODULE_INFO = {
     },
 }
 
+_STAGE_STYLE = {
+    "validated": ("VALIDATED", GREEN),
+    "bootstrap_staging": ("BOOTSTRAP", AMBER),
+    "research": ("RESEARCH", DIM2),
+    "experimental": ("EXPERIMENTAL", RED),
+    "quarantined": ("QUARANTINED", RED),
+}
+
+
+def _stage_badge(stage: Optional[str]) -> tuple[str, str]:
+    key = str(stage or "research").strip().lower()
+    if key in _STAGE_STYLE:
+        return _STAGE_STYLE[key]
+    return (key.upper() or "RESEARCH", DIM2)
+
 
 def build_tracks_from_registry(
     registry: dict,
@@ -323,10 +310,12 @@ def build_tracks_from_registry(
     gmap = groups or DEFAULT_GROUPS
     tracks: list[EngineTrack] = []
     for slug, meta in registry.items():
+        group = meta.get("module", gmap.get(slug, "ENGINES"))
         tracks.append(EngineTrack(
             slug=slug,
             name=meta.get("display", slug.upper()),
-            group=gmap.get(slug, "ENGINES"),
+            group=group,
+            stage=str(meta.get("stage", "research")),
             tagline=meta.get("desc", ""),
             script_path=meta.get("script", ""),
             on_run=on_run_for(slug, meta) if on_run_for else None,
@@ -337,7 +326,7 @@ def build_tracks_from_registry(
     order_idx = {g: i for i, g in enumerate(GROUP_ORDER)}
     tracks.sort(key=lambda t: (
         order_idx.get(t.group, 99),
-        TRACK_SORT_WEIGHT.get(t.slug, 999),
+        int(registry.get(t.slug, {}).get("sort_weight", TRACK_SORT_WEIGHT.get(t.slug, 999))),
         t.name,
     ))
     return tracks
@@ -695,6 +684,10 @@ def render(
                  font=(FONT, 7), fg=DIM, bg=PANEL).pack(side="left")
         tk.Label(line1, text=f" · {mod['label']}",
                  font=(FONT, 7), fg=DIM, bg=PANEL).pack(side="left")
+
+        stage_label, stage_color = _stage_badge(t.stage)
+        tk.Label(line1, text=f" . {stage_label}",
+                 font=(FONT, 7, "bold"), fg=stage_color, bg=PANEL).pack(side="left")
 
         status = "running" if _is_track_running(t) else (t.status or "idle")
         sc = _STATE_COLORS.get(status, DIM)
