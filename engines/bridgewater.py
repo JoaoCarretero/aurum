@@ -199,8 +199,6 @@ def _align_oi_signal_to_candles(
         direction="backward",
         allow_exact_matches=True,
     )
-    if merged["oi_signal"].isna().any():
-        merged["oi_signal"] = merged["oi_signal"].bfill()
     return pd.to_numeric(merged["oi_signal"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
 
 
