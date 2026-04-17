@@ -90,12 +90,281 @@ _fh = logging.FileHandler(RUN_DIR / "logs" / "newton.log", encoding="utf-8")
 _fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s"))
 log.addHandler(_fh)
 
+_BETA_MIN = float(globals().get("NEWTON_BETA_MIN", 0.10))
+_BETA_MAX = float(globals().get("NEWTON_BETA_MAX", 4.00))
+_MAX_REUSE_PER_SYMBOL = int(globals().get("NEWTON_MAX_REUSE_PER_SYMBOL", 2))
+_MIN_EDGE_COST_MULT = float(globals().get("NEWTON_MIN_EDGE_COST_MULT", 1.5))
+_ROLLING_MIN_SIGHTINGS = int(globals().get("NEWTON_ROLLING_MIN_SIGHTINGS", 2))
+_PAIR_EDGE_COST_MULT = float(globals().get("NEWTON_PAIR_EDGE_COST_MULT", 1.0))
+_PAIR_MIN_TRAIN_TRADES = int(globals().get("NEWTON_PAIR_MIN_TRAIN_TRADES", 3))
+_PAIR_MIN_PROFIT_FACTOR = float(globals().get("NEWTON_PAIR_MIN_PROFIT_FACTOR", 1.1))
+
+
+def _pair_stats_from_prices(a: np.ndarray, b: np.ndarray) -> dict | None:
+    if not HAS_STATSMODELS:
+        return None
+    if len(a) < 2 or len(b) < 2:
+        return None
+
+    try:
+        _, pvalue, _ = coint(a, b)
+    except Exception:
+        return None
+
+    if pvalue > NEWTON_COINT_PVALUE:
+        return None
+
+    try:
+        b_with_const = sm.add_constant(b)
+        model = sm.OLS(a, b_with_const).fit()
+        beta = float(model.params[1])
+        alpha = float(model.params[0])
+    except Exception:
+        return None
+
+    if abs(beta) < _BETA_MIN or abs(beta) > _BETA_MAX:
+        return None
+
+    if not _pair_has_economic_width(a, b, beta, alpha):
+        return None
+
+    spread = a - beta * b - alpha
+    spread_lag = np.roll(spread, 1)
+    spread_lag[0] = spread[0]
+    delta = spread[1:] - spread_lag[1:]
+    lag_vals = spread_lag[1:]
+    if np.std(lag_vals) < 1e-12:
+        return None
+
+    try:
+        X_hl = sm.add_constant(lag_vals)
+        model_hl = sm.OLS(delta, X_hl).fit()
+        theta = float(model_hl.params[1])
+    except Exception:
+        return None
+
+    if theta >= 0:
+        return None
+
+    half_life = -np.log(2) / theta
+    if half_life < NEWTON_HALFLIFE_MIN or half_life > NEWTON_HALFLIFE_MAX:
+        return None
+
+    return {
+        "pvalue": round(pvalue, 6),
+        "beta": round(beta, 6),
+        "alpha": round(alpha, 6),
+        "half_life": round(float(half_life), 2),
+        "spread_std": round(float(np.std(spread)), 8),
+    }
+
+
+def _pair_has_economic_width(a: np.ndarray, b: np.ndarray, beta: float, alpha: float) -> bool:
+    if len(a) == 0 or len(b) == 0:
+        return False
+    spread = a - beta * b - alpha
+    spread_std = float(np.std(spread))
+    median_notional = float(np.median(np.abs(a) + np.abs(beta) * np.abs(b)))
+    if median_notional <= 1e-9:
+        return False
+    gross_edge_frac = spread_std / median_notional
+    roundtrip_cost_frac = 2.0 * (SLIPPAGE + SPREAD + COMMISSION)
+    return gross_edge_frac >= roundtrip_cost_frac * _PAIR_EDGE_COST_MULT
+
+
+def _pair_payoff_stats_window(df_a: pd.DataFrame, df_b: pd.DataFrame, pair_info: dict) -> dict:
+    beta = pair_info["beta"]
+    alpha = pair_info["alpha"]
+
+    df_a = indicators(df_a.copy())
+    merged = calc_spread_zscore(df_a, df_b.copy(), beta, alpha)
+    if len(merged) < max(80, NEWTON_SPREAD_WINDOW + 20):
+        return {"n_trades": 0, "pnl": 0.0, "expectancy": 0.0, "profit_factor": 0.0}
+
+    zscore = merged["zscore"].values
+    spread_vals = merged["spread"].values
+    spread_mean_vals = merged["spread_mean"].values
+    a_open = merged["a_open"].values if "a_open" in merged.columns else merged["a_close"].values
+    a_close = merged["a_close"].values
+    a_high = merged["a_high"].values if "a_high" in merged.columns else a_close
+    a_low = merged["a_low"].values if "a_low" in merged.columns else a_close
+    b_open = merged["b_open"].values if "b_open" in merged.columns else merged["b_close"].values
+    b_close = merged["b_close"].values
+    a_atr = merged["a_atr"].values if "a_atr" in merged.columns else None
+
+    _MAINT_MARGIN = 0.005
+
+    def _liq_price(entry: float, direction: str) -> float:
+        if LEVERAGE <= 1.0:
+            return -1.0 if direction == "BULLISH" else entry * 10.0
+        if direction == "BULLISH":
+            return entry * (1 - 1 / LEVERAGE + _MAINT_MARGIN)
+        return entry * (1 + 1 / LEVERAGE - _MAINT_MARGIN)
+
+    pnls = []
+    min_idx = max(40, NEWTON_SPREAD_WINDOW)
+    in_trade = False
+    trade_dir = None
+    trade_entry_idx = None
+    trade_entry_price = None
+    trade_entry_price_b = None
+    size_held = 1.0
+
+    for idx in range(min_idx, len(merged) - 2):
+        z = zscore[idx]
+        atr = a_atr[idx] if a_atr is not None else a_close[idx] * 0.01
+
+        if in_trade:
+            exit_now = False
+            result = None
+            if trade_dir == "BULLISH":
+                if a_low[idx] <= _liq_price(trade_entry_price, "BULLISH"):
+                    exit_now = True
+                    result = "LOSS"
+            else:
+                if a_high[idx] >= _liq_price(trade_entry_price, "BEARISH"):
+                    exit_now = True
+                    result = "LOSS"
+
+            if not exit_now and trade_dir == "BEARISH":
+                if z <= NEWTON_ZSCORE_EXIT:
+                    exit_now = True
+                    result = "WIN"
+                elif z >= NEWTON_ZSCORE_STOP:
+                    exit_now = True
+                    result = "LOSS"
+            elif not exit_now:
+                if z >= NEWTON_ZSCORE_EXIT:
+                    exit_now = True
+                    result = "WIN"
+                elif z <= -NEWTON_ZSCORE_STOP:
+                    exit_now = True
+                    result = "LOSS"
+
+            duration = idx - trade_entry_idx
+            if not exit_now and duration >= NEWTON_MAX_HOLD:
+                exit_now = True
+                result = "WIN" if (
+                    (trade_dir == "BEARISH" and z < zscore[trade_entry_idx]) or
+                    (trade_dir == "BULLISH" and z > zscore[trade_entry_idx])
+                ) else "LOSS"
+
+            if exit_now:
+                pnl = _pair_pnl(
+                    direction=trade_dir,
+                    beta=beta,
+                    entry_a_raw=trade_entry_price,
+                    exit_a_raw=float(a_close[idx]),
+                    entry_b_raw=trade_entry_price_b,
+                    exit_b_raw=float(b_close[idx]),
+                    size_a=size_held,
+                    duration=duration,
+                )
+                pnls.append(float(pnl))
+                in_trade = False
+                continue
+
+        if in_trade:
+            continue
+
+        direction = None
+        if z > NEWTON_ZSCORE_ENTRY:
+            direction = "BEARISH"
+        elif z < -NEWTON_ZSCORE_ENTRY:
+            direction = "BULLISH"
+        if direction is None:
+            continue
+
+        if idx + 1 >= len(merged):
+            continue
+        raw_entry = float(a_open[idx + 1])
+        raw_entry_b = float(b_open[idx + 1])
+        spread_deviation = float(spread_vals[idx] - spread_mean_vals[idx]) if not pd.isna(spread_mean_vals[idx]) else 0.0
+        if not _pair_has_edge_after_costs(
+            spread_deviation=spread_deviation,
+            notional_a=raw_entry,
+            notional_b=abs(beta) * raw_entry_b,
+        ):
+            continue
+        if atr <= 0:
+            continue
+
+        in_trade = True
+        trade_dir = direction
+        trade_entry_idx = idx
+        trade_entry_price = raw_entry
+        trade_entry_price_b = raw_entry_b
+
+    if not pnls:
+        return {"n_trades": 0, "pnl": 0.0, "expectancy": 0.0, "profit_factor": 0.0}
+
+    gains = sum(p for p in pnls if p > 0)
+    losses = abs(sum(p for p in pnls if p < 0))
+    profit_factor = gains / losses if losses > 1e-9 else (999.0 if gains > 0 else 0.0)
+    total_pnl = float(sum(pnls))
+    expectancy = total_pnl / len(pnls)
+    return {
+        "n_trades": len(pnls),
+        "pnl": round(total_pnl, 2),
+        "expectancy": round(expectancy, 4),
+        "profit_factor": round(float(profit_factor), 4),
+    }
+
+
+def _pair_is_tradeable_window(df_a: pd.DataFrame, df_b: pd.DataFrame, pair_info: dict) -> bool:
+    stats = _pair_payoff_stats_window(df_a, df_b, pair_info)
+    pair_info.update({
+        "train_n_trades": stats["n_trades"],
+        "train_pnl": stats["pnl"],
+        "train_expectancy": stats["expectancy"],
+        "train_profit_factor": stats["profit_factor"],
+    })
+    return (
+        stats["n_trades"] >= _PAIR_MIN_TRAIN_TRADES and
+        stats["pnl"] > 0 and
+        stats["expectancy"] > 0 and
+        stats["profit_factor"] >= _PAIR_MIN_PROFIT_FACTOR
+    )
+
+
+def _revalidate_pair_window(df_a: pd.DataFrame, df_b: pd.DataFrame,
+                            end_idx: int, window_bars: int) -> dict | None:
+    start_idx = max(0, end_idx - window_bars + 1)
+    a = df_a["close"].iloc[start_idx:end_idx + 1].to_numpy(dtype=float)
+    b = df_b["close"].iloc[start_idx:end_idx + 1].to_numpy(dtype=float)
+    if len(a) < max(50, NEWTON_SPREAD_WINDOW):
+        return None
+    return _pair_stats_from_prices(a, b)
+
+
+def _apply_pair_selection_limits(pairs: list[dict]) -> list[dict]:
+    pairs = sorted(
+        pairs,
+        key=lambda p: (
+            -float(p.get("train_profit_factor", 0.0)),
+            -float(p.get("train_pnl", 0.0)),
+            p["pvalue"],
+        ),
+    )
+    selected = []
+    symbol_usage = defaultdict(int)
+    for pair in pairs:
+        if symbol_usage[pair["sym_a"]] >= _MAX_REUSE_PER_SYMBOL:
+            continue
+        if symbol_usage[pair["sym_b"]] >= _MAX_REUSE_PER_SYMBOL:
+            continue
+        selected.append(pair)
+        symbol_usage[pair["sym_a"]] += 1
+        symbol_usage[pair["sym_b"]] += 1
+    return selected
+
 
 # ══════════════════════════════════════════════════════════════
 #  COINTEGRATION ANALYSIS
 # ══════════════════════════════════════════════════════════════
 
-def find_cointegrated_pairs(all_dfs: dict, min_obs: int = 200) -> list[dict]:
+def find_cointegrated_pairs(all_dfs: dict, min_obs: int = 200,
+                            log_results: bool = True) -> list[dict]:
     """
     Engle-Granger cointegration test on all symbol pairs.
     Returns list of valid pairs with stats.
@@ -123,56 +392,69 @@ def find_cointegrated_pairs(all_dfs: dict, min_obs: int = 200) -> list[dict]:
         a = merged["a"].values
         b = merged["b"].values
 
-        try:
-            score, pvalue, _ = coint(a, b)
-        except Exception:
-            continue
-
-        if pvalue > NEWTON_COINT_PVALUE:
-            continue
-
-        # OLS hedge ratio: a = beta * b + alpha + epsilon
-        b_with_const = sm.add_constant(b)
-        model = sm.OLS(a, b_with_const).fit()
-        beta = model.params[1]
-        alpha = model.params[0]
-
-        # spread
-        spread = a - beta * b - alpha
-
-        # half-life via Ornstein-Uhlenbeck
-        spread_lag = np.roll(spread, 1)
-        spread_lag[0] = spread[0]
-        delta = spread[1:] - spread_lag[1:]
-        lag_vals = spread_lag[1:]
-
-        if np.std(lag_vals) < 1e-12:
-            continue
-
-        X_hl = sm.add_constant(lag_vals)
-        model_hl = sm.OLS(delta, X_hl).fit()
-        theta = model_hl.params[1]
-
-        if theta >= 0:
-            continue  # not mean-reverting
-
-        half_life = -np.log(2) / theta
-        if half_life < NEWTON_HALFLIFE_MIN or half_life > NEWTON_HALFLIFE_MAX:
+        pair_stats = _pair_stats_from_prices(a, b)
+        if pair_stats is None:
             continue
 
         pairs.append({
             "sym_a": sym_a,
             "sym_b": sym_b,
-            "pvalue": round(pvalue, 6),
-            "beta": round(beta, 6),
-            "alpha": round(alpha, 6),
-            "half_life": round(half_life, 2),
-            "spread_std": round(np.std(spread), 8),
+            **pair_stats,
         })
 
-    # sort by p-value (most cointegrated first)
-    pairs.sort(key=lambda p: p["pvalue"])
-    log.info(f"  cointegration  ·  {len(list(combinations(symbols, 2)))} testados  ·  {len(pairs)} validos")
+    pairs = _apply_pair_selection_limits(pairs)
+    if log_results:
+        log.info(f"  cointegration  ·  {len(list(combinations(symbols, 2)))} testados  ·  {len(pairs)} validos")
+        for p in pairs:
+            log.info(f"    {p['sym_a']}/{p['sym_b']}  p={p['pvalue']:.4f}  "
+                     f"beta={p['beta']:.4f}  HL={p['half_life']:.1f}")
+    return pairs
+
+
+def discover_cointegrated_pairs_over_time(all_dfs: dict, min_obs: int = 200,
+                                          window_bars: int | None = None,
+                                          step_bars: int | None = None) -> list[dict]:
+    if not all_dfs:
+        return []
+
+    sample_df = next(iter(all_dfs.values()))
+    if sample_df is None or len(sample_df) < min_obs:
+        return []
+
+    window_bars = window_bars or max(min_obs, NEWTON_SPREAD_WINDOW + 50, int(NEWTON_RECALC_EVERY) * 4)
+    step_bars = step_bars or max(1, int(NEWTON_RECALC_EVERY))
+    last_idx = len(sample_df) - 1
+    checkpoints = range(window_bars - 1, last_idx + 1, step_bars)
+
+    best_by_pair: dict[tuple[str, str], dict] = {}
+    sightings: dict[tuple[str, str], int] = defaultdict(int)
+    for end_idx in checkpoints:
+        sliced = {}
+        start_idx = max(0, end_idx - window_bars + 1)
+        for sym, df in all_dfs.items():
+            sub = df.iloc[start_idx:end_idx + 1].copy()
+            if len(sub) >= min_obs:
+                sliced[sym] = sub
+        if len(sliced) < 2:
+            continue
+        for pair in find_cointegrated_pairs(sliced, min_obs=min_obs, log_results=False):
+            if not _pair_is_tradeable_window(sliced[pair["sym_a"]], sliced[pair["sym_b"]], pair):
+                continue
+            key = (pair["sym_a"], pair["sym_b"])
+            sightings[key] += 1
+            prev = best_by_pair.get(key)
+            if prev is None or pair["pvalue"] < prev["pvalue"]:
+                best_by_pair[key] = pair
+
+    persistent = [
+        pair for key, pair in best_by_pair.items()
+        if sightings[key] >= _ROLLING_MIN_SIGHTINGS
+    ]
+    pairs = _apply_pair_selection_limits(persistent)
+    log.info(
+        f"  cointegration rolling  ·  {len(best_by_pair)} candidatos unicos  ·  "
+        f"{len(persistent)} persistentes  ·  {len(pairs)} apos limites"
+    )
     for p in pairs:
         log.info(f"    {p['sym_a']}/{p['sym_b']}  p={p['pvalue']:.4f}  "
                  f"beta={p['beta']:.4f}  HL={p['half_life']:.1f}")
@@ -189,7 +471,9 @@ def calc_spread_zscore(df_a: pd.DataFrame, df_b: pd.DataFrame,
     merged = pd.merge(
         df_a[["time", "open", "high", "low", "close", "vol", "tbb", "atr"]].rename(
             columns={c: f"a_{c}" if c != "time" else c for c in df_a.columns}),
-        df_b[["time", "close"]].rename(columns={"close": "b_close"}),
+        df_b[["time", "open", "high", "low", "close"]].rename(
+            columns={c: f"b_{c}" if c != "time" else c for c in ("time", "open", "high", "low", "close")}
+        ),
         on="time", how="inner",
     )
 
@@ -198,8 +482,76 @@ def calc_spread_zscore(df_a: pd.DataFrame, df_b: pd.DataFrame,
     roll_std = merged["spread"].rolling(window, min_periods=20).std()
     merged["zscore"] = (merged["spread"] - roll_mean) / roll_std.replace(0, np.nan)
     merged["zscore"] = merged["zscore"].fillna(0)
+    merged["spread_mean"] = roll_mean
+    merged["spread_std_roll"] = roll_std
 
     return merged
+
+
+def _leg_fill_price(raw_price: float, side: str, phase: str) -> float:
+    slip = SLIPPAGE + SPREAD
+    if phase == "entry":
+        return raw_price * (1 + slip) if side == "LONG" else raw_price * (1 - slip)
+    return raw_price * (1 - slip) if side == "LONG" else raw_price * (1 + slip)
+
+
+def _leg_pnl(entry_raw: float, exit_raw: float, units: float, side: str) -> float:
+    entry_fill = _leg_fill_price(entry_raw, side, "entry")
+    exit_fill = _leg_fill_price(exit_raw, side, "exit")
+    if side == "LONG":
+        entry_net = entry_fill * (1 + COMMISSION)
+        exit_net = exit_fill * (1 - COMMISSION)
+        return units * (exit_net - entry_net)
+    entry_net = entry_fill * (1 - COMMISSION)
+    exit_net = exit_fill * (1 + COMMISSION)
+    return units * (entry_net - exit_net)
+
+
+def _hedge_side(direction: str, beta: float) -> str:
+    if direction == "BULLISH":
+        return "SHORT" if beta >= 0 else "LONG"
+    return "LONG" if beta >= 0 else "SHORT"
+
+
+def _pair_pnl(*, direction: str, beta: float,
+              entry_a_raw: float, exit_a_raw: float,
+              entry_b_raw: float, exit_b_raw: float,
+              size_a: float, duration: int) -> float:
+    hedge_units = size_a * abs(beta)
+    pnl_a = _leg_pnl(entry_a_raw, exit_a_raw, size_a, "LONG" if direction == "BULLISH" else "SHORT")
+    pnl_b = _leg_pnl(entry_b_raw, exit_b_raw, hedge_units, _hedge_side(direction, beta))
+    gross_notional = size_a * entry_a_raw + hedge_units * entry_b_raw
+    funding = -(gross_notional * FUNDING_PER_8H * duration / 32)
+    return round((pnl_a + pnl_b + funding) * LEVERAGE, 2)
+
+
+def _pair_has_edge_after_costs(*, spread_deviation: float, notional_a: float, notional_b: float) -> bool:
+    gross_notional = max(1e-9, abs(notional_a) + abs(notional_b))
+    gross_edge_frac = abs(spread_deviation) / gross_notional
+    roundtrip_cost_frac = 2.0 * (SLIPPAGE + SPREAD + COMMISSION)
+    return gross_edge_frac >= roundtrip_cost_frac * _MIN_EDGE_COST_MULT
+
+
+def _spread_state_at_idx(a_close: np.ndarray, b_close: np.ndarray, idx: int,
+                         beta: float, alpha: float,
+                         window: int = NEWTON_SPREAD_WINDOW) -> dict | None:
+    start_idx = max(0, idx - window + 1)
+    spread_window = a_close[start_idx:idx + 1] - beta * b_close[start_idx:idx + 1] - alpha
+    if len(spread_window) < 20:
+        return None
+    mean = float(np.mean(spread_window))
+    std = float(np.std(spread_window))
+    current_spread = float(spread_window[-1])
+    if std < 1e-12:
+        z = 0.0
+    else:
+        z = (current_spread - mean) / std
+    return {
+        "spread": current_spread,
+        "mean": mean,
+        "std": std,
+        "zscore": float(z),
+    }
 
 
 # ══════════════════════════════════════════════════════════════
@@ -213,10 +565,9 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     Scan a cointegrated pair for mean-reversion trades.
     Returns trades in the standard AURUM format.
     """
-    beta = pair_info["beta"]
-    alpha = pair_info["alpha"]
-    half_life = pair_info["half_life"]
-    pvalue = pair_info["pvalue"]
+    active_pair = dict(pair_info)
+    beta = active_pair["beta"]
+    alpha = active_pair["alpha"]
 
     # prepare indicators on the primary asset (sym_a)
     df_a = indicators(df_a)
@@ -238,7 +589,6 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     peak_equity = ACCOUNT_SIZE
     min_idx = max(200, NEWTON_SPREAD_WINDOW + 50)
 
-    zscore  = merged["zscore"].values
     a_close = merged["a_close"].values
     # HMM regime arrays (observation-only)
     _hmm_lbl = merged["hmm_regime_label"].values
@@ -251,6 +601,10 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     a_open  = merged["a_open"].values  if "a_open"  in merged.columns else a_close
     a_high  = merged["a_high"].values  if "a_high"  in merged.columns else a_close
     a_low   = merged["a_low"].values   if "a_low"   in merged.columns else a_close
+    b_open  = merged["b_open"].values  if "b_open"  in merged.columns else merged["b_close"].values
+    b_high  = merged["b_high"].values  if "b_high"  in merged.columns else merged["b_close"].values
+    b_low   = merged["b_low"].values   if "b_low"   in merged.columns else merged["b_close"].values
+    b_close = merged["b_close"].values
     a_atr   = merged["a_atr"].values   if "a_atr"   in merged.columns else None
     times   = merged["time"].values
 
@@ -269,14 +623,23 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     trade_dir = None
     trade_entry_idx = None
     trade_entry_price = None
+    trade_entry_price_b = None
+    trade_alpha = None
+    trade_beta = None
+    trade_half_life = None
+    trade_pvalue = None
+    trade_entry_z = None
     trade_stop_z = None
     size_held = 0.0
+    pair_active = True
+    last_recalc_idx = None
+    pair_reactivate_at = -1
+    recalc_window = max(200, NEWTON_SPREAD_WINDOW + 50, int(NEWTON_RECALC_EVERY) * 4)
 
     consecutive_losses = 0
     cooldown_until = -1
 
     for idx in range(min_idx, len(merged) - 2):
-        z = zscore[idx]
         price = a_close[idx]
         atr = a_atr[idx] if a_atr is not None else price * 0.01
 
@@ -304,8 +667,11 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
 
         # ── EXIT check ──
         if in_trade:
+            exit_state = _spread_state_at_idx(a_close, b_close, idx, trade_beta, trade_alpha)
+            z = exit_state["zscore"] if exit_state is not None else 0.0
             exit_now = False
             result = None
+            exit_reason = None
 
             # [Backlog #4] Path-dependent liquidation guard. Check raw price
             # adverse excursion of the primary asset BEFORE the z-score gate
@@ -317,12 +683,14 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                 if bar_low <= liq_p:
                     exit_now = True
                     result = "LOSS"
+                    exit_reason = "liquidation"
                     liq_exit_price = liq_p
             else:
                 liq_p = _liq_price(trade_entry_price, "BEARISH")
                 if bar_high >= liq_p:
                     exit_now = True
                     result = "LOSS"
+                    exit_reason = "liquidation"
                     liq_exit_price = liq_p
 
             if not exit_now and trade_dir == "BEARISH":
@@ -330,27 +698,32 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                 if z <= NEWTON_ZSCORE_EXIT:
                     exit_now = True
                     result = "WIN"
+                    exit_reason = "mean_revert"
                 elif z >= NEWTON_ZSCORE_STOP:
                     exit_now = True
                     result = "LOSS"
+                    exit_reason = "stop"
             elif not exit_now:
                 # long spread: entered when z < -entry_z, exit when z >= 0
                 if z >= NEWTON_ZSCORE_EXIT:
                     exit_now = True
                     result = "WIN"
+                    exit_reason = "mean_revert"
                 elif z <= -NEWTON_ZSCORE_STOP:
                     exit_now = True
                     result = "LOSS"
+                    exit_reason = "stop"
 
             # max hold
             duration = idx - trade_entry_idx
             if not exit_now and duration >= NEWTON_MAX_HOLD:
                 exit_now = True
+                exit_reason = "max_hold"
                 # partial mean reversion?
                 if trade_dir == "BEARISH":
-                    result = "WIN" if z < zscore[trade_entry_idx] else "LOSS"
+                    result = "WIN" if z < trade_entry_z else "LOSS"
                 else:
-                    result = "WIN" if z > zscore[trade_entry_idx] else "LOSS"
+                    result = "WIN" if z > trade_entry_z else "LOSS"
 
             if exit_now:
                 # If the liquidation branch fired, the exit price is the
@@ -365,22 +738,21 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                         del liq_exit_price
                 else:
                     exit_p = price
+                exit_p_b = float(b_close[idx])
                 duration = idx - trade_entry_idx
 
                 # PnL calculation
                 entry_p = trade_entry_price
-                slip_exit = SLIPPAGE + SPREAD
-                if trade_dir == "BULLISH":
-                    entry_cost = entry_p * (1 + COMMISSION)
-                    ep_net = exit_p * (1 - COMMISSION - slip_exit)
-                    funding = -(size_held * entry_p * FUNDING_PER_8H * duration / 32)
-                    pnl = size_held * (ep_net - entry_cost) + funding
-                else:
-                    entry_cost = entry_p * (1 - COMMISSION)
-                    ep_net = exit_p * (1 + COMMISSION + slip_exit)
-                    funding = +(size_held * entry_p * FUNDING_PER_8H * duration / 32)
-                    pnl = size_held * (entry_cost - ep_net) + funding
-                pnl = round(pnl * LEVERAGE, 2)
+                pnl = _pair_pnl(
+                    direction=trade_dir,
+                    beta=trade_beta,
+                    entry_a_raw=trade_entry_price,
+                    exit_a_raw=exit_p,
+                    entry_b_raw=trade_entry_price_b,
+                    exit_b_raw=exit_p_b,
+                    size_a=size_held,
+                    duration=duration,
+                )
                 # Apply real PnL. The previous `max(account + pnl, account * 0.5)`
                 # silently clamped per-trade losses at 50% of pre-trade account,
                 # inflating sharpe / maxDD / final equity in backtest reports.
@@ -390,6 +762,10 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
 
                 if result == "LOSS":
                     consecutive_losses += 1
+                    if exit_reason in {"stop", "liquidation"}:
+                        pair_active = False
+                        pair_reactivate_at = idx + int(NEWTON_RECALC_EVERY)
+                        vetos["pair_stop_cooldown"] += 1
                     for n_losses in sorted(STREAK_COOLDOWN.keys(), reverse=True):
                         if consecutive_losses >= n_losses:
                             cooldown_until = idx + STREAK_COOLDOWN[n_losses]
@@ -432,14 +808,17 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                     "in_transition": False,
                     "trans_mult":    1.0,
                     "entry":      round(trade_entry_price, 8),
+                    "entry_b":    round(trade_entry_price_b, 8),
                     "stop":       round(stop_price, 4),
                     "target":     round(target_price, 4),
                     "exit_p":     round(exit_p, 6),
+                    "exit_p_b":   round(exit_p_b, 6),
                     "rr":         round(rr, 2),
                     "duration":   duration,
                     "result":     result,
                     "pnl":        pnl,
                     "size":       round(size_held, 4),
+                    "hedge_size": round(size_held * abs(beta), 4),
                     "score":      round(1.0 - pvalue, 3),
                     "fractal_align": 1.0,
                     "omega_struct":   0.0, "omega_flow":     0.0,
@@ -448,11 +827,11 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                     "chop_trade":     False,
                     "bb_mid":         0.0,
                     # newton-specific
-                    "zscore_entry": round(zscore[trade_entry_idx], 3),
+                    "zscore_entry": round(trade_entry_z, 3),
                     "zscore_exit":  round(z, 3),
-                    "half_life":    half_life,
-                    "coint_pvalue": pvalue,
-                    "beta":         beta,
+                    "half_life":    trade_half_life,
+                    "coint_pvalue": trade_pvalue,
+                    "beta":         trade_beta,
                     "trade_time":   ts_str,
                     # Normalised trade outcome in R units
                     "r_multiple":   round(
@@ -469,15 +848,50 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
                 trades.append(t)
                 icon = "✓" if result == "WIN" else "✗"
                 log.info(f"  {ts_str}  {icon}  {sym_a}/{sym_b}  {trade_dir:8s}  "
-                         f"z={zscore[trade_entry_idx]:+.2f}→{z:+.2f}  ${pnl:+.2f}")
+                         f"z={trade_entry_z:+.2f}→{z:+.2f}  ${pnl:+.2f}")
 
                 in_trade = False
                 trade_dir = None
+                trade_alpha = None
+                trade_beta = None
+                trade_half_life = None
+                trade_pvalue = None
+                trade_entry_z = None
                 continue
 
         # ── ENTRY check ──
         if in_trade:
             continue
+
+        if idx < pair_reactivate_at:
+            vetos["pair_cooldown_active"] += 1
+            continue
+
+        if idx >= recalc_window and (
+            last_recalc_idx is None or idx - last_recalc_idx >= int(NEWTON_RECALC_EVERY)
+        ):
+            refreshed = _revalidate_pair_window(df_a, df_b, idx, recalc_window)
+            last_recalc_idx = idx
+            if refreshed is None:
+                if pair_active:
+                    vetos["pair_decay"] += 1
+                pair_active = False
+            else:
+                pair_active = True
+                active_pair.update(refreshed)
+
+        if not pair_active:
+            vetos["pair_inactive"] += 1
+            continue
+
+        beta = active_pair["beta"]
+        alpha = active_pair["alpha"]
+        half_life = active_pair["half_life"]
+        pvalue = active_pair["pvalue"]
+        signal_state = _spread_state_at_idx(a_close, b_close, idx, beta, alpha)
+        if signal_state is None:
+            continue
+        z = signal_state["zscore"]
 
         # z-score entry conditions
         direction = None
@@ -507,11 +921,16 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
         if idx + 1 >= len(merged):
             continue
         raw_entry = float(a_open[idx + 1])
-        slip = SLIPPAGE + SPREAD
-        if direction == "BULLISH":
-            entry_p = raw_entry * (1 + slip)
-        else:
-            entry_p = raw_entry * (1 - slip)
+        raw_entry_b = float(b_open[idx + 1])
+        entry_p = raw_entry
+        spread_deviation = float(signal_state["spread"] - signal_state["mean"])
+        if not _pair_has_edge_after_costs(
+            spread_deviation=spread_deviation,
+            notional_a=raw_entry,
+            notional_b=abs(beta) * raw_entry_b,
+        ):
+            vetos["edge_lt_cost"] += 1
+            continue
         stop_dist = atr * 2.0
         if direction == "BULLISH":
             stop_p = entry_p - stop_dist
@@ -536,8 +955,9 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
         # tight stop combined with a high LEVERAGE could in theory push
         # the nominal exposure over the margin ceiling. The guard makes
         # the constraint explicit and consistent across all engines.
+        hedge_notional = size * abs(beta) * raw_entry_b
         ok_agg, motivo_agg = check_aggregate_notional(
-            size * entry_p, [], account, LEVERAGE)
+            size * entry_p + hedge_notional, [], account, LEVERAGE)
         if not ok_agg:
             vetos[motivo_agg] += 1
             continue
@@ -546,6 +966,12 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
         trade_dir = direction
         trade_entry_idx = idx
         trade_entry_price = entry_p
+        trade_entry_price_b = raw_entry_b
+        trade_alpha = alpha
+        trade_beta = beta
+        trade_half_life = half_life
+        trade_pvalue = pvalue
+        trade_entry_z = z
         size_held = size
 
     closed = [t for t in trades if t["result"] in ("WIN", "LOSS")]
@@ -831,7 +1257,7 @@ if __name__ == "__main__":
 
     # ── COINTEGRATION ──
     print(f"\n{SEP}\n  COINTEGRATION ANALYSIS\n{SEP}")
-    pairs = find_cointegrated_pairs(all_dfs)
+    pairs = discover_cointegrated_pairs_over_time(all_dfs)
 
     if len(pairs) < NEWTON_MIN_PAIRS:
         print(f"  apenas {len(pairs)} pares cointegrados (minimo: {NEWTON_MIN_PAIRS})")
