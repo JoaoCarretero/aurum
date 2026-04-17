@@ -72,6 +72,42 @@ RENAISSANCE_CAPITAL_WEIGHT = 0.35
 CONFIRM_WINDOW        = 6
 CONFIRM_SIZE_MULT     = 1.25
 CONFLICT_ACTION       = "skip"
+OPERATIONAL_ENGINES   = ("CITADEL", "RENAISSANCE", "JUMP", "BRIDGEWATER")
+# Capital weights calibrados em 2026-04-17 com base em standalone overfit 6/6
+# em TF nativo + OOS multi-janela:
+#   JUMP:        6/6 PASS Sharpe 4.68, OOS 3 janelas 3.15/3.19/4.27, DSR~1.0 → base alta
+#   BRIDGEWATER: 6/6 PASS Sharpe 10.88 (forward-only, 90% sentiment válido) → base alta, cap moderado
+#   RENAISSANCE: 6/6 PASS Sharpe 6.54 mas regime-sensitive (CHOP 2019 -0.04) → base média com gate
+#   CITADEL:     2/6 FAIL 180d recent (edge decay), janela deslocada OK → peso mínimo como seguro
+BASE_CAPITAL_WEIGHTS  = {
+    "JUMP":        0.30,   # edge mais limpo, OOS + recent + 6/6
+    "BRIDGEWATER": 0.30,   # maior Sharpe validado, forward-only
+    "RENAISSANCE": 0.25,   # edge real com gate CHOP
+    "CITADEL":     0.15,   # peso mínimo — edge decay confirmado, segurança p/ virada de regime
+}
+ENGINE_WEIGHT_FLOORS = {
+    "JUMP":        0.15,
+    "BRIDGEWATER": 0.10,   # pode cair se prewarm falhar
+    "RENAISSANCE": 0.05,   # pode ir a zero em CHOP
+    "CITADEL":     0.00,   # pode zerar enquanto edge decay persistir
+}
+ENGINE_WEIGHT_CAPS = {
+    "JUMP":        0.40,
+    "BRIDGEWATER": 0.40,
+    "RENAISSANCE": 0.30,
+    "CITADEL":     0.15,   # cap severo por edge decay
+}
+ENGINE_ACTIVITY_WINDOW = 120
+ENGINE_ACTIVITY_SOFT_CAP = {
+    "JUMP":        0.45,
+    "BRIDGEWATER": 0.55,   # alto volume de trades é característico
+    "RENAISSANCE": 0.35,
+    "CITADEL":     0.30,   # não deixar dominar mesmo em janela favorável
+}
+ENGINE_DRAWDOWN_WINDOW = 30
+ENGINE_DRAWDOWN_WARN_R = 2.0
+ENGINE_DRAWDOWN_HARD_R = 4.0
+ENGINE_DRAWDOWN_MIN_FACTOR = 0.45
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 ENSEMBLE_WINDOW    = 30    # trades lookback para scoring rolling
@@ -86,9 +122,9 @@ REGIME_LAG         = 5     # lag artificial: usa regime de 5 trades atrás → q
 # Regime-aware: amplifica pesos baseado no macro actual
 # TREND (BULL/BEAR) → CITADEL lidera | RANGE (CHOP) → RENAISSANCE lidera
 REGIME_BOOST = {
-    "BULL": {"CITADEL": 1.25, "RENAISSANCE": 0.75},
-    "BEAR": {"CITADEL": 1.20, "RENAISSANCE": 0.80},
-    "CHOP": {"CITADEL": 0.75, "RENAISSANCE": 1.25},
+    "BULL": {"CITADEL": 1.15, "RENAISSANCE": 0.90, "JUMP": 1.10, "BRIDGEWATER": 0.85},
+    "BEAR": {"CITADEL": 1.05, "RENAISSANCE": 0.95, "JUMP": 0.90, "BRIDGEWATER": 1.20},
+    "CHOP": {"CITADEL": 0.90, "RENAISSANCE": 1.20, "JUMP": 1.00, "BRIDGEWATER": 0.95},
 }
 REGIME_BOOST_WINDOW = 20   # trades para detectar regime actual (probabilístico)
 R_CAP_MAX    =  5.0        # R-multiple máximo (evita outlier distorcer score)
@@ -159,16 +195,18 @@ def _regime_confidence_boost(recent_trades):
     """
     biases = [t.get("macro_bias","CHOP") for t in recent_trades[-REGIME_BOOST_WINDOW:]
               if t.get("macro_bias")]
-    if not biases: return {"CITADEL": 1.0, "RENAISSANCE": 1.0}, "CHOP"
+    if not biases:
+        return {name: 1.0 for name in BASE_CAPITAL_WEIGHTS}, "CHOP"
 
     from collections import Counter
     counts = Counter(biases); total = len(biases)
     p = {r: counts.get(r, 0)/total for r in ("BULL","BEAR","CHOP")}
     dominant = max(p, key=p.get)
 
-    az_b = sum(p[r] * REGIME_BOOST[r]["CITADEL"] for r in ("BULL","BEAR","CHOP"))
-    he_b = sum(p[r] * REGIME_BOOST[r]["RENAISSANCE"] for r in ("BULL","BEAR","CHOP"))
-    return {"CITADEL": round(az_b,3), "RENAISSANCE": round(he_b,3)}, dominant
+    boosts = {}
+    for name in BASE_CAPITAL_WEIGHTS:
+        boosts[name] = round(sum(p[r] * REGIME_BOOST[r][name] for r in ("BULL","BEAR","CHOP")), 3)
+    return boosts, dominant
 
 def _decay_score(r_hist):
     """
@@ -250,6 +288,27 @@ def _ensemble_score(r_hist):
     score *= confidence
 
     return max(0.0, score), False
+
+
+def _recent_drawdown_penalty(r_hist):
+    """Soft-cap a strategy when recent closed-trade drawdown in R is widening."""
+    if len(r_hist) < max(6, ENGINE_DRAWDOWN_WINDOW // 3):
+        return 1.0, 0.0
+    equity = 0.0
+    peak = 0.0
+    max_dd_r = 0.0
+    for r in r_hist[-ENGINE_DRAWDOWN_WINDOW:]:
+        equity += float(r)
+        peak = max(peak, equity)
+        max_dd_r = max(max_dd_r, peak - equity)
+    if max_dd_r <= ENGINE_DRAWDOWN_WARN_R:
+        return 1.0, max_dd_r
+    if max_dd_r >= ENGINE_DRAWDOWN_HARD_R:
+        return ENGINE_DRAWDOWN_MIN_FACTOR, max_dd_r
+    span = max(ENGINE_DRAWDOWN_HARD_R - ENGINE_DRAWDOWN_WARN_R, 1e-9)
+    slope = (max_dd_r - ENGINE_DRAWDOWN_WARN_R) / span
+    factor = 1.0 - (1.0 - ENGINE_DRAWDOWN_MIN_FACTOR) * slope
+    return max(ENGINE_DRAWDOWN_MIN_FACTOR, min(1.0, factor)), max_dd_r
 
 def ensemble_reweight(all_trades):
     """
@@ -345,6 +404,187 @@ def ensemble_reweight(all_trades):
     if out: out[-1]["_kill_log"] = kill_log
     return sorted(out, key=lambda t: t["timestamp"])
 
+def operational_core_reweight(all_trades):
+    """Generic ensemble weighting for the 4 validated operational engines."""
+    sorted_t = sorted(all_trades, key=lambda t: t["timestamp"])
+    active_strats = [name for name in OPERATIONAL_ENGINES if any(t.get("strategy") == name for t in sorted_t)]
+    if not active_strats:
+        return sorted_t
+
+    history = {name: [] for name in active_strats}
+    kill_log = {name: [] for name in active_strats}
+    out = []
+
+    for idx, t in enumerate(sorted_t):
+        strat = t.get("strategy", "CITADEL")
+        if strat not in active_strats:
+            out.append(dict(t))
+            continue
+
+        score_map = {}
+        killed_map = {}
+        for name in active_strats:
+            sc, killed = _ensemble_score(history[name])
+            score_map[name] = 0.0 if killed else sc
+            killed_map[name] = killed
+
+        total = sum(score_map.values())
+        if total < 0.001:
+            raw_w = {name: BASE_CAPITAL_WEIGHTS[name] for name in active_strats}
+        else:
+            raw_w = {name: score_map[name] / total for name in active_strats}
+
+        killed_names = [name for name, killed in killed_map.items() if killed]
+        if killed_names and len(killed_names) < len(active_strats):
+            survivors = [name for name in active_strats if name not in killed_names]
+            survivor_mass = 1.0 - ENSEMBLE_MIN_W * len(killed_names)
+            survivor_total = sum(raw_w[name] for name in survivors)
+            adj_w = {}
+            for name in survivors:
+                base = raw_w[name] / survivor_total if survivor_total > 0 else 1.0 / len(survivors)
+                adj_w[name] = base * survivor_mass
+            for name in killed_names:
+                adj_w[name] = ENSEMBLE_MIN_W
+            raw_w = adj_w
+
+        max_window = max((_adaptive_window(history[name]) if history[name] else ENSEMBLE_WINDOW) for name in active_strats)
+        dyn_lag = int(max(3, min(10, max_window / 10)))
+        lag_idx = max(0, idx - dyn_lag)
+        boost, dominant = _regime_confidence_boost(sorted_t[:lag_idx+1])
+        boosted_w = {name: raw_w[name] * boost.get(name, 1.0) for name in active_strats}
+        # Gate CHOP — RENAISSANCE colapsou em CHOP 2019 OOS (Sharpe -0.04 com 16 trades).
+        # Zera o peso quando o regime dominante detectado é CHOP.
+        if dominant == "CHOP" and "RENAISSANCE" in boosted_w:
+            boosted_w["RENAISSANCE"] = ENSEMBLE_MIN_W
+        recent_window = [
+            tt for tt in sorted_t[max(0, idx - ENGINE_ACTIVITY_WINDOW):idx]
+            if tt.get("strategy") in active_strats and tt.get("result") in ("WIN", "LOSS")
+        ]
+        if recent_window:
+            total_recent = len(recent_window)
+            for name in active_strats:
+                share = sum(1 for tt in recent_window if tt.get("strategy") == name) / max(total_recent, 1)
+                soft_cap = ENGINE_ACTIVITY_SOFT_CAP.get(name, 1.0)
+                if share > soft_cap:
+                    boosted_w[name] *= max(0.35, soft_cap / max(share, 1e-9))
+        dd_penalties = {}
+        dd_levels = {}
+        for name in active_strats:
+            dd_penalty, dd_r = _recent_drawdown_penalty(history[name])
+            dd_penalties[name] = dd_penalty
+            dd_levels[name] = round(dd_r, 2)
+            boosted_w[name] *= dd_penalty
+        total_r = sum(boosted_w.values())
+        final_w = {name: (boosted_w[name] / total_r if total_r > 0 else BASE_CAPITAL_WEIGHTS[name]) for name in active_strats}
+        final_w = _apply_engine_weight_caps(final_w, active_strats)
+
+        static_w = BASE_CAPITAL_WEIGHTS.get(strat, 1.0)
+        dynamic_w = final_w.get(strat, static_w)
+        scale = dynamic_w / static_w if static_w > 0 else 1.0
+
+        out.append({**t,
+            "pnl": round(t["pnl"] * scale, 2),
+            "pnl_pre_ensemble": t["pnl"],
+            "ensemble_w": round(dynamic_w, 3),
+            "ensemble_weights": {name: round(final_w[name], 3) for name in active_strats},
+            "kill_states": dict(killed_map),
+            "regime_at_trade": dominant,
+            "decay_scores": {name: round(_decay_score(history[name]), 3) for name in active_strats},
+            "drawdown_penalties": {name: round(dd_penalties[name], 3) for name in active_strats},
+            "recent_drawdown_r": dd_levels,
+        })
+
+        for s, killed in killed_map.items():
+            log = kill_log[s]
+            if killed and (not log or len(log) % 2 == 0):
+                log.append(t["timestamp"])
+            elif not killed and log and len(log) % 2 == 1:
+                log.append(t["timestamp"])
+
+        if t["result"] in ("WIN", "LOSS"):
+            history[strat].append(_r_multiple(t))
+
+    if out:
+        out[-1]["_kill_log"] = kill_log
+    return sorted(out, key=lambda t: t["timestamp"])
+
+
+def _apply_engine_weight_caps(weight_map, active_strats):
+    if not active_strats:
+        return {}
+    weights = {name: max(0.0, float(weight_map.get(name, 0.0))) for name in active_strats}
+    floors = {name: ENGINE_WEIGHT_FLOORS.get(name, 0.0) for name in active_strats}
+    caps = {name: ENGINE_WEIGHT_CAPS.get(name, 1.0) for name in active_strats}
+    floor_total = sum(floors.values())
+    if floor_total >= 1.0:
+        return {name: floors[name] / floor_total for name in active_strats}
+
+    total = sum(weights.values())
+    if total <= 0:
+        weights = {name: 1.0 / len(active_strats) for name in active_strats}
+    else:
+        weights = {name: weights[name] / total for name in active_strats}
+
+    projected = dict(weights)
+    for _ in range(16):
+        clamped = {
+            name: min(caps[name], max(floors[name], projected[name]))
+            for name in active_strats
+        }
+        locked = {
+            name
+            for name in active_strats
+            if abs(clamped[name] - floors[name]) <= 1e-12
+            or abs(clamped[name] - caps[name]) <= 1e-12
+        }
+        target_mass = 1.0 - sum(clamped[name] for name in locked)
+        free = [name for name in active_strats if name not in locked]
+        if not free:
+            projected = clamped
+            break
+        seed_total = sum(weights[name] for name in free)
+        if seed_total <= 0:
+            free_seed = {name: 1.0 / len(free) for name in free}
+        else:
+            free_seed = {name: weights[name] / seed_total for name in free}
+        projected = dict(clamped)
+        for name in free:
+            projected[name] = target_mass * free_seed[name]
+        if all(abs(projected[name] - clamped[name]) <= 1e-12 for name in active_strats):
+            break
+
+    final_weights = {
+        name: min(caps[name], max(floors[name], projected[name]))
+        for name in active_strats
+    }
+    residual = 1.0 - sum(final_weights.values())
+    if abs(residual) > 1e-12:
+        if residual > 0:
+            receivers = [
+                name for name in active_strats
+                if final_weights[name] < caps[name] - 1e-12
+            ]
+            capacity = sum(caps[name] - final_weights[name] for name in receivers)
+            if receivers and capacity > 0:
+                for name in receivers:
+                    room = caps[name] - final_weights[name]
+                    final_weights[name] += residual * (room / capacity)
+        else:
+            donors = [
+                name for name in active_strats
+                if final_weights[name] > floors[name] + 1e-12
+            ]
+            removable = sum(final_weights[name] - floors[name] for name in donors)
+            if donors and removable > 0:
+                for name in donors:
+                    slack = final_weights[name] - floors[name]
+                    final_weights[name] += residual * (slack / removable)
+
+    total = sum(final_weights.values())
+    if total <= 0:
+        return {name: 1.0 / len(active_strats) for name in active_strats}
+    return {name: final_weights[name] / total for name in active_strats}
+
 def print_ensemble_stats(original, reweighted):
     """Compara métricas antes e depois do ensemble reweighting."""
     def _m(trades):
@@ -423,7 +663,7 @@ def print_ensemble_stats(original, reweighted):
             max_decay = max(e[1] for e in evs)
             print(f"    {strat:8s}  {len(evs)} trades em decay  |  máx decay score: {max_decay:.2f}")
     if not any_decay:
-        print(f"    Nenhum — edge estrutural manteve-se estável em ambas as estratégias")
+        print(f"    Nenhum — edge estrutural manteve-se estável nas estratégias activas")
 
 # ── STRESS TEST ───────────────────────────────────────────────
 def stress_test(pnl_list):
@@ -768,20 +1008,26 @@ def aggregate_signals(azoth_trades, hermes_trades):
     return result
 
 def metrics_by_strategy(all_trades):
-    by_s={"CITADEL":[],"RENAISSANCE":[],"CONFIRMED":[]}
+    by_s=defaultdict(list)
     for t in all_trades:
         s=t.get("strategy","CITADEL"); by_s[s].append(t)
         if t.get("confirmed"): by_s["CONFIRMED"].append(t)
     print(f"\n{SEP}\n  PERFORMANCE POR ESTRATEGIA\n{SEP}")
     print(f"  {'Estrategia':12s}  {'N':>4s}  {'WR':>6s}  {'Sharpe':>7s}  {'MaxDD':>6s}  {'ROI':>7s}  {'PnL':>12s}")
     print(f"  {'─'*72}")
-    for name,ts in [("CITADEL",by_s["CITADEL"]),("RENAISSANCE",by_s["RENAISSANCE"]),("CONFIRMADOS",by_s["CONFIRMED"])]:
+    ordered = [name for name in OPERATIONAL_ENGINES if by_s.get(name)]
+    ordered += [name for name in by_s.keys() if name not in OPERATIONAL_ENGINES and name != "CONFIRMED"]
+    if by_s.get("CONFIRMED"):
+        ordered.append("CONFIRMED")
+    for name in ordered:
+        ts = by_s[name]
+        display = "CONFIRMADOS" if name == "CONFIRMED" else name
         closed=[t for t in ts if t["result"] in ("WIN","LOSS")]
-        if not closed: print(f"  {name:12s}  sem trades"); continue
+        if not closed: print(f"  {display:12s}  sem trades"); continue
         w=sum(1 for t in closed if t["result"]=="WIN"); wr=w/len(closed)*100
         pnl_s=[t["pnl"] for t in closed]
         r=calc_ratios(pnl_s,n_days=SCAN_DAYS); _,_,mdd,_=equity_stats(pnl_s)
-        print(f"  {name:12s}  {len(closed):>4d}  {wr:>5.1f}%  {str(r['sharpe'] or '—'):>7s}  {mdd:>5.1f}%  {r['ret']:>+6.1f}%  ${sum(pnl_s):>+10,.0f}")
+        print(f"  {display:12s}  {len(closed):>4d}  {wr:>5.1f}%  {str(r['sharpe'] or '—'):>7s}  {mdd:>5.1f}%  {r['ret']:>+6.1f}%  ${sum(pnl_s):>+10,.0f}")
 
 def metrics_confirmations(all_trades):
     conf=[t for t in all_trades if t.get("confirmed") and t["result"] in ("WIN","LOSS")]
@@ -820,6 +1066,7 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
     closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
     wr=sum(1 for t in closed if t["result"]=="WIN")/max(len(closed),1)*100
     exp=sum(t["pnl"] for t in closed)/max(len(closed),1)
+    n_strats=len({t.get("strategy") for t in closed if t.get("strategy")})
     bear_stab=(wf_regime or {}).get("BEAR",{}).get("stable_pct")
     wf_ok=bear_stab>=60 if bear_stab else False
     wf_label=f"BEAR {bear_stab:.0f}%" if bear_stab else "global"
@@ -831,7 +1078,7 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
         ("Sharpe >= 1.0",ratios["sharpe"] and ratios["sharpe"]>=1.0),
         ("Monte Carlo >= 70% positivo",mc and mc["pct_pos"]>=70),
         (f"Walk-Forward estavel ({wf_label})",wf_ok),
-        ("RENAISSANCE tem trades",any(t.get("strategy")=="RENAISSANCE" for t in closed)),
+        ("Diversificacao real (>=2 estrategias)",n_strats>=2),
     ]
     passou=sum(1 for _,v in checks if v)
     print(f"\n{SEP}\n  VEREDITO\n{SEP}")
@@ -845,25 +1092,28 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
 def export_ms_json(all_trades, eq, mc, ratios):
     closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
     wr=sum(1 for t in closed if t["result"]=="WIN")/max(len(closed),1)*100
-    azoth_t=[t for t in closed if t.get("strategy")=="CITADEL"]
-    hermes_t=[t for t in closed if t.get("strategy")=="RENAISSANCE"]
     confirmed_t=[t for t in closed if t.get("confirmed")]
+    by_strategy={}
+    for name in sorted({t.get("strategy") for t in closed if t.get("strategy")}):
+        ts=[t for t in closed if t.get("strategy")==name]
+        by_strategy[name]={
+            "n":len(ts),
+            "wr":round(sum(1 for t in ts if t["result"]=="WIN")/max(len(ts),1)*100,1),
+            "pnl":round(sum(t["pnl"] for t in ts),2),
+        }
     payload={
         "version":"multistrategy-1.0","run_id":RUN_ID,
         "timestamp":datetime.now().isoformat(),
-        "config":{"azoth_weight":CITADEL_CAPITAL_WEIGHT,"hermes_weight":RENAISSANCE_CAPITAL_WEIGHT,
-                  "max_open_ms":MAX_OPEN_POSITIONS_MS,"confirm_window":CONFIRM_WINDOW,
-                  "confirm_size_mult":CONFIRM_SIZE_MULT,"h_tol":H_TOL,
-                  "h_min_score":H_MIN_SCORE,"h_min_rr":H_MIN_RR},
-        "summary":{"total":len(closed),"azoth_n":len(azoth_t),"hermes_n":len(hermes_t),
+        "config":{"base_weights":BASE_CAPITAL_WEIGHTS,
+                  "max_open_ms":MAX_OPEN_POSITIONS_MS,
+                  "confirm_window":CONFIRM_WINDOW,
+                  "confirm_size_mult":CONFIRM_SIZE_MULT},
+        "summary":{"total":len(closed),
                    "confirmed_n":len(confirmed_t),"win_rate":round(wr,2),
                    "total_pnl":round(sum(t["pnl"] for t in closed),2),
                    "final_equity":round(eq[-1],2),
                    **{k:ratios.get(k) for k in ("sharpe","sortino","calmar","ret")}},
-        "by_strategy":{
-            "CITADEL":{"n":len(azoth_t),"wr":round(sum(1 for t in azoth_t if t["result"]=="WIN")/max(len(azoth_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in azoth_t),2)},
-            "RENAISSANCE":{"n":len(hermes_t),"wr":round(sum(1 for t in hermes_t if t["result"]=="WIN")/max(len(hermes_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in hermes_t),2)},
-        },
+        "by_strategy":by_strategy,
         "monte_carlo":{k:v for k,v in (mc or {}).items() if k not in ("paths","finals","dds")},
         "trades":[{k:(str(v) if k=="timestamp" else v) for k,v in t.items()} for t in all_trades],
         "equity":eq,
@@ -998,7 +1248,8 @@ def _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr):
     return hermes_all, hermes_vetos
 
 def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
-    closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
+    portfolio_trades = operational_core_reweight(all_trades) if label == "CORE OPERATIONAL" else all_trades
+    closed=[t for t in portfolio_trades if t["result"] in ("WIN","LOSS")]
     if not closed: print("  Sem trades fechados."); return
     pnl_s=[t["pnl"] for t in closed]; eq,mdd,mdd_pct,ms=equity_stats(pnl_s)
     ratios=calc_ratios(pnl_s,n_days=SCAN_DAYS)
@@ -1008,14 +1259,14 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
     print(f"  ROI      {ratios['ret']:>6.2f}%     MaxDD    {mdd_pct:>6.2f}%     Streak  {ms:>5d} perdas")
     print(f"  Capital  ${ACCOUNT_SIZE:>8,.0f}  ->  ${eq[-1]:>10,.0f}   (+${eq[-1]-ACCOUNT_SIZE:,.0f})")
     if label!="CITADEL":
-        metrics_by_strategy(all_trades); metrics_confirmations(all_trades); print_hermes_patterns(all_trades)
+        metrics_by_strategy(portfolio_trades); metrics_confirmations(portfolio_trades); print_hermes_patterns(portfolio_trades)
     mc=monte_carlo(pnl_s)
     print(f"\n{SEP}\n  MONTE CARLO   {MC_N}x   bloco={MC_BLOCK}\n{SEP}")
     if mc:
         rlb="SEGURO" if mc["ror"]<1 else "ATENCAO" if mc["ror"]<5 else "RISCO"
         print(f"  Positivos {mc['pct_pos']:>5.1f}%   p5 ${mc['p5']:>9,.0f}   Mediana ${mc['median']:>9,.0f}   p95 ${mc['p95']:>9,.0f}")
         print(f"  RoR       {mc['ror']:>5.1f}%   [{rlb}]   DD medio {mc['avg_dd']:.1f}%   pior {mc['worst_dd']:.1f}%")
-    wf=walk_forward(all_trades)
+    wf=walk_forward(portfolio_trades)
     print(f"\n{SEP}\n  WALK-FORWARD GLOBAL   {len(wf)} janelas\n{SEP}")
     if wf:
         ok=sum(1 for w in wf if abs(w["test"]["wr"]-w["train"]["wr"])<=15); pct=ok/len(wf)*100
@@ -1023,7 +1274,7 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
         for w in wf[-10:]:
             d=w["test"]["wr"]-w["train"]["wr"]
             print(f"  {w['w']:>3d}  treino {w['train']['wr']:>5.1f}%  fora {w['test']['wr']:>5.1f}%  D {d:>+5.1f}%  {'ok' if abs(d)<=15 else 'xx'}")
-    wf_regime=walk_forward_by_regime(all_trades)
+    wf_regime=walk_forward_by_regime(portfolio_trades)
     print(f"\n{SEP}\n  WALK-FORWARD POR REGIME\n{SEP}")
     for regime,d in wf_regime.items():
         if d["stable_pct"] is None: print(f"  {regime:5s}  n={d['n']:>3d}  insuficiente"); continue
@@ -1043,20 +1294,23 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
     robustness_test(pnl_s)
 
     # ── AUTO-DIAGNÓSTICO ─────────────────────────────────────
-    diag = auto_diagnostic(all_trades)
-    conflict_mult = all_trades[0].get("_conflict_mult", 1.0) if all_trades else 1.0
+    diag = auto_diagnostic(portfolio_trades)
+    conflict_mult = portfolio_trades[0].get("_conflict_mult", 1.0) if portfolio_trades else 1.0
     print_auto_diagnostic(diag, conflict_mult)
 
     # ── ENSEMBLE WEIGHTING ────────────────────────────────────
     if label not in ("CITADEL", "RENAISSANCE"):
-        rew = ensemble_reweight(all_trades)
-        print_ensemble_stats(all_trades, rew)
+        if label == "CORE OPERATIONAL":
+            print_ensemble_stats(all_trades, portfolio_trades)
+        else:
+            rew = operational_core_reweight(all_trades)
+            print_ensemble_stats(all_trades, rew)
 
     # ── STRESS TEST ───────────────────────────────────────────
     stress_test(pnl_s)
 
-    print_veredito_ms(all_trades,eq,mdd_pct,mc,wf,ratios,wf_regime)
-    export_ms_json(all_trades,eq,mc,ratios)
+    print_veredito_ms(portfolio_trades,eq,mdd_pct,mc,wf,ratios,wf_regime)
+    export_ms_json(portfolio_trades,eq,mc,ratios)
 
     # ── CHARTS ────────────────────────────────────────────────
     if GENERATE_PLOTS:
@@ -1104,6 +1358,40 @@ def _resultados_por_simbolo(all_trades, show_he=True):
         else:
             print(f"  {sym:12s}  {len(c):>4d}  {wr:>5.1f}%  ${sum(t['pnl'] for t in c):>+10,.0f}")
 
+def _collect_operational_trades(all_dfs, htf_stack_by_sym, macro_series, corr):
+    engine_trades = {}
+
+    azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
+    engine_trades["CITADEL"] = azoth_all
+
+    hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
+    engine_trades["RENAISSANCE"] = hermes_all
+
+    from engines.jump import scan_mercurio
+    mercurio_all = []
+    for sym, df in all_dfs.items():
+        trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
+        mercurio_all.extend(trades)
+    engine_trades["JUMP"] = mercurio_all
+
+    from engines.bridgewater import scan_thoth, collect_sentiment
+    sentiment_data = collect_sentiment(list(all_dfs.keys()))
+    thoth_all = []
+    for sym, df in all_dfs.items():
+        trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
+                               sentiment_data=sentiment_data)
+        thoth_all.extend(trades)
+    engine_trades["BRIDGEWATER"] = thoth_all
+
+    all_trades = []
+    for eng, trades in engine_trades.items():
+        for t in trades:
+            tt = t.copy()
+            tt.setdefault("strategy", eng)
+            all_trades.append(tt)
+    all_trades.sort(key=lambda t: t["timestamp"])
+    return engine_trades, all_trades
+
 def _menu():
     W = 50
     print(f"\n  {'─'*W}")
@@ -1111,7 +1399,7 @@ def _menu():
     print(f"  {'─'*W}")
     while True:
         print()
-        print(f"  [1]  CITADEL + RENAISSANCE")
+        print(f"  [1]  CORE OPERATIONAL (CITADEL + RENAISSANCE + JUMP + BRIDGEWATER)")
         print(f"  [2]  CITADEL")
         print(f"  [3]  RENAISSANCE")
         print(f"  [4]  NEWTON")
@@ -1130,7 +1418,7 @@ if __name__ == "__main__":
     setup_multistrategy()
     op = _menu()
     LABELS = {
-        "1":"CITADEL + RENAISSANCE", "2":"CITADEL", "3":"RENAISSANCE",
+        "1":"CORE OPERATIONAL", "2":"CITADEL", "3":"RENAISSANCE",
         "4":"DE SHAW", "5":"JUMP", "6":"BRIDGEWATER",
         "7":"ALL", "8":"TWO SIGMA (ML)",
     }
@@ -1307,11 +1595,14 @@ if __name__ == "__main__":
         _metricas_e_export(all_trades, label="TWO SIGMA ML")
 
     else:
-        # op == "1" — original CITADEL + RENAISSANCE
-        azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
-        hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
-        print(f"\n{SEP}\n  SIGNAL AGGREGATOR\n{SEP}")
-        all_trades = aggregate_signals(azoth_all, hermes_all)
+        # op == "1" — operational multi-strategy core
+        _, all_trades = _collect_operational_trades(all_dfs, htf_stack_by_sym, macro_series, corr)
         if not all_trades: print("  Sem trades."); sys.exit(1)
-        _resultados_por_simbolo(all_trades, show_he=True)
-        _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE")
+        print(f"\n{SEP}\n  RESULTADOS POR ENGINE\n{SEP}")
+        for eng in OPERATIONAL_ENGINES:
+            ts = [t for t in all_trades if t.get("strategy") == eng and t["result"] in ("WIN","LOSS")]
+            if not ts: print(f"  {eng:12s}  sem trades"); continue
+            w = sum(1 for t in ts if t["result"] == "WIN")
+            pnl = sum(t["pnl"] for t in ts)
+            print(f"  {eng:12s}  n={len(ts):>4d}  WR={w/len(ts)*100:>5.1f}%  ${pnl:>+10,.0f}")
+        _metricas_e_export(all_trades, label="CORE OPERATIONAL")

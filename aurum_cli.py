@@ -195,17 +195,18 @@ STRATEGIES = {
     "millennium": {
         "name": "MILLENNIUM",
         "tag": "MLN",
-        "desc": "Multi-strategy pod — ensemble orchestrator",
+        "desc": "Multi-strategy pod — meta portfolio orchestrator",
         "methods": ["backtest"],
         "composite": True,
-        "components": ["citadel","renaissance","deshaw","jump","bridgewater"],
+        "meta_engine": True,
+        "components": ["citadel","renaissance","jump","bridgewater"],
         "info": [
-            "Orquestra todos os engines num unico portfolio.",
+            "Orquestrador multi-strategy sobre os engines validados.",
             "",
             "Aggregator      Signal-level merge",
             "Weighting       Sortino rolling + regime boost",
             "Kill-switch     Pausa se Sortino(20) < -0.5",
-            "TWO SIGMA       ML meta-ensemble (opcao 8)",
+            "Core            CITADEL + RENAISSANCE + JUMP + BRIDGEWATER",
         ],
     },
     "kepos": {
@@ -257,10 +258,13 @@ STRATEGIES = {
         "tag": "TSG",
         "desc": "ML meta-ensemble — LightGBM walk-forward (requires prior runs)",
         "methods": ["backtest"],
+        "composite": True,
+        "meta_engine": True,
+        "components": ["citadel","renaissance","jump","bridgewater"],
         "info": [
             "Re-pondera trades de outros engines via LightGBM.",
             "",
-            "Requer          backtests previos de citadel/jump/bridgewater",
+            "Requer          backtests previos do core operacional",
             "Features        regime HMM + Hurst + volatilidade + decay",
             "Output          feature importance + static vs ML PnL",
             "Standalone      imprime instrucoes se nao ha trades em disco",
@@ -554,11 +558,17 @@ ML = {"backtest":"BACKTEST","simulator":"SIMULADOR","live":"LIVE"}
 
 def screen_method(method):
     label = ML[method]
-    base = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and not s.get("composite")]
-    comp = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and s.get("composite")]
-    avail = base + comp
+    directional = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and not s.get("meta_engine")]
+    meta = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and s.get("meta_engine")]
+    avail = directional + meta
     if not avail:
         _head(label); print(f"\n  {D}Nenhuma estrategia disponivel.{Z}"); _wait(); return
+
+    section_rows = {}
+    if directional:
+        section_rows[0] = f"{B}{C}DIRECTIONAL / RESEARCH{Z}"
+    if meta:
+        section_rows[len(directional)] = f"{B}{M}META / ORCHESTRATION{Z}"
 
     cur = 0
     while True:
@@ -567,8 +577,10 @@ def screen_method(method):
 
         # Strategy list
         for i, (k, s) in enumerate(avail):
+            if i in section_rows:
+                print(f"  {section_rows[i]}")
             tag = f"{C}{s['tag']}{Z}"
-            star = f"{M}★{Z}" if s.get("composite") else " "
+            star = f"{M}★{Z}" if s.get("meta_engine") else " "
             if i == cur:
                 print(f"  {Y}❯{Z} {star} {tag}  {B}{W}{s['name']}{Z}  {s['desc']}")
             else:
