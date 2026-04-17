@@ -103,8 +103,13 @@ class KeposParams:
     # robust all-purpose config. Engine has marginal multi-year edge; SOL
     # carries 51–73% of PnL depending on period (single-asset dependency).
     # Do NOT register in FROZEN_ENGINES without walk-forward 6/6 in 3+ years.
-    eta_critical: float = 0.95
-    eta_exit: float = 0.85
+    # 2026-04-17: default baixado 0.95 → 0.75 pra disparar em candle
+    # data (0.95 era unreachable, confirmado em OOS BEAR 2022: 0 trades).
+    # 0.75 corresponde ao valor da calibração 2026-04-16 sweep base
+    # (ver comentário acima). Edge real ainda marginal; engine é rodável
+    # com este default — sobe pro usuário subir se quiser mais restritivo.
+    eta_critical: float = 0.75
+    eta_exit: float = 0.65
     eta_sustained_bars: int = 10
     eta_exit_sustained_bars: int = 2
 

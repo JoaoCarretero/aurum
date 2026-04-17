@@ -41,11 +41,9 @@ __all__ = [
     "MC_N", "MC_BLOCK", "WF_TRAIN", "WF_TEST", "VETO_HOURS_UTC",
     # Chop
     "CHOP_BB_PERIOD", "CHOP_BB_STD", "CHOP_RSI_LONG", "CHOP_RSI_SHORT",
-    "CHOP_RR", "CHOP_SIZE_MULT", "CHOP_MAX_SLOPE_ABS",
+    "CHOP_RR", "CHOP_MAX_SLOPE_ABS",
     # Live/Backtest parity filters
     "SPEED_MIN", "SPEED_WINDOW", "SESSION_BLOCK_HOURS", "SESSION_BLOCK_ACTIVE",
-    # Omega Risk Table
-    "OMEGA_RISK_TABLE",
     # TF Scaling (underscore-prefixed — precisa de __all__ para exportar)
     "_TF_MINUTES", "_tf_params", "_TFP",
     "MIN_STOP_PCT", "SLOPE_N", "CHOP_S21", "CHOP_S200",
@@ -226,7 +224,7 @@ CASCADE_MIN                 = 1
 
 # ── OMEGA & SCORE ─────────────────────────────────────────────
 REGIME_MIN_STRENGTH = 0.25
-SCORE_THRESHOLD     = 0.53    # fallback global (regimes usam SCORE_BY_REGIME). 0.55 seria ótimo mas colide com cliff 0.56 (sensitivity FAIL)
+SCORE_THRESHOLD     = 0.53    # fallback global; regime-specific values live in SCORE_BY_REGIME
 OMEGA_MIN_COMPONENT = 0.15
 OMEGA_WEIGHTS       = {
     "struct": 0.25, "flow": 0.25,
@@ -271,20 +269,20 @@ BULL_LONG_MIN_PULLBACK_ATR = 0.15
 # MILLENNIUM (orquestrador), TWO_SIGMA (meta-ensemble) e AQR (allocator)
 # não leem estes dicts — by-design. Não é gap.
 ENGINE_INTERVALS: dict[str, str] = {
-    "CITADEL":     "15m",  # Sharpe +1.38 @ 15m default (360d, longrun 2026-04-14)
-    "RENAISSANCE": "15m",  # Sharpe +5.65 @ 15m bluechip (6/6 overfit PASS, longrun 2026-04-14)
-    "DESHAW":      "1h",   # Sharpe +2.65 @ 1h vs -0.10 @ 15m (longrun 2026-04-14 bluechip)
-    "JUMP":        "1h",   # Sharpe +2.06 @ 1h/720d (6/6 overfit PASS) vs -2.95 @ 15m
-    "BRIDGEWATER": "1h",   # Sharpe 5.06 @ 1h vs -1.95 @ 15m (master battery 2026-04-13)
+    "CITADEL":     "15m",  # tuned_on=[360d longrun 2026-04-14], oos_sharpe=5.68 BEAR 2022, 2.92 BULL 2021. Edge real confirmado.
+    "RENAISSANCE": "15m",  # tuned_on=[longrun 2026-04-14 bluechip], oos_sharpe=2.42 (BEAR 2022). Claim in-sample 5.65 era inflado 2×.
+    "DESHAW":      "1h",   # tuned_on=[longrun 2026-04-14 bluechip], oos_sharpe=-1.73 BEAR 2022. COLAPSOU OOS. Rodável, edge negativo.
+    "JUMP":        "1h",   # tuned_on=[720d 1h], oos_sharpe=3.15 BEAR 2022. Edge real confirmado.
+    "BRIDGEWATER": "1h",   # tuned_on=[longrun 2026-04-14]. Claim Sharpe 5.06 inflado por LIVE_SENTIMENT_UNBOUNDED bug. Fixed 9b41c76 (2026-04-17), re-test OOS pendente.
 }
 # Basket calibrado por engine (universe onde o edge é mais robusto).
 # Default fallback = SYMBOLS (11 altcoins). Key engines below have specific tuning.
 ENGINE_BASKETS: dict[str, str] = {
-    "CITADEL":     "default",   # Sharpe +1.38 default vs -0.35 bluechip (360d 15m)
-    "RENAISSANCE": "bluechip",  # Sharpe +5.65, 6/6 overfit PASS (360d 15m)
-    "DESHAW":      "bluechip",  # Sharpe +2.65 (360d 1h, 3P 3W 0F overfit)
-    "JUMP":        "bluechip",  # Sharpe +2.06 (720d 1h, 6/6 overfit PASS)
-    "BRIDGEWATER": "bluechip",  # Sharpe +0.87 (360d 1h)
+    "CITADEL":     "default",   # basket=11 altcoins. oos BEAR edge confirmado.
+    "RENAISSANCE": "bluechip",  # basket=bluechip. oos_sharpe=2.42 honesto (claim 5.65 inflado).
+    "DESHAW":      "bluechip",  # basket=bluechip. COLAPSOU OOS. Rodável, edge negativo — quarentenar em EXPERIMENTAL_ENGINES (spec pendente).
+    "JUMP":        "bluechip",  # basket=bluechip. oos edge confirmado.
+    "BRIDGEWATER": "bluechip",  # basket=bluechip. Re-test OOS pós-fix 9b41c76 pendente.
 }
 ENGINE_RISK_SCALE_BY_REGIME: dict[str, dict[str, float]] = {
     # CITADEL regime-adaptive: Sharpe 4.43 vs 0.39 com default (180d)
@@ -351,7 +349,6 @@ CHOP_BB_STD        = 2.0
 CHOP_RSI_LONG      = 32
 CHOP_RSI_SHORT     = 68
 CHOP_RR            = 1.5
-CHOP_SIZE_MULT     = 0.40
 CHOP_MAX_SLOPE_ABS = 0.025
 
 # ── LIVE/BACKTEST PARITY FILTERS ─────────────────────────────
@@ -361,15 +358,6 @@ SPEED_MIN            = 0.002         # range_pct médio mínimo (<mercado muito 
 SPEED_WINDOW         = 5             # candles para média de speed
 SESSION_BLOCK_HOURS  = {2, 3, 4, 5}  # UTC: Ásia baixa liquidez
 SESSION_BLOCK_ACTIVE = False         # off por default — backtest e live ambos desligados
-
-# ── OMEGA RISK TABLE ─────────────────────────────────────────
-# Graduated risk table — score alto = mais confiança = mais risco
-OMEGA_RISK_TABLE: list[tuple[float, float]] = [
-    (0.65, 1.20),
-    (0.59, 1.00),
-    (0.53, 0.80),
-    (0.00, 0.50),
-]
 
 # ── TIMEFRAME SCALING ─────────────────────────────────────────
 _TF_MINUTES: dict[str, int] = {
@@ -393,27 +381,27 @@ def _tf_params(interval: str) -> dict:
 
 # ── NEWTON — Statistical Mean Reversion (Pairs Trading) ──────
 NEWTON_ZSCORE_ENTRY    = 2.0       # NÃO USAR EM LIVE — DE SHAW sem edge no universe crypto (18 iters, melhor -2.3%, overfit 2/6)
-NEWTON_ZSCORE_EXIT     = 0.3       # iter11 1080d WINNER: 0.0→0.3 (ROI -3.33%); 0.5 regrediu
-NEWTON_ZSCORE_STOP     = 3.5       # iter4 1080d: revertido (era 3.0 original, foi 4.0 iter3 que piorou)
-NEWTON_COINT_PVALUE    = 0.01      # iter4 1080d winner (ROI -7.7% com 791t); 0.001/0.005 filtram demais
+NEWTON_ZSCORE_EXIT     = 0.3       # tuned_on=[1080d bluechip]; grid 0.0→0.5 explorado
+NEWTON_ZSCORE_STOP     = 3.5       # tuned_on=[1080d bluechip]; original 3.0, 4.0 piorou
+NEWTON_COINT_PVALUE    = 0.01      # tuned_on=[1080d bluechip]; 0.001/0.005 filtram demais
 NEWTON_HALFLIFE_MIN    = 5         # half-life mínimo (candles)
-NEWTON_HALFLIFE_MAX    = 500       # revertido (300 exclui FET/NEAR HL=336); filtragem via pvalue 0.01 + SPREAD_WIN 60
-NEWTON_SPREAD_WINDOW   = 60        # iter13 1080d WINNER: 90→60 (ROI -2.3%, WR 77%, DD 4.2%); 30 regrediu
-NEWTON_RECALC_EVERY    = 60        # iter15 1080d: 120→60 — recomputar coint 2× mais rápido (catch regime shifts)
-NEWTON_MAX_HOLD        = 200       # iter9 1080d WINNER: 96→200; iter10 300 saturado (mesmo resultado)
+NEWTON_HALFLIFE_MAX    = 500       # 300 excluía FET/NEAR (HL=336); filtragem via pvalue+SPREAD_WIN
+NEWTON_SPREAD_WINDOW   = 60        # tuned_on=[1080d bluechip]; grid 30/60/90 explorado
+NEWTON_RECALC_EVERY    = 60        # recomputar cointegração a cada 60 bars (catch regime shifts)
+NEWTON_MAX_HOLD        = 200       # tuned_on=[1080d bluechip]; 300 saturado
 NEWTON_SIZE_MULT       = 0.30      # position size relativo ao normal (grid 2026-04-14: 0.30 domina 0.50/0.70 em Sharpe e DD)
 NEWTON_MIN_PAIRS       = 2         # mínimo de pares cointegrados para operar
 
 # ── MERCURIO — Order Flow / Microstructure ────────────────────
-MERCURIO_CVD_WINDOW     = 20       # iter21 mostrou 15≈20 (ROI 88.35 vs 88.32, saturado); default mantido
-MERCURIO_CVD_DIV_BARS   = 3        # iter19 1080d WINNER: ROI +88.3%, Sharpe 4.07 — DIV=2 falha no rolling(min_periods=3)
+MERCURIO_CVD_WINDOW     = 20       # tuned_on=[1080d bluechip]; 15≈20 saturado
+MERCURIO_CVD_DIV_BARS   = 3        # tuned_on=[1080d bluechip]; min_periods=3 requer
 MERCURIO_VIMB_WINDOW    = 10       # janela para volume imbalance
-MERCURIO_VIMB_LONG      = 0.62     # iter15 1080d: 0.60→0.62 — confirmação mais restritiva (iter7 0.58 piorou, probe outro lado)
+MERCURIO_VIMB_LONG      = 0.62     # tuned_on=[1080d bluechip]; grid 0.58..0.65 explorado
 MERCURIO_VIMB_SHORT     = 0.40
-MERCURIO_LIQ_VOL_MULT   = 2.5     # iter6 1080d: 3.0→2.5 pra ampliar LIQ FADE sample (iter5 só teve 9 trades)
-MERCURIO_LIQ_ATR_MULT   = 1.5     # iter6 1080d: 2.0→1.5
-MERCURIO_MIN_SCORE      = 0.50     # iter11 1080d: 0.65 igual a iter8 — todos 442 trades tinham score>=0.65, lever MORTO; revertido pra default
-MERCURIO_SIZE_MULT      = 0.47     # iter13 1080d WINNER: ROI +55.9%, Sharpe 3.10, MaxDD 1.4% — 0.49 caiu pra 40%, 0.50 caiu pra 37%
+MERCURIO_LIQ_VOL_MULT   = 2.5      # tuned_on=[1080d bluechip]; 3.0 filtrava demais (9 trades)
+MERCURIO_LIQ_ATR_MULT   = 1.5      # tuned_on=[1080d bluechip]
+MERCURIO_MIN_SCORE      = 0.50     # tuned_on=[1080d bluechip]; 0.65 reduziu sample sem ganho
+MERCURIO_SIZE_MULT      = 0.47     # tuned_on=[1080d bluechip]; oos_sharpe=3.15 (BEAR 2022), edge real.
 
 # ── THOTH — Sentiment Quantificado ───────────────────────────
 THOTH_FUNDING_WINDOW    = 30       # períodos de 8h para z-score do funding
