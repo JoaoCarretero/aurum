@@ -71,10 +71,17 @@ def _bright(hex_color: str, factor: float = 1.2) -> str:
 def _format_track_subtitle(bc: Optional[dict], t: "EngineTrack") -> str:
     """Build a compact subtitle line for a track row.
 
-    Reads brief['best_config'] (battery-validated stats) when available.
-    Falls back to track.tagline truncated. Formats like:
-        '15m · Sh 4.43 · 256t'  or  '4h · marginal'
+    Prefers brief['what'] — plain-language description — so the user can
+    scan the list and understand each engine at a glance. Falls back to
+    the numeric calibration summary (TF · Sharpe · status) for engines
+    without a 'what' field, then to the raw tagline.
     """
+    brief = getattr(t, "brief", None) or {}
+    what = brief.get("what")
+    if what:
+        # 56-char cap keeps the subtitle to one line in the 252-wide sidebar
+        return str(what)[:56].rstrip()
+    # Numeric fallback: TF · Sharpe · EDGE/MARG tag
     if bc:
         parts: list[str] = []
         tf = bc.get("TF")
@@ -94,26 +101,114 @@ def _format_track_subtitle(bc: Optional[dict], t: "EngineTrack") -> str:
                 parts.append(tag)
         if parts:
             return " · ".join(parts)
-    # Fallback: trimmed tagline
     if t.tagline:
         return t.tagline[:44]
     return ""
 
 
 def _section(parent, title):
-    """Amber-bar section header (Bloomberg style)."""
-    tk.Frame(parent, bg=PANEL, height=8).pack()
-    row = tk.Frame(parent, bg=PANEL)
-    row.pack(fill="x")
-    tk.Frame(row, bg=AMBER, width=3).pack(side="left", fill="y")
-    tk.Label(row, text=f" {title} ", font=(FONT, 7, "bold"),
-             fg=AMBER, bg=PANEL, anchor="w", padx=4).pack(
-        side="left", fill="x", expand=True)
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
+    """Institutional section header: terse label · 1px rule, no rails."""
+    tk.Frame(parent, bg=PANEL, height=10).pack()
+    tk.Label(parent, text=title, font=(FONT, 7, "bold"),
+             fg=AMBER, bg=PANEL, anchor="w"
+             ).pack(fill="x")
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 6))
+
+
+_TRADE_KEYS = ("Trades", "trades", "N trades", "n_trades", "trade_count")
+_ROI_KEYS   = ("ROI", "roi", "ROI%", "roi_pct", "ROI val")
+_MC_KEYS    = ("MC", "mc", "MC 1000", "monte_carlo", "MC pct")
+
+
+def _pull_trade_count(bc: dict) -> str | None:
+    """Extract trade count from a best_config dict. Returns short display str
+    or None when nothing matches. best_config entries come from hand-written
+    BRIEFINGS so shape varies — this normalises them for the KPI strip."""
+    if not isinstance(bc, dict):
+        return None
+    # Direct keys
+    for k in _TRADE_KEYS:
+        if k in bc:
+            v = str(bc[k])
+            # "225" or "225 trades" → "225"
+            tok = v.strip().split()
+            if tok and tok[0].replace(",", "").isdigit():
+                return tok[0]
+            return v[:8]
+    # Extract from a "Sharpe val" string like "2.54 · 225 trades · ROI +51%"
+    for k in ("Sharpe val", "Sharpe", "sharpe_val"):
+        if k in bc:
+            import re
+            m = re.search(r"(\d[\d,]*)\s*trade", str(bc[k]))
+            if m:
+                return m.group(1)
+    return None
+
+
+def _pull_roi(bc: dict) -> str | None:
+    if not isinstance(bc, dict):
+        return None
+    for k in _ROI_KEYS:
+        if k in bc:
+            return str(bc[k])[:10]
+    for k in ("Sharpe val", "Sharpe", "sharpe_val"):
+        if k in bc:
+            import re
+            m = re.search(r"ROI\s*([+-]?\d[\d.]*\s*%?)", str(bc[k]))
+            if m:
+                val = m.group(1).strip()
+                if not val.endswith("%"):
+                    val += "%"
+                return val
+    return None
+
+
+def _pull_mc(bc: dict) -> str | None:
+    if not isinstance(bc, dict):
+        return None
+    for k in _MC_KEYS:
+        if k in bc:
+            import re
+            m = re.search(r"(\d+\.?\d*)\s*%", str(bc[k]))
+            if m:
+                return f"{m.group(1)}%"
+            return str(bc[k])[:8]
+    for k in ("Sharpe val", "Sharpe", "sharpe_val"):
+        if k in bc:
+            import re
+            m = re.search(r"MC\s*(\d+\.?\d*)\s*%", str(bc[k]))
+            if m:
+                return f"{m.group(1)}%"
+    return None
+
+
+def _compact_audit(s: str | None) -> str:
+    """Shrink 'Audit' brief field into a short KPI badge like '5/6' or 'OK'."""
+    if not s:
+        return "--"
+    import re
+    m = re.search(r"(\d+)\s*/\s*(\d+)", str(s))
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+    if "PASS" in str(s).upper() or "✓" in str(s):
+        return "PASS"
+    if "FAIL" in str(s).upper() or "✗" in str(s):
+        return "FAIL"
+    if "⚠" in str(s) or "WARN" in str(s).upper():
+        return "WARN"
+    return str(s)[:6]
 
 
 def _scrollable(parent):
-    """Return an inner Frame that scrolls vertically inside parent."""
+    """Return an inner Frame that scrolls vertically inside parent.
+
+    Mouse-wheel is bound DIRECTLY on the canvas + inner frame (not via
+    bind_all). bind_all on MouseWheel registers a global handler that
+    is NOT automatically removed when the canvas is destroyed — every
+    re-render leaked another reference, and after a few dozen clicks
+    the event dispatch queue spent tens of milliseconds walking dead
+    handlers. Direct bindings die with the widget.
+    """
     outer = tk.Frame(parent, bg=PANEL)
     outer.pack(fill="both", expand=True)
     canvas = tk.Canvas(outer, bg=PANEL, highlightthickness=0)
@@ -131,8 +226,9 @@ def _scrollable(parent):
     def _wheel(e):
         try: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         except Exception: pass
-    canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
-    canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return "break"
+    canvas.bind("<MouseWheel>", _wheel)
+    inner.bind("<MouseWheel>", _wheel)
     return inner
 
 
@@ -170,6 +266,7 @@ DEFAULT_GROUPS = {
     "twosigma":    "BACKTEST",
     "kepos":       "BACKTEST",
     "graham":      "BACKTEST",
+    "medallion":   "BACKTEST",
     "live":        "LIVE",
     "janestreet":  "LIVE",
     "aqr":         "TOOLS",
@@ -190,6 +287,7 @@ TRACK_SORT_WEIGHT = {
     "twosigma":    70,
     "kepos":       72,
     "graham":      74,
+    "medallion":   76,
     "live":        80,
     "janestreet":  90,
     "aqr":        100,
@@ -197,18 +295,18 @@ TRACK_SORT_WEIGHT = {
 }
 MODULE_INFO = {
     "BACKTEST": {
-        "label": "TEST",
-        "desc": "rodar e medir",
+        "label": "RESEARCH",
+        "desc": "Backtest, walk-forward, Monte Carlo",
         "accent": "#4DA3FF",
     },
     "TOOLS": {
-        "label": "VALIDATE",
-        "desc": "validar e calibrar",
+        "label": "ANALYTICS",
+        "desc": "Validation and calibration utilities",
         "accent": "#E0B94B",
     },
     "LIVE": {
-        "label": "EXECUTE",
-        "desc": "paper e live",
+        "label": "EXECUTION",
+        "desc": "Paper, demo, testnet, live",
         "accent": "#00D26A",
     },
 }
@@ -542,8 +640,31 @@ def render(
                 for widget in (card, body, *body.winfo_children()):
                     widget.bind("<Button-1>", lambda _e, _i=idx: _sel(_i, scroll=True))
 
-    # ─── detail panel
+    # ─── detail panel (LABORATORY layout)
+    # Structure — top to bottom:
+    #   1. Identity strip — name + status chip + compressed tagline
+    #   2. KPI tape — 8 mini-cells always visible (SHRP/SORT/MDD/WR/TRDS/ROI/MC/AUD)
+    #   3. Chip bar — OVER · LAB · CODE · RUN (backtest) or LAUNCH/LOG/POS/OVER (live)
+    #   4. Content pane — renders active chip (wrapped in try/except)
+    #
+    # KPIs move OUT of OVER into the tape so they're visible in every chip.
+    # This matches the "laboratory" brief: the numbers are the lab's readout,
+    # not a detail you only see when on the OVERVIEW screen.
+    _last_paint = {"sel": -1, "chip": None, "running": None}
+
     def _paint_detail():
+        # Short-circuit: nothing the paint depends on actually changed.
+        # Repeated clicks on the same row + same chip used to rebuild 60+
+        # widgets for nothing, which felt like a click freeze when the user
+        # clicked twice in a row.
+        running = _is_track_running(tracks[state["sel"]]) if tracks else False
+        key = (state["sel"], state["chip"], running)
+        if (_last_paint["sel"] == key[0]
+                and _last_paint["chip"] == key[1]
+                and _last_paint["running"] == key[2]):
+            return
+        _last_paint["sel"], _last_paint["chip"], _last_paint["running"] = key
+
         for w in right.winfo_children():
             try: w.destroy()
             except Exception: pass
@@ -552,37 +673,107 @@ def render(
                      font=(FONT, 9), fg=DIM, bg=PANEL).pack(pady=40)
             return
         t = tracks[state["sel"]]
+        brief = t.brief or {}
+        mod = MODULE_INFO.get(t.group, {"label": t.group, "accent": AMBER})
 
-        # ── Header row: name + status chip
-        hero = tk.Frame(right, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
-        hero.pack(fill="x", padx=10, pady=(10, 0))
-        hdr = tk.Frame(hero, bg=BG2)
-        hdr.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Label(hdr, text=t.name, font=(FONT, 14, "bold"),
-                 fg=AMBER, bg=BG2, anchor="w").pack(side="left")
+        # Uniform horizontal padding for every vertical band
+        PAD_X = 10
+
+        # ── 1. IDENTITY STRIP — institutional header ──
+        # Restrained layout: name left (bold, not colored), module tag,
+        # status pill right. Tagline below on its own subtle line.
+        # No colored accent rails — institutional look relies on
+        # typography hierarchy, not graphical ornament.
+        head = tk.Frame(right, bg=PANEL)
+        head.pack(fill="x", padx=PAD_X, pady=(10, 0))
+
+        line1 = tk.Frame(head, bg=PANEL)
+        line1.pack(fill="x")
+        tk.Label(line1, text=t.name, font=(FONT, 11, "bold"),
+                 fg=WHITE, bg=PANEL, anchor="w").pack(side="left")
+        tk.Label(line1, text=f"   {t.slug.upper()}",
+                 font=(FONT, 7), fg=DIM, bg=PANEL).pack(side="left")
+        tk.Label(line1, text=f" · {mod['label']}",
+                 font=(FONT, 7), fg=DIM, bg=PANEL).pack(side="left")
 
         status = "running" if _is_track_running(t) else (t.status or "idle")
         sc = _STATE_COLORS.get(status, DIM)
-        tk.Label(hdr, text=f" {status.upper()} ",
-                 font=(FONT, 7, "bold"), fg=BG, bg=sc,
+        tk.Label(line1, text=status.upper(),
+                 font=(FONT, 7, "bold"), fg=sc, bg=PANEL,
                  padx=4).pack(side="right")
 
-        meta = tk.Frame(hero, bg=BG2)
-        meta.pack(fill="x", padx=12, pady=(0, 10))
-        mod = MODULE_INFO.get(t.group, {"label": t.group, "accent": AMBER})
-        tk.Label(meta, text=f" {mod['label']} ",
-                 font=(FONT, 7, "bold"), fg=BG, bg=mod["accent"],
-                 padx=4).pack(side="left", padx=(0, 6))
-        tk.Label(meta, text=t.slug.upper(),
-                 font=(FONT, 7, "bold"), fg=DIM, bg=BG2,
-                 anchor="w").pack(side="left")
-        if t.tagline:
-            tk.Label(meta, text=t.tagline[:46],
-                     font=(FONT, 7), fg=DIM2, bg=BG2,
-                     anchor="e").pack(side="right")
+        tagline = (t.tagline or brief.get("edge", "") or "")[:80]
+        if tagline:
+            tk.Label(head, text=tagline,
+                     font=(FONT, 8), fg=DIM2, bg=PANEL,
+                     anchor="w", wraplength=560, justify="left"
+                     ).pack(fill="x", pady=(3, 0))
 
+        tk.Frame(right, bg=BORDER, height=1).pack(
+            fill="x", padx=PAD_X, pady=(8, 0))
+
+        # ── 2. KPI TAPE — two groups: PERFORMANCE | TRACK RECORD ──
+        bc = brief.get("best_config") or {}
+        aud = _compact_audit(bc.get("Audit") or bc.get("Status"))
+        roi = _pull_roi(bc) or ""
+        perf_cells = [
+            ("SHRP", f"{t.sharpe:.2f}" if t.sharpe is not None else "--",
+             GREEN if (t.sharpe or 0) >= 1.0 else (AMBER if (t.sharpe or 0) > 0 else WHITE)),
+            ("SORT", f"{t.sortino:.2f}" if t.sortino is not None else "--", WHITE),
+            ("MDD",  f"{t.max_dd:.1%}" if t.max_dd is not None else "--",
+             GREEN if (t.max_dd or 1) < 0.10 else (AMBER if (t.max_dd or 1) < 0.20 else RED)),
+            ("WR",   f"{t.win_rate:.0%}" if t.win_rate is not None else "--", WHITE),
+        ]
+        track_cells = [
+            ("TRDS", _pull_trade_count(bc) or "--", DIM2),
+            ("ROI",  roi or "--",
+             GREEN if roi.startswith("+") else (RED if roi.startswith("-") else DIM2)),
+            ("MC+",  _pull_mc(bc) or "--", DIM2),
+            ("AUD",  aud,
+             GREEN if "PASS" in aud else
+             AMBER if "WARN" in aud else
+             RED if "FAIL" in aud else WHITE),
+        ]
+
+        def _mk_group(parent, title, cells):
+            """Institutional KPI group — title · flush cells · 1px rule.
+
+            Values are right-aligned and uniformly white. Color is reserved
+            for status severity (PASS/WARN/FAIL) and signed returns, not
+            every numeric cell — institutional dashboards treat color as
+            signal, not decoration.
+            """
+            grp = tk.Frame(parent, bg=PANEL)
+            grp.pack(side="left", fill="both", expand=True, padx=(0, 1))
+            tk.Label(grp, text=title, font=(FONT, 6, "bold"),
+                     fg=DIM, bg=PANEL, anchor="w"
+                     ).pack(fill="x", padx=2, pady=(2, 2))
+            row = tk.Frame(grp, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1)
+            row.pack(fill="x")
+            for i, (label, val, col) in enumerate(cells):
+                cell = tk.Frame(row, bg=PANEL)
+                cell.pack(side="left", fill="both", expand=True)
+                tk.Label(cell, text=label, font=(FONT, 6, "bold"),
+                         fg=DIM, bg=PANEL, anchor="w"
+                         ).pack(fill="x", padx=6, pady=(4, 0))
+                tk.Label(cell, text=val, font=(FONT, 11, "bold"),
+                         fg=col if val != "--" else DIM, bg=PANEL,
+                         anchor="e").pack(fill="x", padx=6, pady=(0, 5))
+                # 1px vertical separator between cells (institutional grid)
+                if i < len(cells) - 1:
+                    tk.Frame(row, bg=BORDER, width=1).pack(
+                        side="left", fill="y")
+
+        tape = tk.Frame(right, bg=PANEL)
+        tape.pack(fill="x", padx=PAD_X, pady=(10, 0))
+        _mk_group(tape, "PERFORMANCE", perf_cells)
+        tk.Frame(tape, bg=PANEL, width=8).pack(side="left", fill="y")
+        _mk_group(tape, "TRACK RECORD", track_cells)
+
+        # ── 3. CHIP BAR ────────────────────────────────────────
         chip_bar = tk.Frame(right, bg=BG)
-        chip_bar.pack(fill="x", padx=10, pady=(8, 0))
+        chip_bar.pack(fill="x", padx=PAD_X, pady=(10, 0))
         chip_host["frame"] = chip_bar
 
         def _mk_chip(label, key):
@@ -592,11 +783,11 @@ def render(
             hov = AMBER_H if active else BORDER_H
             b = tk.Label(chip_bar, text=f" {label} ",
                          font=(FONT, 8, "bold"),
-                         fg=fg_c, bg=bg_c, padx=9, pady=4,
+                         fg=fg_c, bg=bg_c, padx=8, pady=3,
                          highlightbackground=(AMBER if active else BORDER),
                          highlightthickness=1,
                          cursor="hand2")
-            b.pack(side="left", padx=(0, 3))
+            b.pack(side="left", padx=(0, 2))
 
             def _click(_e=None, _k=key):
                 state["chip"] = _k
@@ -607,50 +798,62 @@ def render(
                 b.bind("<Leave>", lambda _e: b.config(bg=bg_c))
             return b
 
-        # Chip set adapts to mode — backtest is research-oriented, live is
-        # operations-oriented (the iPod "now playing" panel for live trades)
         if mode == "live":
             _chips = [
                 ("LAUNCH",    "LAUNCH"),
                 ("LOG",       "LOG"),
-                ("POSITIONS", "POSITIONS"),
-                ("OVERVIEW",  "OVERVIEW"),
+                ("POS",       "POSITIONS"),
+                ("OVER",      "OVERVIEW"),
             ]
         else:
             _chips = [
-                ("OVERVIEW", "OVERVIEW"),
-                ("CONFIG",   "CONFIG"),
-                ("CODE",     "CODE"),
-                ("RUN",      "RUN"),
+                ("OVER",  "OVERVIEW"),
+                ("LAB",   "CONFIG"),
+                ("CODE",  "CODE"),
+                ("RUN",   "RUN"),
             ]
-        # If the saved chip is not in the current set, reset to first
         if state["chip"] not in {k for _, k in _chips}:
             state["chip"] = _chips[0][1]
         for _label, _key in _chips:
             _mk_chip(_label, _key)
 
-        tk.Frame(right, bg=BORDER, height=1).pack(fill="x",
-                                                   padx=12, pady=(4, 0))
+        tk.Frame(right, bg=BORDER, height=1).pack(
+            fill="x", padx=PAD_X, pady=(3, 0))
 
+        # ── 4. CONTENT PANE (chip dispatcher with safety wrapper) ──
         content = tk.Frame(right, bg=PANEL)
-        content.pack(fill="both", expand=True, padx=12, pady=8)
+        content.pack(fill="both", expand=True, padx=PAD_X, pady=8)
         chip_content_host["frame"] = content
 
-        sel_chip = state["chip"]
-        if sel_chip == "OVERVIEW":
-            _paint_overview(content, t)
-        elif sel_chip == "CONFIG":
-            _paint_config(content, t)
-        elif sel_chip == "CODE":
-            _paint_code(content, t)
-        elif sel_chip == "LAUNCH":
-            _paint_launch(content, t)
-        elif sel_chip == "LOG":
-            _paint_log(content, t)
-        elif sel_chip == "POSITIONS":
-            _paint_positions(content, t)
-        else:  # RUN (backtest only)
-            _paint_run(content, t)
+        _chip_painters = {
+            "OVERVIEW":  _paint_overview,
+            "CONFIG":    _paint_config,
+            "CODE":      _paint_code,
+            "RUN":       _paint_run,
+            "LAUNCH":    _paint_launch,
+            "LOG":       _paint_log,
+            "POSITIONS": _paint_positions,
+        }
+        painter = _chip_painters.get(state["chip"])
+        if painter is None:
+            tk.Label(content, text=f"unknown chip: {state['chip']}",
+                     font=(FONT, 9), fg=RED, bg=PANEL).pack(pady=20)
+        else:
+            try:
+                painter(content, t)
+            except Exception as e:
+                # Never let a chip painter hang the UI — show the error inline
+                import traceback
+                tk.Label(content,
+                         text=f"chip '{state['chip']}' render failed:\n{e}",
+                         font=(FONT, 8), fg=RED, bg=PANEL,
+                         anchor="w", justify="left",
+                         wraplength=500).pack(fill="x", pady=(10, 4))
+                tk.Label(content,
+                         text=traceback.format_exc()[:800],
+                         font=(FONT, 7), fg=DIM2, bg=PANEL,
+                         anchor="w", justify="left",
+                         wraplength=540).pack(fill="x")
 
         if on_select:
             try: on_select(t)
@@ -661,115 +864,137 @@ def render(
         _paint_detail()
 
     def _paint_overview(host, t: EngineTrack):
+        """Research brief — institutional layout.
+
+        Sections render top-to-bottom in this fixed order:
+          1. STRATEGY   — one-paragraph description
+          2. METHOD     — numbered pipeline of steps
+          3. EDGE · RISK — two terse tagged blocks
+          4. EQUITY     — cumulative return curve
+          5. RATIONALE  — extended thesis (optional deep-dive)
+
+        Design notes:
+          - Values left-aligned; headers 7pt amber bold; body 8pt white/dim
+          - Accent bars are 1-2px DIM2, never thick or colored
+          - Edge/Risk use a single-pixel top rule instead of filled bars
+        """
         sbody = _scrollable(host)
         brief = t.brief or {}
 
-        intro = tk.Frame(sbody, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
-        intro.pack(fill="x", pady=(0, 8))
-        tk.Label(intro, text=t.tagline or "strategy engine", font=(FONT, 8),
-                 fg=DIM2, bg=BG2, anchor="w", justify="left",
-                 wraplength=560).pack(fill="x", padx=10, pady=(9, 6))
-        info_row = tk.Frame(intro, bg=BG2)
-        info_row.pack(fill="x", padx=10, pady=(0, 9))
-        mod = MODULE_INFO.get(t.group, {"label": t.group, "accent": AMBER})
-        tk.Label(info_row, text=f" {mod['label']} ",
-                 font=(FONT, 7, "bold"), fg=BG, bg=mod["accent"],
-                 padx=4).pack(side="left")
-        tk.Label(info_row, text=f"  {t.group}",
-                 font=(FONT, 7, "bold"), fg=DIM, bg=BG2).pack(side="left")
-        inline_status = "running" if _is_track_running(t) else (t.status or "idle")
-        tk.Label(info_row, text=inline_status.upper(),
-                 font=(FONT, 7, "bold"),
-                 fg=_STATE_COLORS.get(inline_status, DIM2), bg=BG2).pack(side="right")
+        # ── 1. STRATEGY ─────────────────────────────────────────
+        _section(sbody, "STRATEGY")
+        what = brief.get("what")
+        if what:
+            tk.Label(sbody, text=what, font=(FONT, 9), fg=WHITE, bg=PANEL,
+                     wraplength=560, justify="left", anchor="w"
+                     ).pack(fill="x", pady=(0, 10))
+        else:
+            tk.Label(sbody, text="No strategy description available.",
+                     font=(FONT, 8, "italic"), fg=DIM2, bg=PANEL,
+                     anchor="w").pack(fill="x", pady=(0, 10))
 
-        if brief.get("philosophy"):
-            _section(sbody, "RATIONALE")
-            tk.Label(sbody, text=brief["philosophy"],
-                     font=(FONT, 8), fg=AMBER_H, bg=PANEL,
-                     wraplength=560, justify="left",
-                     anchor="w").pack(fill="x", pady=(0, 6))
+        # ── 2. METHOD (pipeline) ────────────────────────────────
+        logic = brief.get("logic")
+        if logic:
+            _section(sbody, "METHOD")
+            for i, step in enumerate(logic, start=1):
+                r = tk.Frame(sbody, bg=PANEL)
+                r.pack(fill="x", pady=1)
+                tk.Label(r, text=f"  {i:02d}", font=(FONT, 7),
+                         fg=DIM, bg=PANEL, width=4,
+                         anchor="w").pack(side="left")
+                tk.Label(r, text=step, font=(FONT, 8),
+                         fg=WHITE, bg=PANEL, anchor="w",
+                         wraplength=510, justify="left"
+                         ).pack(side="left", fill="x", expand=True)
 
-        def _cell(row, label, value):
-            c = tk.Frame(row, bg=BG2,
-                         highlightbackground=BORDER, highlightthickness=1)
-            c.pack(side="left", fill="both", expand=True, padx=1)
-            tk.Label(c, text=label, font=(FONT, 6, "bold"),
-                     fg=DIM, bg=BG2, anchor="w").pack(
-                fill="x", padx=4, pady=(1, 0))
-            col = WHITE if value != "--" else DIM
-            tk.Label(c, text=value, font=(FONT, 12, "bold"),
-                     fg=col, bg=BG2, anchor="w").pack(
-                fill="x", padx=4, pady=(0, 4))
-
-        r1 = tk.Frame(sbody, bg=PANEL)
-        r1.pack(fill="x", pady=1)
-        _cell(r1, "SHARPE", f"{t.sharpe:.2f}" if t.sharpe is not None else "--")
-        _cell(r1, "SORTINO", f"{t.sortino:.2f}" if t.sortino is not None else "--")
-        r2 = tk.Frame(sbody, bg=PANEL)
-        r2.pack(fill="x", pady=1)
-        _cell(r2, "MAX DD", f"{t.max_dd:.1%}" if t.max_dd is not None else "--")
-        _cell(r2, "WIN%", f"{t.win_rate:.0%}" if t.win_rate is not None else "--")
-
-        summary = tk.Frame(sbody, bg=PANEL)
-        summary.pack(fill="x", pady=(8, 2))
-        rg = t.regime or "--"
-        rc = _REGIME_COLORS.get(rg, BG2)
-        tk.Label(summary, text="REGIME", font=(FONT, 6, "bold"),
-                 fg=DIM, bg=PANEL).pack(side="left")
-        tk.Label(summary, text=f" {rg} ", font=(FONT, 8, "bold"),
-                 fg=BG if rg != "--" else DIM2, bg=rc,
-                 padx=4).pack(side="left", padx=(4, 10))
-        sig = t.last_signal or "no signal"
-        age = f" | {t.last_signal_age}" if t.last_signal_age else ""
-        tk.Label(summary, text=f"LAST {sig}{age}",
-                 font=(FONT, 8),
-                 fg=DIM2 if t.last_signal else DIM,
-                 bg=PANEL, anchor="w").pack(side="left", fill="x", expand=True)
-
+        # ── 3. EDGE · RISK ──────────────────────────────────────
         if brief.get("edge") or brief.get("risk"):
-            _section(sbody, "EDGE / RISK")
-            if brief.get("edge"):
-                row = tk.Frame(sbody, bg=PANEL)
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text=" EDGE ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=GREEN, padx=4).pack(side="left")
-                tk.Label(row, text="  " + brief["edge"],
-                         font=(FONT, 8), fg=WHITE, bg=PANEL,
-                         anchor="w", wraplength=500,
-                         justify="left").pack(side="left", fill="x", expand=True)
-            if brief.get("risk"):
-                row = tk.Frame(sbody, bg=PANEL)
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text=" RISK ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=RED, padx=4).pack(side="left")
-                tk.Label(row, text="  " + brief["risk"],
-                         font=(FONT, 8), fg=DIM2, bg=PANEL,
-                         anchor="w", wraplength=500,
-                         justify="left").pack(side="left", fill="x", expand=True)
+            _section(sbody, "EDGE · RISK")
+            cards = tk.Frame(sbody, bg=PANEL)
+            cards.pack(fill="x", pady=(2, 10))
 
-        tk.Label(sbody, text="EQUITY 90D", font=(FONT, 6, "bold"),
-                 fg=DIM, bg=PANEL, anchor="w").pack(fill="x", pady=(8, 0))
-        cv = tk.Canvas(sbody, bg=BG2, highlightthickness=1,
-                       highlightbackground=BORDER, height=52)
-        cv.pack(fill="x")
+            def _card(parent, tag, tag_fg, body_text, body_fg, left_pad):
+                card = tk.Frame(parent, bg=PANEL,
+                                highlightbackground=BORDER,
+                                highlightthickness=1)
+                card.pack(side="left", fill="both", expand=True,
+                          padx=(0 if left_pad == 0 else 4,
+                                4 if left_pad == 0 else 0))
+                tk.Label(card, text=tag, font=(FONT, 7, "bold"),
+                         fg=tag_fg, bg=PANEL
+                         ).pack(anchor="w", padx=8, pady=(6, 2))
+                tk.Label(card, text=body_text, font=(FONT, 8),
+                         fg=body_fg, bg=PANEL, anchor="w",
+                         wraplength=250, justify="left"
+                         ).pack(fill="x", padx=8, pady=(0, 8))
+                return card
+
+            if brief.get("edge"):
+                _card(cards, "EDGE", GREEN, brief["edge"], WHITE, 0)
+            if brief.get("risk"):
+                _card(cards, "RISK", RED, brief["risk"], DIM2, 1)
+
+        # ── 4. EQUITY ───────────────────────────────────────────
+        _section(sbody, "EQUITY")
+        cv = tk.Canvas(sbody, bg=PANEL, highlightthickness=1,
+                       highlightbackground=BORDER, height=80)
+        cv.pack(fill="x", pady=(0, 10))
         series = t.equity_series
         if series and len(series) >= 2:
             cv.after(20, lambda s=series: _draw_spark(cv, s, AMBER))
         else:
             cv.after(20, lambda: cv.create_text(
-                (cv.winfo_width() or 400) // 2, 28,
-                text="-- no equity data --", font=(FONT, 8), fill=DIM))
+                (cv.winfo_width() or 400) // 2, 40,
+                text="no data available",
+                font=(FONT, 8), fill=DIM))
+
+        # ── 5. RATIONALE (deep thesis) ─────────────────────────
+        if brief.get("philosophy"):
+            _section(sbody, "RATIONALE")
+            tk.Label(sbody, text=brief["philosophy"],
+                     font=(FONT, 8), fg=DIM2, bg=PANEL,
+                     wraplength=560, justify="left", anchor="w"
+                     ).pack(fill="x", pady=(0, 6))
 
     def _paint_config(host, t: EngineTrack):
-        """Interactive config: period, basket, leverage, plots."""
+        """LAB chip — the research workspace.
+
+        Two-column layout puts `interactive controls` next to `calibrated
+        reference values` so the user can compare what they're about to run
+        against what was already validated. Pipeline sits full-width below.
+
+          ┌─ PARAMETERS ─────────┬─ CALIBRATED ─────────┐
+          │ PERIOD  [30][90]...  │ TF        1h         │
+          │ BASKET  [majors]...  │ BASKET    bluechip   │
+          │ LEV     [1x][2x]...  │ SHARPE    2.54       │
+          │ CHARTS  [ON] [OFF]   │ STATUS    ✓ VALID    │
+          └──────────────────────┴──────────────────────┘
+          ▌ PIPELINE
+          01  step one...
+          02  step two...
+          ...
+          ── slug · script                 [OPEN EDITOR] ──
+        """
         sbody = _scrollable(host)
+        brief = t.brief or {}
 
-        _section(sbody, "PARAMETERS")
+        # ── Two-column top section ──
+        top = tk.Frame(sbody, bg=PANEL)
+        top.pack(fill="x", pady=(0, 6))
+        col_left = tk.Frame(top, bg=PANEL)
+        col_left.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        col_right = tk.Frame(top, bg=PANEL)
+        col_right.pack(side="left", fill="both", expand=True, padx=(6, 0))
 
-        def _pill_row(label, opts, state_key):
-            tk.Label(sbody, text=f"  {label}", font=(FONT, 7, "bold"),
-                     fg=DIM, bg=PANEL, anchor="w").pack(fill="x", pady=(4, 1))
-            wrap = tk.Frame(sbody, bg=PANEL)
+        # ─── LEFT COLUMN: PARAMETERS (interactive) ─────
+        _section(col_left, "PARAMETERS")
+
+        def _pill_row(parent, label, opts, state_key):
+            tk.Label(parent, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=PANEL, anchor="w"
+                     ).pack(fill="x", pady=(4, 1))
+            wrap = tk.Frame(parent, bg=PANEL)
             wrap.pack(fill="x", pady=(0, 2))
             btns: list = []
             for text_, val in opts:
@@ -790,13 +1015,14 @@ def render(
                                   bg=AMBER if on else BG3)
                 b.bind("<Button-1>", _click)
 
-        _pill_row("PERIOD", PERIOD_OPTS, "cfg_period")
-        _pill_row("BASKET", BASKET_OPTS, "cfg_basket")
-        _pill_row("LEVERAGE", LEVERAGE_OPTS, "cfg_leverage")
+        _pill_row(col_left, "PERIOD",   PERIOD_OPTS,   "cfg_period")
+        _pill_row(col_left, "BASKET",   BASKET_OPTS,   "cfg_basket")
+        _pill_row(col_left, "LEVERAGE", LEVERAGE_OPTS, "cfg_leverage")
 
-        tk.Label(sbody, text="  CHARTS", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=PANEL, anchor="w").pack(fill="x", pady=(4, 1))
-        trow = tk.Frame(sbody, bg=PANEL)
+        tk.Label(col_left, text="CHARTS", font=(FONT, 7, "bold"),
+                 fg=DIM, bg=PANEL, anchor="w"
+                 ).pack(fill="x", pady=(4, 1))
+        trow = tk.Frame(col_left, bg=PANEL)
         trow.pack(fill="x", pady=(0, 4))
         on = state["cfg_plots"] == "s"
         plot_btn = tk.Label(trow,
@@ -804,7 +1030,7 @@ def render(
                             font=(FONT, 8, "bold"),
                             fg=BG, bg=GREEN if on else BG3,
                             padx=8, pady=3, cursor="hand2")
-        plot_btn.pack(side="left", padx=1)
+        plot_btn.pack(side="left")
 
         def _toggle_plots(_e=None):
             state["cfg_plots"] = "n" if state["cfg_plots"] == "s" else "s"
@@ -814,35 +1040,37 @@ def render(
                             bg=GREEN if _on else BG3)
         plot_btn.bind("<Button-1>", _toggle_plots)
 
-        def _row(label, value, color=WHITE):
-            r = tk.Frame(sbody, bg=PANEL)
+        # ─── RIGHT COLUMN: CALIBRATED reference values ─────
+        _section(col_right, "CALIBRATED")
+
+        def _ref_row(parent, label, value, color=WHITE):
+            r = tk.Frame(parent, bg=PANEL)
             r.pack(fill="x", pady=1)
-            tk.Label(r, text=f"  {label}", font=(FONT, 7, "bold"),
-                     fg=DIM, bg=PANEL, width=14,
+            tk.Label(r, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=PANEL, width=10,
                      anchor="w").pack(side="left")
-            tk.Label(r, text=value, font=(FONT, 8),
+            tk.Label(r, text=str(value), font=(FONT, 8),
                      fg=color, bg=PANEL, anchor="w",
-                     wraplength=440, justify="left").pack(
-                side="left", fill="x", expand=True)
+                     wraplength=250, justify="left"
+                     ).pack(side="left", fill="x", expand=True)
 
-        _section(sbody, "IDENTITY")
-        _row("SLUG", t.slug, AMBER_H)
-        _row("GROUP", t.group)
-        _row("SCRIPT", t.script_path or "--", DIM2)
-        _row("STATUS", (t.status or "idle").upper(),
-             _STATE_COLORS.get(t.status, DIM))
-
-        bc = (t.brief or {}).get("best_config") if t.brief else None
+        bc = brief.get("best_config") or {}
         if bc:
-            _section(sbody, "BEST CONFIG")
             for k, v in bc.items():
                 v_str = str(v)
-                color = (GREEN if "?" in v_str else
-                         RED if "?" in v_str else
-                         AMBER if "?" in v_str else WHITE)
-                _row(k.upper(), v_str, color)
+                color = (GREEN if ("✓" in v_str or "PASS" in v_str) else
+                         RED if ("✗" in v_str or "FAIL" in v_str) else
+                         AMBER if ("⚠" in v_str or "WARN" in v_str) else WHITE)
+                # Truncate long values to keep the column narrow
+                display = v_str if len(v_str) <= 40 else v_str[:38] + "…"
+                _ref_row(col_right, k.upper()[:9], display, color)
+        else:
+            tk.Label(col_right, text="  (no calibration data)",
+                     font=(FONT, 7, "italic"), fg=DIM2, bg=PANEL,
+                     anchor="w").pack(fill="x", pady=4)
 
-        logic = (t.brief or {}).get("logic") if t.brief else None
+        # ── PIPELINE (full-width below the two columns) ──
+        logic = brief.get("logic")
         if logic:
             _section(sbody, "PIPELINE")
             for i, step in enumerate(logic, start=1):
@@ -853,22 +1081,36 @@ def render(
                          anchor="w").pack(side="left")
                 tk.Label(r, text=step, font=(FONT, 8),
                          fg=WHITE, bg=PANEL, anchor="w",
-                         wraplength=480,
-                         justify="left").pack(side="left", fill="x", expand=True)
+                         wraplength=520,
+                         justify="left").pack(
+                    side="left", fill="x", expand=True)
 
+        # ── Footer ──
+        tk.Frame(sbody, bg=BORDER, height=1).pack(fill="x", pady=(10, 6))
+        foot = tk.Frame(sbody, bg=PANEL)
+        foot.pack(fill="x", pady=(0, 4))
+        tk.Label(foot, text=t.slug.upper(), font=(FONT, 7, "bold"),
+                 fg=AMBER_H, bg=PANEL).pack(side="left")
+        tk.Label(foot, text=f"  ·  {t.script_path or '--'}",
+                 font=(FONT, 7), fg=DIM2, bg=PANEL,
+                 anchor="w").pack(side="left", fill="x", expand=True)
         if t.on_config:
-            tk.Frame(sbody, bg=BORDER, height=1).pack(fill="x", pady=6)
-            b = tk.Label(sbody, text=" OPEN FULL EDITOR ",
+            b = tk.Label(foot, text=" OPEN EDITOR ",
                          font=(FONT, 8, "bold"),
                          fg=BG, bg=AMBER, padx=10, pady=4,
                          cursor="hand2")
-            b.pack(anchor="w")
+            b.pack(side="right")
             b.bind("<Button-1>", lambda _e: _safe(t.on_config))
             b.bind("<Enter>", lambda _e: b.config(bg=AMBER_H))
             b.bind("<Leave>", lambda _e: b.config(bg=AMBER))
     def _paint_code(host, t: EngineTrack):
+        """CODE chip — source viewer with async file read.
+
+        OneDrive sync can stall a read briefly (WinError 5 / retry loop),
+        so we kick the read off in a daemon thread and replace the
+        placeholder label once the text arrives. Keeps Tk responsive.
+        """
         path = t.script_path or ""
-        # Resolve repo root (parent of "core/")
         root = Path(__file__).resolve().parent.parent
         target = root / path if path else None
 
@@ -876,28 +1118,43 @@ def render(
                  font=(FONT, 7), fg=DIM2, bg=PANEL,
                  anchor="w").pack(fill="x")
 
-        text = tk.Text(host, bg=BG2, fg=WHITE, insertbackground=AMBER,
+        text_wrap = tk.Frame(host, bg=PANEL)
+        text_wrap.pack(fill="both", expand=True, pady=(4, 0))
+        text = tk.Text(text_wrap, bg=BG2, fg=WHITE, insertbackground=AMBER,
                        bd=0, highlightthickness=1,
                        highlightbackground=BORDER,
                        font=(FONT, 8), wrap="none", height=18)
-        sb = tk.Scrollbar(host, orient="vertical", command=text.yview)
+        sb = tk.Scrollbar(text_wrap, orient="vertical", command=text.yview)
         text.configure(yscrollcommand=sb.set)
-        text.pack(side="left", fill="both", expand=True, pady=(4, 0))
-        sb.pack(side="right", fill="y", pady=(4, 0))
-
-        try:
-            if target and target.is_file():
-                with open(target, "r", encoding="utf-8",
-                          errors="replace") as f:
-                    content = f.read(120_000)  # cap at ~120KB for perf
-                text.insert("1.0", content)
-            else:
-                text.insert("1.0",
-                            "# — script not found —\n\n"
-                            f"# path: {path}\n")
-        except Exception as e:
-            text.insert("1.0", f"# error reading file: {e}\n")
+        text.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        text.insert("1.0", "# loading ...")
         text.configure(state="disabled")
+
+        def _load():
+            try:
+                if target and target.is_file():
+                    with open(target, "r", encoding="utf-8",
+                              errors="replace") as f:
+                        content = f.read(120_000)  # cap ~120KB
+                else:
+                    content = f"# — script not found —\n\n# path: {path}\n"
+            except Exception as e:
+                content = f"# error reading file: {e}\n"
+
+            def _apply():
+                try:
+                    text.configure(state="normal")
+                    text.delete("1.0", "end")
+                    text.insert("1.0", content)
+                    text.configure(state="disabled")
+                except Exception:
+                    pass
+            try: host.after(0, _apply)
+            except Exception: pass
+
+        import threading as _th
+        _th.Thread(target=_load, daemon=True).start()
 
     # progress bar state
     bar_host = {"canvas": None, "pct_lbl": None, "tail_lbl": None}
@@ -1304,8 +1561,11 @@ def render(
     def _wheel(e):
         try: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         except Exception: pass
-    canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
-    canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return "break"
+    # Direct bindings (not bind_all) — avoids global handler leaks across
+    # re-renders. See _scrollable() for the rationale.
+    canvas.bind("<MouseWheel>", _wheel)
+    track_list.bind("<MouseWheel>", _wheel)
 
     _apply_progress_from_selection()
     _paint_modules(modules)

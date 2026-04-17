@@ -34,6 +34,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="AURUM prefetch — OHLCV cache warmer")
     ap.add_argument("--basket", default="bluechip",
                     help="Basket name (default: bluechip)")
+    ap.add_argument("--symbol", default=None,
+                    help="Fetch a single symbol (overrides --basket)")
     ap.add_argument("--days", type=int, default=3000,
                     help="History depth in days (default: 3000)")
     ap.add_argument("--interval", default=INTERVAL,
@@ -45,7 +47,12 @@ def main() -> int:
     args = ap.parse_args()
 
     futures = not args.spot
-    symbols = _resolve_symbols(args.basket)
+    if args.symbol:
+        symbols = [args.symbol.strip().upper()]
+        target_label = f"symbol={symbols[0]}"
+    else:
+        symbols = _resolve_symbols(args.basket)
+        target_label = f"basket={args.basket}"
     if not symbols:
         print(f"  basket '{args.basket}' unknown. options: {list(BASKETS)}")
         return 2
@@ -58,7 +65,7 @@ def main() -> int:
     print("  +-----------------------------------------------+")
     print("  | AURUM prefetch                                |")
     print("  +-----------------------------------------------+")
-    print(f"  basket       {args.basket} ({len(symbols)} symbols)")
+    print(f"  target       {target_label} ({len(symbols)} symbols)")
     print(f"  interval     {args.interval}  ({tf_min}m bars)")
     print(f"  depth        {args.days}d  ~{n_candles:,} bars/symbol")
     print(f"  market       {market}")

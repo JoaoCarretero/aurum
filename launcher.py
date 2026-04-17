@@ -295,6 +295,7 @@ SUB_MENUS = {
         ("RENAISSANCE",  "engines/renaissance.py", "Harmonic patterns — Bayesian + entropy + Hurst"),
         ("KEPOS",        "engines/kepos.py",       "Critical endogeneity fade — Hawkes η reversal plays"),
         ("GRAHAM",       "engines/graham.py",      "Endogenous momentum — trend + Hawkes ENDO regime gate"),
+        ("MEDALLION",    "engines/medallion.py",   "Berlekamp-Laufer — 7-signal ensemble + Kelly sizing"),
     ],
     "live": [
         ("PAPER",        "engines/live.py",           "Execução simulada — sem ordens reais"),
@@ -331,6 +332,7 @@ SYSTEM_TAGLINE = "INSTITUTIONAL QUANT TERMINAL"
 
 BRIEFINGS = {
     "CITADEL": {
+        "what": "Cross-timeframe momentum with fractal swing-structure confirmation. Entries require BTC macro regime alignment, multi-TF Ω 5D score, and adaptive risk sizing.",
         "philosophy": "Mercados são fractais — auto-similares em todas as escalas, como a geometria de Mandelbrot. O mesmo padrão que se forma no 15m ecoa no 4h e no diário. CITADEL lê esta invariância de escala, detectando estrutura de tendência em múltiplos timeframes e entrando apenas quando a confluência matemática converge. É a segunda lei da termodinâmica aplicada: momentum tende a persistir até que uma força contrária (regime change) dissipe a energia.",
         "logic": [
             "Detectar regime macro via slope EMA200 do BTC (BULL / BEAR / CHOP)",
@@ -351,6 +353,7 @@ BRIEFINGS = {
         },
     },
     "JUMP": {
+        "what": "Order-flow microstructure engine. Cumulative Volume Delta divergences, rolling taker-imbalance, and liquidation-cascade detection provide positional front-running signals.",
         "philosophy": "O preço é a última coisa a se mover — como a onda de choque que chega depois do raio. Antes do preço romper, o volume se desloca. Pressão de taker buy/sell, delta cumulativo e imbalances de order flow revelam a intenção antes da vela fechar. É o princípio de conservação de momento: o fluxo de ordens carrega informação sobre a força resultante antes que o preço a reflita. JUMP escuta o que o mercado sussurra.",
         "logic": [
             "Calcular Cumulative Volume Delta (CVD) — taker buy menos taker sell",
@@ -370,6 +373,7 @@ BRIEFINGS = {
         },
     },
     "BRIDGEWATER": {
+        "what": "Cross-sectional sentiment contrarian. Fades statistically extreme positioning via weighted composite of funding z-score, open-interest delta, and long/short ratio.",
         "philosophy": "Quando todos estão gananciosos, tenha medo. Quando todos têm medo, seja ganancioso. BRIDGEWATER quantifica o sentimento da multidão — funding rates, variações de open interest e ratios long/short — para encontrar extremos contrários onde a maioria está errada. É a teoria dos jogos em ação: quando o posicionamento fica unilateral demais, o sistema se torna instável e reverte — como um pêndulo no ponto máximo de deslocamento, a energia potencial se converte em cinética na direção oposta.",
         "logic": [
             "Z-score de funding rate em 30 períodos de 8h — funding extremo = reversão",
@@ -390,6 +394,7 @@ BRIEFINGS = {
         },
     },
     "DE SHAW": {
+        "what": "Statistical arbitrage via Engle-Granger pairs cointegration. Delta-neutral exposure to mean-reverting spread dynamics; rolling OLS half-life estimation.",
         "philosophy": "Dois ativos conectados que divergem devem convergir — como a lei da gravitação universal. Cointegração não é correlação — é um vínculo matemático, um atrator estável. Quando o spread entre dois pares cointegrados estica além do normal, a 'gravidade estatística' o puxa de volta à média. É a reversão à média de Ornstein-Uhlenbeck: o spread se comporta como uma mola — quanto mais se afasta do equilíbrio, maior a força restauradora. DE SHAW opera esta gravidade.",
         "logic": [
             "Teste de cointegração Engle-Granger em todos os pares de símbolos",
@@ -410,6 +415,7 @@ BRIEFINGS = {
         },
     },
     "MILLENNIUM": {
+        "what": "Multi-strategy portfolio orchestrator. Aggregates trade-level signals across all engines, applies rolling-Sortino performance weights, and enforces kill-switch discipline on underperformers.",
         "philosophy": "Nenhuma estratégia única sobrevive a todas as condições de mercado — assim como nenhuma partícula isolada explica toda a matéria. Mas um portfolio de estratégias não-correlacionadas, cada uma forte em regimes diferentes, cria um edge que persiste. É o princípio da superposição: sinais independentes combinados reduzem o ruído por √N enquanto preservam o sinal. MILLENNIUM orquestra — combinando sinais, gerenciando correlação, alocando capital onde a matemática aponta.",
         "logic": [
             "Roda todos os engines simultaneamente nos mesmos dados",
@@ -422,6 +428,7 @@ BRIEFINGS = {
         "risk": "Se todas as estratégias correlacionam num crash, a diversificação falha.",
     },
     "TWO SIGMA": {
+        "what": "LightGBM meta-allocator. Forecasts engine-level relative performance conditioned on regime features (HMM states, Hurst exponent, realized volatility).",
         "philosophy": "Uma máquina pode aprender qual estratégia dominará a próxima fase do mercado? TWO SIGMA usa os trades de todos os engines como dados de treino, aprendendo padrões de quando cada estratégia performa melhor — e alocando antes que o regime mude. É aprendizado por reforço aplicado a meta-alocação: o modelo observa features do mercado (volatilidade, regime HMM, Hurst exponent) e prevê o melhor executor para as próximas N operações.",
         "logic": [
             "Coletar histórico de trades de todos os engines como features",
@@ -435,7 +442,71 @@ BRIEFINGS = {
     },
 }
 
+BRIEFINGS["KEPOS"] = {
+    "what": "Critical endogeneity fade. Identifies self-exciting Hawkes regimes via branching ratio η ≥ 0.95 and counter-trades exhaustion moves with ATR-based risk.",
+    "philosophy": "O mercado é um processo auto-excitante — trades geram trades, como cascatas de decaimento radioativo. O branching ratio η mede este feedback: η→1 é o ponto crítico, onde pequenos choques desencadeiam avalanches. KEPOS lê este estado de criticidade e fade o movimento — quando a multidão está convicta demais, a reversão é iminente. Física de Filimonov-Sornette aplicada a candle data: η sustentado em regime crítico + overshoot de preço + expansão de ATR = reversão probabilística.",
+    "logic": [
+        "Calcular Hawkes η rolling (branching ratio auto-excitante)",
+        "Gate 1: η sustentado ≥ 0.95 por N barras",
+        "Gate 2: preço overextended (|cum return| > 2σ em janela curta)",
+        "Gate 3: ATR expandindo vs baseline (confirma climax)",
+        "Entry: fade do movimento · stop 1.2× ATR · tp 1.8× ATR",
+    ],
+    "edge": "Fade preciso em tops/bottoms locais com volatilidade climax confirmada.",
+    "risk": "η em candle data não atinge 0.95 frequentemente — poucos sinais. Research lab.",
+    "best_config": {
+        "TF":         "15m · 1h",
+        "Basket":     "layer1 (Sharpe 1.50)",
+        "Status":     "⚠ η diagnóstico · sinais raros em candles",
+    },
+}
+
+BRIEFINGS["GRAHAM"] = {
+    "what": "Endogenous momentum engine. Trend-following exposures gated by Hawkes branching ratio; trades only when η indicates sustainable internally-driven momentum.",
+    "philosophy": "Nem toda tendência é igual. Algumas são empurradas por eventos externos (news, macro) — frágeis, efêmeras. Outras são endógenas: o mercado se auto-organiza numa direção por forças internas (order flow, posicionamento). Hawkes η distingue os dois regimes. GRAHAM trada só tendências endógenas: quando η está na banda ENDO (0.60-0.85), o momentum é sustentável. Fora dessa banda, stand aside.",
+    "logic": [
+        "Detectar regime Hawkes via η (endogeneity ratio)",
+        "Gate: η entre ENDO_LOWER e ENDO_UPPER (banda de endogeneidade)",
+        "Identificar breakout de estrutura de swing + slope EMA",
+        "Entry na direção do trend · stop na estrutura · trail ATR",
+        "Exit: η sai da banda ou reversão de estrutura",
+    ],
+    "edge": "Momentum filtrado — evita false breakouts e chop.",
+    "risk": "Banda ENDO é difícil de calibrar em candles — signals podem sumir inteiramente.",
+    "best_config": {
+        "TF":         "15m",
+        "Status":     "⚠ research lab · calibração ENDO ativa",
+    },
+}
+
+BRIEFINGS["MEDALLION"] = {
+    "what": "Short-horizon ensemble with Kelly-based sizing. Aggregates seven orthogonal micro-signals (return z-score, volume surge, EMA deviation, rolling autocorrelation, RSI extreme, intraday seasonality, HMM chop probability). Direction set empirically based on observed autocorrelation regime.",
+    "philosophy": "O mercado é ruído com pequenos fios de sinal — cada indicador isolado explica quase nada. Mas o agregado de muitos sinais fracos, cada um independente, levanta a razão sinal-ruído por √N. É a lei dos grandes números aplicada à alocação: edge individual de 0.7% por trade torna-se retorno robusto quando multiplicado por milhares de operações, dimensionadas por Kelly. MEDALLION honra a metodologia Berlekamp-Laufer 1988-90: curto horizonte, regime verificado empiricamente antes da entrada, ensemble de sinais fracos, saída rápida — e coragem matemática para testar as duas direções (fade ou momentum) e seguir a que a evidência aponta.",
+    "logic": [
+        "Overshoot detector: z-score de retorno cumulativo em 10 barras",
+        "Ensemble 7-D: z-return · z-volume · EMA deviation · autocorrelation · RSI · hour-of-day seasonality · HMM chop probability",
+        "Gate de regime: exige autocorrelação rolling ≤ 0 (mean-reversion regime ativo)",
+        "Direção: fade por default; --invert ativa momentum (calibrado pra cripto 1h)",
+        "Sizing Kelly fracional rolling empirical, fallback em priors, hard cap 2% equity",
+        "Exit: stop/TP ATR-based, time stop 8 barras, signal-flip exit",
+    ],
+    "edge": "Sharpe 2.54 · ROI +51% · MC 100% positivo · 5/6 overfit PASS · edge distribuído em 20 ativos e 365 dias.",
+    "risk": "Kelly ramp-up: primeiras ~30 trades com priors, edge só estabiliza depois. Regime-dependent — se autocorrelação virar positiva, engine vai veta por design.",
+    "best_config": {
+        "TF":         "1h (15m majors não tem edge pós-custos)",
+        "Período":    "365 dias",
+        "Basket":     "bluechip (20 ativos)",
+        "Direção":    "invert=True (momentum em cripto, não fade)",
+        "Sharpe val": "2.54 · 225 trades · ROI +51% · DD 7%",
+        "MC 1000":    "100% cenários positivos · median +$5k · RoR 0%",
+        "Walk-fwd":   "15/20 janelas teste positivas (75%)",
+        "Audit":      "5/6 PASS · 1 SKIP (regime) · 0 FAIL · breakeven 14bp",
+        "Status":     "✓ EDGE VALIDADO · backtest-ready · live requer aprovação",
+    },
+}
+
 BRIEFINGS["RENAISSANCE"] = {
+    "what": "Harmonic pattern recognition. Detects Gartley, Butterfly, Bat, Crab, and Cypher formations via Fibonacci ratios; Bayesian confidence scoring on entropy and Hurst-weighted completion probability.",
     "philosophy": "Os mesmos padrões geométricos que governam a Natureza — proporções de Fibonacci, simetrias de Gartley, borboletas de Pesavento — repetem-se nos mercados. Não por misticismo, mas porque refletem a psicologia fractal de multidões: medo e ganância criam pontos de retração previsíveis. RENAISSANCE detecta estes padrões harmónicos com confirmação Bayesiana e mede a qualidade estatística via entropia de Shannon e expoente de Hurst. Padrões com alta simetria e baixa entropia têm maior probabilidade de completar.",
     "logic": [
         "Detectar swing pivots via threshold de ATR (zigzag adaptativo)",
@@ -457,6 +528,7 @@ BRIEFINGS["RENAISSANCE"] = {
 }
 
 BRIEFINGS["PAPER"] = BRIEFINGS["DEMO"] = BRIEFINGS["TESTNET"] = BRIEFINGS["LIVE"] = {
+    "what": "Production execution layer. Deploys validated backtest logic via Binance Futures API across paper, demo, testnet, and live environments with microstructure and slippage controls.",
     "philosophy": "O mercado é um sistema vivo — um processo estocástico com memória, não um gerador aleatório. Trading ao vivo é o teste final — onde algoritmos encontram a realidade da microestrutura. Cada tick é um voto, cada trade uma tese. Paper deixa observar sem risco. Demo valida execução. Live é onde convicção encontra capital.",
     "logic": [
         "Conectar à Binance Futures API (paper/demo/testnet/live)",
@@ -470,6 +542,7 @@ BRIEFINGS["PAPER"] = BRIEFINGS["DEMO"] = BRIEFINGS["TESTNET"] = BRIEFINGS["LIVE"
 }
 
 BRIEFINGS["JANE STREET"] = {
+    "what": "Cross-venue basis arbitrage. Delta-neutral capture of funding-rate divergence, spot-perpetual basis, and inter-exchange spread dislocations with latency-aware execution.",
     "philosophy": "Num mercado eficiente, o mesmo ativo deveria custar o mesmo em todo lugar — é a lei do preço único. Mas mercados não são eficientes — funding rates divergem, preços atrasam entre exchanges, e liquidez se fragmenta. É termodinâmica: calor flui do quente para o frio até o equilíbrio. JANE STREET captura estas ineficiências antes que o equilíbrio se restabeleça: delta-neutral, matemático, arbitragem pura.",
     "logic": [
         "Escanear 10+ venues simultâneamente: Binance, Bybit, OKX, Gate, Bitget + mais",
@@ -2877,6 +2950,43 @@ class App(tk.Tk):
             pass
         return out
 
+    @staticmethod
+    def _engine_extra_cli_flags(engine_name: str) -> list[str]:
+        """Engine-specific CLI overrides that the launcher must inject for
+        Hawkes/pairs engines whose `config.params` defaults don't match the
+        validated 2026-04-16 battery configs. Without these, the engine runs
+        with tick-literature defaults (e.g. KEPOS eta_critical=0.95) that
+        produce zero trades on candle data.
+
+        Keep in sync with the CLI flags documented in the respective engine
+        docstrings. Flags applied here don't touch config.params (core-
+        protected) — they only change the in-process dataclass for the run.
+        """
+        name = engine_name.upper().replace(" ", "").replace("_", "")
+        if name == "KEPOS":
+            # H1-INV config (2026-04-16): layer1 sustained=10 k_sigma=1.0
+            # eta_crit=0.75/exit=0.65. Keeps default tp=1.8 stop=1.2
+            # (robust in 1095d; the tp=4 peak at Sharpe 2.37 was
+            # cherry-picked from 730d). price_ext_sigma stays at default 2.0.
+            return [
+                "--invert",
+                "--k-sigma", "1.0",
+                "--eta-critical", "0.75",
+                "--eta-exit", "0.65",
+                "--eta-sustained", "10",
+            ]
+        if name in ("DESHAW", "DE_SHAW", "NEWTON"):
+            # Winning config (2026-04-16): z=3.0 exit=0.0 pvalue=0.15 hl=300
+            # Validated 1095d: Sharpe 1.05, ROI +29.8%, 4/6 PASS.
+            # 5/6 PASS with bluechip_active basket (no MATIC).
+            return [
+                "--z-entry", "3.0",
+                "--z-exit", "0.0",
+                "--pvalue", "0.15",
+                "--hl-max", "300",
+            ]
+        return []
+
     # ─── INLINE LIVE EXEC (from picker RUN chip in LIVE mode) ──────
     def _exec_live_inline(self, name, script, desc, mode_preset, cfg):
         """Fire a strategy in live mode (paper/demo/testnet/live) directly
@@ -2975,6 +3085,7 @@ class App(tk.Tk):
                 cli += ["--leverage", str(_lev)]
         except (ValueError, TypeError):
             pass
+        cli += self._engine_extra_cli_flags(name)
         cli += ["--no-menu"]
 
         if getattr(self, "_strategies_picker", None):
@@ -3243,6 +3354,7 @@ class App(tk.Tk):
                     cli += ["--leverage", str(_lev)]
             except (ValueError, TypeError):
                 pass
+            cli += self._engine_extra_cli_flags(name)
             cli += ["--no-menu"]
             self._exec(name, script, desc, parent_menu, inputs, cli_args=cli)
 
@@ -6958,45 +7070,32 @@ class App(tk.Tk):
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> DATA")
         self.h_stat.configure(text="CENTER", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P prefetch  |  X export")
+        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P lake  |  X export")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell(
-            "DATA CENTER",
-            "Backtests, engine logs, reports and export surfaces",
-        )
-        panel = self._ui_panel_frame(body, "DATA ROUTING", "Primary storage and review workflows")
 
         # Quick counts for each card so the user sees signal, not just titles.
         bt_count = self._data_count_backtests()
         eng_running, eng_total = self._data_count_procs()
         rep_count = self._data_count_reports()
-        summary = tk.Frame(panel, bg=BG)
-        summary.pack(fill="x", pady=(0, 10))
-        tk.Label(summary, text=f"RUNS  {bt_count}", font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG).pack(side="left")
-        tk.Label(summary, text=f"ENGINES  {eng_running}/{eng_total}", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(18, 0))
-        tk.Label(summary, text=f"FILES  {rep_count}", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(18, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
-        self._ui_note(
-            panel,
-            "Use DATA as the review desk: validated runs first, raw artifacts second, export only when sending outside the terminal.",
-            fg=DIM,
-        )
-
         try:
             from core import cache as _cache_mod
             _cache_info = _cache_mod.info()
-            _cache_tag = (f"{_cache_info['n_files']} syms · "
+            _cache_tag = (f"{_cache_info['n_files']} files · "
                           f"{_cache_info['total_bytes']/1024/1024:.1f} MB"
                           if _cache_info["n_files"]
-                          else "vazio — clique pra baixar")
+                          else "vazio")
         except Exception:
             _cache_tag = "indisponivel"
+
+        _outer, body = self._ui_page_shell(
+            "DATA CENTER",
+            f"{bt_count} runs · {eng_running}/{eng_total} engines · "
+            f"{rep_count} files · cache {_cache_tag}",
+            pad_y=10,
+        )
+        panel = self._ui_panel_frame(body, "DATA ROUTING")
 
         sections = [
             ("PRIMARY ROUTES", [
@@ -7006,8 +7105,8 @@ class App(tk.Tk):
                  f"{eng_running} running · {eng_total} total", lambda: self._data_engines()),
             ]),
             ("HISTORICAL CACHE", [
-                ("P", "PREFETCH OHLCV", "baixa bluechip 3000d · 15m pra usar offline",
-                 _cache_tag, lambda: self._data_prefetch()),
+                ("P", "OHLCV LAKE", "inspeciona cache local e baixa novos dados",
+                 _cache_tag, lambda: self._data_lake()),
             ]),
             ("ARTIFACTS", [
                 ("R", "REPORT INDEX", "raw JSON and persisted report artifact browser",
@@ -7039,37 +7138,497 @@ class App(tk.Tk):
 
         self._ui_back_row(panel, lambda: self._menu("main"))
 
-    def _data_prefetch(self, basket: str = "bluechip", days: int = 3000,
-                       interval: str = "15m"):
-        """Dispara tools/prefetch.py via core.proc.spawn, em background.
+    # ─── DATA > OHLCV LAKE (cache browser + downloader) ───────
+    def _data_lake(self):
+        """Split-pane browser for the local OHLCV cache.
 
-        Roda com args default (bluechip · 3000d · 15m futures). O tail do log
-        aparece na tela de ENGINE LOGS — mesma UX das engines.
+        Left  (60%): table of every cached file. Click pre-fills the
+                     right-hand form in SYMBOL mode; DEL removes the file.
+        Right (40%): download form — BASKET or SYMBOL mode, interval, days,
+                     market. DOWNLOAD button spawns tools/prefetch.py.
+        While a prefetch is alive the status line polls every 3s and the
+        table refreshes so new rows appear as they land.
         """
-        try:
-            from core.proc import spawn
-        except Exception as e:
-            messagebox.showerror("Prefetch", f"indisponivel: {e}")
-            return
-        info = spawn("prefetch", cli_args=[
-            "--basket", basket,
-            "--days", str(days),
-            "--interval", interval,
-        ])
-        if not info:
-            messagebox.showwarning(
-                "Prefetch", "ja esta em execucao (ou falhou ao iniciar).")
-            return
-        pid = info.get("pid", "?")
-        messagebox.showinfo(
-            "Prefetch iniciado",
-            f"PID {pid}\nbasket  {basket}\ndepth   {days}d\ninterval {interval}\n\n"
-            "segue em background — veja ENGINE LOGS pro tail ao vivo.")
-        # refresh current screen so the cache-size pill updates after the run
-        try:
-            self.after(1500, self._data_center)
-        except Exception:
-            pass
+        import gzip
+        import pickle
+
+        from core import cache as cache_mod
+        from config.params import BASKETS
+
+        self._clr(); self._clear_kb()
+        self.h_path.configure(text="> DATA > LAKE")
+        self.h_stat.configure(text="OHLCV", fg=AMBER_D)
+        self.f_lbl.configure(text="ESC voltar  |  DEL apagar  |  enter baixar")
+        self._kb("<Escape>", lambda: self._data_center())
+        self._kb("<Key-0>", lambda: self._data_center())
+        self._bind_global_nav()
+
+        _outer, body = self._ui_page_shell(
+            "OHLCV CACHE",
+            "Dados históricos locais · data/.cache/ · alimenta backtests e pesquisa",
+        )
+
+        # Split-pane: left list (expands), right form (fixed width)
+        split = tk.Frame(body, bg=BG)
+        split.pack(fill="both", expand=True)
+        left_wrap = tk.Frame(split, bg=BG)
+        left_wrap.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        right_wrap = tk.Frame(split, bg=BG, width=340)
+        right_wrap.pack(side="right", fill="y")
+        right_wrap.pack_propagate(False)
+
+        # ── LEFT: cache list ──
+        left_panel = self._ui_panel_frame(
+            left_wrap, "LOCAL CACHE",
+            "baskets e arquivos · click → pre-popula form · DEL apaga",
+        )
+
+        # ── BASKETS COVERAGE (section 1) ──
+        bk_title_row = tk.Frame(left_panel, bg=BG)
+        bk_title_row.pack(fill="x", padx=10, pady=(0, 2))
+        tk.Label(bk_title_row, text="BASKETS", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=BG).pack(side="left")
+        tk.Label(bk_title_row, text="  · coverage por (tf, mkt) · click = BASKET mode",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left")
+
+        bk_header = tk.Frame(left_panel, bg=BG2)
+        bk_header.pack(fill="x", padx=10, pady=(0, 2))
+        _bcols = [("BASKET", 16), ("TF", 6), ("MKT", 6),
+                  ("COVERAGE", 10), ("SIZE", 8)]
+        for name, w in _bcols:
+            tk.Label(bk_header, text=name, font=(FONT, 7, "bold"),
+                     fg=AMBER_D, bg=BG2, width=w, anchor="w").pack(side="left")
+        tk.Frame(left_panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 2))
+
+        bk_list_wrap = tk.Frame(left_panel, bg=BG)
+        bk_list_wrap.pack(fill="x", padx=10, pady=(0, 8))
+        bk_canvas = tk.Canvas(bk_list_wrap, bg=BG, highlightthickness=0, height=140)
+        bk_sb = tk.Scrollbar(bk_list_wrap, orient="vertical",
+                             command=bk_canvas.yview)
+        bk_rows_frame = tk.Frame(bk_canvas, bg=BG)
+        bk_canvas.create_window((0, 0), window=bk_rows_frame, anchor="nw")
+        bk_canvas.configure(yscrollcommand=bk_sb.set)
+        bk_canvas.pack(side="left", fill="x", expand=True)
+        bk_sb.pack(side="right", fill="y")
+        bk_rows_frame.bind("<Configure>",
+                           lambda e: bk_canvas.configure(scrollregion=bk_canvas.bbox("all")))
+
+        # ── FILES (section 2) ──
+        fl_title_row = tk.Frame(left_panel, bg=BG)
+        fl_title_row.pack(fill="x", padx=10, pady=(2, 2))
+        tk.Label(fl_title_row, text="FILES", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=BG).pack(side="left")
+        tk.Label(fl_title_row, text="  · um arquivo por (sym, tf, mkt) · click = SYMBOL mode",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left")
+
+        header = tk.Frame(left_panel, bg=BG2)
+        header.pack(fill="x", padx=10, pady=(0, 2))
+        _cols = [("SYMBOL", 12), ("TF", 6), ("MKT", 6),
+                 ("SPAN", 22), ("BARS", 10), ("SIZE", 8)]
+        for name, w in _cols:
+            tk.Label(header, text=name, font=(FONT, 7, "bold"),
+                     fg=AMBER_D, bg=BG2, width=w, anchor="w").pack(side="left")
+        tk.Frame(left_panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 2))
+
+        list_wrap = tk.Frame(left_panel, bg=BG)
+        list_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+        canvas = tk.Canvas(list_wrap, bg=BG, highlightthickness=0, height=420)
+        sb = tk.Scrollbar(list_wrap, orient="vertical", command=canvas.yview)
+        rows_frame = tk.Frame(canvas, bg=BG)
+        canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        rows_frame.bind("<Configure>",
+                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        def _on_wheel(event):
+            canvas.yview_scroll(-1 * (event.delta // 120), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_wheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        total_lbl = tk.Label(left_panel, text="", font=(FONT, 8),
+                             fg=DIM, bg=BG, anchor="w")
+        total_lbl.pack(fill="x", padx=10, pady=(2, 6))
+
+        # ── RIGHT: download form ──
+        right_panel = self._ui_panel_frame(
+            right_wrap, "DOWNLOAD", "binance · prefetch → cache local",
+        )
+        form = tk.Frame(right_panel, bg=BG)
+        form.pack(fill="x", padx=10, pady=(0, 8))
+
+        def _lbl(txt):
+            tk.Label(form, text=txt, font=(FONT, 7, "bold"),
+                     fg=AMBER_D, bg=BG, anchor="w").pack(fill="x", pady=(4, 2))
+
+        mode_var = tk.StringVar(value="BASKET")
+        basket_var = tk.StringVar(value="bluechip")
+        symbol_var = tk.StringVar(value="BTCUSDT")
+        interval_var = tk.StringVar(value="15m")
+        days_var = tk.StringVar(value="3000")
+        market_var = tk.StringVar(value="FUTURES")
+        btn_var = tk.StringVar(value="DOWNLOAD")
+
+        _lbl("MODE")
+        mode_row = tk.Frame(form, bg=BG); mode_row.pack(fill="x")
+        for val in ("BASKET", "SYMBOL"):
+            tk.Radiobutton(mode_row, text=val, variable=mode_var, value=val,
+                           font=(FONT, 8, "bold"), fg=WHITE, bg=BG,
+                           selectcolor=BG2, activebackground=BG,
+                           activeforeground=AMBER, bd=0).pack(side="left", padx=(0, 10))
+
+        _lbl("BASKET")
+        bk_keys = list(BASKETS.keys())
+        bk_om = tk.OptionMenu(form, basket_var, *bk_keys)
+        bk_om.configure(font=(FONT, 8), bg=BG2, fg=WHITE, bd=0,
+                        highlightthickness=0, activebackground=AMBER_D,
+                        activeforeground=BG, anchor="w")
+        bk_om.pack(fill="x")
+
+        _lbl("SYMBOL")
+        tk.Entry(form, textvariable=symbol_var, font=(FONT, 9, "bold"),
+                 bg=BG2, fg=WHITE, insertbackground=AMBER, bd=0,
+                 highlightthickness=1, highlightbackground=BORDER
+                 ).pack(fill="x", ipady=3)
+
+        _lbl("INTERVAL")
+        iv_om = tk.OptionMenu(form, interval_var,
+                              "1m", "5m", "15m", "1h", "4h", "1d")
+        iv_om.configure(font=(FONT, 8), bg=BG2, fg=WHITE, bd=0,
+                        highlightthickness=0, activebackground=AMBER_D,
+                        activeforeground=BG, anchor="w")
+        iv_om.pack(fill="x")
+
+        _lbl("DAYS")
+        tk.Entry(form, textvariable=days_var, font=(FONT, 9, "bold"),
+                 bg=BG2, fg=WHITE, insertbackground=AMBER, bd=0,
+                 highlightthickness=1, highlightbackground=BORDER
+                 ).pack(fill="x", ipady=3)
+
+        _lbl("MARKET")
+        mk_row = tk.Frame(form, bg=BG); mk_row.pack(fill="x", pady=(0, 8))
+        for val in ("FUTURES", "SPOT"):
+            tk.Radiobutton(mk_row, text=val, variable=market_var, value=val,
+                           font=(FONT, 8, "bold"), fg=WHITE, bg=BG,
+                           selectcolor=BG2, activebackground=BG,
+                           activeforeground=AMBER, bd=0).pack(side="left", padx=(0, 10))
+
+        dl_btn = tk.Button(form, textvariable=btn_var, font=(FONT, 10, "bold"),
+                           bg=AMBER, fg=BG, bd=0, padx=10, pady=8,
+                           activebackground=AMBER_B, activeforeground=BG,
+                           cursor="hand2")
+        dl_btn.pack(fill="x", pady=(4, 4))
+
+        status_lbl = tk.Label(form, text="idle", font=(FONT, 7),
+                              fg=DIM, bg=BG, anchor="w")
+        status_lbl.pack(fill="x")
+
+        # ── state + renderers ──
+        state = {"selected": None, "rows": [], "files": [], "meta_seq": 0}
+
+        def _fmt_size(b):
+            if b < 1024: return f"{b}B"
+            if b < 1024 * 1024: return f"{b/1024:.1f}K"
+            return f"{b/1024/1024:.1f}M"
+
+        def _load_files():
+            info = cache_mod.info()
+            files = []
+            for sym, entries in info["by_symbol"].items():
+                for e in entries:
+                    files.append({
+                        "symbol": sym,
+                        "interval": e["interval"],
+                        "market": e["market"],
+                        "bytes": e["bytes"],
+                    })
+            files.sort(key=lambda f: (f["symbol"], f["interval"], f["market"]))
+            return files, info
+
+        def _row_paint(idx, selected: bool):
+            if idx is None or idx >= len(state["rows"]):
+                return
+            row, cells = state["rows"][idx]
+            bg = BG2 if selected else BG
+            fg = AMBER if selected else WHITE
+            row.configure(bg=bg)
+            for c in cells:
+                c.configure(bg=bg, fg=fg)
+
+        def _select(idx):
+            prev = state["selected"]
+            if prev is not None:
+                _row_paint(prev, False)
+            state["selected"] = idx
+            _row_paint(idx, True)
+            f = state["files"][idx]
+            mode_var.set("SYMBOL")
+            symbol_var.set(f["symbol"])
+            interval_var.set(f["interval"])
+            market_var.set(f["market"].upper())
+            btn_var.set("RE-DOWNLOAD")
+
+        def _clear_selection():
+            state["selected"] = None
+            btn_var.set("DOWNLOAD")
+
+        def _compute_basket_coverage(files):
+            """For each basket × (tf, market) combo present in the cache,
+            return how many of the basket's symbols are covered + total bytes.
+            """
+            by_key = {}  # (sym, tf, market) -> bytes
+            combos = set()
+            for f in files:
+                k = (f["symbol"], f["interval"], f["market"])
+                by_key[k] = f["bytes"]
+                combos.add((f["interval"], f["market"]))
+            out = []
+            for bk_name, bk_syms in BASKETS.items():
+                if not bk_syms:
+                    continue
+                for (iv, mk) in combos:
+                    present = [s for s in bk_syms if (s, iv, mk) in by_key]
+                    if not present:
+                        continue
+                    total_bytes = sum(by_key[(s, iv, mk)] for s in present)
+                    out.append({
+                        "basket": bk_name,
+                        "interval": iv,
+                        "market": mk,
+                        "present": len(present),
+                        "total": len(bk_syms),
+                        "bytes": total_bytes,
+                    })
+            out.sort(key=lambda x: (
+                -x["present"] / max(1, x["total"]),  # higher coverage first
+                x["basket"], x["interval"],
+            ))
+            return out
+
+        def _render_baskets():
+            for w in bk_rows_frame.winfo_children():
+                w.destroy()
+            coverage = _compute_basket_coverage(state["files"])
+            if not coverage:
+                tk.Label(bk_rows_frame,
+                         text="nenhum basket coberto — baixe algo primeiro",
+                         font=(FONT, 8), fg=DIM, bg=BG,
+                         anchor="w", padx=6, pady=8).pack(fill="x")
+                return
+            for e in coverage:
+                pct = e["present"] / max(1, e["total"])
+                cov_fg = GREEN if pct >= 1.0 else (AMBER if pct >= 0.5 else DIM)
+                row = tk.Frame(bk_rows_frame, bg=BG, cursor="hand2")
+                row.pack(fill="x", pady=0)
+                cells_data = [
+                    (e["basket"], 16, WHITE),
+                    (e["interval"], 6, WHITE),
+                    (e["market"].upper()[:3], 6, WHITE),
+                    (f"{e['present']}/{e['total']}", 10, cov_fg),
+                    (_fmt_size(e["bytes"]), 8, WHITE),
+                ]
+                lbls = []
+                for txt, w_, fg in cells_data:
+                    c = tk.Label(row, text=txt, font=(FONT, 8),
+                                 fg=fg, bg=BG, width=w_,
+                                 anchor="w", padx=2, pady=1)
+                    c.pack(side="left")
+                    lbls.append(c)
+                def _bind_bk(entry=e, r=row, ls=lbls):
+                    def _on_click(_e=None):
+                        prev = state["selected"]
+                        if prev is not None:
+                            _row_paint(prev, False)
+                        state["selected"] = None
+                        mode_var.set("BASKET")
+                        basket_var.set(entry["basket"])
+                        interval_var.set(entry["interval"])
+                        market_var.set(entry["market"].upper())
+                        btn_var.set("RE-DOWNLOAD")
+                    def _on_enter(_e=None):
+                        r.configure(bg=BG3)
+                        for lb in ls: lb.configure(bg=BG3)
+                    def _on_leave(_e=None):
+                        r.configure(bg=BG)
+                        for lb in ls: lb.configure(bg=BG)
+                    for w in (r, *ls):
+                        w.bind("<Button-1>", _on_click)
+                        w.bind("<Enter>", _on_enter)
+                        w.bind("<Leave>", _on_leave)
+                _bind_bk()
+
+        def _render_rows():
+            for w in rows_frame.winfo_children():
+                w.destroy()
+            files, info = _load_files()
+            state["files"] = files
+            state["rows"] = []
+            state["meta_seq"] += 1  # invalidates in-flight meta worker
+
+            if not files:
+                tk.Label(rows_frame,
+                         text="cache vazio — use o form à direita pra baixar",
+                         font=(FONT, 8), fg=DIM, bg=BG,
+                         anchor="w", padx=6, pady=20).pack(fill="x")
+            else:
+                for i, f in enumerate(files):
+                    row = tk.Frame(rows_frame, bg=BG, cursor="hand2")
+                    row.pack(fill="x", pady=0)
+                    cells = []
+                    values = [
+                        (f["symbol"], 12), (f["interval"], 6),
+                        (f["market"].upper()[:3], 6),
+                        ("...", 22), ("...", 10), (_fmt_size(f["bytes"]), 8),
+                    ]
+                    for txt, w_ in values:
+                        c = tk.Label(row, text=txt, font=(FONT, 8),
+                                     fg=WHITE, bg=BG, width=w_,
+                                     anchor="w", padx=2, pady=2)
+                        c.pack(side="left")
+                        cells.append(c)
+                    state["rows"].append((row, cells))
+
+                    def _bind(idx=i, r=row, cs=cells):
+                        def _on_click(_e=None): _select(idx)
+                        def _on_enter(_e=None):
+                            if state["selected"] != idx:
+                                r.configure(bg=BG3)
+                                for c in cs: c.configure(bg=BG3)
+                        def _on_leave(_e=None):
+                            if state["selected"] != idx:
+                                r.configure(bg=BG)
+                                for c in cs: c.configure(bg=BG)
+                        for w in (r, *cs):
+                            w.bind("<Button-1>", _on_click)
+                            w.bind("<Enter>", _on_enter)
+                            w.bind("<Leave>", _on_leave)
+                    _bind()
+
+            total_mb = info["total_bytes"] / 1024 / 1024
+            total_lbl.configure(
+                text=f"total: {info['n_files']} files · {total_mb:.1f} MB")
+            _render_baskets()
+            _load_meta_async()
+
+        def _load_meta_async():
+            """Read first/last timestamp + bar count per file in a worker.
+
+            Tagged with meta_seq so a later re-render (download finished,
+            delete, manual refresh) invalidates older workers still mid-read.
+            """
+            seq = state["meta_seq"]
+            files = list(state["files"])
+            def worker():
+                for i, f in enumerate(files):
+                    if state["meta_seq"] != seq:
+                        return
+                    p = (cache_mod.CACHE_DIR /
+                         f"{f['symbol']}_{f['interval']}_{f['market']}.pkl.gz")
+                    try:
+                        with gzip.open(p, "rb") as fh:
+                            df = pickle.load(fh)
+                        if df is not None and not df.empty:
+                            span = (f"{df['time'].iloc[0].strftime('%y-%m-%d')}"
+                                    f" -> "
+                                    f"{df['time'].iloc[-1].strftime('%y-%m-%d')}")
+                            bars = f"{len(df):,}"
+                        else:
+                            span, bars = "empty", "0"
+                    except Exception:
+                        span, bars = "error", "-"
+                    def update(ii=i, s=span, b=bars, sq=seq):
+                        if state["meta_seq"] != sq:
+                            return
+                        if ii < len(state["rows"]):
+                            _, cs = state["rows"][ii]
+                            if len(cs) >= 5:
+                                cs[3].configure(text=s)
+                                cs[4].configure(text=b)
+                    try:
+                        self.after(0, update)
+                    except Exception:
+                        return
+            threading.Thread(target=worker, daemon=True).start()
+
+        def _on_del(_e=None):
+            idx = state["selected"]
+            if idx is None or idx >= len(state["files"]):
+                return
+            f = state["files"][idx]
+            tag = f"{f['symbol']}_{f['interval']}_{f['market']}.pkl.gz"
+            if not messagebox.askyesno(
+                    "Apagar cache",
+                    f"Remover {tag}?\n\nO arquivo é recriável via DOWNLOAD."):
+                return
+            try:
+                (cache_mod.CACHE_DIR / tag).unlink(missing_ok=True)
+            except OSError as ex:
+                messagebox.showerror("Erro", str(ex))
+                return
+            _clear_selection()
+            _render_rows()
+
+        self._kb("<Delete>", _on_del)
+
+        def _do_download(_e=None):
+            try:
+                from core.proc import spawn
+            except Exception as e:
+                messagebox.showerror("Download", f"proc indisponivel: {e}")
+                return
+            try:
+                days = int(days_var.get().strip())
+                assert days > 0
+            except Exception:
+                messagebox.showwarning("Download", "DAYS inválido.")
+                return
+            cli = ["--days", str(days),
+                   "--interval", interval_var.get().strip() or "15m"]
+            if mode_var.get() == "SYMBOL":
+                sym = symbol_var.get().strip().upper()
+                if not sym:
+                    messagebox.showwarning("Download", "SYMBOL vazio.")
+                    return
+                cli += ["--symbol", sym]
+            else:
+                cli += ["--basket", basket_var.get()]
+            if market_var.get() == "SPOT":
+                cli.append("--spot")
+            info = spawn("prefetch", cli_args=cli)
+            if not info:
+                messagebox.showwarning(
+                    "Download", "ja esta em execucao (ou falhou ao iniciar).")
+                return
+            status_lbl.configure(
+                text=f"running · PID {info.get('pid', '?')}", fg=AMBER)
+            _poll_status()
+
+        dl_btn.configure(command=_do_download)
+        self._kb("<Return>", _do_download)
+
+        def _poll_status():
+            try:
+                from core.proc import list_procs
+                running = any(
+                    p.get("alive") and p.get("engine") == "prefetch"
+                    for p in list_procs(max_age=0))
+            except Exception:
+                running = False
+            if running:
+                status_lbl.configure(text="running · baixando...", fg=AMBER)
+                _render_rows()
+                try:
+                    self.after(3000, _poll_status)
+                except Exception:
+                    pass
+            else:
+                status_lbl.configure(text="idle", fg=DIM)
+                _render_rows()
+
+        _render_rows()
+
+        # Bottom: return row
+        self._ui_back_row(body, lambda: self._data_center())
 
     # ── Counts used by the DATA CENTER cards ──────────────────
     def _data_count_backtests(self) -> int:
