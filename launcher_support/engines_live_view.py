@@ -698,6 +698,7 @@ def _render_row_ready(parent, slug, meta, state):
     row = _row_base(parent, slug, state, is_selected=sel)
     bg = row["bg"]
     stage_label, stage_color = _stage_badge(meta)
+    action_label, action_color = row_action_label("READY", meta)
     tk.Label(row, text=meta.get("display", slug.upper()),
              fg=WHITE, bg=bg, font=(FONT, 9, "bold"),
              padx=8).pack(side="left")
