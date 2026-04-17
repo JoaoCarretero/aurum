@@ -50,6 +50,57 @@ KILL_FLAG = RUN_DIR / ".kill"
 
 log = logging.getLogger("millennium_shadow")
 log.setLevel(logging.INFO)
+
+
+# ─── Telegram alerting (opt-in via config/keys.json) ──────────────
+# Send simple text pings for start / tick_fail / stop. Uses the Telegram
+# Bot HTTP API directly so the shadow runner stays synchronous. Silent
+# fallback if keys.json is absent, misconfigured, or network fails.
+_TELEGRAM_CFG: dict | None = None
+
+
+def _telegram_cfg() -> dict | None:
+    global _TELEGRAM_CFG
+    if _TELEGRAM_CFG is not None:
+        return _TELEGRAM_CFG
+    keys_path = ROOT / "config" / "keys.json"
+    if not keys_path.exists():
+        _TELEGRAM_CFG = {}
+        return None
+    try:
+        data = json.loads(keys_path.read_text(encoding="utf-8"))
+        tg = data.get("telegram") or {}
+        if tg.get("bot_token") and tg.get("chat_id"):
+            _TELEGRAM_CFG = {
+                "token": str(tg["bot_token"]),
+                "chat_id": str(tg["chat_id"]),
+            }
+            return _TELEGRAM_CFG
+    except (json.JSONDecodeError, OSError):
+        pass
+    _TELEGRAM_CFG = {}
+    return None
+
+
+def _tg_send(text: str) -> None:
+    cfg = _telegram_cfg()
+    if not cfg:
+        return
+    try:
+        import urllib.parse
+        import urllib.request
+        url = f"https://api.telegram.org/bot{cfg['token']}/sendMessage"
+        payload = urllib.parse.urlencode({
+            "chat_id": cfg["chat_id"],
+            "text": text,
+            "parse_mode": "HTML",
+        }).encode()
+        req = urllib.request.Request(url, data=payload, method="POST")
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            resp.read()
+    except Exception as exc:  # noqa: BLE001
+        # Alerting nunca derruba o runner. Erro vai pro log local.
+        log.warning("telegram send failed: %s", exc)
 _fmt = logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s")
 _sh = logging.StreamHandler(sys.stdout)
 _sh.setFormatter(_fmt)
@@ -139,6 +190,11 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
 
     log.info("SHADOW START run=%s tick=%ds hours=%.1f dir=%s",
              RUN_ID, tick_sec, run_hours, RUN_DIR)
+    _tg_send(
+        f"<b>MILLENNIUM shadow START</b>\n"
+        f"run: <code>{RUN_ID}</code>\n"
+        f"tick: {tick_sec}s · hours: {run_hours}"
+    )
     _write_heartbeat({
         "run_id": RUN_ID,
         "status": "running",
@@ -191,6 +247,12 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
             err = f"{type(exc).__name__}: {exc}"
             log.error("TICK fail=%d err=%s", ticks_fail, err)
             log.error("%s", traceback.format_exc())
+            _tg_send(
+                f"<b>MILLENNIUM shadow TICK FAIL</b>\n"
+                f"run: <code>{RUN_ID}</code>\n"
+                f"fails: {ticks_fail}\n"
+                f"err: <code>{err[:200]}</code>"
+            )
             _write_heartbeat({
                 "run_id": RUN_ID,
                 "status": "running",
@@ -231,6 +293,13 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         "SHADOW END ok=%d fail=%d novel=%d reason=%s",
         ticks_ok, ticks_fail, novel_total,
         stop_requested["reason"] or "deadline",
+    )
+    _tg_send(
+        f"<b>MILLENNIUM shadow STOP</b>\n"
+        f"run: <code>{RUN_ID}</code>\n"
+        f"ticks_ok: {ticks_ok} · fails: {ticks_fail}\n"
+        f"signals: {novel_total}\n"
+        f"reason: {stop_requested['reason'] or 'deadline'}"
     )
     return 0 if ticks_ok > 0 else 1
 
