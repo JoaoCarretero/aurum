@@ -745,7 +745,13 @@ def main() -> int:
                     help="max_bars_in_trade (time stop)")
     ap.add_argument("--risk-pct", type=float, default=None,
                     help="max_pct_equity per trade (0.02 == 2 percent)")
+    ap.add_argument("--end", type=str, default=None,
+                    help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
     args = ap.parse_known_args()[0]
+    END_TIME_MS = None
+    if args.end:
+        import pandas as _pd_tmp
+        END_TIME_MS = int(_pd_tmp.Timestamp(args.end).timestamp() * 1000)
 
     basket_name = args.basket or "default"
     symbols = BASKETS.get(basket_name, SYMBOLS)
@@ -796,7 +802,7 @@ def main() -> int:
     # Fetch
     print(f"  fetching {len(symbols)} symbols @ {interval} ...")
     all_dfs = fetch_all(symbols, interval=interval,
-                        n_candles=n_candles, futures=True)
+                        n_candles=n_candles, futures=True, end_time_ms=END_TIME_MS)
     if not all_dfs:
         print("  no data fetched.")
         return 1

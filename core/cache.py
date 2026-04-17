@@ -38,8 +38,13 @@ def reads_disabled() -> bool:
 
 
 def read(symbol: str, interval: str, n_candles: int,
-         futures: bool) -> Optional[pd.DataFrame]:
-    """Return the last n_candles from cache, or None if insufficient."""
+         futures: bool, end_time_ms: Optional[int] = None) -> Optional[pd.DataFrame]:
+    """Return the last n_candles from cache, or None if insufficient.
+
+    If end_time_ms is provided, slice the cached frame to rows whose
+    bar time is <= end_time_ms BEFORE taking the tail — enables retro
+    OOS/holdout backtests without refetching.
+    """
     if reads_disabled():
         return None
     p = _path(symbol, interval, futures)
@@ -50,7 +55,12 @@ def read(symbol: str, interval: str, n_candles: int,
             df = pickle.load(f)
     except Exception:
         return None
-    if df is None or len(df) < n_candles:
+    if df is None:
+        return None
+    if end_time_ms is not None:
+        cutoff = pd.Timestamp(end_time_ms, unit="ms")
+        df = df[df["time"] <= cutoff]
+    if len(df) < n_candles:
         return None
     return df.tail(n_candles).reset_index(drop=True)
 

@@ -564,11 +564,16 @@ if __name__ == "__main__":
     _ap.add_argument("--leverage",    type=float, default=LEVERAGE,   help="Leverage multiplier")
     _ap.add_argument("--no-menu",     action="store_true",            help="Skip post-run interactive menu")
     _ap.add_argument("--holdout-pct", type=float, default=0.0,        help="Reserve last N%% of data as pure OOS holdout (0 = disabled, matches other engines)")
+    _ap.add_argument("--end",         type=str,   default=None,       help="End date YYYY-MM-DD for backtest window (pre-calibration OOS). Default: now.")
     _args, _ = _ap.parse_known_args()
 
     SCAN_DAYS = _args.days
     LEVERAGE = _args.leverage
     BASKET_NAME = _args.basket or ENGINE_BASKETS.get("CITADEL", "default")
+    END_TIME_MS = None
+    if _args.end:
+        import pandas as _pd_tmp
+        END_TIME_MS = int(_pd_tmp.Timestamp(_args.end).timestamp() * 1000)
     if BASKET_NAME in BASKETS:
         SYMBOLS = BASKETS[BASKET_NAME]
 
@@ -681,7 +686,7 @@ if __name__ == "__main__":
 
     print()
     all_dfs = fetch_all(_fetch_syms, n_candles=N_CANDLES, futures=True,
-                        on_progress=_fetch_progress)
+                        on_progress=_fetch_progress, end_time_ms=END_TIME_MS)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -701,7 +706,7 @@ if __name__ == "__main__":
     if MTF_ENABLED:
         for tf in HTF_STACK:
             nc = HTF_N_CANDLES_MAP.get(tf, 300)
-            tf_dfs = fetch_all(list(all_dfs.keys()), interval=tf, n_candles=nc)
+            tf_dfs = fetch_all(list(all_dfs.keys()), interval=tf, n_candles=nc, end_time_ms=END_TIME_MS)
             for sym, df_h in tf_dfs.items():
                 df_h = prepare_htf(df_h, htf_interval=tf)
                 htf_stack_by_sym.setdefault(sym, {})[tf] = df_h

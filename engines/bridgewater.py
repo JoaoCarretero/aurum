@@ -539,7 +539,13 @@ if __name__ == "__main__":
     _ap.add_argument("--interval", type=str, default=INTERVAL, help="Execution timeframe override for this run.")
     _ap.add_argument("--leverage", type=float, default=None, help="Leverage override for this run.")
     _ap.add_argument("--no-menu", action="store_true")
+    _ap.add_argument("--end", type=str, default=None,
+                     help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
     _args, _ = _ap.parse_known_args()
+    END_TIME_MS = None
+    if _args.end:
+        import pandas as _pd_tmp
+        END_TIME_MS = int(_pd_tmp.Timestamp(_args.end).timestamp() * 1000)
 
     if _args.interval:
         INTERVAL = _args.interval
@@ -593,7 +599,7 @@ if __name__ == "__main__":
     _fetch_syms = list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms:
         _fetch_syms.insert(0, MACRO_SYMBOL)
-    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES)
+    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES, end_time_ms=END_TIME_MS)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:

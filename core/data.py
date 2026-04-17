@@ -11,16 +11,17 @@ _vl = logging.getLogger("CITADEL.val")
 
 def fetch(symbol: str, interval: str | None = None,
           n_candles: int | None = None,
-          futures: bool = False) -> pd.DataFrame | None:
+          futures: bool = False,
+          end_time_ms: int | None = None) -> pd.DataFrame | None:
     _iv  = interval  or INTERVAL
     _nc  = n_candles or N_CANDLES
-    cached = _cache.read(symbol, _iv, _nc, futures)
+    cached = _cache.read(symbol, _iv, _nc, futures, end_time_ms=end_time_ms)
     if cached is not None:
         log.debug(f"[{symbol}] cache hit: {len(cached)} bars")
         return cached
     # futures klines têm preço perp (mais próximo do que vai ser executado)
     base = "https://fapi.binance.com/fapi/v1" if futures else "https://api.binance.com/api/v3"
-    url, frames, end_time = f"{base}/klines", [], None
+    url, frames, end_time = f"{base}/klines", [], end_time_ms
     remaining = _nc
     _429_count = 0
     _err_count = 0
@@ -78,7 +79,8 @@ def fetch_all(symbols: list, interval: str | None = None,
               n_candles: int | None = None,
               label: str = "", workers: int = 6,
               futures: bool = False,
-              on_progress=None) -> dict:
+              on_progress=None,
+              end_time_ms: int | None = None) -> dict:
     from concurrent.futures import ThreadPoolExecutor, as_completed
     _iv = interval or INTERVAL
     _nc = n_candles or N_CANDLES
@@ -88,7 +90,7 @@ def fetch_all(symbols: list, interval: str | None = None,
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for sym in symbols:
-            futures_map[ex.submit(fetch, sym, _iv, _nc, futures)] = sym
+            futures_map[ex.submit(fetch, sym, _iv, _nc, futures, end_time_ms)] = sym
         done = 0
         for fut in as_completed(futures_map):
             sym = futures_map[fut]
