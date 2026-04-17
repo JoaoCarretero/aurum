@@ -93,6 +93,10 @@ def _scan_warmup_bars() -> int:
     return max(200, W_NORM, PIVOT_N * 3) + 10
 
 
+def _scan_window_can_close_trades(n_candles: int) -> bool:
+    return int(n_candles) > (MAX_HOLD + 2)
+
+
 def collect_sentiment(symbols: list, end_time_ms: int | None = None,
                       window_days: int | None = None) -> dict:
     """
@@ -784,6 +788,11 @@ if __name__ == "__main__":
         print("  sem simbolos com sentiment completo"); sys.exit(1)
     all_dfs = {sym: all_dfs[sym] for sym in eligible_symbols}
     SYMBOLS = eligible_symbols
+
+    if not _scan_window_can_close_trades(N_CANDLES):
+        print(f"\n  insufficient sample: {N_CANDLES} candles <= MAX_HOLD {MAX_HOLD}")
+        log.warning(f"insufficient sample for closed trades: n_candles={N_CANDLES} max_hold={MAX_HOLD}")
+        sys.exit(0)
 
     print_header()
 

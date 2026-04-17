@@ -170,6 +170,11 @@ def test_scan_warmup_bars_has_room_for_indicator_lookbacks():
     assert bridgewater._scan_warmup_bars() >= max(200, bridgewater.W_NORM, bridgewater.PIVOT_N * 3) + 10
 
 
+def test_scan_window_can_close_trades_respects_max_hold():
+    assert bridgewater._scan_window_can_close_trades(bridgewater.MAX_HOLD + 3) is True
+    assert bridgewater._scan_window_can_close_trades(bridgewater.MAX_HOLD + 2) is False
+
+
 def test_filter_stale_market_data_drops_old_series():
     fresh = pd.DataFrame({"time": pd.date_range("2026-04-16", periods=3, freq="1h")})
     stale = pd.DataFrame({"time": pd.date_range("2026-04-10", periods=3, freq="1h")})
