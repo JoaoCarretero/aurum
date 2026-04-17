@@ -1078,115 +1078,30 @@ class App(tk.Tk):
         # Header
         hd = tk.Frame(self, bg=BG, height=26); hd.pack(fill="x"); hd.pack_propagate(False)
         hc = tk.Frame(hd, bg=BG); hc.pack(fill="both", expand=True, padx=10)
-        tk.Label(hc, text="AURUM", font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        # Macro Brain quick-return button — futuristic cyan, always top-left
-        # after AURUM brand. Sempre visível.
-        self.h_macro_btn = tk.Label(
-            hc, text=" ▸ MACRO ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#00eaff", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_macro_btn.pack(side="left", padx=(8, 0))
-        self.h_macro_btn.bind(
-            "<Button-1>", lambda e: self._macro_brain_menu()
-        )
-        self.h_macro_btn.bind(
-            "<Enter>",
-            lambda e: self.h_macro_btn.configure(bg="#00ffff", fg="#001015")
-        )
-        self.h_macro_btn.bind(
-            "<Leave>",
-            lambda e: self.h_macro_btn.configure(bg="#00eaff", fg="#000000")
-        )
+        tk.Label(hc, text="AURUM", font=(FONT, 8, "bold"), fg=WHITE, bg=BG).pack(side="left")
+        # Neutral header nav buttons — all share the terminal chrome palette
+        # (BG2 fill, WHITE text, subtle BG3/AMBER_B hover). No per-button hue.
+        def _mk_nav_btn(text: str, cmd) -> tk.Label:
+            btn = tk.Label(
+                hc, text=text, font=(FONT, 8, "bold"),
+                fg=WHITE, bg=BG2, cursor="hand2", padx=6, pady=0,
+            )
+            btn.pack(side="left", padx=(4, 0))
+            btn.bind("<Button-1>", lambda e: cmd())
+            btn.bind("<Enter>",
+                     lambda e: btn.configure(bg=BG3, fg=AMBER_B))
+            btn.bind("<Leave>",
+                     lambda e: btn.configure(bg=BG2, fg=WHITE))
+            return btn
 
-        # Main menu quick-access — magenta futuristic, sempre visível.
-        # Complementa MACRO button: uma click → cockpit, outra → terminal/engines.
-        self.h_main_btn = tk.Label(
-            hc, text=" ≡ MAIN ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#ff00a0", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_main_btn.pack(side="left", padx=(4, 0))
-        self.h_main_btn.bind("<Button-1>", lambda e: self._menu("main"))
-        self.h_main_btn.bind(
-            "<Enter>",
-            lambda e: self.h_main_btn.configure(bg="#ff33b0", fg="#150005")
-        )
-        self.h_main_btn.bind(
-            "<Leave>",
-            lambda e: self.h_main_btn.configure(bg="#ff00a0", fg="#000000")
-        )
-
-        # BACKTEST — verde neon · research seguro, sem capital real.
-        self.h_backtest_btn = tk.Label(
-            hc, text=" ◆ BACKTEST ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#00ff80", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_backtest_btn.pack(side="left", padx=(4, 0))
-        self.h_backtest_btn.bind(
-            "<Button-1>", lambda e: self._strategies_backtest()
-        )
-        self.h_backtest_btn.bind(
-            "<Enter>",
-            lambda e: self.h_backtest_btn.configure(bg="#33ffa0", fg="#001505")
-        )
-        self.h_backtest_btn.bind(
-            "<Leave>",
-            lambda e: self.h_backtest_btn.configure(bg="#00ff80", fg="#000000")
-        )
-
-        # ENGINES — âmbar · futuros ao vivo rodando (capital real · safety gates).
-        self.h_engines_btn = tk.Label(
-            hc, text=" ▣ ENGINES ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#ff8c00", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_engines_btn.pack(side="left", padx=(4, 0))
-        self.h_engines_btn.bind(
-            "<Button-1>", lambda e: self._strategies_live()
-        )
-        self.h_engines_btn.bind(
-            "<Enter>",
-            lambda e: self.h_engines_btn.configure(bg="#ffaa33", fg="#150a00")
-        )
-        self.h_engines_btn.bind(
-            "<Leave>",
-            lambda e: self.h_engines_btn.configure(bg="#ff8c00", fg="#000000")
-        )
-
-        # DATA — púrpura · runs · backtests · reports · trades DB
-        self.h_data_btn = tk.Label(
-            hc, text=" ▤ DATA ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#a855f7", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_data_btn.pack(side="left", padx=(4, 0))
-        self.h_data_btn.bind(
-            "<Button-1>", lambda e: self._data_center()
-        )
-        self.h_data_btn.bind(
-            "<Enter>",
-            lambda e: self.h_data_btn.configure(bg="#c084fc", fg="#0a0010")
-        )
-        self.h_data_btn.bind(
-            "<Leave>",
-            lambda e: self.h_data_btn.configure(bg="#a855f7", fg="#000000")
-        )
-
-        # ARBITRAGE — amarelo · delta-neutral funding + basis + spot spreads
-        # Single entry point for everything JANE STREET related.
-        self.h_arb_btn = tk.Label(
-            hc, text=" ⇄ ARBITRAGE ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#ffd700", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_arb_btn.pack(side="left", padx=(4, 0))
-        self.h_arb_btn.bind(
-            "<Button-1>", lambda e: self._arbitrage_hub()
-        )
-        self.h_arb_btn.bind(
-            "<Enter>",
-            lambda e: self.h_arb_btn.configure(bg="#ffed4e", fg="#1a1500")
-        )
-        self.h_arb_btn.bind(
-            "<Leave>",
-            lambda e: self.h_arb_btn.configure(bg="#ffd700", fg="#000000")
-        )
+        self.h_macro_btn    = _mk_nav_btn(" ▸ MACRO ",     self._macro_brain_menu)
+        self.h_main_btn     = _mk_nav_btn(" ≡ MAIN ",      lambda: self._menu("main"))
+        self.h_backtest_btn = _mk_nav_btn(" ◆ BACKTEST ",  self._strategies_backtest)
+        self.h_engines_btn  = _mk_nav_btn(" ▣ ENGINES ",   self._strategies_live)
+        self.h_data_btn     = _mk_nav_btn(" ▤ DATA ",      self._data_center)
+        self.h_arb_btn      = _mk_nav_btn(" ⇄ ARBITRAGE ", self._arbitrage_hub)
+        # Extra left padding for the first button so it clears the AURUM brand.
+        self.h_macro_btn.pack_configure(padx=(8, 0))
 
         self.h_path = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_path.pack(side="left", padx=(8,0))
         self.h_stat = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_stat.pack(side="right")
@@ -2023,21 +1938,35 @@ class App(tk.Tk):
         canvas.create_line(48, 48, 872, 48, fill=AMBER_D, width=1)
         canvas.create_line(48, 596, 872, 596, fill=DIM2, width=1)
 
-        # Centered column: CD logo → wordmark → tagline. Single
-        # vertical axis (x=460) — the old layout had the logo pinned
-        # top-left while the title floated center, which read as
-        # misaligned. Stacking everything on the axis is cleaner.
-        self._active_cd_center = (460, 108)
-        self._draw_cd_center(canvas, r=28)
+        # Centered column: logo → wordmark → tagline. Single vertical
+        # axis (x=460). The CD router card has fixed offsets calibrated
+        # for r=52 (main-menu); at r=28 its top strip covers the logo
+        # and DESK ROUTER overlaps the A U R U M inner text, so the
+        # splash uses a clean direct logo draw instead.
+        LOGO_CX, LOGO_CY = 460, 108
+        self._draw_aurum_logo(canvas, LOGO_CX, LOGO_CY, scale=40,
+                              tag="splash-logo")
 
-        canvas.create_text(460, 186, anchor="center", text=BANNER_PREMIUM,
-                           font=(FONT, 18, "bold"), fill=AMBER, tags="wordmark")
-        canvas.create_text(460, 232, anchor="center", text=SYSTEM_TAGLINE,
-                           font=(FONT, 9, "bold"), fill=AMBER_D, tags="subtitle")
-        # Single thin rule under the tagline — separates brand stack
-        # from the session overview panel below without the old
-        # double-scanline clutter.
-        canvas.create_line(280, 258, 640, 258, fill=AMBER_D, width=1,
+        # Institutional wordmark stack:
+        #   AURUM — white, heavy, generous letter-tracking (hero).
+        #   FINANCE — muted amber, smaller, sits as a quiet partner.
+        #   thin rule — full-width institutional divider.
+        #   tagline — dim caption, the terminal's subtitle in small caps.
+        # BANNER_PREMIUM is bypassed on purpose — its trailing "\n" was
+        # pushing the bounding box up and throwing center alignment off.
+        canvas.create_text(LOGO_CX, 180, anchor="center",
+                           text="A U R U M",
+                           font=(FONT, 22, "bold"), fill=WHITE,
+                           tags="wordmark")
+        canvas.create_text(LOGO_CX, 210, anchor="center",
+                           text="F I N A N C E",
+                           font=(FONT, 12), fill=AMBER_D,
+                           tags="wordmark")
+        canvas.create_line(LOGO_CX - 140, 230, LOGO_CX + 140, 230,
+                           fill=AMBER_D, width=1, tags="wordmark")
+        canvas.create_text(LOGO_CX, 246, anchor="center", text=SYSTEM_TAGLINE,
+                           font=(FONT, 8, "bold"), fill=DIM, tags="subtitle")
+        canvas.create_line(280, 268, 640, 268, fill=BORDER, width=1,
                            tags="subtitle")
 
         try:
@@ -4424,16 +4353,16 @@ class App(tk.Tk):
         tk.Label(top, text=f" {name} ", font=(FONT, 8, "bold"), fg=BG, bg=AMBER).pack(side="left", padx=6, pady=3)
         tk.Label(top, text=desc, font=(FONT, 8), fg=DIM, bg=BG2, padx=6).pack(side="left", pady=3)
 
-        tk.Button(top, text=" STOP ", font=(FONT, 7, "bold"), fg=RED, bg=BG2, border=0, cursor="hand2",
+        tk.Button(top, text=" STOP ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                   activeforeground=WHITE, activebackground=BG3, command=self._stop).pack(side="right", padx=4, pady=3)
-        tk.Button(top, text=" BACK ", font=(FONT, 7, "bold"), fg=DIM, bg=BG2, border=0, cursor="hand2",
+        tk.Button(top, text=" BACK ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                   activeforeground=WHITE, activebackground=BG3,
                   command=lambda: (self._stop(), self._menu(parent_menu))).pack(side="right", pady=3)
         if is_bt:
-            tk.Button(top, text=" CMD ", font=(FONT, 7, "bold"), fg=AMBER, bg=BG2, border=0, cursor="hand2",
+            tk.Button(top, text=" CMD ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                       activeforeground=WHITE, activebackground=BG3,
                       command=lambda: self._exec_show_view("console")).pack(side="right", padx=(0, 4), pady=3)
-            tk.Button(top, text=" MAPA ", font=(FONT, 7, "bold"), fg=GREEN, bg=BG2, border=0, cursor="hand2",
+            tk.Button(top, text=" MAPA ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                       activeforeground=WHITE, activebackground=BG3,
                       command=lambda: self._exec_show_view("visual")).pack(side="right", padx=(0, 4), pady=3)
 
