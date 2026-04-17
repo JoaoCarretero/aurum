@@ -401,7 +401,7 @@ MERCURIO_VIMB_SHORT     = 0.40
 MERCURIO_LIQ_VOL_MULT   = 2.5      # tuned_on=[1080d bluechip]; 3.0 filtrava demais (9 trades)
 MERCURIO_LIQ_ATR_MULT   = 1.5      # tuned_on=[1080d bluechip]
 MERCURIO_MIN_SCORE      = 0.50     # tuned_on=[1080d bluechip]; 0.65 reduziu sample sem ganho
-MERCURIO_SIZE_MULT      = 0.47     # tuned_on=[1080d bluechip]; oos_sharpe=3.15 (BEAR 2022), edge real.
+MERCURIO_SIZE_MULT      = 0.35     # tuned_on=[1080d bluechip]; revalidated no-cache 180d/730d bluechip_active: Sharpe/DD improved vs 0.47.
 
 # ── THOTH — Sentiment Quantificado ───────────────────────────
 THOTH_FUNDING_WINDOW    = 30       # períodos de 8h para z-score do funding
@@ -484,10 +484,11 @@ ARB_POSITION_SIZE_REF = 1000.0
 
 # ── Frozen engines ────────────────────────────────────────────
 # Engines that are code-complete but should NOT be executed until
-# their prerequisites are met. PROMETEU needs 1000+ trades,
-# DARWIN needs performance data from other engines, RENAISSANCE
-# needs statistical validation of harmonic patterns.
-FROZEN_ENGINES = ["TWOSIGMA", "AQR", "RENAISSANCE"]
+# their prerequisites are met. TWOSIGMA (PROMETEU) needs 1000+ trades
+# ground-truth; AQR (DARWIN) needs performance data from other engines.
+# RENAISSANCE removed 2026-04-17: OOS Sharpe 2.42 confirmed edge, now
+# active in MILLENNIUM OPERATIONAL_ENGINES (weight 0.25).
+FROZEN_ENGINES = ["TWOSIGMA", "AQR"]
 
 # ── Ablation testing ─────────────────────────────────────────
 # Set to a component name to disable it during ablation runs.

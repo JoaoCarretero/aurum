@@ -67,42 +67,49 @@ def setup_multistrategy():
 
 # ── MULTISTRATEGY CONFIG ──────────────────────────────────────
 MAX_OPEN_POSITIONS_MS = 5
-CITADEL_CAPITAL_WEIGHT  = 0.65
-RENAISSANCE_CAPITAL_WEIGHT = 0.35
+
+# LEGADO: pesos usados APENAS pela função ensemble_reweight() (path 2-engine
+# CITADEL+RENAISSANCE, ops legadas). O path CORE OPERATIONAL (op=1) — que é
+# o default "grande dia" — NÃO usa esses valores; usa BASE_CAPITAL_WEIGHTS
+# logo abaixo. Mantidos para não quebrar a função legada ensemble_reweight.
+CITADEL_CAPITAL_WEIGHT  = 0.65  # legacy-only (ensemble_reweight)
+RENAISSANCE_CAPITAL_WEIGHT = 0.35  # legacy-only (ensemble_reweight)
+
 CONFIRM_WINDOW        = 6
 CONFIRM_SIZE_MULT     = 1.25
 CONFLICT_ACTION       = "skip"
-OPERATIONAL_ENGINES   = ("CITADEL", "RENAISSANCE", "JUMP", "BRIDGEWATER")
-# Capital weights calibrados em 2026-04-17 com base em standalone overfit 6/6
-# em TF nativo + OOS multi-janela:
-#   JUMP:        6/6 PASS Sharpe 4.68, OOS 3 janelas 3.15/3.19/4.27, DSR~1.0 → base alta
-#   BRIDGEWATER: 6/6 PASS Sharpe 10.88 (forward-only, 90% sentiment válido) → base alta, cap moderado
-#   RENAISSANCE: 6/6 PASS Sharpe 6.54 mas regime-sensitive (CHOP 2019 -0.04) → base média com gate
-#   CITADEL:     2/6 FAIL 180d recent (edge decay), janela deslocada OK → peso mínimo como seguro
+# BRIDGEWATER removida 2026-04-17 (sessão ~15:40): bateria revelou domínio
+# excessivo (88-90% dos trades, 99% shorts, avg R 0.12-0.15). Decisão do
+# João: só pode ser re-julgada quando houver histórico de OI/LS suficiente
+# pra uma janela inteira relevante (cache de sentiment precisa cobrir 180d+
+# em todos os símbolos ativos). Em paralelo, audit rodando pra detectar bug.
+OPERATIONAL_ENGINES   = ("CITADEL", "RENAISSANCE", "JUMP")
+# Capital weights recalibrados em 2026-04-17 pós-remoção BRIDGEWATER.
+# Base anterior (4 engines): JUMP 0.30 / BW 0.30 / REN 0.25 / CIT 0.15.
+# Redistribuição dos 0.30 que eram BRIDGEWATER:
+#   JUMP:        6/6 PASS Sharpe 4.68, OOS 3 janelas 3.15/3.19/4.27, DSR~1.0 → ganha
+#   RENAISSANCE: 6/6 PASS Sharpe 6.54 mas regime-sensitive (CHOP 2019 -0.04) → ganha mais
+#   CITADEL:     2/6 FAIL 180d recent (edge decay), janela deslocada OK → mantém leve
 BASE_CAPITAL_WEIGHTS  = {
-    "JUMP":        0.30,   # edge mais limpo, OOS + recent + 6/6
-    "BRIDGEWATER": 0.30,   # maior Sharpe validado, forward-only
-    "RENAISSANCE": 0.25,   # edge real com gate CHOP
-    "CITADEL":     0.15,   # peso mínimo — edge decay confirmado, segurança p/ virada de regime
+    "JUMP":        0.40,   # edge mais limpo, DSR~1.0; recebeu +0.10
+    "RENAISSANCE": 0.40,   # alta WR + R positivo, melhor qualidade por trade; recebeu +0.15
+    "CITADEL":     0.20,   # edge decay mas ainda dominante em 360d; recebeu +0.05
 }
 ENGINE_WEIGHT_FLOORS = {
-    "JUMP":        0.15,
-    "BRIDGEWATER": 0.10,   # pode cair se prewarm falhar
-    "RENAISSANCE": 0.05,   # pode ir a zero em CHOP
-    "CITADEL":     0.00,   # pode zerar enquanto edge decay persistir
+    "JUMP":        0.20,   # piso garantido
+    "RENAISSANCE": 0.10,   # pode cair em CHOP
+    "CITADEL":     0.05,   # pode quase zerar em decay
 }
 ENGINE_WEIGHT_CAPS = {
-    "JUMP":        0.40,
-    "BRIDGEWATER": 0.40,
-    "RENAISSANCE": 0.30,
-    "CITADEL":     0.15,   # cap severo por edge decay
+    "JUMP":        0.50,
+    "RENAISSANCE": 0.50,   # antigo 0.30; agora pode liderar em CHOP
+    "CITADEL":     0.25,   # antigo 0.15; leve folga
 }
 ENGINE_ACTIVITY_WINDOW = 120
 ENGINE_ACTIVITY_SOFT_CAP = {
-    "JUMP":        0.45,
-    "BRIDGEWATER": 0.55,   # alto volume de trades é característico
-    "RENAISSANCE": 0.35,
-    "CITADEL":     0.30,   # não deixar dominar mesmo em janela favorável
+    "JUMP":        0.55,
+    "RENAISSANCE": 0.45,   # antigo 0.35
+    "CITADEL":     0.35,   # antigo 0.30
 }
 ENGINE_DRAWDOWN_WINDOW = 30
 ENGINE_DRAWDOWN_WARN_R = 2.0
@@ -122,9 +129,9 @@ REGIME_LAG         = 5     # lag artificial: usa regime de 5 trades atrás → q
 # Regime-aware: amplifica pesos baseado no macro actual
 # TREND (BULL/BEAR) → CITADEL lidera | RANGE (CHOP) → RENAISSANCE lidera
 REGIME_BOOST = {
-    "BULL": {"CITADEL": 1.15, "RENAISSANCE": 0.90, "JUMP": 1.10, "BRIDGEWATER": 0.85},
-    "BEAR": {"CITADEL": 1.05, "RENAISSANCE": 0.95, "JUMP": 0.90, "BRIDGEWATER": 1.20},
-    "CHOP": {"CITADEL": 0.90, "RENAISSANCE": 1.20, "JUMP": 1.00, "BRIDGEWATER": 0.95},
+    "BULL": {"CITADEL": 1.15, "RENAISSANCE": 0.90, "JUMP": 1.10},
+    "BEAR": {"CITADEL": 1.05, "RENAISSANCE": 0.95, "JUMP": 0.90},
+    "CHOP": {"CITADEL": 0.90, "RENAISSANCE": 1.20, "JUMP": 1.00},
 }
 REGIME_BOOST_WINDOW = 20   # trades para detectar regime actual (probabilístico)
 R_CAP_MAX    =  5.0        # R-multiple máximo (evita outlier distorcer score)
@@ -146,6 +153,27 @@ from core.harmonics import scan_hermes
 from core.fs import atomic_write
 
 SEP = "─"*80
+
+def _derive_end_time_ms(all_dfs) -> int | None:
+    """Extrai o timestamp do último candle (em ms) a partir de all_dfs.
+
+    Usado para passar end_time_ms para collect_sentiment de BRIDGEWATER e
+    evitar look-ahead em backtest OOS — o sentiment é fetched relativo ao
+    fim da janela de dados, não à hora atual.
+
+    Em runs com janela recente/live-like, retorna ~agora (comportamento
+    idêntico ao antigo sem end_time_ms). Em runs OOS, retorna o fim do
+    backtest → fetch honesto.
+    """
+    try:
+        for df in all_dfs.values():
+            if df is None or len(df) == 0 or "time" not in df.columns:
+                continue
+            return int(df["time"].iloc[-1].timestamp() * 1000)
+    except Exception:
+        pass
+    return None
+
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 def _std(lst):
@@ -405,7 +433,13 @@ def ensemble_reweight(all_trades):
     return sorted(out, key=lambda t: t["timestamp"])
 
 def operational_core_reweight(all_trades):
-    """Generic ensemble weighting for the 4 validated operational engines."""
+    """Generic ensemble weighting for the engines in OPERATIONAL_ENGINES.
+
+    Filters dinamicamente — qualquer engine listado em OPERATIONAL_ENGINES
+    é processado; os demais pass-through. Originalmente 4 engines, reduzido
+    para 3 (CITADEL + RENAISSANCE + JUMP) em 2026-04-17 após remoção do
+    BRIDGEWATER pendente histórico OI/LS.
+    """
     sorted_t = sorted(all_trades, key=lambda t: t["timestamp"])
     active_strats = [name for name in OPERATIONAL_ENGINES if any(t.get("strategy") == name for t in sorted_t)]
     if not active_strats:
@@ -1392,6 +1426,8 @@ def _resultados_por_simbolo(all_trades, show_he=True):
             print(f"  {sym:12s}  {len(c):>4d}  {wr:>5.1f}%  ${sum(t['pnl'] for t in c):>+10,.0f}")
 
 def _collect_operational_trades(all_dfs, htf_stack_by_sym, macro_series, corr):
+    # BRIDGEWATER removida 2026-04-17: ver nota em OPERATIONAL_ENGINES.
+    # Até a re-habilitação, op=1 roda só CITADEL + RENAISSANCE + JUMP.
     engine_trades = {}
 
     azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
@@ -1406,15 +1442,6 @@ def _collect_operational_trades(all_dfs, htf_stack_by_sym, macro_series, corr):
         trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
         mercurio_all.extend(trades)
     engine_trades["JUMP"] = mercurio_all
-
-    from engines.bridgewater import scan_thoth, collect_sentiment
-    sentiment_data = collect_sentiment(list(all_dfs.keys()))
-    thoth_all = []
-    for sym, df in all_dfs.items():
-        trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
-                               sentiment_data=sentiment_data)
-        thoth_all.extend(trades)
-    engine_trades["BRIDGEWATER"] = thoth_all
 
     all_trades = []
     for eng, trades in engine_trades.items():
@@ -1432,7 +1459,7 @@ def _menu():
     print(f"  {'─'*W}")
     while True:
         print()
-        print(f"  [1]  CORE OPERATIONAL (CITADEL + RENAISSANCE + JUMP + BRIDGEWATER)")
+        print(f"  [1]  CORE OPERATIONAL (CITADEL + RENAISSANCE + JUMP)")
         print(f"  [2]  CITADEL")
         print(f"  [3]  RENAISSANCE")
         print(f"  [4]  NEWTON")
@@ -1512,7 +1539,11 @@ if __name__ == "__main__":
     elif op == "6":
         from engines.bridgewater import scan_thoth, collect_sentiment
         print(f"\n{SEP}\n  SENTIMENT DATA\n{SEP}")
-        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        sentiment_data = collect_sentiment(
+            list(all_dfs.keys()),
+            end_time_ms=_derive_end_time_ms(all_dfs),
+            window_days=SCAN_DAYS,
+        )
         thoth_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
@@ -1553,7 +1584,11 @@ if __name__ == "__main__":
         engine_trades["JUMP"] = mercurio_all
 
         from engines.bridgewater import scan_thoth, collect_sentiment
-        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        sentiment_data = collect_sentiment(
+            list(all_dfs.keys()),
+            end_time_ms=_derive_end_time_ms(all_dfs),
+            window_days=SCAN_DAYS,
+        )
         thoth_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
@@ -1613,7 +1648,11 @@ if __name__ == "__main__":
         engine_trades["JUMP"] = mercurio_all
 
         from engines.bridgewater import scan_thoth, collect_sentiment
-        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        sentiment_data = collect_sentiment(
+            list(all_dfs.keys()),
+            end_time_ms=_derive_end_time_ms(all_dfs),
+            window_days=SCAN_DAYS,
+        )
         thoth_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,

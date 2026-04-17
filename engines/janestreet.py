@@ -1578,9 +1578,7 @@ class Engine:
                 "basis_history":getattr(s,"_latest_basis_history",{}),
             }
             snapshot_file=getattr(s,"_snapshot_file",DIR/"state"/"snapshot.json")
-            fd,tmp=tempfile.mkstemp(dir=str(snapshot_file.parent),prefix=".snap_",suffix=".json")
-            with os.fdopen(fd,"w") as f:json.dump(data,f,default=str)
-            os.replace(tmp,snapshot_file)
+            atomic_write(snapshot_file,json.dumps(data,default=str))
         except Exception as e:log.debug(f"snapshot write failed: {e}")
 
     def _check_reload_params(s):
