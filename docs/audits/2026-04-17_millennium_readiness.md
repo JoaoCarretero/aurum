@@ -9,6 +9,12 @@ Audit completo em 4 lanes paralelas antes do GO.
 
 ## Veredito geral: **GO-COM-RESSALVAS**
 
+> **Errata pós-fix (2026-04-17, fim do dia):**
+> O core operacional atual do `MILLENNIUM` é `CITADEL + RENAISSANCE + JUMP`.
+> `BRIDGEWATER` foi removida de `OPERATIONAL_ENGINES` depois deste audit,
+> os pesos foram redistribuídos, e o caveat de `end_time_ms` ficou mitigado
+> nos call-sites ativos do runner.
+
 Sistema tá saudável e pode rodar. Três ressalvas operacionais pra atenção,
 nenhuma bloqueadora.
 
@@ -23,7 +29,7 @@ nenhuma bloqueadora.
 
 ## ✅ O que tá saudável (evidências)
 
-**Pesos recalibrados batem com código (14:45 hoje)** — `engines/millennium.py:82-87`:
+**Pesos recalibrados batem com código (snapshot 14:45)** — `engines/millennium.py:82-87`:
 | Engine | Peso esperado | Peso no código | Match |
 |--------|---------------|----------------|-------|
 | JUMP | 0.30 | 0.30 | ✅ |
@@ -64,7 +70,7 @@ carrega keys, não envia ordem. `config/engines.py:17` marca `live_ready: False`
 
 ## ⚠️ Ressalvas operacionais (3 pra ficar de olho)
 
-### R1 — Conflito de governança: FROZEN_ENGINES vs OPERATIONAL_ENGINES [MED]
+### R1 — Conflito de governança: FROZEN_ENGINES vs OPERATIONAL_ENGINES [MED, resolvido depois]
 
 **Problema:** `config/params.py` lista `FROZEN_ENGINES = ["TWOSIGMA", "AQR", "RENAISSANCE"]` mas `engines/millennium.py:75` define `OPERATIONAL_ENGINES = ("CITADEL", "RENAISSANCE", "JUMP", "BRIDGEWATER")`. MILLENNIUM **não consulta** `FROZEN_ENGINES` — RENAISSANCE vai rodar mesmo marcada como congelada.
 
@@ -75,7 +81,7 @@ decorativa e deveria ser limpa em breve.
 **Ação:** confirmar intenção antes do GO. Se quiser rodar sem RENAISSANCE,
 remover de `OPERATIONAL_ENGINES` temporariamente. Memory `project_backlog_aurum_2026_04_15` já menciona "Remover RENAISSANCE de FROZEN_ENGINES" como backlog.
 
-### R2 — Possível look-ahead residual no sentiment do BRIDGEWATER [MED]
+### R2 — Possível look-ahead residual no sentiment do BRIDGEWATER [MED, mitigado depois]
 
 **Problema:** `engines/millennium.py:1411` chama `collect_sentiment()` **sem**
 `end_time_ms`. O fix aplicado hoje em `core/sentiment.py` (que derrubou
@@ -106,7 +112,7 @@ futura do código ou se alguém trocar op inadvertidamente.
 Preferencialmente:
 
 1. **Rodar `python -m pytest tests/test_millennium_contracts.py -v`** pra confirmar os 6 contract tests verdes (especialmente `test_capital_weights_reflect_2026_04_17_calibration`).
-2. **Escolher opção 1 (CORE OPERATIONAL)** no menu — CITADEL + RENAISSANCE + JUMP + BRIDGEWATER. **NÃO** opção 7 (ALL) nem 8 (TWO SIGMA), que puxam DE SHAW (experimental) e contaminam métricas.
+2. **Escolher opção 1 (CORE OPERATIONAL)** no menu — CITADEL + RENAISSANCE + JUMP. **NÃO** opção 7 (ALL) nem 8 (TWO SIGMA), que puxam DE SHAW (experimental) e contaminam métricas.
 3. **Confirmar janela do run** pra decidir R2:
    - Janela padrão / últimos N dias → safe
    - OOS histórico delimitado → caveat no BRIDGEWATER

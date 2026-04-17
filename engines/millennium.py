@@ -12,7 +12,7 @@ intentional, not violations to refactor away.
 import sys, math, json, random, logging
 import numpy as np
 import pandas as pd
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -84,6 +84,10 @@ CONFLICT_ACTION       = "skip"
 # pra uma janela inteira relevante (cache de sentiment precisa cobrir 180d+
 # em todos os símbolos ativos). Em paralelo, audit rodando pra detectar bug.
 OPERATIONAL_ENGINES   = ("CITADEL", "RENAISSANCE", "JUMP")
+ENGINE_NATIVE_INTERVALS = {
+    name: ENGINE_INTERVALS.get(name, INTERVAL)
+    for name in OPERATIONAL_ENGINES
+}
 # Capital weights recalibrados em 2026-04-17 pós-remoção BRIDGEWATER.
 # Base anterior (4 engines): JUMP 0.30 / BW 0.30 / REN 0.25 / CIT 0.15.
 # Redistribuição dos 0.30 que eram BRIDGEWATER:
@@ -115,6 +119,35 @@ ENGINE_DRAWDOWN_WINDOW = 30
 ENGINE_DRAWDOWN_WARN_R = 2.0
 ENGINE_DRAWDOWN_HARD_R = 4.0
 ENGINE_DRAWDOWN_MIN_FACTOR = 0.45
+PORTFOLIO_EXECUTION_ENABLED = True
+PORTFOLIO_MIN_WEIGHT = {
+    "JUMP":        0.32,
+    "RENAISSANCE": 0.22,
+    "CITADEL":     0.18,
+}
+PORTFOLIO_CHALLENGER_RATIO = 0.92
+PORTFOLIO_CHALLENGER_MAX_GAP = 0.06
+PORTFOLIO_GLOBAL_COOLDOWN_BARS = 1
+PORTFOLIO_STRATEGY_COOLDOWN_BARS = {
+    "JUMP":        2,
+    "RENAISSANCE": 2,
+    "CITADEL":     2,
+}
+PORTFOLIO_REGIME_COOLDOWN_MULT = {
+    "BULL": 1.0,
+    "BEAR": 1.5,
+    "CHOP": 2.0,
+}
+PORTFOLIO_ACCEPTED_WINDOW = 80
+PORTFOLIO_MIN_ACCEPTED_SHARE = {
+    "CITADEL": 0.12,
+    "RENAISSANCE": 0.22,
+    "JUMP": 0.25,
+}
+JUMP_RECENT_QUALITY_WINDOW = 30
+JUMP_MIN_SCORE_BASE = 0.80
+JUMP_MIN_SCORE_WEAK = 0.82
+JUMP_MIN_SCORE_STRESSED = 0.84
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 ENSEMBLE_WINDOW    = 30    # trades lookback para scoring rolling
@@ -338,6 +371,209 @@ def _recent_drawdown_penalty(r_hist):
     factor = 1.0 - (1.0 - ENGINE_DRAWDOWN_MIN_FACTOR) * slope
     return max(ENGINE_DRAWDOWN_MIN_FACTOR, min(1.0, factor)), max_dd_r
 
+
+def _bar_minutes() -> int:
+    return max(int(_TF_MINUTES.get(INTERVAL, 15)), 1)
+
+
+def _n_candles_for_interval(days: int, interval: str, *, with_buffer: bool = False) -> int:
+    minutes = max(int(_TF_MINUTES.get(interval, _TF_MINUTES.get(INTERVAL, 15))), 1)
+    candles = int(days * 24 * 60 / minutes)
+    if not with_buffer:
+        return candles
+    if interval == "1h":
+        return candles + 300
+    if interval == "4h":
+        return candles + 200
+    if interval == "1d":
+        return candles + 200
+    return candles
+
+
+def _load_interval_context(interval: str) -> dict:
+    interval = str(interval or INTERVAL)
+    n_candles = _n_candles_for_interval(SCAN_DAYS, interval)
+    print(f"\n{SEP}\n  DADOS   {interval}   {n_candles:,} candles\n{SEP}")
+    _fetch_syms = list(SYMBOLS)
+    if MACRO_SYMBOL not in _fetch_syms:
+        _fetch_syms.insert(0, MACRO_SYMBOL)
+    all_dfs = fetch_all(_fetch_syms, interval=interval, n_candles=n_candles)
+    for sym, df in all_dfs.items():
+        validate(df, sym)
+    if not all_dfs:
+        raise RuntimeError(f"sem dados para intervalo {interval}")
+
+    htf_stack_by_sym = {}
+    if MTF_ENABLED:
+        for tf in HTF_STACK:
+            nc = _n_candles_for_interval(SCAN_DAYS, tf, with_buffer=True)
+            print(f"\n{SEP}\n  HTF   {interval}->{tf}   {nc:,} candles\n{SEP}")
+            tf_dfs = fetch_all(list(all_dfs.keys()), interval=tf, n_candles=nc)
+            for sym, df_h in tf_dfs.items():
+                df_h = prepare_htf(df_h, htf_interval=tf)
+                htf_stack_by_sym.setdefault(sym, {})[tf] = df_h
+
+    print(f"\n{SEP}\n  PRE-PROCESSAMENTO [{interval}]\n{SEP}")
+    macro_series = detect_macro(all_dfs)
+    if macro_series is not None:
+        bull_n = (macro_series == "BULL").sum()
+        bear_n = (macro_series == "BEAR").sum()
+        chop_n = (macro_series == "CHOP").sum()
+        total = bull_n + bear_n + chop_n
+        print(
+            f"  Macro ({MACRO_SYMBOL})    BULL {bull_n}c ({bull_n/max(total,1)*100:.0f}%)   "
+            f"BEAR {bear_n}c ({bear_n/max(total,1)*100:.0f}%)   CHOP {chop_n}c ({chop_n/max(total,1)*100:.0f}%)"
+        )
+    corr = build_corr_matrix(all_dfs)
+    return {
+        "interval": interval,
+        "n_candles": n_candles,
+        "all_dfs": all_dfs,
+        "htf_stack_by_sym": htf_stack_by_sym,
+        "macro_series": macro_series,
+        "corr": corr,
+    }
+
+
+def _load_operational_contexts() -> dict[str, dict]:
+    interval_cache: dict[str, dict] = {}
+    contexts: dict[str, dict] = {}
+    print(f"\n{SEP}\n  CORE OPERATIONAL · TF NATIVO POR ESTRATÉGIA\n{SEP}")
+    for engine_name in OPERATIONAL_ENGINES:
+        interval = ENGINE_NATIVE_INTERVALS.get(engine_name, INTERVAL)
+        if interval not in interval_cache:
+            interval_cache[interval] = _load_interval_context(interval)
+        ctx = interval_cache[interval]
+        contexts[engine_name] = {
+            "engine": engine_name,
+            "interval": interval,
+            "n_candles": ctx["n_candles"],
+            "all_dfs": ctx["all_dfs"],
+            "htf_stack_by_sym": ctx["htf_stack_by_sym"],
+            "macro_series": ctx["macro_series"],
+            "corr": ctx["corr"],
+        }
+        print(f"  {engine_name:12s}  ->  {interval}")
+    return contexts
+
+
+def _bars_since(prev_ts, cur_ts) -> float:
+    if prev_ts is None or cur_ts is None:
+        return float("inf")
+    try:
+        prev = pd.Timestamp(prev_ts)
+        cur = pd.Timestamp(cur_ts)
+    except Exception:
+        return float("inf")
+    delta_m = (cur - prev).total_seconds() / 60.0
+    if delta_m < 0:
+        return 0.0
+    return delta_m / _bar_minutes()
+
+
+def _portfolio_execution_gate(trade, strat, final_w, dominant, last_portfolio_ts,
+                              last_strategy_ts, accepted_history, history):
+    """Decide whether the portfolio should actually take this trade."""
+    if not PORTFOLIO_EXECUTION_ENABLED:
+        return True, "disabled", {}
+
+    ts = trade.get("timestamp")
+    dyn_w = float(final_w.get(strat, 0.0))
+    leader = max(final_w, key=final_w.get)
+    leader_w = float(final_w.get(leader, dyn_w))
+    leader_gap = max(0.0, leader_w - dyn_w)
+
+    if strat == "JUMP":
+        score = float(trade.get("score") or 0.0)
+        recent_r = history.get("JUMP", [])[-JUMP_RECENT_QUALITY_WINDOW:]
+        avg_recent_r = (sum(recent_r) / len(recent_r)) if recent_r else 0.0
+        min_score = JUMP_MIN_SCORE_BASE
+        if recent_r and avg_recent_r < 0.0:
+            min_score = JUMP_MIN_SCORE_STRESSED
+        elif recent_r and avg_recent_r < 0.08:
+            min_score = JUMP_MIN_SCORE_WEAK
+        if score < min_score:
+            return False, "jump_quality_floor", {
+                "leader": leader,
+                "leader_w": leader_w,
+                "dyn_w": dyn_w,
+                "leader_gap": leader_gap,
+                "jump_avg_recent_r": round(avg_recent_r, 3),
+                "jump_min_score": round(min_score, 3),
+                "score": round(score, 3),
+            }
+
+    min_w = float(PORTFOLIO_MIN_WEIGHT.get(strat, 0.0))
+    if dyn_w < min_w:
+        return False, "min_weight", {
+            "leader": leader,
+            "leader_w": leader_w,
+            "dyn_w": dyn_w,
+            "leader_gap": leader_gap,
+        }
+
+    if strat != leader:
+        ratio = dyn_w / max(leader_w, 1e-9)
+        if ratio < PORTFOLIO_CHALLENGER_RATIO or leader_gap > PORTFOLIO_CHALLENGER_MAX_GAP:
+            recent = accepted_history[-PORTFOLIO_ACCEPTED_WINDOW:]
+            total_recent = len(recent)
+            accepted_share = (
+                sum(1 for name in recent if name == strat) / total_recent
+                if total_recent > 0 else 0.0
+            )
+            min_share = PORTFOLIO_MIN_ACCEPTED_SHARE.get(strat, 0.0)
+            strategy_need = max(0.0, PORTFOLIO_STRATEGY_COOLDOWN_BARS.get(strat, 0))
+            strategy_bars = _bars_since(last_strategy_ts.get(strat), ts)
+            if total_recent >= 12 and accepted_share < min_share and strategy_bars >= strategy_need:
+                return True, "diversity_override", {
+                    "leader": leader,
+                    "leader_w": leader_w,
+                    "dyn_w": dyn_w,
+                    "leader_gap": leader_gap,
+                    "accepted_share": round(accepted_share, 3),
+                    "min_share": round(min_share, 3),
+                }
+            return False, f"not_leader:{leader}", {
+                "leader": leader,
+                "leader_w": leader_w,
+                "dyn_w": dyn_w,
+                "leader_gap": leader_gap,
+                "accepted_share": round(accepted_share, 3),
+                "min_share": round(min_share, 3),
+            }
+
+    regime_mult = float(PORTFOLIO_REGIME_COOLDOWN_MULT.get(dominant, 1.0))
+    global_need = max(0.0, PORTFOLIO_GLOBAL_COOLDOWN_BARS * regime_mult)
+    global_bars = _bars_since(last_portfolio_ts, ts)
+    if global_bars < global_need:
+        return False, "portfolio_cooldown", {
+            "leader": leader,
+            "leader_w": leader_w,
+            "dyn_w": dyn_w,
+            "leader_gap": leader_gap,
+            "bars_since_portfolio": round(global_bars, 2),
+        }
+
+    strategy_need = max(0.0, PORTFOLIO_STRATEGY_COOLDOWN_BARS.get(strat, 0) * regime_mult)
+    strategy_bars = _bars_since(last_strategy_ts.get(strat), ts)
+    if strategy_bars < strategy_need:
+        return False, f"strategy_cooldown:{strat}", {
+            "leader": leader,
+            "leader_w": leader_w,
+            "dyn_w": dyn_w,
+            "leader_gap": leader_gap,
+            "bars_since_strategy": round(strategy_bars, 2),
+        }
+
+    return True, "accepted", {
+        "leader": leader,
+        "leader_w": leader_w,
+        "dyn_w": dyn_w,
+        "leader_gap": leader_gap,
+        "bars_since_portfolio": round(global_bars, 2),
+        "bars_since_strategy": round(strategy_bars, 2),
+    }
+
 def ensemble_reweight(all_trades):
     """
     Ajusta dinamicamente os pesos CITADEL/RENAISSANCE.
@@ -447,7 +683,13 @@ def operational_core_reweight(all_trades):
 
     history = {name: [] for name in active_strats}
     kill_log = {name: [] for name in active_strats}
+    gate_blocked = Counter()
+    gate_accepted = Counter()
+    gate_leaders = Counter()
+    accepted_history = []
     out = []
+    last_portfolio_ts = None
+    last_strategy_ts = {}
 
     for idx, t in enumerate(sorted_t):
         strat = t.get("strategy", "CITADEL")
@@ -511,6 +753,22 @@ def operational_core_reweight(all_trades):
         total_r = sum(boosted_w.values())
         final_w = {name: (boosted_w[name] / total_r if total_r > 0 else BASE_CAPITAL_WEIGHTS[name]) for name in active_strats}
         final_w = _apply_engine_weight_caps(final_w, active_strats)
+        leader = max(final_w, key=final_w.get)
+        allow_trade, gate_reason, gate_ctx = _portfolio_execution_gate(
+            t, strat, final_w, dominant, last_portfolio_ts, last_strategy_ts,
+            accepted_history, history,
+        )
+        if not allow_trade:
+            gate_blocked[gate_reason] += 1
+            for s, killed in killed_map.items():
+                log = kill_log[s]
+                if killed and (not log or len(log) % 2 == 0):
+                    log.append(t["timestamp"])
+                elif not killed and log and len(log) % 2 == 1:
+                    log.append(t["timestamp"])
+            if t["result"] in ("WIN", "LOSS"):
+                history[strat].append(_r_multiple(t))
+            continue
 
         static_w = BASE_CAPITAL_WEIGHTS.get(strat, 1.0)
         dynamic_w = final_w.get(strat, static_w)
@@ -523,10 +781,21 @@ def operational_core_reweight(all_trades):
             "ensemble_weights": {name: round(final_w[name], 3) for name in active_strats},
             "kill_states": dict(killed_map),
             "regime_at_trade": dominant,
+            "portfolio_gate": gate_reason,
+            "portfolio_leader": leader,
+            "portfolio_leader_w": round(gate_ctx.get("leader_w", final_w.get(leader, 0.0)), 3),
+            "portfolio_weight_gap": round(gate_ctx.get("leader_gap", 0.0), 3),
+            "portfolio_bars_since_trade": gate_ctx.get("bars_since_portfolio"),
+            "portfolio_bars_since_strategy": gate_ctx.get("bars_since_strategy"),
             "decay_scores": {name: round(_decay_score(history[name]), 3) for name in active_strats},
             "drawdown_penalties": {name: round(dd_penalties[name], 3) for name in active_strats},
             "recent_drawdown_r": dd_levels,
         })
+        gate_accepted[strat] += 1
+        gate_leaders[leader] += 1
+        accepted_history.append(strat)
+        last_portfolio_ts = t.get("timestamp")
+        last_strategy_ts[strat] = t.get("timestamp")
 
         for s, killed in killed_map.items():
             log = kill_log[s]
@@ -540,6 +809,11 @@ def operational_core_reweight(all_trades):
 
     if out:
         out[-1]["_kill_log"] = kill_log
+        out[-1]["_portfolio_gate_stats"] = {
+            "accepted_by_strategy": dict(gate_accepted),
+            "leader_by_strategy": dict(gate_leaders),
+            "blocked": dict(gate_blocked),
+        }
     return sorted(out, key=lambda t: t["timestamp"])
 
 
@@ -678,6 +952,34 @@ def print_ensemble_stats(original, reweighted):
             for start, end in pairs:
                 end_s = str(end)[:16] if end != "ainda pausado" else end
                 print(f"    {strat:8s}  pausado {str(start)[:16]}  →  recuperado {end_s}")
+
+
+def print_portfolio_gate_stats(reweighted):
+    gate_stats = {}
+    for t in reversed(reweighted):
+        gate_stats = t.get("_portfolio_gate_stats") or {}
+        if gate_stats:
+            break
+    if not gate_stats:
+        return
+
+    accepted = gate_stats.get("accepted_by_strategy") or {}
+    leaders = gate_stats.get("leader_by_strategy") or {}
+    blocked = gate_stats.get("blocked") or {}
+    total_live = sum(accepted.values())
+    if total_live <= 0:
+        return
+
+    print(f"\n{SEP}\n  PORTFOLIO EXECUTION GATE\n{SEP}")
+    print(f"  Live selection enabled  ·  accepted {total_live} trades")
+    for name in OPERATIONAL_ENGINES:
+        if name in accepted:
+            lead_n = leaders.get(name, 0)
+            print(f"  {name:12s}  accepted={accepted[name]:>4d}  leader={lead_n:>4d}")
+    if blocked:
+        print(f"\n  Blocked:")
+        for reason, n in sorted(blocked.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+            print(f"    {reason:24s} {n:>5d}")
     if not any_kill:
         print(f"    Nenhum — Sortino(R) manteve-se > {KILL_SWITCH_SORTINO} durante todo o período")
 
@@ -1135,19 +1437,31 @@ def export_ms_json(all_trades, eq, mc, ratios, mdd_pct=None):
             "wr":round(sum(1 for t in ts if t["result"]=="WIN")/max(len(ts),1)*100,1),
             "pnl":round(sum(t["pnl"] for t in ts),2),
         }
+    gate_stats = {}
+    for t in reversed(all_trades):
+        gate_stats = t.get("_portfolio_gate_stats") or {}
+        if gate_stats:
+            break
     payload={
         "version":"multistrategy-1.0","run_id":RUN_ID,
         "timestamp":datetime.now().isoformat(),
         "config":{"base_weights":BASE_CAPITAL_WEIGHTS,
                   "max_open_ms":MAX_OPEN_POSITIONS_MS,
                   "confirm_window":CONFIRM_WINDOW,
-                  "confirm_size_mult":CONFIRM_SIZE_MULT},
+                  "confirm_size_mult":CONFIRM_SIZE_MULT,
+                  "portfolio_execution_enabled": PORTFOLIO_EXECUTION_ENABLED,
+                  "portfolio_min_weight": PORTFOLIO_MIN_WEIGHT,
+                  "portfolio_challenger_ratio": PORTFOLIO_CHALLENGER_RATIO,
+                  "portfolio_challenger_max_gap": PORTFOLIO_CHALLENGER_MAX_GAP,
+                  "portfolio_global_cooldown_bars": PORTFOLIO_GLOBAL_COOLDOWN_BARS,
+                  "portfolio_strategy_cooldown_bars": PORTFOLIO_STRATEGY_COOLDOWN_BARS},
         "summary":{"total":len(closed),
                    "confirmed_n":len(confirmed_t),"win_rate":round(wr,2),
                    "total_pnl":round(sum(t["pnl"] for t in closed),2),
                    "final_equity":round(eq[-1],2),
                    **{k:ratios.get(k) for k in ("sharpe","sortino","calmar","ret")}},
         "by_strategy":by_strategy,
+        "portfolio_gate": gate_stats,
         "monte_carlo":{k:v for k,v in (mc or {}).items() if k not in ("paths","finals","dds")},
         "trades":[{k:(str(v) if k=="timestamp" else v) for k,v in t.items()} for t in all_trades],
         "equity":eq,
@@ -1369,6 +1683,7 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
     if label not in ("CITADEL", "RENAISSANCE"):
         if label == "CORE OPERATIONAL":
             print_ensemble_stats(all_trades, portfolio_trades)
+            print_portfolio_gate_stats(portfolio_trades)
         else:
             rew = operational_core_reweight(all_trades)
             print_ensemble_stats(all_trades, rew)
@@ -1425,21 +1740,42 @@ def _resultados_por_simbolo(all_trades, show_he=True):
         else:
             print(f"  {sym:12s}  {len(c):>4d}  {wr:>5.1f}%  ${sum(t['pnl'] for t in c):>+10,.0f}")
 
-def _collect_operational_trades(all_dfs, htf_stack_by_sym, macro_series, corr):
+def _collect_operational_trades(all_dfs=None, htf_stack_by_sym=None, macro_series=None, corr=None, engine_contexts=None):
     # BRIDGEWATER removida 2026-04-17: ver nota em OPERATIONAL_ENGINES.
     # Até a re-habilitação, op=1 roda só CITADEL + RENAISSANCE + JUMP.
     engine_trades = {}
+    if engine_contexts is None:
+        shared_ctx = {
+            "all_dfs": all_dfs,
+            "htf_stack_by_sym": htf_stack_by_sym or {},
+            "macro_series": macro_series,
+            "corr": corr or {},
+        }
+        engine_contexts = {name: shared_ctx for name in OPERATIONAL_ENGINES}
 
-    azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
+    citadel_ctx = engine_contexts["CITADEL"]
+    azoth_all, _ = _scan_azoth(
+        citadel_ctx["all_dfs"],
+        citadel_ctx.get("htf_stack_by_sym", {}),
+        citadel_ctx.get("macro_series"),
+        citadel_ctx.get("corr", {}),
+    )
     engine_trades["CITADEL"] = azoth_all
 
-    hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
+    renaissance_ctx = engine_contexts["RENAISSANCE"]
+    hermes_all, _ = _scan_hermes_all(
+        renaissance_ctx["all_dfs"],
+        renaissance_ctx.get("htf_stack_by_sym", {}),
+        renaissance_ctx.get("macro_series"),
+        renaissance_ctx.get("corr", {}),
+    )
     engine_trades["RENAISSANCE"] = hermes_all
 
     from engines.jump import scan_mercurio
     mercurio_all = []
-    for sym, df in all_dfs.items():
-        trades, _ = scan_mercurio(df.copy(), sym, macro_series, corr)
+    jump_ctx = engine_contexts["JUMP"]
+    for sym, df in jump_ctx["all_dfs"].items():
+        trades, _ = scan_mercurio(df.copy(), sym, jump_ctx.get("macro_series"), jump_ctx.get("corr", {}))
         mercurio_all.extend(trades)
     engine_trades["JUMP"] = mercurio_all
 
@@ -1668,7 +2004,8 @@ if __name__ == "__main__":
 
     else:
         # op == "1" — operational multi-strategy core
-        _, all_trades = _collect_operational_trades(all_dfs, htf_stack_by_sym, macro_series, corr)
+        engine_contexts = _load_operational_contexts()
+        _, all_trades = _collect_operational_trades(engine_contexts=engine_contexts)
         if not all_trades: print("  Sem trades."); sys.exit(1)
         print(f"\n{SEP}\n  RESULTADOS POR ENGINE\n{SEP}")
         for eng in OPERATIONAL_ENGINES:

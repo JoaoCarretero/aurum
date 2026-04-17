@@ -58,6 +58,9 @@ TRADE_CSV_FIELDS = [
     # reweight / portfolio
     "dd_scale", "corr_mult", "in_transition", "trans_mult",
     "ensemble_w", "recent_drawdown_r",
+    "portfolio_gate", "portfolio_leader", "portfolio_leader_w",
+    "portfolio_weight_gap", "portfolio_bars_since_trade",
+    "portfolio_bars_since_strategy",
 ]
 
 
@@ -68,6 +71,48 @@ def _get(d: dict, key: str, default=""):
     if v is None:
         return ""
     return v
+
+
+def _register_window_run(
+    *,
+    battery_root: Path,
+    window_dir: Path,
+    days: int,
+    summary: dict,
+    config: dict,
+) -> None:
+    from core.run_manager import append_to_index
+
+    battery_id = battery_root.name.replace("battery_", "", 1)
+    run_id = f"millennium_battery_{battery_id}_w{days}d"
+    summary_path = window_dir / "summary.json"
+    config_path = window_dir / "config.json"
+    report_html = window_dir / "report.html"
+
+    append_to_index(
+        window_dir,
+        summary=summary,
+        config=config,
+        entry_overrides={
+            "run_id": run_id,
+            "engine": "millennium",
+            "interval": config.get("INTERVAL"),
+            "period_days": days,
+            "n_symbols": len(config.get("symbols") or []),
+            "n_candles": config.get("N_CANDLES"),
+            "win_rate": summary.get("win_rate_pct"),
+            "pnl": summary.get("total_pnl"),
+            "roi_pct": summary.get("roi_pct"),
+            "sharpe": summary.get("sharpe"),
+            "sortino": summary.get("sortino"),
+            "max_dd_pct": summary.get("max_dd_pct"),
+            "run_dir": str(window_dir),
+            "summary_path": str(summary_path),
+            "config_path": str(config_path),
+            "report_html_path": str(report_html) if report_html.exists() else "",
+            "source": "millennium_battery",
+        },
+    )
 
 
 def _write_trades(trades: list[dict], run_id: str, window_days: int,
@@ -253,8 +298,8 @@ def _run_window(days: int, battery_root: Path, account_size: float,
 
         ms.log.info(f"BATTERY window={days}d  account=${account_size:,.0f}  start")
 
-        all_dfs, htf_stack, macro, corr = ms._load_dados(generate_plots=False)
-        _, all_trades = ms._collect_operational_trades(all_dfs, htf_stack, macro, corr)
+        engine_contexts = ms._load_operational_contexts()
+        _, all_trades = ms._collect_operational_trades(engine_contexts=engine_contexts)
         if not all_trades:
             print(f"  [w{days}d] sem trades — skip")
             return {"window_days": days, "n_trades": 0, "status": "no_trades"}
@@ -262,7 +307,20 @@ def _run_window(days: int, battery_root: Path, account_size: float,
         portfolio_trades = ms.operational_core_reweight(all_trades)
 
         summary = _portfolio_summary(portfolio_trades, days, account_size)
+        summary["engine"] = "MILLENNIUM"
         per_strat = _per_strategy(portfolio_trades)
+        config_payload = {
+            "window_days": days,
+            "SCAN_DAYS": days,
+            "INTERVAL": f"{interval_minutes}m",
+            "N_CANDLES": int(getattr(ms, "N_CANDLES", 0) or 0),
+            "interval_minutes": interval_minutes,
+            "native_intervals": dict(getattr(ms, "ENGINE_NATIVE_INTERVALS", {})),
+            "symbols": list(getattr(ms, "SYMBOLS", [])),
+            "account_size": account_size,
+            "base_weights": dict(ms.BASE_CAPITAL_WEIGHTS),
+            "timestamp": datetime.now().isoformat(),
+        }
 
         # Persist
         (window_dir / "summary.json").write_text(
@@ -272,14 +330,7 @@ def _run_window(days: int, battery_root: Path, account_size: float,
             json.dumps(per_strat, indent=2, default=str), encoding="utf-8"
         )
         (window_dir / "config.json").write_text(
-            json.dumps({
-                "window_days": days,
-                "interval_minutes": interval_minutes,
-                "symbols": list(getattr(ms, "SYMBOLS", [])),
-                "account_size": account_size,
-                "base_weights": dict(ms.BASE_CAPITAL_WEIGHTS),
-                "timestamp": datetime.now().isoformat(),
-            }, indent=2, default=str),
+            json.dumps(config_payload, indent=2, default=str),
             encoding="utf-8",
         )
 
@@ -293,6 +344,14 @@ def _run_window(days: int, battery_root: Path, account_size: float,
         except Exception as e:
             print(f"  [w{days}d] report.html falhou: {e}")
             ms.log.warning(f"HTML report failed: {e}")
+
+        _register_window_run(
+            battery_root=battery_root,
+            window_dir=window_dir,
+            days=days,
+            summary=summary,
+            config=config_payload,
+        )
 
         dt = time.time() - t0
         print(f"\n  [w{days}d] {summary['n_trades']} trades  "

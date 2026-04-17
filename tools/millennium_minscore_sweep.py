@@ -1,4 +1,4 @@
-"""MILLENNIUM focused sweep — THOTH_MIN_SCORE only, 180d window.
+"""Legacy BRIDGEWATER-focused sweep — THOTH_MIN_SCORE only, 180d window.
 
 Hypothesis (pre-registered):
     Pre-R2-fix (2026-04-14), grid at THOTH_MIN_SCORE=0.30 showed Sharpe
@@ -8,7 +8,7 @@ Hypothesis (pre-registered):
     instead of edge.
 
 Mechanism tested:
-    BRIDGEWATER currently emits ~89% of MILLENNIUM trades at THOTH_MIN_SCORE
+    BRIDGEWATER historically emitted ~89% of MILLENNIUM trades at THOTH_MIN_SCORE
     = 0.20. Raising threshold should (a) reduce trade count, (b) raise
     average R-multiple per trade, (c) decide whether edge is in the volume
     or in selectivity.
@@ -209,6 +209,19 @@ def _write_sweep_summary(results: list[dict], sweep_root: Path,
 
 
 def main() -> int:
+    import engines.millennium as ms
+
+    if "BRIDGEWATER" not in ms.OPERATIONAL_ENGINES:
+        print(
+            "MILLENNIUM THOTH_MIN_SCORE sweep is disabled: "
+            "BRIDGEWATER is not part of today's operational core."
+        )
+        print(
+            "Use tools/millennium_battery.py for the current "
+            "CITADEL + RENAISSANCE + JUMP battery."
+        )
+        return 2
+
     ap = argparse.ArgumentParser(description="MILLENNIUM THOTH_MIN_SCORE sweep")
     ap.add_argument("--window", type=int, default=180, help="Window in days (default 180)")
     ap.add_argument("--account", type=float, default=None)
