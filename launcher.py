@@ -505,6 +505,24 @@ BRIEFINGS["MEDALLION"] = {
     },
 }
 
+BRIEFINGS["PHI"] = {
+    "what": "Multi-timeframe Fibonacci confluence. Looks for 0.618 retracement agreement across 1D/4H/1H/15m/5m and executes only on a micro trigger with rejection + volume.",
+    "philosophy": "Mercados repetem geometria em escalas diferentes. PHI tenta capturar isso sem misticismo: quando várias camadas fractais convergem no mesmo retracement de Fibonacci e o micro-timeframe confirma rejeição real, a entrada deixa de ser um chute isolado e vira uma tese geométrica multi-escala.",
+    "logic": [
+        "Calcular pivots confirmados e fibs locais em 5 timeframes",
+        "Alinhar HTFs ao 5m sem lookahead",
+        "Detectar cluster de confluência em torno do 0.618",
+        "Filtrar por regime, rejeição, volume e tendência",
+        "Entrar só quando Ω_PHI supera o limiar configurado",
+    ],
+    "edge": "Pode capturar pullbacks geométricos limpos em ativos muito líquidos quando múltiplas escalas concordam.",
+    "risk": "Engine pesado e ainda research-only. Default pode ficar rígido demais; combo solto pode overfit fácil.",
+    "best_config": {
+        "TF": "5m base · 15m/1h/4h/1d contexto",
+        "Status": "⚠ research-only · validar majors/OOS antes de promover",
+    },
+}
+
 BRIEFINGS["RENAISSANCE"] = {
     "what": "Harmonic pattern recognition. Detects Gartley, Butterfly, Bat, Crab, and Cypher formations via Fibonacci ratios; Bayesian confidence scoring on entropy and Hurst-weighted completion probability.",
     "philosophy": "Os mesmos padrões geométricos que governam a Natureza — proporções de Fibonacci, simetrias de Gartley, borboletas de Pesavento — repetem-se nos mercados. Não por misticismo, mas porque refletem a psicologia fractal de multidões: medo e ganância criam pontos de retração previsíveis. RENAISSANCE detecta estes padrões harmónicos com confirmação Bayesiana e mede a qualidade estatística via entropia de Shannon e expoente de Hurst. Padrões com alta simetria e baixa entropia têm maior probabilidade de completar.",
@@ -5759,7 +5777,8 @@ class App(tk.Tk):
         sym = pair.get("symbol") or pair.get("sym") or "\u2014"
         venue = (f"{pair.get('long_venue', '')} \u2194 {pair.get('short_venue', '')}"
                  if pair.get("long_venue") else pair.get("venue", ""))
-        return f"{sym}  \u00b7  {venue.strip(' \u2194')}"
+        venue_clean = venue.strip(" \u2194")
+        return f"{sym}  \u00b7  {venue_clean}"
 
     # ── Scoring filter ───────────────────────────────────────
     def _arb_score_fallback(self, pair: dict):
@@ -7078,9 +7097,6 @@ class App(tk.Tk):
         While a prefetch is alive the status line polls every 3s and the
         table refreshes so new rows appear as they land.
         """
-        import gzip
-        import pickle
-
         from core import cache as cache_mod
         from config.params import BASKETS
 
@@ -7454,8 +7470,7 @@ class App(tk.Tk):
                     p = (cache_mod.CACHE_DIR /
                          f"{f['symbol']}_{f['interval']}_{f['market']}.pkl.gz")
                     try:
-                        with gzip.open(p, "rb") as fh:
-                            df = pickle.load(fh)
+                        df = cache_mod.load_frame(p)
                         if df is not None and not df.empty:
                             span = (f"{df['time'].iloc[0].strftime('%y-%m-%d')}"
                                     f" -> "
@@ -8230,7 +8245,7 @@ class App(tk.Tk):
         market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
 
         _titles = {
-            "BACKTEST": ("BACKTEST", "research · walkforward · Monte Carlo", "#00ff80"),
+            "BACKTEST": ("BACKTEST", "research · walkforward · Monte Carlo", TILE_RESEARCH),
             "LIVE":     ("ENGINES LIVE", "paper · demo · testnet · safety gates", "#ff8c00"),
             "TOOLS":    ("TOOLS", "utilities · research labs", AMBER_D),
             None:       ("STRATEGIES", "all engines across groups", AMBER),
@@ -8256,13 +8271,18 @@ class App(tk.Tk):
         tk.Label(strip, text=title, font=(FONT, 12, "bold"),
                  fg=title_hue, bg=BG).pack(side="left", padx=(0, 14))
 
-        # Segmented pills inline with title
-        segments = [
-            ("BACKTEST", "BACKTEST", "#00ff80"),
-            ("ENGINES",  "LIVE",     "#ff8c00"),
-            ("TOOLS",    "TOOLS",    AMBER_D),
-            ("ALL",      None,       AMBER),
-        ]
+        # Segmented pills inline with title.
+        # BACKTEST should be a pure research surface, without the old
+        # TOOLS/ALL cross-navigation noise.
+        if filter_group == "BACKTEST":
+            segments = []
+        else:
+            segments = [
+                ("BACKTEST", "BACKTEST", TILE_RESEARCH),
+                ("ENGINES",  "LIVE",     "#ff8c00"),
+                ("TOOLS",    "TOOLS",    AMBER_D),
+                ("ALL",      None,       AMBER),
+            ]
         for seg_label, grp, hue in segments:
             active = grp == filter_group
             fg = "#000000" if active else hue

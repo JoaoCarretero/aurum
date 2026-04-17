@@ -786,6 +786,7 @@ class FundingScanner:
         self._cache: list[FundingOpp] = []
         self._spot_cache: list[SpotPrice] = []
         self._last_scan: float = 0.0
+        self._last_spot_scan: float = 0.0
         self._cache_ttl: float = cache_ttl
         self._last_error: dict[str, str] = {}
         self._last_counts: dict[str, int] = {}
@@ -907,6 +908,10 @@ class FundingScanner:
 
     def scan_spot(self, force: bool = False) -> list[SpotPrice]:
         """Fetch spot prices from all spot venues."""
+        now = time.time()
+        with self._lock:
+            if not force and (now - self._last_spot_scan) < self._cache_ttl and self._spot_cache:
+                return list(self._spot_cache)
         all_spot: list[SpotPrice] = []
         with ThreadPoolExecutor(max_workers=len(SPOT_FETCHERS)) as ex:
             futures = {ex.submit(fn): name for name, fn in SPOT_FETCHERS.items()}
@@ -915,8 +920,10 @@ class FundingScanner:
                     all_spot.extend(fut.result())
                 except Exception as e:
                     log.warning("spot_scan: %s failed — %s", futures[fut], e)
-        self._spot_cache = all_spot
-        return all_spot
+        with self._lock:
+            self._spot_cache = all_spot
+            self._last_spot_scan = now
+        return list(all_spot)
 
     def basis_pairs(self, min_basis_bps: float = 10.0) -> list[dict]:
         """Spot-perp basis: (perp_mark - spot_price) / spot_price in bps."""

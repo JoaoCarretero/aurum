@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shlex
 import subprocess
 import sys
 import threading
@@ -123,18 +124,24 @@ class SiteRunner:
             return ("static", _FRAMEWORK_COMMANDS["static"](port))
         return ("unknown", "npm run dev")
 
-    def resolved_command(self) -> tuple[str, str]:
+    def resolved_command(self) -> tuple[str, list[str]]:
         """Apply user override / explicit framework selection / autodetect."""
         override = (self.config.get("command") or "").strip()
         if override:
             framework = self.config.get("framework", "custom") or "custom"
-            return (framework, override)
+            return (framework, self._split_command(override))
         framework = self.config.get("framework", "auto") or "auto"
         if framework == "auto":
-            return self.detect_framework()
+            framework, command = self.detect_framework()
+            return (framework, self._split_command(command))
         port = int(self.config.get("port", 3000) or 3000)
         builder = _FRAMEWORK_COMMANDS.get(framework, _FRAMEWORK_COMMANDS["custom"])
-        return (framework, builder(port))
+        return (framework, self._split_command(builder(port)))
+
+    def _split_command(self, command: str) -> list[str]:
+        posix = sys.platform != "win32"
+        parts = shlex.split(command, posix=posix)
+        return parts or [command]
 
     # ── LIFECYCLE ─────────────────────────────────────────────
     def is_running(self) -> bool:
@@ -167,7 +174,6 @@ class SiteRunner:
             encoding="utf-8",
             errors="replace",
             env=env,
-            shell=True,
         )
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -190,7 +196,7 @@ class SiteRunner:
             except Exception:
                 pass
 
-        header = f"▶ {command}\n"
+        header = f"▶ {subprocess.list2cmdline(command) if sys.platform == 'win32' else shlex.join(command)}\n"
         with self._lock:
             self.buffer.append(header)
             self.total_emitted += 1

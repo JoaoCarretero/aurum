@@ -17,8 +17,10 @@ Design notes:
 from __future__ import annotations
 
 import gzip
+import io
+import json
 import os
-import pickle
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -37,8 +39,30 @@ def reads_disabled() -> bool:
     return os.environ.get("AURUM_NO_CACHE", "").strip() not in ("", "0", "false", "False")
 
 
+def _serialize_frame(df: pd.DataFrame) -> str:
+    payload = {"frame": json.loads(df.to_json(orient="table", date_format="iso"))}
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def load_frame(path: Path) -> Optional[pd.DataFrame]:
+    """Load a cache dataframe from disk, returning None on corruption."""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        frame = payload.get("frame")
+        if frame is None:
+            return None
+        df = pd.read_json(io.StringIO(json.dumps(frame)), orient="table")
+        if "time" in df.columns:
+            df["time"] = pd.to_datetime(df["time"], utc=False)
+        return df
+    except Exception:
+        return None
+
+
 def read(symbol: str, interval: str, n_candles: int,
-         futures: bool, end_time_ms: Optional[int] = None) -> Optional[pd.DataFrame]:
+         futures: bool, end_time_ms: Optional[int] = None,
+         max_age_seconds: Optional[float] = None) -> Optional[pd.DataFrame]:
     """Return the last n_candles from cache, or None if insufficient.
 
     If end_time_ms is provided, slice the cached frame to rows whose
@@ -50,11 +74,14 @@ def read(symbol: str, interval: str, n_candles: int,
     p = _path(symbol, interval, futures)
     if not p.exists():
         return None
-    try:
-        with gzip.open(p, "rb") as f:
-            df = pickle.load(f)
-    except Exception:
-        return None
+    if end_time_ms is None and max_age_seconds is not None:
+        try:
+            age_s = max(0.0, time.time() - os.path.getmtime(p))
+        except OSError:
+            return None
+        if age_s > max_age_seconds:
+            return None
+    df = load_frame(p)
     if df is None:
         return None
     if end_time_ms is not None:
@@ -74,11 +101,7 @@ def write(symbol: str, interval: str, df: pd.DataFrame,
     p = _path(symbol, interval, futures)
     existing = None
     if p.exists():
-        try:
-            with gzip.open(p, "rb") as f:
-                existing = pickle.load(f)
-        except Exception:
-            existing = None
+        existing = load_frame(p)
     if existing is not None and not existing.empty:
         merged = pd.concat([existing, df], ignore_index=True)
         merged = (merged.drop_duplicates("time")
@@ -88,8 +111,8 @@ def write(symbol: str, interval: str, df: pd.DataFrame,
         merged = df.copy()
     tmp = p.with_suffix(p.suffix + ".tmp")
     try:
-        with gzip.open(tmp, "wb") as f:
-            pickle.dump(merged, f, protocol=pickle.HIGHEST_PROTOCOL)
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            f.write(_serialize_frame(merged))
         os.replace(tmp, p)
         return True
     except Exception:

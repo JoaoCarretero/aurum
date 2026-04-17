@@ -17,6 +17,7 @@ from api.routes import (
     benchmark,
     deposit,
     equity_curve,
+    refresh,
     get_account,
     open_positions,
     per_engine_performance,
@@ -25,7 +26,9 @@ from api.routes import (
     trade_history,
     trading_status,
     withdraw,
+    RefreshRequest,
 )
+from api.auth import create_token, decode_token
 
 
 @pytest.fixture
@@ -117,6 +120,23 @@ def test_get_account_exposes_pending_and_available_balance(nexus_db):
     assert payload["pnl"] == 650.0
 
 
+def test_get_account_hides_global_allocations_from_non_admin(nexus_db):
+    conn = models.get_conn()
+    try:
+        conn.execute(
+            "UPDATE users SET role = 'viewer' WHERE id = 1"
+        )
+        conn.execute(
+            "INSERT INTO engine_state (engine, status, fitness_score) VALUES ('janestreet', 'running', 1.5)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    payload = asyncio.run(get_account(user={"id": 1, "role": "viewer"}))
+    assert payload["allocations"] == []
+
+
 def test_trading_status_normalizes_proc_and_db_engine_keys(nexus_db, monkeypatch):
     conn = models.get_conn()
     try:
@@ -163,6 +183,20 @@ def test_start_and_stop_engine_accept_canonical_names(nexus_db, monkeypatch):
     finally:
         conn.close()
     assert dict(row) == {"engine": "janestreet", "status": "stopped"}
+
+
+def test_refresh_reloads_user_role_from_db(nexus_db):
+    token = create_token({"sub": 1, "email": "u@x", "role": "admin"})
+    conn = models.get_conn()
+    try:
+        conn.execute("UPDATE users SET role = 'viewer' WHERE id = 1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    payload = asyncio.run(refresh(RefreshRequest(token=token)))
+    refreshed = decode_token(payload["token"])
+    assert refreshed["role"] == "viewer"
 
 
 @pytest.mark.parametrize(

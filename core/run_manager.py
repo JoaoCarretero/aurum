@@ -20,7 +20,10 @@ Directory layout:
 import hashlib
 import json
 import logging
+import os
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +35,8 @@ from core.persistence import atomic_write_json
 # ---------------------------------------------------------------------------
 RUNS_DIR = DATA_DIR / "runs"
 INDEX_PATH = RUN_INDEX_PATH
+INDEX_LOCK_PATH = INDEX_PATH.with_suffix(INDEX_PATH.suffix + ".lock")
+_INDEX_LOCK = threading.Lock()
 
 
 # ── TeeLogger ──────────────────────────────────────────────────────────────
@@ -302,6 +307,138 @@ def _load_index() -> list:
         return data if isinstance(data, list) else []
     except (json.JSONDecodeError, OSError):
         return []
+
+
+class _FileLock:
+    def __init__(self, path: Path, timeout_s: float = 10.0, poll_s: float = 0.05):
+        self.path = Path(path)
+        self.timeout_s = timeout_s
+        self.poll_s = poll_s
+        self.fd: int | None = None
+
+    def __enter__(self):
+        deadline = time.time() + self.timeout_s
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        while True:
+            try:
+                self.fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                os.write(self.fd, str(os.getpid()).encode("ascii", errors="ignore"))
+                return self
+            except FileExistsError:
+                if time.time() >= deadline:
+                    raise TimeoutError(f"timed out waiting for index lock: {self.path}")
+                time.sleep(self.poll_s)
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            finally:
+                self.fd = None
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+class _IndexLockContext:
+    def __enter__(self):
+        _INDEX_LOCK.acquire()
+        self._file_lock = _FileLock(INDEX_LOCK_PATH)
+        self._file_lock.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self._file_lock.__exit__(exc_type, exc, tb)
+        finally:
+            _INDEX_LOCK.release()
+
+
+def _index_lock():
+    return _IndexLockContext()
+
+
+def create_run_dir(engine_name: str = "citadel") -> tuple[str, Path]:
+    """Create a unique timestamped run directory under data/runs/."""
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    for suffix_idx in range(1000):
+        suffix = "" if suffix_idx == 0 else f"_{suffix_idx:03d}"
+        run_id = f"{engine_name}_{stamp}{suffix}"
+        run_dir = RUNS_DIR / run_id
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+            return run_id, run_dir
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"could not allocate unique run directory for {engine_name} at {stamp}")
+
+
+def append_to_index(run_dir, summary, config, overfit_results=None):
+    """Append this run to data/index.json with process-safe locking."""
+    run_dir = Path(run_dir)
+    raw_id = run_dir.name
+
+    s = summary if isinstance(summary, dict) else {}
+    _inst = str(s.get("engine") or "").strip()
+    _parent = run_dir.parent.name.lower()
+    _ENG_TO_SLUG = {
+        "CITADEL": "citadel", "BRIDGEWATER": "bridgewater",
+        "JUMP": "jump", "DE SHAW": "deshaw", "RENAISSANCE": "renaissance",
+        "MILLENNIUM": "millennium", "TWO SIGMA": "twosigma",
+        "AQR": "aqr", "JANE STREET": "janestreet",
+        "KEPOS": "kepos", "GRAHAM": "graham", "MEDALLION": "medallion",
+    }
+    _PARENT_TO_SLUG = {
+        "bridgewater": "bridgewater", "jump": "jump", "deshaw": "deshaw",
+        "renaissance": "renaissance", "millennium": "millennium",
+        "twosigma": "twosigma", "aqr": "aqr", "janestreet": "janestreet",
+        "kepos": "kepos", "graham": "graham", "medallion": "medallion",
+        "runs": "citadel",
+    }
+    engine_slug = (
+        _ENG_TO_SLUG.get(_inst.upper())
+        or _PARENT_TO_SLUG.get(_parent)
+        or raw_id.rsplit("_", 2)[0] if "_" in raw_id else "unknown"
+    )
+    run_id = raw_id if raw_id.startswith(f"{engine_slug}_") else f"{engine_slug}_{raw_id}"
+
+    config_json = json.dumps(config, sort_keys=True, default=str)
+    config_hash = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+    entry = {
+        "run_id":       run_id,
+        "engine":       engine_slug,
+        "timestamp":    datetime.now().isoformat(),
+        "interval":     s.get("interval") or config.get("INTERVAL") or config.get("ENTRY_TF"),
+        "period_days":  s.get("period_days") or config.get("SCAN_DAYS"),
+        "basket":       s.get("basket") or config.get("BASKET_EFFECTIVE") or "default",
+        "n_symbols":    s.get("n_symbols"),
+        "n_candles":    s.get("n_candles") or config.get("N_CANDLES"),
+        "n_trades":     s.get("n_trades"),
+        "win_rate":     s.get("win_rate"),
+        "pnl":          s.get("pnl") or s.get("total_pnl"),
+        "roi_pct":      s.get("roi_pct") or s.get("roi"),
+        "sharpe":       s.get("sharpe"),
+        "sortino":      s.get("sortino"),
+        "max_dd_pct":   s.get("max_dd_pct") or s.get("max_dd"),
+        "overfit_pass": None,
+        "overfit_warn": None,
+        "config_hash":  config_hash,
+    }
+    if overfit_results and isinstance(overfit_results, dict):
+        entry["overfit_pass"] = overfit_results.get("passed")
+        entry["overfit_warn"] = overfit_results.get("warnings")
+
+    INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _index_lock():
+        index = _load_index()
+        index.append(entry)
+        try:
+            atomic_write_json(INDEX_PATH, index)
+        except OSError:
+            with open(INDEX_PATH, "w", encoding="utf-8") as f:
+                json.dump(index, f, ensure_ascii=False, indent=2, default=str)
 
 
 # ── 6. list_runs ───────────────────────────────────────────────────────────

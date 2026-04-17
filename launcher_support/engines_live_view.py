@@ -15,6 +15,7 @@ Spec: docs/superpowers/specs/2026-04-16-engines-live-cockpit-design.md
 from __future__ import annotations
 
 import json
+import os
 import tkinter as tk
 from pathlib import Path
 from typing import Literal
@@ -131,6 +132,32 @@ _PROC_TO_SLUG: dict[str, str] = {
     "graham":      "graham",
 }
 
+_ENGINE_DIR_MAP: dict[str, str] = {
+    "citadel": "runs",
+}
+
+
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _uptime_seconds(proc: dict) -> float | None:
+    for key in ("uptime_seconds", "uptime_s", "uptime"):
+        value = _safe_float(proc.get(key))
+        if value is not None:
+            return value
+    started = proc.get("started")
+    if not started:
+        return None
+    try:
+        from datetime import datetime as _dt
+        return (_dt.now() - _dt.fromisoformat(str(started))).total_seconds()
+    except Exception:
+        return None
+
 
 def running_slugs_from_procs(procs: list[dict]) -> dict[str, dict]:
     """Filter live proc-manager rows into {slug: proc_row}.
@@ -232,6 +259,17 @@ def render(launcher, parent, *, on_escape) -> dict:
 
     _kb("<KeyPress-m>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
     _kb("<KeyPress-M>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
+    _kb("<Up>", lambda _e=None: _move_selection(state, -1))
+    _kb("<Down>", lambda _e=None: _move_selection(state, 1))
+    _kb("<Left>", lambda _e=None: _move_live_selection(state, -1))
+    _kb("<Right>", lambda _e=None: _move_live_selection(state, 1))
+    _kb("<Return>", lambda _e=None: _activate_selection(state, launcher))
+    _kb("<KeyPress-l>", lambda _e=None: _open_selected_log(state, launcher))
+    _kb("<KeyPress-L>", lambda _e=None: _open_selected_log(state, launcher))
+    _kb("<KeyPress-s>", lambda _e=None: _stop_selected_live(state, launcher))
+    _kb("<KeyPress-S>", lambda _e=None: _stop_selected_live(state, launcher))
+    _kb("<KeyPress-b>", lambda _e=None: _open_selected_backtest(state, launcher))
+    _kb("<KeyPress-B>", lambda _e=None: _open_selected_backtest(state, launcher))
 
     refresh()
     return {"refresh": refresh, "cleanup": cleanup, "set_mode": set_mode}
@@ -239,6 +277,16 @@ def render(launcher, parent, *, on_escape) -> dict:
 
 def _build_header(parent, launcher, state) -> tk.Frame:
     h = tk.Frame(parent, bg=BG)
+    brand = tk.Frame(h, bg=BG)
+    brand.pack(side="left", padx=(0, 12))
+    logo = tk.Canvas(brand, width=18, height=18, bg=BG, highlightthickness=0)
+    logo.pack(side="left", padx=(0, 6))
+    try:
+        logo.after(10, lambda: launcher._draw_aurum_logo(logo, 9, 9, scale=5, tag="engines-live"))
+    except Exception:
+        pass
+    tk.Label(brand, text="AURUM", font=(FONT, 8, "bold"),
+             fg=WHITE, bg=BG).pack(side="left", padx=(0, 10))
     tk.Frame(h, bg=AMBER, width=3, height=22).pack(side="left", padx=(0, 8))
     tk.Label(h, text="ENGINES", font=(FONT, 12, "bold"),
              fg=AMBER, bg=BG).pack(side="left", padx=(0, 14))
@@ -257,6 +305,9 @@ def _build_header(parent, launcher, state) -> tk.Frame:
 
     right = tk.Frame(h, bg=BG)
     right.pack(side="right")
+    state["desk_lbl"] = tk.Label(right, text="", font=(FONT, 6, "bold"),
+                                 fg=DIM2, bg=BG)
+    state["desk_lbl"].pack(side="right", padx=(8, 0))
     state["counts_lbl"] = tk.Label(right, text="", font=(FONT, 7, "bold"),
                                     fg=DIM, bg=BG)
     state["counts_lbl"].pack(side="right", padx=(8, 0))
@@ -275,6 +326,9 @@ def _refresh_header(state):
             pill.configure(fg=BG, bg=color)
         else:
             pill.configure(fg=color, bg=BG3)
+    desk_lbl = state.get("desk_lbl")
+    if desk_lbl is not None:
+        desk_lbl.configure(text=f"DESK {state['mode'].upper()}")
     rule = state.get("header_rule")
     if rule is not None:
         rule.configure(bg=(RED if state["mode"] == "live" else BORDER))
@@ -295,7 +349,7 @@ def _refresh_footer(state):
     selected = state.get("selected_bucket")
     hints = ["ESC main", "▲▼ select"]
     if selected == "LIVE":
-        hints += ["S stop", "L log"]
+        hints += ["◄► fleet", "S stop", "L log"]
     elif selected == "READY":
         hints += ["ENTER run"]
     elif selected == "RESEARCH":
@@ -337,6 +391,13 @@ def _render_master_list(state, launcher):
             ready_items.append((slug, meta))
         else:
             research_items.append((slug, meta))
+
+    state["live_running_slugs"] = [slug for slug, _meta, _proc in live_items]
+    state["ordered_items"] = (
+        [(slug, "LIVE") for slug, _meta, _proc in live_items] +
+        [(slug, "READY") for slug, _meta in ready_items] +
+        [(slug, "RESEARCH") for slug, _meta in research_items]
+    )
 
     # Scrollable container
     canvas = tk.Canvas(host, bg=BG, highlightthickness=0)
@@ -401,6 +462,72 @@ def _select_slug(state, slug, bucket):
     state["selected_slug"] = slug
     state["selected_bucket"] = bucket
     state["refresh"]()
+
+
+def _move_selection(state, delta):
+    ordered = state.get("ordered_items") or []
+    if not ordered:
+        return
+    current = (state.get("selected_slug"), state.get("selected_bucket"))
+    try:
+        idx = ordered.index(current)
+    except ValueError:
+        idx = 0
+    slug, bucket = ordered[(idx + delta) % len(ordered)]
+    _select_slug(state, slug, bucket)
+
+
+def _move_live_selection(state, delta):
+    running = state.get("live_running_slugs") or []
+    if state.get("selected_bucket") != "LIVE" or not running:
+        return
+    slug = state.get("selected_slug")
+    try:
+        idx = running.index(slug)
+    except ValueError:
+        idx = 0
+    _select_slug(state, running[(idx + delta) % len(running)], "LIVE")
+
+
+def _activate_selection(state, launcher):
+    slug = state.get("selected_slug")
+    bucket = state.get("selected_bucket")
+    if not slug or not bucket:
+        return
+    from config.engines import ENGINES
+    meta = ENGINES.get(slug, {})
+    if bucket == "READY":
+        _run_engine(launcher, slug, meta, state)
+    elif bucket == "RESEARCH":
+        _go_to_backtest(launcher, slug)
+
+
+def _selected_proc(state):
+    if state.get("selected_bucket") != "LIVE":
+        return None
+    try:
+        from core.proc import list_procs
+        running = running_slugs_from_procs(list_procs())
+    except Exception:
+        return None
+    return running.get(state.get("selected_slug"))
+
+
+def _open_selected_log(state, launcher):
+    proc = _selected_proc(state)
+    if proc:
+        _open_full_log(launcher, proc)
+
+
+def _stop_selected_live(state, launcher):
+    proc = _selected_proc(state)
+    if proc:
+        _stop_engine(launcher, state, proc)
+
+
+def _open_selected_backtest(state, launcher):
+    if state.get("selected_bucket") == "RESEARCH":
+        _go_to_backtest(launcher, state.get("selected_slug"))
 
 
 def _row_base(parent, slug, state, is_selected):
@@ -570,82 +697,339 @@ def _view_code(launcher, script_path):
         pass
 
 
-# Config defaults for the READY skin's inline config row.
-_PERIOD_OPTS   = [("30D", "30"), ("90D", "90"), ("180D", "180"), ("365D", "365")]
-_BASKET_OPTS   = [("DEFAULT", ""), ("TOP12", "2"), ("DEFI", "3"), ("L1", "4"),
-                  ("L2", "5"), ("AI", "6"), ("MEME", "7"), ("MAJORS", "8"),
-                  ("BLUECHIP", "9")]
 _LEVERAGE_OPTS = [("1x", "1.0"), ("2x", "2.0"), ("3x", "3.0"), ("5x", "5.0")]
+
+
+def _latest_run_dir(slug: str) -> Path | None:
+    root = Path(__file__).resolve().parent.parent / "data"
+    eng_dir = root / _ENGINE_DIR_MAP.get(slug, slug)
+    if not eng_dir.is_dir():
+        return None
+    try:
+        runs = sorted([d for d in eng_dir.iterdir() if d.is_dir()],
+                      key=lambda d: d.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    return runs[0] if runs else None
+
+
+def _load_positions_for_slug(slug: str) -> list[dict]:
+    run_dir = _latest_run_dir(slug)
+    if run_dir is None:
+        return []
+    path = run_dir / "state" / "positions.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return [{"symbol": k, **(v if isinstance(v, dict) else {"value": v})} for k, v in data.items()]
+    return []
+
+
+def _resolve_log_path(slug: str, proc: dict) -> Path | None:
+    for key in ("log", "log_path", "log_file"):
+        val = proc.get(key)
+        if val:
+            p = Path(val)
+            if p.exists():
+                return p
+    run_dir = _latest_run_dir(slug)
+    if run_dir is None:
+        return None
+    for cand in (run_dir / "logs" / "live.log", run_dir / "logs" / "engine.log", run_dir / "log.txt"):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _read_log_tail(path: Path | None, n: int = 18) -> list[str]:
+    if path is None:
+        return []
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore").splitlines()[-n:]
+    except OSError:
+        return []
+
+
+def _runtime_snapshot(slug: str, proc: dict) -> dict:
+    positions = _load_positions_for_slug(slug)
+    log_path = _resolve_log_path(slug, proc)
+    tail = _read_log_tail(log_path)
+    pnl = proc.get("pnl")
+    if pnl is None:
+        vals = [_safe_float(p.get("pnl", p.get("unrealized_pnl"))) for p in positions]
+        vals = [v for v in vals if v is not None]
+        pnl = sum(vals) if vals else None
+    return {
+        "positions": positions,
+        "positions_count": len(positions),
+        "log_path": log_path,
+        "tail": tail,
+        "pnl": pnl,
+        "last_signal": proc.get("last_signal") or (tail[-1] if tail else "-"),
+    }
+
+
+def _pnl_color(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return WHITE
+    return GREEN if f > 0 else RED if f < 0 else WHITE
+
+
+def _desk_metric(parent, label, value, color):
+    box = tk.Frame(parent, bg=BG3, highlightbackground=BORDER, highlightthickness=1)
+    box.pack(side="left", fill="x", expand=True, padx=(0, 4))
+    tk.Label(box, text=label, fg=DIM, bg=BG3, font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(5, 1))
+    tk.Label(box, text=str(value), fg=color, bg=BG3, font=(FONT, 8, "bold")).pack(anchor="w", padx=8, pady=(0, 5))
+
+
+def _mode_bank_snapshot(launcher) -> dict[str, dict]:
+    snap: dict[str, dict] = {}
+    try:
+        from core.portfolio_monitor import PortfolioMonitor
+        paper = PortfolioMonitor.paper_state_load()
+        snap["paper"] = {
+            "status": "editable",
+            "detail": f"${float(paper.get('current_balance', 0) or 0):,.2f}",
+        }
+    except Exception:
+        snap["paper"] = {"status": "editable", "detail": "N/A"}
+
+    pm = None
+    try:
+        getter = getattr(launcher, "_get_portfolio_monitor", None)
+        if callable(getter):
+            pm = getter()
+    except Exception:
+        pm = None
+
+    for mode in ("demo", "testnet", "live"):
+        has_keys = False
+        try:
+            if pm is not None:
+                has_keys = bool(pm.has_keys(mode))
+        except Exception:
+            has_keys = False
+        snap[mode] = {
+            "status": "keys" if has_keys else "offline",
+            "detail": "BINANCE" if has_keys else "NO KEYS",
+        }
+    return snap
+
+
+def _open_paper_editor(launcher):
+    fn = getattr(launcher, "_dash_paper_edit_dialog", None)
+    if callable(fn):
+        fn()
+
+
+def _render_mode_bank(parent, launcher, active_mode: str, *, allow_paper_edit: bool = False):
+    snap = _mode_bank_snapshot(launcher)
+    box = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+    box.pack(fill="x", padx=12, pady=(0, 8))
+    head = tk.Frame(box, bg=BG2)
+    head.pack(fill="x", padx=10, pady=(8, 4))
+    tk.Label(head, text="ENVIRONMENT BANK", fg=AMBER_D, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(head, text="PAPER / DEMO / TESTNET / LIVE", fg=DIM2, bg=BG2,
+             font=(FONT, 6)).pack(side="right")
+    row = tk.Frame(box, bg=BG2)
+    row.pack(fill="x", padx=8, pady=(0, 8))
+    for mode in _MODE_ORDER:
+        item = snap.get(mode, {})
+        active = mode == active_mode
+        color = _MODE_COLORS[mode]
+        status = str(item.get("status", "-")).upper()
+        detail = str(item.get("detail", "-"))
+        card = tk.Frame(row, bg=(PANEL if active else BG3),
+                        highlightbackground=(color if active else BORDER),
+                        highlightthickness=1)
+        card.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        tk.Label(card, text=mode.upper(), fg=(color if active else DIM2),
+                 bg=card["bg"], font=(FONT, 7, "bold")).pack(anchor="w", padx=8, pady=(6, 1))
+        tk.Label(card, text=detail, fg=WHITE, bg=card["bg"],
+                 font=(FONT, 8, "bold")).pack(anchor="w", padx=8)
+        tk.Label(card, text=status, fg=DIM, bg=card["bg"],
+                 font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(1, 6))
+
+    if allow_paper_edit and active_mode == "paper":
+        actions = tk.Frame(box, bg=BG2)
+        actions.pack(fill="x", padx=10, pady=(0, 8))
+        _action_btn(actions, "EDIT PAPER BALANCE", AMBER_B, lambda: _open_paper_editor(launcher))
+
+
+def _render_live_book(parent, state, running):
+    if not running:
+        return
+    box = tk.Frame(parent, bg=BG2, highlightbackground=BORDER_H, highlightthickness=1)
+    box.pack(fill="x", padx=12, pady=(12, 0))
+    head = tk.Frame(box, bg=BG2)
+    head.pack(fill="x", padx=10, pady=(8, 4))
+    tk.Label(head, text="LIVE FLEET", fg=AMBER_B, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(head, text=f"{len(running)} ACTIVE", fg=DIM2, bg=BG2,
+             font=(FONT, 6, "bold")).pack(side="right")
+    tk.Label(box, text="LEFT / RIGHT SWITCH THE ACTIVE ENGINE ON DESK",
+             fg=DIM2, bg=BG2, font=(FONT, 6)).pack(anchor="w", padx=10, pady=(0, 4))
+    grid = tk.Frame(box, bg=BG2)
+    grid.pack(fill="x", padx=8, pady=(0, 8))
+    cols = 3
+    for idx, (slug, proc) in enumerate(running.items()):
+        snap = _runtime_snapshot(slug, proc)
+        active = state.get("selected_slug") == slug
+        card = tk.Frame(grid, bg=(PANEL if active else BG3),
+                        highlightbackground=(AMBER_B if active else BORDER),
+                        highlightthickness=1, cursor="hand2")
+        card.grid(row=idx // cols, column=idx % cols, sticky="ew", padx=3, pady=3)
+        grid.grid_columnconfigure(idx % cols, weight=1)
+        inner = tk.Frame(card, bg=card["bg"])
+        inner.pack(fill="both", expand=True, padx=8, pady=6)
+        tk.Label(inner, text=slug.upper(), fg=WHITE, bg=card["bg"], font=(FONT, 8, "bold")).pack(anchor="w")
+        tk.Label(inner, text=f"{str(proc.get('engine_mode') or proc.get('mode') or 'paper').upper()}  ·  {format_uptime(seconds=_uptime_seconds(proc))}",
+                 fg=DIM2, bg=card["bg"], font=(FONT, 6)).pack(anchor="w", pady=(1, 0))
+        tk.Label(inner, text=f"{snap['positions_count']} OPEN  ·  {_fmt_pnl(snap['pnl'])}",
+                 fg=_pnl_color(snap["pnl"]), bg=card["bg"], font=(FONT, 7, "bold")).pack(anchor="w", pady=(3, 0))
+        for w in (card, inner) + tuple(inner.winfo_children()):
+            w.bind("<Button-1>", lambda _e, s=slug: _select_slug(state, s, "LIVE"))
+
+
+def _render_positions_panel(parent, column, positions):
+    box = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+    box.grid(row=0, column=column, sticky="nsew", padx=(0, 4) if column == 0 else (4, 0))
+    tk.Label(box, text="POSITIONS", fg=AMBER_D, bg=BG2, font=(FONT, 7, "bold")).pack(anchor="w", padx=10, pady=(8, 4))
+    if not positions:
+        tk.Label(box, text="NO OPEN BOOK", fg=DIM, bg=BG2, font=(FONT, 8)).pack(anchor="w", padx=10, pady=(0, 8))
+        return
+    hdr = tk.Frame(box, bg=BG3)
+    hdr.pack(fill="x", padx=10)
+    for text, width in (("SYMBOL", 9), ("SIDE", 7), ("ENTRY", 10), ("P/L", 10)):
+        tk.Label(hdr, text=text, fg=DIM, bg=BG3, font=(FONT, 6, "bold"),
+                 width=width, anchor="w", padx=3, pady=4).pack(side="left")
+    body = tk.Frame(box, bg=BG2)
+    body.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    for p in positions[:7]:
+        row = tk.Frame(body, bg=BG2)
+        row.pack(fill="x")
+        side = str(p.get("side", p.get("direction", "?"))).upper()
+        for txt, width, color in (
+            (str(p.get("symbol", "?")), 9, WHITE),
+            (side, 7, GREEN if side == "LONG" else RED if side == "SHORT" else WHITE),
+            (str(p.get("entry", p.get("entry_price", "-"))), 10, AMBER_B),
+            (_fmt_pnl(p.get("pnl", p.get("unrealized_pnl"))), 10, _pnl_color(p.get("pnl", p.get("unrealized_pnl")))),
+        ):
+            tk.Label(row, text=txt, fg=color, bg=BG2, font=(FONT, 8),
+                     width=width, anchor="w", padx=3, pady=2).pack(side="left")
+
+
+def _render_log_panel(parent, column, state, launcher, proc, snap):
+    box = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+    box.grid(row=0, column=column, sticky="nsew", padx=(0, 4) if column == 0 else (4, 0))
+    head = tk.Frame(box, bg=BG2)
+    head.pack(fill="x", padx=10, pady=(8, 4))
+    tk.Label(head, text="LOG", fg=AMBER_D, bg=BG2, font=(FONT, 7, "bold")).pack(side="left")
+    if snap["log_path"] is not None:
+        tk.Label(head, text=snap["log_path"].name, fg=DIM2, bg=BG2,
+                 font=(FONT, 6)).pack(side="left", padx=(8, 0))
+    _action_btn(head, "OPEN FULL", DIM, lambda: _open_full_log(launcher, proc))
+    log_box = tk.Text(box, height=16, bg=BG, fg=WHITE, font=(FONT, 8),
+                      wrap="none", highlightbackground=BORDER, highlightthickness=0,
+                      state="disabled")
+    log_box.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    state["log_box"] = log_box
+    _schedule_log_tail(state, launcher, proc)
 
 
 def _render_detail_ready(parent, slug, meta, state, launcher):
     name = meta.get("display", slug.upper())
     desc = meta.get("desc", "")
+    mode = state["mode"]
+    run_color = _MODE_COLORS[mode]
 
     head = tk.Frame(parent, bg=PANEL)
     head.pack(fill="x", padx=12, pady=(10, 4))
     tk.Label(head, text=name, fg=AMBER, bg=PANEL,
              font=(FONT, 11, "bold")).pack(side="left")
-    tk.Label(head, text=" READY ", fg=BG, bg=GREEN,
+    tk.Label(head, text=" DEPLOY READY ", fg=BG, bg=GREEN,
              font=(FONT, 7, "bold"), padx=6, pady=2).pack(side="right")
 
     if desc:
-        tk.Label(parent, text=desc, fg=DIM, bg=PANEL,
-                 font=(FONT, 8), anchor="w", justify="left",
-                 wraplength=520).pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(parent, text=desc.upper(), fg=DIM2, bg=PANEL,
+                 font=(FONT, 7), anchor="w", justify="left",
+                 wraplength=520).pack(fill="x", padx=12, pady=(0, 6))
 
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
 
+    deck = tk.Frame(parent, bg=BG2, highlightbackground=BORDER_H, highlightthickness=1)
+    deck.pack(fill="x", padx=12, pady=(10, 8))
+    top = tk.Frame(deck, bg=BG2)
+    top.pack(fill="x", padx=10, pady=(8, 4))
+    tk.Label(top, text="DEPLOY DECK", fg=AMBER_B, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(top, text=f"NEXT {mode.upper()}", fg=run_color, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="right")
+    facts = tk.Frame(deck, bg=BG2)
+    facts.pack(fill="x", padx=8, pady=(0, 8))
+    _desk_metric(facts, "RUNNER", "VALIDATED", GREEN)
+    _desk_metric(facts, "ROLE", "LAB", WHITE)
+    _desk_metric(facts, "STACK", "LIVE", AMBER_B)
+    _desk_metric(facts, "RISK", mode.upper(), run_color)
+
+    run = tk.Label(parent, text=f"  DEPLOY IN {mode.upper()}  ",
+                   fg=BG, bg=run_color, font=(FONT, 11, "bold"),
+                   cursor="hand2", padx=8, pady=10)
+    run.pack(fill="x", padx=12, pady=(0, 8))
+    run.bind("<Button-1>", lambda _e: _run_engine(launcher, slug, meta, state))
+
+    _render_mode_bank(parent, launcher, mode, allow_paper_edit=True)
+
     cfg_store = state.setdefault("config", {})
-    cfg = cfg_store.setdefault(slug, {"period": "90", "basket": "", "leverage": "2.0"})
-
-    cfg_frame = tk.Frame(parent, bg=PANEL)
-    cfg_frame.pack(fill="x", padx=12, pady=(10, 8))
-    tk.Label(cfg_frame, text="CONFIG", fg=AMBER_D, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(anchor="w", pady=(0, 4))
-    _config_row(cfg_frame, "Period",   _PERIOD_OPTS,   cfg, "period", state)
-    _config_row(cfg_frame, "Basket",   _BASKET_OPTS,   cfg, "basket", state)
-    _config_row(cfg_frame, "Leverage", _LEVERAGE_OPTS, cfg, "leverage", state)
-
-    mode = state["mode"]
-    run_color = _MODE_COLORS[mode]
-    run_frame = tk.Frame(parent, bg=PANEL)
-    run_frame.pack(fill="x", padx=12, pady=(8, 10))
-    btn = tk.Label(
-        run_frame,
-        text=f"  RUN IN {mode.upper()} MODE  ",
-        fg=BG, bg=run_color,
-        font=(FONT, 11, "bold"),
-        cursor="hand2", padx=8, pady=10,
-    )
-    btn.pack(fill="x")
-    btn.bind("<Button-1>",
-             lambda _e: _run_engine(launcher, slug, meta, state))
-
-    actions = tk.Frame(parent, bg=PANEL)
-    actions.pack(fill="x", padx=12, pady=(0, 12))
-    _action_btn(actions, "VIEW CODE", DIM,
-                lambda: _view_code(launcher, meta.get("script", "")))
-    _action_btn(actions, "PAST RUNS", DIM,
-                lambda: _past_runs(launcher, slug))
-
-
-def _config_row(parent, label, opts, cfg_dict, cfg_key, state):
-    row = tk.Frame(parent, bg=PANEL)
-    row.pack(fill="x", pady=1)
-    tk.Label(row, text=f"  {label:<10}", fg=DIM, bg=PANEL,
-             font=(FONT, 8)).pack(side="left")
-    for disp, val in opts:
-        active = cfg_dict.get(cfg_key) == val
-        fg = BG if active else DIM2
-        bg = AMBER if active else BG3
-        pill = tk.Label(row, text=f" {disp} ",
-                        fg=fg, bg=bg, font=(FONT, 7, "bold"),
+    cfg = cfg_store.setdefault(slug, {"leverage": "2.0"})
+    cfg_frame = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+    cfg_frame.pack(fill="x", padx=12, pady=(0, 8))
+    top_cfg = tk.Frame(cfg_frame, bg=BG2)
+    top_cfg.pack(fill="x", padx=10, pady=(8, 4))
+    tk.Label(top_cfg, text="EXECUTION PROFILE", fg=AMBER_D, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(top_cfg, text="ROUTE AUTO", fg=DIM2, bg=BG2,
+             font=(FONT, 6, "bold")).pack(side="right")
+    facts = tk.Frame(cfg_frame, bg=BG2)
+    facts.pack(fill="x", padx=8, pady=(0, 6))
+    _desk_metric(facts, "ACCOUNT", mode.upper(), run_color)
+    _desk_metric(facts, "ROUTING", "UNIFIED", WHITE)
+    _desk_metric(facts, "RISK", "DESK LIMITS", WHITE)
+    lev = tk.Frame(cfg_frame, bg=BG2)
+    lev.pack(fill="x", padx=10, pady=(0, 8))
+    tk.Label(lev, text="LEVERAGE", fg=DIM, bg=BG2,
+             font=(FONT, 7)).pack(side="left", padx=(0, 8))
+    for disp, val in _LEVERAGE_OPTS:
+        active = cfg.get("leverage") == val
+        pill = tk.Label(lev, text=f" {disp} ",
+                        fg=(BG if active else DIM2),
+                        bg=(AMBER if active else BG3),
+                        font=(FONT, 7, "bold"),
                         cursor="hand2", padx=4, pady=1)
         pill.pack(side="left", padx=(0, 3))
         pill.bind("<Button-1>",
-                  lambda _e, _v=val, _k=cfg_key, _d=cfg_dict, _s=state:
-                      _set_cfg(_d, _k, _v, _s))
+                  lambda _e, _v=val, _d=cfg, _s=state: _set_cfg(_d, "leverage", _v, _s))
+
+    mandate = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+    mandate.pack(fill="x", padx=12, pady=(0, 10))
+    tk.Label(mandate, text="MANDATE", fg=AMBER_D, bg=BG2,
+             font=(FONT, 7, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+    tk.Label(mandate, text="RESEARCH -> EXECUTION\nSIGNAL -> RISK GATE -> MARKET",
+             fg=DIM2, bg=BG2, font=(FONT, 8), anchor="w", justify="left").pack(fill="x", padx=10, pady=(0, 8))
+
+    actions = tk.Frame(parent, bg=PANEL)
+    actions.pack(fill="x", padx=12, pady=(0, 12))
+    _action_btn(actions, "VIEW CODE", DIM, lambda: _view_code(launcher, meta.get("script", "")))
+    _action_btn(actions, "PAST RUNS", DIM, lambda: _past_runs(launcher, slug))
 
 
 def _set_cfg(cfg_dict, key, val, state):
@@ -657,7 +1041,8 @@ def _set_cfg(cfg_dict, key, val, state):
 
 def _run_engine(launcher, slug, meta, state):
     mode = state["mode"]
-    cfg = (state.get("config") or {}).get(slug) or {}
+    raw_cfg = (state.get("config") or {}).get(slug) or {}
+    cfg = {"leverage": raw_cfg.get("leverage", "2.0")}
     name = meta.get("display", slug.upper())
     script = meta.get("script", "")
     desc = meta.get("desc", "")
@@ -674,7 +1059,6 @@ def _run_engine(launcher, slug, meta, state):
 
 
 def _confirm_live_modal(launcher, engine_name, *, on_confirm):
-    """Ritual modal for LIVE mode — user must type the engine name."""
     top = tk.Toplevel()
     top.title("LIVE EXECUTION")
     top.configure(bg=BG)
@@ -685,13 +1069,10 @@ def _confirm_live_modal(launcher, engine_name, *, on_confirm):
 
     tk.Label(top, text=f"LIVE EXECUTION — {engine_name}",
              fg=RED, bg=BG, font=(FONT, 10, "bold")).pack(pady=(14, 4))
-    tk.Label(
-        top,
-        text=(f"Você está prestes a ligar {engine_name} em modo LIVE.\n"
-              "Real money, real orders."),
-        fg=WHITE, bg=BG, font=(FONT, 8), justify="center",
-    ).pack(pady=(0, 10))
-    tk.Label(top, text=f"Digite  {engine_name}  pra confirmar:",
+    tk.Label(top, text=(f"Você está prestes a ligar {engine_name} em modo LIVE.\n"
+                        "REAL MONEY. REAL ORDERS."),
+             fg=WHITE, bg=BG, font=(FONT, 8), justify="center").pack(pady=(0, 10))
+    tk.Label(top, text=f"DIGITE {engine_name} PRA CONFIRMAR:",
              fg=DIM, bg=BG, font=(FONT, 8)).pack()
 
     var = tk.StringVar()
@@ -720,8 +1101,7 @@ def _confirm_live_modal(launcher, engine_name, *, on_confirm):
         ok = live_confirm_ok(engine_name=engine_name, user_input=var.get())
         if ok:
             confirm.configure(fg=BG, bg=RED, cursor="hand2")
-            confirm.bind("<Button-1>",
-                         lambda _e: (top.destroy(), on_confirm()))
+            confirm.bind("<Button-1>", lambda _e: (top.destroy(), on_confirm()))
         else:
             confirm.configure(fg=DIM2, bg=BG3, cursor="arrow")
             confirm.unbind("<Button-1>")
@@ -737,7 +1117,6 @@ def _past_runs(launcher, slug):
 
 def _render_detail_live(parent, slug, meta, state, launcher):
     name = meta.get("display", slug.upper())
-
     try:
         from core.proc import list_procs
         procs = list_procs()
@@ -745,8 +1124,13 @@ def _render_detail_live(parent, slug, meta, state, launcher):
         procs = []
     running = running_slugs_from_procs(procs)
     proc = running.get(slug, {})
+    snap = _runtime_snapshot(slug, proc)
     mode_key = (proc.get("engine_mode") or proc.get("mode") or "paper").lower()
     mode_color = _MODE_COLORS.get(mode_key, CYAN)
+    fleet = state.get("live_running_slugs") or []
+    fleet_pos = (fleet.index(slug) + 1) if slug in fleet else 1
+
+    _render_live_book(parent, state, running)
 
     head = tk.Frame(parent, bg=PANEL)
     head.pack(fill="x", padx=12, pady=(10, 4))
@@ -754,6 +1138,8 @@ def _render_detail_live(parent, slug, meta, state, launcher):
              font=(FONT, 11, "bold")).pack(side="left")
     right = tk.Frame(head, bg=PANEL)
     right.pack(side="right")
+    tk.Label(right, text=f"{fleet_pos}/{max(len(fleet), 1)}", fg=DIM2, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left", padx=(0, 8))
     tk.Label(right, text="●", fg=GREEN, bg=PANEL,
              font=(FONT, 9, "bold")).pack(side="left")
     tk.Label(right, text=f" {mode_key.upper()} ",
@@ -772,29 +1158,41 @@ def _render_detail_live(parent, slug, meta, state, launcher):
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(4, 0))
 
     kpis = tk.Frame(parent, bg=PANEL)
-    kpis.pack(fill="x", padx=12, pady=(10, 8))
-    _kpi_col(kpis, "PnL",         _fmt_pnl(proc.get("pnl")))
-    _kpi_col(kpis, "POSITIONS",   str(proc.get("positions") or 0))
-    _kpi_col(kpis, "TRADES",      str(proc.get("trades") or 0))
-    _kpi_col(kpis, "LAST SIGNAL", str(proc.get("last_signal") or "—")[:24])
+    kpis.pack(fill="x", padx=12, pady=(8, 6))
+    _kpi_col(kpis, "P/L",    _fmt_pnl(snap["pnl"]), _pnl_color(snap["pnl"]))
+    _kpi_col(kpis, "OPEN",   str(snap["positions_count"]), WHITE)
+    _kpi_col(kpis, "TRADES", str(proc.get("trades") or 0), WHITE)
+    _kpi_col(kpis, "PID",    str(proc.get("pid") or "-"), DIM2)
+    _kpi_col(kpis, "SIGNAL", str(snap["last_signal"])[:28], WHITE)
 
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
+    _render_mode_bank(parent, launcher, mode_key, allow_paper_edit=(mode_key == "paper"))
 
-    log_header = tk.Frame(parent, bg=PANEL)
-    log_header.pack(fill="x", padx=12, pady=(8, 2))
-    tk.Label(log_header, text="LOG TAIL", fg=AMBER_D, bg=PANEL,
+    ops = tk.Frame(parent, bg=BG2, highlightbackground=BORDER_H, highlightthickness=1)
+    ops.pack(fill="x", padx=12, pady=(0, 8))
+    top = tk.Frame(ops, bg=BG2)
+    top.pack(fill="x", padx=10, pady=(8, 4))
+    tk.Label(top, text="OPERATING MAP", fg=AMBER_B, bg=BG2,
              font=(FONT, 7, "bold")).pack(side="left")
-    _action_btn(log_header, "OPEN FULL", DIM,
-                lambda: _open_full_log(launcher, proc))
+    tk.Label(top, text="LAB -> LIVE", fg=mode_color, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="right")
+    facts = tk.Frame(ops, bg=BG2)
+    facts.pack(fill="x", padx=8, pady=(0, 6))
+    _desk_metric(facts, "MODE", mode_key.upper(), mode_color)
+    _desk_metric(facts, "UPTIME", format_uptime(seconds=_uptime_seconds(proc)), WHITE)
+    _desk_metric(facts, "DESK", f"{fleet_pos}/{max(len(fleet), 1)}", WHITE)
+    _desk_metric(facts, "RISK", f"{snap['positions_count']} BOOKS", WHITE)
+    _desk_metric(facts, "FEED", "ATTACHED" if snap["log_path"] else "OFFLINE",
+                 GREEN if snap["log_path"] else RED)
+    tk.Label(ops, text="BOOK · TELEMETRY · CONTROL", fg=DIM2, bg=BG2,
+             font=(FONT, 8)).pack(anchor="w", padx=10, pady=(0, 8))
 
-    log_box = tk.Text(parent, height=10, bg=BG2, fg=WHITE,
-                      font=(FONT, 8), wrap="none",
-                      highlightbackground=BORDER, highlightthickness=1,
-                      state="disabled")
-    log_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
-    state["log_box"] = log_box
-
-    _schedule_log_tail(state, launcher, proc)
+    lower = tk.Frame(parent, bg=PANEL)
+    lower.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+    lower.grid_columnconfigure(0, weight=40, uniform="lower")
+    lower.grid_columnconfigure(1, weight=60, uniform="lower")
+    lower.grid_rowconfigure(0, weight=1)
+    _render_positions_panel(lower, 0, snap["positions"])
+    _render_log_panel(lower, 1, state, launcher, proc, snap)
 
     actions = tk.Frame(parent, bg=PANEL)
     actions.pack(fill="x", padx=12, pady=(0, 12))
@@ -806,17 +1204,21 @@ def _render_detail_live(parent, slug, meta, state, launcher):
     _bind_hold_to_confirm(stop_btn,
                           on_confirm=lambda: _stop_engine(launcher, state, proc),
                           duration_ms=1500)
+    _action_btn(actions, "OPEN LOG", DIM,
+                lambda: _open_full_log(launcher, proc))
     _action_btn(actions, "REPORTS", DIM,
                 lambda: _past_runs(launcher, slug))
+    _action_btn(actions, "VIEW CODE", DIM,
+                lambda: _view_code(launcher, meta.get("script", "")))
 
 
-def _kpi_col(parent, label, value):
+def _kpi_col(parent, label, value, color=WHITE):
     col = tk.Frame(parent, bg=PANEL)
     col.pack(side="left", fill="x", expand=True)
     tk.Label(col, text=label, fg=DIM, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(anchor="w")
-    tk.Label(col, text=value, fg=WHITE, bg=PANEL,
-             font=(FONT, 10, "bold")).pack(anchor="w")
+             font=(FONT, 6, "bold")).pack(anchor="w")
+    tk.Label(col, text=value, fg=color, bg=PANEL,
+             font=(FONT, 8, "bold")).pack(anchor="w")
 
 
 def _fmt_pnl(v):
@@ -833,21 +1235,15 @@ def _schedule_log_tail(state, launcher, proc):
     box = state.get("log_box")
     if not box or not proc:
         return
-    log_path = proc.get("log") or proc.get("log_path")
-    if not log_path:
+    slug = state.get("selected_slug")
+    if not slug:
         return
-    try:
-        from pathlib import Path as _P
-        p = _P(log_path)
-        if p.exists():
-            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()[-15:]
-            box.configure(state="normal")
-            box.delete("1.0", "end")
-            box.insert("end", "\n".join(lines))
-            box.configure(state="disabled")
-            box.see("end")
-    except Exception:
-        pass
+    lines = _read_log_tail(_resolve_log_path(slug, proc), n=18)
+    box.configure(state="normal")
+    box.delete("1.0", "end")
+    box.insert("end", "\n".join(lines) if lines else "(no log available)")
+    box.configure(state="disabled")
+    box.see("end")
     try:
         aid = launcher.after(1000,
                              lambda: _schedule_log_tail(state, launcher, proc))
@@ -857,18 +1253,16 @@ def _schedule_log_tail(state, launcher, proc):
 
 
 def _open_full_log(launcher, proc):
-    log_path = proc.get("log") or proc.get("log_path")
+    log_path = proc.get("log") or proc.get("log_path") or proc.get("log_file")
     if not log_path:
         return
     try:
-        import os
         os.startfile(log_path)
     except Exception:
         pass
 
 
 def _bind_hold_to_confirm(widget, *, on_confirm, duration_ms):
-    """Fires on_confirm only if user holds MB1 for duration_ms."""
     tok = {"aid": None}
 
     def _down(_e=None):

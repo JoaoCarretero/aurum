@@ -18,6 +18,7 @@ from api.auth import (
     verify_password,
     create_token,
     decode_token,
+    get_current_user_from_token,
     get_current_user,
     require_admin,
 )
@@ -144,14 +145,14 @@ async def login(req: LoginRequest):
 async def refresh(req: RefreshRequest):
     """Refresh an existing token (returns a new one with extended expiry)."""
     try:
-        payload = decode_token(req.token)
+        user = get_current_user_from_token(req.token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     new_token = create_token({
-        "sub": payload["sub"],
-        "email": payload.get("email"),
-        "role": payload.get("role"),
+        "sub": user["id"],
+        "email": user.get("email"),
+        "role": user.get("role"),
     })
     return {"token": new_token}
 
@@ -180,13 +181,13 @@ async def get_account(user: dict = Depends(get_current_user)):
         available_balance = acct_dict["balance"] - pending_withdrawals
         pnl = acct_dict["balance"] - acct_dict["total_deposited"] + acct_dict["total_withdrawn"]
 
-        # Engine allocations from engine_state
-        engines = conn.execute("SELECT engine, status, fitness_score FROM engine_state").fetchall()
         allocations = []
-        for e in engines:
-            row = dict(e)
-            row["engine"] = _canonical_engine_key(row.get("engine", ""))
-            allocations.append(row)
+        if user.get("role") == "admin":
+            engines = conn.execute("SELECT engine, status, fitness_score FROM engine_state").fetchall()
+            for e in engines:
+                row = dict(e)
+                row["engine"] = _canonical_engine_key(row.get("engine", ""))
+                allocations.append(row)
 
         return {
             "balance": acct_dict["balance"],

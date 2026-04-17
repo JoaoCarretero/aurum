@@ -240,6 +240,13 @@ class TestRefreshCache:
         pm = PortfolioMonitor(keys_path=tmp_path / "missing.json")
         assert pm.get_cached("live") is None
 
+    def test_get_cached_returns_defensive_copy(self, tmp_path):
+        pm = PortfolioMonitor(keys_path=tmp_path / "missing.json")
+        snap = pm.refresh("testnet")
+        cached = pm.get_cached("testnet")
+        cached["status"] = "tampered"
+        assert pm.get_cached("testnet")["status"] == snap["status"]
+
     def test_all_cached_returns_copy(self, tmp_path):
         pm = PortfolioMonitor(keys_path=tmp_path / "missing.json")
         pm.refresh("testnet")
@@ -247,6 +254,13 @@ class TestRefreshCache:
         # Mutating the returned dict should not affect live cache
         snapshot_of_cache["testnet"] = None
         assert pm.get_cached("testnet") is not None
+
+    def test_all_cached_nested_mutation_does_not_leak_back(self, tmp_path):
+        pm = PortfolioMonitor(keys_path=tmp_path / "missing.json")
+        pm.refresh("testnet")
+        snapshot_of_cache = pm.all_cached()
+        snapshot_of_cache["testnet"]["status"] = "tampered"
+        assert pm.get_cached("testnet")["status"] == "no_keys"
 
     def test_clear_empties_cache(self, tmp_path):
         pm = PortfolioMonitor(keys_path=tmp_path / "missing.json")

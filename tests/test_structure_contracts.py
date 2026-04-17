@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from config import engines as registry
-from config.paths import AURUM_DB_PATH, DATA_DIR, NEXUS_DB_PATH, PROC_STATE_PATH
+from config.paths import AURUM_DB_PATH, AURUM_JWT_SECRET_PATH, DATA_DIR, NEXUS_DB_PATH, PROC_STATE_PATH
 from core import db as trade_db
 from core.connections import ConnectionManager, DEFAULT_STATE
 from core.engine_base import EngineRuntime
@@ -24,6 +24,7 @@ def test_rooted_paths_contract():
     assert AURUM_DB_PATH == root / "data" / "aurum.db"
     assert NEXUS_DB_PATH == root / "data" / "nexus.db"
     assert PROC_STATE_PATH == root / "data" / ".aurum_procs.json"
+    assert AURUM_JWT_SECRET_PATH == root / "data" / ".secrets" / "jwt_secret.txt"
 
 
 def test_config_paths_anchored_to_config_dir():

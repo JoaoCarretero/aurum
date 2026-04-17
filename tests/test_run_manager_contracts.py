@@ -17,6 +17,8 @@ Covers:
 from __future__ import annotations
 
 import json
+import threading
+from datetime import datetime
 
 import pytest
 
@@ -31,6 +33,7 @@ def isolated_dirs(tmp_path, monkeypatch):
     index = tmp_path / "index.json"
     monkeypatch.setattr(rm, "RUNS_DIR", runs)
     monkeypatch.setattr(rm, "INDEX_PATH", index)
+    monkeypatch.setattr(rm, "INDEX_LOCK_PATH", index.with_suffix(index.suffix + ".lock"))
     return runs, index
 
 
@@ -70,6 +73,18 @@ class TestCreateRunDir:
     def test_default_engine_is_citadel(self, isolated_dirs):
         run_id, _ = rm.create_run_dir()
         assert run_id.startswith("citadel_")
+
+    def test_same_second_allocates_unique_suffix(self, isolated_dirs, monkeypatch):
+        class _FixedDateTime:
+            @classmethod
+            def now(cls):
+                return datetime(2026, 4, 17, 12, 0, 0)
+
+        monkeypatch.setattr(rm, "datetime", _FixedDateTime)
+        first_id, _ = rm.create_run_dir("citadel")
+        second_id, _ = rm.create_run_dir("citadel")
+        assert first_id == "citadel_2026-04-17_120000"
+        assert second_id == "citadel_2026-04-17_120000_001"
 
 
 # ────────────────────────────────────────────────────────────
@@ -210,6 +225,27 @@ class TestAppendToIndex:
         data = json.loads(index.read_text(encoding="utf-8"))
         assert data[0]["overfit_pass"] is False
         assert data[0]["overfit_warn"] == ["x", "y"]
+
+    def test_concurrent_appends_do_not_drop_entries(self, isolated_dirs):
+        runs, index = isolated_dirs
+        start = threading.Barrier(8)
+        done = []
+
+        def worker(i: int):
+            rd = self._mkrun(runs, f"citadel_{i}")
+            start.wait()
+            rm.append_to_index(rd, summary={"engine": "CITADEL"}, config={"i": i})
+            done.append(i)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        data = json.loads(index.read_text(encoding="utf-8"))
+        assert sorted(done) == list(range(8))
+        assert sorted(row["run_id"] for row in data) == [f"citadel_{i}" for i in range(8)]
 
 
 # ────────────────────────────────────────────────────────────

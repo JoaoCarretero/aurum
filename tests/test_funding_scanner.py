@@ -137,3 +137,41 @@ def test_spot_arb_pairs_with_synthetic_data():
     assert p["symbol"] == "BTC"
     assert "spread_bps" in p
     assert p["spread_bps"] > 0
+
+
+def test_scan_spot_uses_cache_ttl(monkeypatch):
+    from core.funding_scanner import FundingScanner, SpotPrice
+
+    calls = []
+
+    def _fake_fetch():
+        calls.append(1)
+        return [SpotPrice("BTC", "binance", 50000.0, 1e9)]
+
+    scanner = FundingScanner(cache_ttl=60.0)
+    monkeypatch.setattr("core.funding_scanner.SPOT_FETCHERS", {"binance": _fake_fetch})
+
+    first = scanner.scan_spot()
+    second = scanner.scan_spot()
+
+    assert len(calls) == 1
+    assert len(first) == 1
+    assert len(second) == 1
+
+
+def test_scan_spot_force_bypasses_cache(monkeypatch):
+    from core.funding_scanner import FundingScanner, SpotPrice
+
+    calls = []
+
+    def _fake_fetch():
+        calls.append(1)
+        return [SpotPrice("BTC", "binance", 50000.0, 1e9)]
+
+    scanner = FundingScanner(cache_ttl=60.0)
+    monkeypatch.setattr("core.funding_scanner.SPOT_FETCHERS", {"binance": _fake_fetch})
+
+    scanner.scan_spot()
+    scanner.scan_spot(force=True)
+
+    assert len(calls) == 2

@@ -15,6 +15,7 @@ status() return atomic snapshots for the UI thread.
 """
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
@@ -410,11 +411,12 @@ class PortfolioMonitor:
     # ── CACHE ACCESS ──────────────────────────────────────────
     def get_cached(self, mode: str) -> Optional[dict]:
         with self._lock:
-            return self._cache.get(mode)
+            data = self._cache.get(mode)
+            return copy.deepcopy(data) if data is not None else None
 
     def all_cached(self) -> dict[str, dict]:
         with self._lock:
-            return dict(self._cache)
+            return copy.deepcopy(self._cache)
 
     def clear(self) -> None:
         with self._lock:

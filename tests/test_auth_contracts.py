@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 import api.auth as auth
+from config import paths as config_paths
 
 
 class _FakeWebSocket:
@@ -18,22 +19,27 @@ class _FakeWebSocket:
             self.query_params["token"] = token
 
 
-def test_missing_env_secret_uses_ephemeral_key(monkeypatch):
+def test_missing_env_secret_persists_file_backed_key(tmp_path, monkeypatch):
     monkeypatch.delenv("AURUM_JWT_SECRET", raising=False)
+    monkeypatch.setattr(config_paths, "AURUM_JWT_SECRET_PATH", tmp_path / "jwt_secret.txt")
     reloaded = importlib.reload(auth)
     try:
-        assert reloaded.SECRET_KEY_SOURCE == "ephemeral"
-        assert reloaded.SECRET_KEY != "aurum-dev-secret-change-in-production"
+        assert reloaded.SECRET_KEY_SOURCE == "file"
+        assert reloaded.SECRET_KEY == (tmp_path / "jwt_secret.txt").read_text(encoding="utf-8").strip()
+        reloaded_again = importlib.reload(reloaded)
+        assert reloaded_again.SECRET_KEY == reloaded.SECRET_KEY
     finally:
         importlib.reload(reloaded)
 
 
-def test_insecure_default_secret_is_rejected_for_runtime_use(monkeypatch):
-    monkeypatch.setenv("AURUM_JWT_SECRET", "aurum-dev-secret-change-in-production")
+def test_insecure_default_secret_is_rejected_for_runtime_use(tmp_path, monkeypatch):
+    sentinel = auth._INSECURE_DEFAULT_SECRET
+    monkeypatch.setenv("AURUM_JWT_SECRET", sentinel)
+    monkeypatch.setattr(config_paths, "AURUM_JWT_SECRET_PATH", tmp_path / "jwt_secret_fallback.txt")
     reloaded = importlib.reload(auth)
     try:
-        assert reloaded.SECRET_KEY_SOURCE == "ephemeral"
-        assert reloaded.SECRET_KEY != "aurum-dev-secret-change-in-production"
+        assert reloaded.SECRET_KEY_SOURCE == "file"
+        assert reloaded.SECRET_KEY != sentinel
     finally:
         importlib.reload(reloaded)
 

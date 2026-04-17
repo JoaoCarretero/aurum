@@ -10,20 +10,35 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
+from config.paths import AURUM_JWT_SECRET_PATH
 from api.models import get_conn
+from core.persistence import atomic_write_text
 
 _INSECURE_DEFAULT_SECRET = "aurum-dev-secret-change-in-production"
-_ENV_SECRET = (os.environ.get("AURUM_JWT_SECRET") or "").strip()
-SECRET_KEY = (
-    _ENV_SECRET
-    if _ENV_SECRET and _ENV_SECRET != _INSECURE_DEFAULT_SECRET
-    else secrets.token_urlsafe(48)
-)
-SECRET_KEY_SOURCE = (
-    "env"
-    if _ENV_SECRET and _ENV_SECRET != _INSECURE_DEFAULT_SECRET
-    else "ephemeral"
-)
+
+
+def _load_or_create_secret() -> tuple[str, str]:
+    env_secret = (os.environ.get("AURUM_JWT_SECRET") or "").strip()
+    if env_secret and env_secret != _INSECURE_DEFAULT_SECRET:
+        return env_secret, "env"
+
+    try:
+        persisted = AURUM_JWT_SECRET_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        persisted = ""
+
+    if persisted and persisted != _INSECURE_DEFAULT_SECRET:
+        return persisted, "file"
+
+    generated = secrets.token_urlsafe(48)
+    try:
+        atomic_write_text(AURUM_JWT_SECRET_PATH, generated + "\n")
+        return generated, "file"
+    except OSError:
+        return generated, "ephemeral"
+
+
+SECRET_KEY, SECRET_KEY_SOURCE = _load_or_create_secret()
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
@@ -44,6 +59,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_token(data: dict, expires_hours: int = TOKEN_EXPIRE_HOURS) -> str:
     """Create a signed JWT token with an expiration claim."""
     payload = data.copy()
+    if "sub" in payload:
+        payload["sub"] = str(payload["sub"])
     payload["exp"] = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
     payload["iat"] = datetime.now(timezone.utc)
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -66,6 +83,10 @@ def _load_user_from_payload(payload: dict) -> dict:
     user_id = payload.get("sub")
     if user_id is None:
         raise _unauthorized("Token missing subject claim")
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        raise _unauthorized("Token subject claim is invalid")
 
     conn = get_conn()
     try:
