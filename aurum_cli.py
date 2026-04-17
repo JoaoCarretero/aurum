@@ -236,6 +236,22 @@ STRATEGIES = {
             "Flag            --invert mean-reversion (H2-INV)",
         ],
     },
+    "medallion": {
+        "name": "MEDALLION",
+        "tag": "MED",
+        "desc": "Berlekamp-Laufer — 7-signal ensemble + Kelly sizing",
+        "methods": ["backtest"],
+        "info": [
+            "Filosofia Simons/Renaissance 1988-90 em codigo.",
+            "",
+            "Ensemble        7 sub-sinais (z-return, z-vol, ema-dev,",
+            "                autocorr, RSI, seasonality, HMM chop)",
+            "Gate            autocorr < 0 + HMM regime + ensemble>=th",
+            "Sizing          quarter-Kelly rolling empirical, cap 2%",
+            "Exit            tp/stop ATR + time-stop curto",
+            "Flag            --invert momentum (calibrado pra cripto)",
+        ],
+    },
     "twosigma": {
         "name": "TWO SIGMA",
         "tag": "TSG",
@@ -280,6 +296,7 @@ def _resolve(strategy, method, config):
         if strategy == "millennium":  return "multi","engines/millennium.py",["1",days,"","","","","",plots,""]
         if strategy == "kepos":       return "kepos","engines/kepos.py",["--days",days,"--no-menu"]
         if strategy == "graham":      return "graham","engines/graham.py",["--days",days,"--no-menu"]
+        if strategy == "medallion":   return "medallion","engines/medallion.py",["--days",days,"--no-menu"]
         if strategy == "twosigma":    return "prometeu","engines/twosigma.py",[]
         if strategy == "aqr":         return "darwin","engines/aqr.py",[]
     if method == "simulator":
@@ -389,7 +406,7 @@ def _launch(ek, sc, stdin, sname="", mname="", foreground=True):
     from core.proc import spawn, _is_alive, get_log_path
     # Hawkes engines parse argv via argparse instead of reading interactive
     # prompts from stdin, so route their payload through cli_args.
-    if ek in ("kepos", "graham"):
+    if ek in ("kepos", "graham", "medallion"):
         info = spawn(ek, cli_args=stdin)
     else:
         info = spawn(ek, stdin_lines=stdin)
@@ -914,7 +931,7 @@ def main():
 
     # Real strategy names (must match keys in STRATEGIES dict and branches in _resolve).
     # backtest supports 6; simulator/live are limited to engines with a runtime mode.
-    BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium", "kepos", "graham", "twosigma", "aqr"]
+    BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium", "kepos", "graham", "medallion", "twosigma", "aqr"]
     LIVE_STRATS = ["citadel", "janestreet"]
 
     p=sub.add_parser("backtest",aliases=["bt"]); p.add_argument("strategy",choices=BT_STRATS,nargs="?",default="citadel"); p.add_argument("--days",type=int,default=90); p.add_argument("--plots",action="store_true"); p.add_argument("--leverage",type=float,default=None)

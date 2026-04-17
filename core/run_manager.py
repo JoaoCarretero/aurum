@@ -231,11 +231,13 @@ def append_to_index(run_dir, summary, config, overfit_results=None):
         "JUMP": "jump", "DE SHAW": "deshaw", "RENAISSANCE": "renaissance",
         "MILLENNIUM": "millennium", "TWO SIGMA": "twosigma",
         "AQR": "aqr", "JANE STREET": "janestreet",
+        "KEPOS": "kepos", "GRAHAM": "graham", "MEDALLION": "medallion",
     }
     _PARENT_TO_SLUG = {
         "bridgewater": "bridgewater", "jump": "jump", "deshaw": "deshaw",
         "renaissance": "renaissance", "millennium": "millennium",
         "twosigma": "twosigma", "aqr": "aqr", "janestreet": "janestreet",
+        "kepos": "kepos", "graham": "graham", "medallion": "medallion",
         "runs": "citadel",  # data/runs/ is CITADEL's
     }
     engine_slug = (_ENG_TO_SLUG.get(_inst.upper())

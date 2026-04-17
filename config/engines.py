@@ -9,19 +9,20 @@ the trading style each engine implements.
 """
 
 ENGINES = {
-    "citadel":     {"script": "engines/citadel.py",      "display": "CITADEL",     "desc": "Systematic momentum — trend-following + fractal alignment"},
-    "renaissance": {"script": "engines/renaissance.py",   "display": "RENAISSANCE", "desc": "Pattern recognition — harmonic geometry + Bayesian scoring"},
-    "jump":        {"script": "engines/jump.py",      "display": "JUMP",        "desc": "Order flow — CVD divergence + volume imbalance"},
-    "bridgewater": {"script": "engines/bridgewater.py",         "display": "BRIDGEWATER", "desc": "Macro sentiment — funding + OI + LS ratio contrarian"},
-    "deshaw":      {"script": "engines/deshaw.py",        "display": "DE SHAW",     "desc": "Statistical arb — pairs cointegration + mean reversion"},
-    "millennium":  {"script": "engines/millennium.py", "display": "MILLENNIUM",  "desc": "Multi-strategy pod — ensemble orchestrator"},
-    "twosigma":    {"script": "engines/twosigma.py",      "display": "TWO SIGMA",   "desc": "ML meta-ensemble — LightGBM walk-forward"},
-    "janestreet":  {"script": "engines/janestreet.py",     "display": "JANE STREET", "desc": "Cross-venue arb — funding/basis multi-exchange"},
-    "aqr":         {"script": "engines/aqr.py",        "display": "AQR",         "desc": "Adaptive allocation — evolutionary parameter optimization"},
-    "kepos":       {"script": "engines/kepos.py",      "display": "KEPOS",       "desc": "Critical endogeneity fade — Hawkes η≥0.95 reversal plays"},
-    "graham":      {"script": "engines/graham.py",     "display": "GRAHAM",      "desc": "Endogenous momentum — trend-following gated by Hawkes ENDO regime"},
-    "phi":         {"script": "engines/phi.py",       "display": "PHI",         "desc": "Fibonacci fractal — multi-TF 0.618 confluence + Golden Trigger"},
-    "winton":      {"script": "core/chronos.py",          "display": "WINTON",      "desc": "Time-series intelligence — HMM + GARCH + Hurst + seasonality"},
+    "citadel":     {"script": "engines/citadel.py",      "display": "CITADEL",     "desc": "Cross-timeframe momentum with fractal confirmation"},
+    "renaissance": {"script": "engines/renaissance.py",  "display": "RENAISSANCE", "desc": "Harmonic pattern recognition with Bayesian scoring"},
+    "jump":        {"script": "engines/jump.py",         "display": "JUMP",        "desc": "Order-flow microstructure with CVD divergence"},
+    "bridgewater": {"script": "engines/bridgewater.py",  "display": "BRIDGEWATER", "desc": "Cross-sectional sentiment contrarian"},
+    "deshaw":      {"script": "engines/deshaw.py",       "display": "DE SHAW",     "desc": "Engle-Granger pairs statistical arbitrage"},
+    "millennium":  {"script": "engines/millennium.py",   "display": "MILLENNIUM",  "desc": "Multi-strategy portfolio orchestrator"},
+    "twosigma":    {"script": "engines/twosigma.py",     "display": "TWO SIGMA",   "desc": "LightGBM meta-allocator on regime features"},
+    "janestreet":  {"script": "engines/janestreet.py",   "display": "JANE STREET", "desc": "Cross-venue basis arbitrage, delta-neutral"},
+    "aqr":         {"script": "engines/aqr.py",          "display": "AQR",         "desc": "Evolutionary parameter allocation"},
+    "kepos":       {"script": "engines/kepos.py",        "display": "KEPOS",       "desc": "Critical endogeneity fade via Hawkes η"},
+    "graham":      {"script": "engines/graham.py",       "display": "GRAHAM",      "desc": "Endogenous momentum with Hawkes regime gate"},
+    "medallion":   {"script": "engines/medallion.py",    "display": "MEDALLION",   "desc": "Short-horizon ensemble with Kelly sizing"},
+    "phi":         {"script": "engines/phi.py",          "display": "PHI",         "desc": "Fibonacci confluence at 0.618 retracement"},
+    "winton":      {"script": "core/chronos.py",         "display": "WINTON",      "desc": "Time-series regime suite (HMM, GARCH, Hurst)"},
     "live":        {"script": "engines/live.py",          "display": "LIVE",        "desc": "Live execution — paper / demo / testnet / real"},
 }
 
@@ -99,6 +100,11 @@ PROC_ENGINES = {
         "script": ENGINES["graham"]["script"],
         "display": "GRAHAM",
         "canonical": "graham",
+    },
+    "medallion": {
+        "script": ENGINES["medallion"]["script"],
+        "display": "MEDALLION",
+        "canonical": "medallion",
     },
     "prefetch": {
         "script": "tools/prefetch.py",
