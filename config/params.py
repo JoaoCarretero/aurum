@@ -486,8 +486,8 @@ ARB_POSITION_SIZE_REF = 1000.0
 # Engines that are code-complete but should NOT be executed until
 # their prerequisites are met. TWOSIGMA (PROMETEU) needs 1000+ trades
 # ground-truth; AQR (DARWIN) needs performance data from other engines.
-# RENAISSANCE removed 2026-04-17: OOS Sharpe 2.42 confirmed edge, now
-# active in MILLENNIUM OPERATIONAL_ENGINES (weight 0.25).
+# RENAISSANCE removed from freeze on 2026-04-17: OOS Sharpe 2.42 confirmed
+# edge, now active in MILLENNIUM OPERATIONAL_ENGINES (base weight 0.40).
 FROZEN_ENGINES = ["TWOSIGMA", "AQR"]
 
 # ── Ablation testing ─────────────────────────────────────────
