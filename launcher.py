@@ -11261,6 +11261,7 @@ class App(tk.Tk):
             "leverage": report.get("leverage"),
             "final_equity": final_equity,
             "summary_path": str(report_path),
+            "report_json_path": str(report_path),
             "config_path": str(run_dir / "config.json"),
             "report_html_path": str(report_html) if report_html.exists() else "",
             "run_dir": str(run_dir),
@@ -11316,6 +11317,15 @@ class App(tk.Tk):
                         entry.setdefault("config_path", str(run_dir / "config.json"))
                         report_html = run_dir / "report.html"
                         entry.setdefault("report_html_path", str(report_html) if report_html.exists() else "")
+                        # Find the real report JSON in reports/ dir (Millennium
+                        # + legacy engines save there as <engine>_<tf>_v1.json,
+                        # never as summary.json at run_dir root). Without this
+                        # _show_results falls through to data/runs/ fallback
+                        # and loads a completely different run.
+                        if not entry.get("report_json_path"):
+                            cands = self._bt_report_candidates(run_dir)
+                            if cands:
+                                entry["report_json_path"] = str(cands[0])
                         entry.setdefault("source", "index")
                         # Fallback: read summary.json for fields that might be
                         # missing in older index entries (basket, period_days...)
@@ -11368,6 +11378,10 @@ class App(tk.Tk):
                     entry["config_path"] = str(config_path)
                     report_html = run_dir / "report.html"
                     entry["report_html_path"] = str(report_html) if report_html.exists() else entry.get("report_html_path", "")
+                    if not entry.get("report_json_path"):
+                        cands = self._bt_report_candidates(run_dir)
+                        if cands:
+                            entry["report_json_path"] = str(cands[0])
                     entry.setdefault("source", "runs")
                     runs_by_id[run_id] = entry
             except OSError:
