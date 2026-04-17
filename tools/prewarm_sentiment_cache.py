@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+from datetime import datetime, UTC
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,20 +53,7 @@ def _coverage(df):
     }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Prewarm local sentiment caches for BRIDGEWATER-style OI/LS/funding windows."
-    )
-    ap.add_argument("--engine", default="BRIDGEWATER", help="Engine preset for basket default.")
-    ap.add_argument("--basket", default=None, help="Basket name from config.params.BASKETS.")
-    ap.add_argument("--symbols", default=None, help="Comma-separated symbols override.")
-    ap.add_argument("--period", default="15m", help="OI/LS period.")
-    ap.add_argument("--funding-limit", type=int, default=1000)
-    ap.add_argument("--oi-limit", type=int, default=500)
-    ap.add_argument("--ls-limit", type=int, default=500)
-    ap.add_argument("--json", action="store_true", help="Emit machine-readable summary.")
-    args = ap.parse_args()
-
+def _build_report(args: argparse.Namespace) -> dict[str, object]:
     basket_name, symbols = _resolve_symbols(args.engine, args.basket, args.symbols)
     if not symbols:
         raise SystemExit(f"no symbols resolved for basket={basket_name!r}")
@@ -73,6 +62,7 @@ def main() -> int:
         "engine": args.engine.upper() if args.engine else None,
         "basket": basket_name,
         "period": args.period,
+        "generated_at": datetime.now(UTC).isoformat(),
         "symbols": {},
     }
 
@@ -85,11 +75,18 @@ def main() -> int:
             "open_interest": _coverage(oi_df),
             "long_short_ratio": _coverage(ls_df),
         }
+    return report
 
-    if args.json:
+
+def _emit_report(report: dict[str, object], json_mode: bool) -> None:
+    basket_name = report["basket"]
+    if json_mode:
         print(json.dumps(report, indent=2))
     else:
-        print(f"engine={report['engine']} basket={basket_name} period={args.period}")
+        print(
+            f"generated_at={report['generated_at']} "
+            f"engine={report['engine']} basket={basket_name} period={report['period']}"
+        )
         for sym, payload in report["symbols"].items():
             funding = payload["funding"]
             oi = payload["open_interest"]
@@ -100,6 +97,52 @@ def main() -> int:
                 f"oi={oi['rows'] if oi else 0:>4} "
                 f"ls={ls['rows'] if ls else 0:>4}"
             )
+
+
+def _write_heartbeat(path_raw: str | None, report: dict[str, object]) -> None:
+    if not path_raw:
+        return
+    path = Path(path_raw)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description="Prewarm local sentiment caches for BRIDGEWATER-style OI/LS/funding windows."
+    )
+    ap.add_argument("--engine", default="BRIDGEWATER", help="Engine preset for basket default.")
+    ap.add_argument("--basket", default=None, help="Basket name from config.params.BASKETS.")
+    ap.add_argument("--symbols", default=None, help="Comma-separated symbols override.")
+    ap.add_argument("--period", default="15m", help="OI/LS period.")
+    ap.add_argument("--funding-limit", type=int, default=1000)
+    ap.add_argument("--oi-limit", type=int, default=500)
+    ap.add_argument("--ls-limit", type=int, default=500)
+    ap.add_argument("--json", action="store_true", help="Emit machine-readable summary.")
+    ap.add_argument("--loop-minutes", type=float, default=0.0,
+                    help="Run continuously, sleeping N minutes between refreshes.")
+    ap.add_argument("--iterations", type=int, default=0,
+                    help="Optional cap for loop cycles. 0 means unlimited.")
+    ap.add_argument("--heartbeat-file", default=None,
+                    help="Optional JSON path updated after each completed refresh.")
+    return ap.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    cycles = 0
+    while True:
+        report = _build_report(args)
+        _emit_report(report, args.json)
+        _write_heartbeat(args.heartbeat_file, report)
+        cycles += 1
+
+        if args.loop_minutes <= 0:
+            break
+        if args.iterations > 0 and cycles >= args.iterations:
+            break
+        time.sleep(args.loop_minutes * 60.0)
+
     return 0
 
 
