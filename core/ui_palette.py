@@ -59,6 +59,7 @@ DIM2     = _DIM2
 GREEN    = _GREEN
 RED      = _RED
 CYAN     = _CYAN
+HAZARD   = _HAZARD
 GLOW     = _GLOW
 
 # ── Alchemy UI (nomenclatura HEV_* do Half-Life HEV suit) ────────
