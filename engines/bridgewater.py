@@ -205,6 +205,36 @@ def _filter_stale_market_data(all_dfs: dict[str, pd.DataFrame], interval: str) -
     return kept, dropped
 
 
+def _trade_sentiment_diagnostics(closed: list[dict]) -> dict:
+    if not closed:
+        return {
+            "oi_zero_pct": 0.0,
+            "oi_nonzero_trades": 0,
+            "ls_zero_pct": 0.0,
+            "ls_distribution": {},
+            "funding_positive_pct": 0.0,
+            "funding_negative_pct": 0.0,
+        }
+
+    oi_values = pd.Series([float(t.get("oi_signal", 0.0) or 0.0) for t in closed], dtype=float)
+    ls_values = pd.Series([float(t.get("ls_signal", 0.0) or 0.0) for t in closed], dtype=float)
+    funding_values = pd.Series([float(t.get("funding_z", 0.0) or 0.0) for t in closed], dtype=float)
+
+    ls_distribution = {
+        str(round(float(k), 3)): int(v)
+        for k, v in ls_values.value_counts().sort_index().to_dict().items()
+    }
+
+    return {
+        "oi_zero_pct": round(float((oi_values == 0.0).mean() * 100), 2),
+        "oi_nonzero_trades": int((oi_values != 0.0).sum()),
+        "ls_zero_pct": round(float((ls_values == 0.0).mean() * 100), 2),
+        "ls_distribution": ls_distribution,
+        "funding_positive_pct": round(float((funding_values > 0.0).mean() * 100), 2),
+        "funding_negative_pct": round(float((funding_values < 0.0).mean() * 100), 2),
+    }
+
+
 def _align_series_to_candles(
     candle_times: pd.Series,
     series: pd.Series | None,
@@ -596,6 +626,7 @@ def export_json(all_trades, eq, mc, ratios):
     import json
     closed = [t for t in all_trades if t["result"] in ("WIN", "LOSS")]
     wr = sum(1 for t in closed if t["result"] == "WIN") / max(len(closed), 1) * 100
+    diagnostics = _trade_sentiment_diagnostics(closed)
 
     data = {
         "engine": "BRIDGEWATER",
@@ -612,6 +643,7 @@ def export_json(all_trades, eq, mc, ratios):
         "sharpe": ratios["sharpe"],
         "sortino": ratios.get("sortino"),
         "final_equity": round(eq[-1], 2) if eq else ACCOUNT_SIZE,
+        "sentiment_diagnostics": diagnostics,
         "trades": [{k: (v.isoformat() if isinstance(v, pd.Timestamp) else
                         float(v) if isinstance(v, (np.floating, np.integer)) else v)
                     for k, v in t.items()} for t in closed],

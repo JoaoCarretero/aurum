@@ -181,3 +181,18 @@ def test_filter_stale_market_data_drops_old_series():
 
     assert list(kept.keys()) == ["BTCUSDT"]
     assert dropped == ["MATICUSDT"]
+
+
+def test_trade_sentiment_diagnostics_surfaces_neutral_oi_share():
+    diagnostics = bridgewater._trade_sentiment_diagnostics([
+        {"oi_signal": 0.0, "ls_signal": -0.5, "funding_z": 1.2},
+        {"oi_signal": 0.0, "ls_signal": 0.0, "funding_z": -0.7},
+        {"oi_signal": 0.3, "ls_signal": -0.5, "funding_z": 0.4},
+    ])
+
+    assert diagnostics["oi_zero_pct"] == 66.67
+    assert diagnostics["oi_nonzero_trades"] == 1
+    assert diagnostics["ls_zero_pct"] == 33.33
+    assert diagnostics["ls_distribution"] == {"-0.5": 2, "0.0": 1}
+    assert diagnostics["funding_positive_pct"] == 66.67
+    assert diagnostics["funding_negative_pct"] == 33.33
