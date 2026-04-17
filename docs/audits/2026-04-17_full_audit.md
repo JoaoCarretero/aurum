@@ -274,5 +274,109 @@ Branch tem valor real (PHI + Bloco 0 + cockpit) mas escopo muito grande para mer
 
 ---
 
-**Gerado por:** 4 agentes paralelos (Claude Opus 4.7) em 2026-04-17.
-**Arquivos de referência:** `docs/audits/2026-04-16_oos_verdict.md`, `docs/audits/2026-04-17_oos_revalidation.md`, `docs/methodology/anti_overfit_protocol.md`.
+## 5. Addendum — BRIDGEWATER deep-dive (2026-04-17)
+
+Agente dedicado investigou o BUG_SUSPECT de BRIDGEWATER após as ondas de fix iniciais.
+
+### Root cause
+
+**Bug principal** — `engines/bridgewater.py:88,96,101` usa `limit=100` (funding) e `limit=200` (OI, LS ratio) hardcoded. Funding no Binance é emitido a cada 8h: 100 pontos cobrem apenas ~33 dias. Numa janela OOS de 360 dias (BEAR 2022), **as primeiras ~327 dias de barras caem antes do primeiro ponto da série de sentimento**.
+
+`engines/bridgewater.py:143-148` — `_align_series_to_candles` propaga `values[0]` (primeiro valor disponível) para todas as barras anteriores ao início da série, em vez de usar `default=0.0`. Resultado: ~90% das barras recebem o mesmo valor de sentimento fixo.
+
+**Consequência:** O **Sharpe 11.04 é espúrio** — artefato de truncamento, não edge real. Cada run da Binance retorna ticks ligeiramente diferentes dependendo de timing, alterando o valor constante propagado e gerando as 1630 trades de diferença (9194 → 7564 fresh).
+
+### Bug adicional (falso positivo do audit)
+
+`tools/oos_revalidate.py:283` verifica assinatura de `fetch_funding_rate` com string antiga (sem `end_time_ms`). O sentiment.py já foi atualizado mas o detector continua flagando como unbounded.
+
+### Fix acionável
+
+Três mudanças, todas fora do core protegido:
+
+```python
+# engines/bridgewater.py:88,96,101 — escalar limit com a janela
+_funding_limit = min(1000, int(SCAN_DAYS * 3 * 1.2))    # 3 ticks/dia + 20% buffer
+_oi_limit      = min(1500, int(SCAN_DAYS * 96 * 1.1))   # 15m: 96 pontos/dia
+_ls_limit      = min(1500, int(SCAN_DAYS * 96 * 1.1))
+
+# engines/bridgewater.py:143-148 — default em vez de values[0]
+if first_valid > 0:
+    aligned[:first_valid] = default   # era values[0]
+
+# tools/oos_revalidate.py:283 — fix do detector
+if "end_time_ms" not in sentiment_text.split("def fetch_funding_rate")[1].split("\n")[0]:
+```
+
+### Risco
+
+Após o fix, **o Sharpe vai cair radicalmente** (parte do "edge" era artefato). O engine precisa re-calibração — provavelmente cai pra NO_EDGE_OU_OVERFIT. Melhor saber agora do que descobrir em capital real.
+
+### Recomendação
+
+Aplicar o fix, re-rodar OOS BEAR, e decidir:
+- Sharpe OOS real > 1.5 → manter, marcar como re-calibrado
+- Sharpe OOS real < 1.5 → arquivar (junto com DE SHAW, MEDALLION, KEPOS)
+
+---
+
+## 6. Addendum — Second-pass (performance / concurrency / resilience)
+
+Agente dedicado varreu dimensões não cobertas no audit original. Novos achados:
+
+### 🔴 CRITICAL
+
+- **`engines/live.py:1147` — race condition em `self.positions`**
+  `_reconciliation_loop` itera `self.positions` enquanto `_open_position` dá append no mesmo objeto (asyncio task paralela). Python asyncio não previne race se houver yield points — pode ver lista parcialmente atualizada ou pular entrada.
+  **Fix 1 linha:** `for p in list(self.positions):` (snapshot).
+
+- **`engines/live.py:598-611` — `futures_create_order` sem timeout explícito**
+  `binance.Client` usa default da lib (~30s), mas API pode ficar lenta em burst. Sem retry. Ordem pode ficar "hanging" — engine pensa que está pending quando não foi enviada.
+  **Fix:** timeout explícito + retry com backoff exponencial.
+
+### 🟠 HIGH
+
+- **`engines/live.py:1560-1576` — API error gate bloqueia engine 60s**
+  Quando `_consecutive_api_errors >= 5`, chama `asyncio.sleep(60)` que pausa o event loop inteiro. Websockets continuam mas `on_candle_close` retorna cedo. Posições em progresso podem expirar de stop durante a pausa.
+
+- **`core/cache.py:101-116` — file I/O race entre engines paralelos**
+  Dois engines escrevendo cache do mesmo símbolo ao mesmo tempo → um perde via `os.replace`. `try/except` silencia, mas data loss em backtest paralelo.
+
+- **`core/indicators.py:66-67` — swing pivot detection em Python puro** *[CORE PROTEGIDO]*
+  Loop com `max()/min()` em slice por barra: O(n × PIVOT_N). Pandas `.rolling().max()/min()` seria O(n). ~10× mais rápido em live update (5ms → <1ms). Fora de hot path do backtest mas importante em latência de decisão.
+
+### 🟡 MEDIUM
+
+- **`analysis/montecarlo.py:12-24`** — 10k simulações em Python loops puros. Vetorização com numpy daria 10-50×. Off hot path (roda 1× por backtest), baixa prioridade.
+- **`engines/live.py:2169-2202`** — WS reconnect não faz `log.error(exc_info=True)`. Crash de `on_candle_close` fica sem stacktrace.
+- **`bot/telegram.py:95-119`** — `_post` silencia todas exceções com `return {}`. Operator cego pra falhas de API do Telegram.
+- **`engines/live.py:1817-1827`** — kill-switch não idempotente. Chamar 2× tenta flatten duplo.
+
+### ✅ Verificado OK
+
+- Indicators vetorizados (ewm, rolling, np.select) — zero loops em hot path nos principais
+- WS reconnect com backoff exponencial (5s → 300s)
+- Retry logic com 429/5xx em `core/data.py`
+- Kill-switch estatístico + risk gates implementados e testados
+- Audit trail encadeado (intent → ack → fill)
+
+### Quick wins (priorizado)
+
+1. **1 linha**: `for p in list(self.positions):` em `_reconciliation_loop` — elimina CRITICAL #1 acima
+2. **3 linhas**: timeout explícito em `futures_create_order` — elimina CRITICAL #2
+3. **1 param**: `log.error(..., exc_info=True)` no WS handler — debug de crashes
+4. **2 linhas**: check `resp.json()` em `bot/telegram.py:112` — detecta Telegram API errors
+
+---
+
+## 7. Errata
+
+Correções pós-audit ao documento original:
+
+- **TL;DR item #4 (pickle.load em `core/cache.py`)** — FALSO POSITIVO. Cache usa JSON dentro de gzip (extensão `.pkl.gz` é legacy). Zero `pickle.load` no codebase. Removido da ação required.
+- **Item #3 (vol_regime ignorado)** — após investigação, confirmado que é intencional (v3.7 session log `2026-04-12_1505.md` registrou remoção de 8→3 fatores). As funções órfãs (`_omega_risk_mult`, `_global_risk_mult`) foram removidas na onda de fix. `VOL_RISK_SCALE` sobrevive como veto em `decide_direction`, não como multiplicador de sizing.
+
+---
+
+**Gerado por:** 4 agentes paralelos (wave 1) + 2 agentes follow-up (wave 2), Claude Opus 4.7, em 2026-04-17.
+**Arquivos de referência:** `docs/audits/2026-04-16_oos_verdict.md`, `docs/audits/2026-04-17_oos_revalidation.md`, `docs/methodology/anti_overfit_protocol.md`, `docs/sessions/2026-04-12_1505.md`.
