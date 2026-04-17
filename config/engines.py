@@ -53,11 +53,10 @@ LIVE_READY_SLUGS = frozenset(k for k, v in ENGINES.items() if v.get("live_ready"
 # Consumo: launcher filtra em view "experimental"; CLI aurum_cli emite
 # warning ao rodar; orquestrador OOS audit pode incluir/excluir via flag.
 EXPERIMENTAL_SLUGS: frozenset[str] = frozenset({
-    "deshaw",    # oos_sharpe=-1.73 BEAR 2022 (cointegração quebra em regime shifts)
+    "deshaw",    # oos_sharpe=-1.73 BEAR 2022 (cointegração quebra em regime shifts). Smoke last-360d: -1.9 Sharpe / 2.0 MC / 2/6 overfit.
     "graham",    # arquivado per docstring (4h overfit)
-    # kepos e medallion: re-avaliação pendente após fixes 2026-04-17
-    # (cost asymmetry + KEPOS threshold). Adicionar aqui se OOS re-run
-    # confirmar colapso após fixes.
+    "kepos",     # Smoke last-360d 2026-04-17 pós-fixes (cost asymmetry + eta 0.95→0.75 + sustained 10→5): ainda 0 trades. Threshold AND excessivamente restritivo ou mercado atual sem setups válidos. Rodável sem crash.
+    "medallion", # Smoke last-360d 2026-04-17 pós-fix cost asymmetry: Sharpe -3.69, ROI -35%, MDD 35%. Grid-best in-sample foi overfit canônico (Codex audit flag).
 })
 
 # Process-manager names are still legacy in some UI/API surfaces. Keep the
