@@ -68,9 +68,15 @@ log.addHandler(_fh)
 #  SENTIMENT DATA COLLECTION
 # ══════════════════════════════════════════════════════════════
 
-def collect_sentiment(symbols: list) -> dict:
+def collect_sentiment(symbols: list, end_time_ms: int | None = None) -> dict:
     """
     Fetch all sentiment data for each symbol.
+
+    Se `end_time_ms` é passado (backtest OOS), todas as 3 chamadas ao
+    Binance respeitam o fim da janela — evita look-ahead. Sem isso, as
+    chamadas voltam com a série mais recente encerrando AGORA, mesmo em
+    backtest histórico.
+
     Returns dict[symbol] = {funding_z: Series, oi_signal: Series, ls_signal: Series}
     """
     sentiment = {}
@@ -79,7 +85,7 @@ def collect_sentiment(symbols: list) -> dict:
         data = {}
 
         # Funding rate
-        fr_df = fetch_funding_rate(sym, limit=100)
+        fr_df = fetch_funding_rate(sym, limit=100, end_time_ms=end_time_ms)
         if fr_df is not None and len(fr_df) >= 10:
             data["funding_df"] = fr_df
             data["funding_z"] = funding_zscore(fr_df, window=THOTH_FUNDING_WINDOW)
@@ -87,11 +93,11 @@ def collect_sentiment(symbols: list) -> dict:
             data["funding_z"] = None
 
         # Open Interest
-        oi_df = fetch_open_interest(sym, period="15m", limit=200)
+        oi_df = fetch_open_interest(sym, period="15m", limit=200, end_time_ms=end_time_ms)
         data["oi_df"] = oi_df
 
         # Long/Short ratio
-        ls_df = fetch_long_short_ratio(sym, period="15m", limit=200)
+        ls_df = fetch_long_short_ratio(sym, period="15m", limit=200, end_time_ms=end_time_ms)
         if ls_df is not None and len(ls_df) >= 5:
             data["ls_signal"] = ls_ratio_signal(ls_df)
             data["ls_df"] = ls_df
@@ -610,7 +616,10 @@ if __name__ == "__main__":
 
     # ── FETCH SENTIMENT ──
     print(f"\n{SEP}\n  SENTIMENT DATA\n{SEP}")
-    sentiment_data = collect_sentiment([s for s in SYMBOLS if s in all_dfs])
+    sentiment_data = collect_sentiment(
+        [s for s in SYMBOLS if s in all_dfs],
+        end_time_ms=END_TIME_MS,
+    )
 
     print_header()
 

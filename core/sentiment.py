@@ -28,13 +28,22 @@ def _rate_limit():
     _last_req = time.time()
 
 
-def fetch_funding_rate(symbol: str, limit: int = 100) -> pd.DataFrame | None:
-    """Fetch historical funding rate from Binance Futures."""
+def fetch_funding_rate(symbol: str, limit: int = 100,
+                       end_time_ms: int | None = None) -> pd.DataFrame | None:
+    """Fetch historical funding rate from Binance Futures.
+
+    If end_time_ms is provided, the API returns funding rates ending at that
+    instant — required for OOS/backtest reproducibility. Without it, the API
+    returns the most recent `limit` rates ending NOW, introducing look-ahead.
+    """
     try:
         import requests
         _rate_limit()
         url = "https://fapi.binance.com/fapi/v1/fundingRate"
-        resp = requests.get(url, params={"symbol": symbol, "limit": limit}, timeout=10)
+        params: dict = {"symbol": symbol, "limit": limit}
+        if end_time_ms is not None:
+            params["endTime"] = int(end_time_ms)
+        resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
             log.warning(f"funding rate {symbol}: HTTP {resp.status_code}")
             return None
@@ -51,15 +60,22 @@ def fetch_funding_rate(symbol: str, limit: int = 100) -> pd.DataFrame | None:
         return None
 
 
-def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200) -> pd.DataFrame | None:
-    """Fetch Open Interest history from Binance Futures."""
+def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200,
+                        end_time_ms: int | None = None) -> pd.DataFrame | None:
+    """Fetch Open Interest history from Binance Futures.
+
+    If end_time_ms is provided, returns the `limit` observations ending at
+    that instant — required for OOS/backtest. Without it, returns most
+    recent observations ending NOW (look-ahead in backtest).
+    """
     try:
         import requests
         _rate_limit()
         url = "https://fapi.binance.com/futures/data/openInterestHist"
-        resp = requests.get(url, params={
-            "symbol": symbol, "period": period, "limit": limit
-        }, timeout=10)
+        params: dict = {"symbol": symbol, "period": period, "limit": limit}
+        if end_time_ms is not None:
+            params["endTime"] = int(end_time_ms)
+        resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
             log.warning(f"OI {symbol}: HTTP {resp.status_code}")
             return None
@@ -82,15 +98,22 @@ def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200) -> p
 
 
 def fetch_long_short_ratio(symbol: str, period: str = "15m",
-                           limit: int = 200) -> pd.DataFrame | None:
-    """Fetch global Long/Short Account Ratio from Binance Futures."""
+                           limit: int = 200,
+                           end_time_ms: int | None = None) -> pd.DataFrame | None:
+    """Fetch global Long/Short Account Ratio from Binance Futures.
+
+    If end_time_ms is provided, returns the `limit` observations ending at
+    that instant — required for OOS/backtest. Without it, returns live data
+    (look-ahead in backtest).
+    """
     try:
         import requests
         _rate_limit()
         url = "https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
-        resp = requests.get(url, params={
-            "symbol": symbol, "period": period, "limit": limit
-        }, timeout=10)
+        params: dict = {"symbol": symbol, "period": period, "limit": limit}
+        if end_time_ms is not None:
+            params["endTime"] = int(end_time_ms)
+        resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
             log.warning(f"LS ratio {symbol}: HTTP {resp.status_code}")
             return None
