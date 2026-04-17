@@ -8456,16 +8456,10 @@ class App(tk.Tk):
         for t in tracks:
             if t.slug in running_map:
                 t.status = "running"
-        if filter_group == "LIVE":
-            # Only expose engines with a concrete live entrypoint. Most
-            # backtest strategies do not accept a strategy selector when
-            # routed via engines/live.py, so listing them here would launch
-            # the wrong engine.
-            _live_slugs = {"citadel", "live", "janestreet"}
-            tracks = [t for t in tracks if t.slug in _live_slugs]
-            for t in tracks:
-                t.group = "LIVE"
-        elif filter_group:
+        if filter_group:
+            # LIVE view now has its own cockpit (_strategies_live) — the
+            # only remaining filter_group values that hit this path are
+            # "BACKTEST" and "TOOLS".
             tracks = [t for t in tracks if t.group == filter_group]
 
         # Counts pill — only RUNNING is meaningful, rest is noise
@@ -8476,13 +8470,7 @@ class App(tk.Tk):
         except Exception:
             pass
 
-        # ENGINES LIVE — "NOW PLAYING" strip above the picker. Each running
-        # engine is a clickable pill; clicking focuses it in the iPod list +
-        # opens the LOG chip so the user lands on the live tail.
-        if filter_group == "LIVE" and running_map:
-            self._engines_now_playing(picker_host, tracks, running_map)
-
-        picker_mode = "live" if filter_group == "LIVE" else "backtest"
+        picker_mode = "backtest"
         handle = ep.render(picker_host, tracks, mode=picker_mode)
         self._strategies_picker = handle
 
@@ -8633,8 +8621,27 @@ class App(tk.Tk):
         self._strategies(filter_group="BACKTEST")
 
     def _strategies_live(self):
-        """Live/demo/testnet entry point — real execution paths with safety gates."""
-        self._strategies(filter_group="LIVE")
+        """Live/demo/testnet entry point — cockpit view with safety gates.
+
+        Implementation lives in launcher_support.engines_live_view — this
+        method only sets up the screen chrome and delegates rendering.
+        """
+        self._clr(); self._clear_kb()
+        self.h_path.configure(text="> ENGINES")
+        market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
+        self.h_stat.configure(text=market_label, fg=AMBER_D)
+        self.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run  |  M cycle mode")
+        self._bind_global_nav()
+        from launcher_support import engines_live_view
+        prior = getattr(self, "_engines_live_handle", None)
+        if prior and callable(prior.get("cleanup")):
+            try:
+                prior["cleanup"]()
+            except Exception:
+                pass
+        self._engines_live_handle = engines_live_view.render(
+            self, self.main, on_escape=lambda: self._menu("main"),
+        )
 
     def _strategies_render_tab(self, tab):
         if not hasattr(self, "_strategies_inner") or self._strategies_inner is None:
