@@ -80,7 +80,13 @@ class KeposParams:
     # Hawkes
     hawkes_window_bars: int = 2000
     hawkes_refit_every: int = 100
-    hawkes_k_sigma: float = 2.0
+    # 2026-04-17: k_sigma 2.0 → 1.0 pra alinhar com a calibração base
+    # do sweep 2026-04-16 (comentário logo abaixo). k_sigma=2.0 fazia
+    # eta_smooth nunca atingir eta_critical=0.75 em candle data — 0
+    # trades confirmado em last-360d mesmo pós sustained=5. A dupla
+    # k_sigma=1.0 + eta_critical=0.75 + sustained=10 foi a que produziu
+    # Sharpe 1.50 DD 10.75% no sweep 730d layer1.
+    hawkes_k_sigma: float = 1.0
     hawkes_vol_lookback: int = 100
     hawkes_smooth_span: int = 5
     hawkes_min_events: int = 30

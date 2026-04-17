@@ -55,7 +55,7 @@ LIVE_READY_SLUGS = frozenset(k for k, v in ENGINES.items() if v.get("live_ready"
 EXPERIMENTAL_SLUGS: frozenset[str] = frozenset({
     "deshaw",    # oos_sharpe=-1.73 BEAR 2022 (cointegração quebra em regime shifts). Smoke last-360d: -1.9 Sharpe / 2.0 MC / 2/6 overfit.
     "graham",    # arquivado per docstring (4h overfit)
-    "kepos",     # Smoke last-360d 2026-04-17 pós-fixes (cost asymmetry + eta 0.95→0.75 + sustained 10→5): ainda 0 trades. Threshold AND excessivamente restritivo ou mercado atual sem setups válidos. Rodável sem crash.
+    "kepos",     # Smoke last-360d 2026-04-17 pós-fixes completos (cost asymmetry + eta 0.95→0.75 + sustained 10→5 + k_sigma 2.0→1.0): 164 trades, Sharpe -2.08, ROI -36%, MDD 46%. Rodável mas "fade extensions" thesis sem edge em mercado atual.
     "medallion", # Smoke last-360d 2026-04-17 pós-fix cost asymmetry: Sharpe -3.69, ROI -35%, MDD 35%. Grid-best in-sample foi overfit canônico (Codex audit flag).
 })
 

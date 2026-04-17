@@ -10,7 +10,7 @@ if sys.stdout.encoding != "utf-8":
 import numpy as np
 import pandas as pd
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path as _Path
 
 # ── Config ────────────────────────────────────────────────────
@@ -72,8 +72,11 @@ def setup_run(engine_name: str = "citadel") -> tuple[str, _Path]:
     from core.run_manager import create_run_dir
 
     RUN_ID, RUN_DIR = create_run_dir(engine_name)
-    RUN_DATE = datetime.now().strftime("%Y-%m-%d")
-    RUN_TIME = datetime.now().strftime("%H%M")
+    # UTC so RUN_IDs generated on the Windows dev box and on the Linux VPS
+    # agree regardless of the host's local timezone.
+    _run_dt = datetime.now(timezone.utc)
+    RUN_DATE = _run_dt.strftime("%Y-%m-%d")
+    RUN_TIME = _run_dt.strftime("%H%M")
 
     # Logging: DEBUG to file, WARNING+ to terminal
     _fmt = logging.Formatter("%(asctime)s  %(levelname)s  %(message)s")

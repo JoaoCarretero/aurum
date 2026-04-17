@@ -19,7 +19,7 @@ Sharpe documentado (pode ser negativo — é realidade).
 | JUMP | 3.737 | 129 | 19.00 | 2.04 | ✅ rodável | edge forte |
 | BRIDGEWATER | 13.113 | 11165 | 355.29 | 6.73 | ⚠️ rodável | Sharpe alto suspeito — verificar se é regime atual ou bug residual |
 | DE SHAW | ~-1.9 | ~300 | -19.45 | 30.7 | 🔴 rodável | edge negativo, quarentena |
-| KEPOS | 0.000 | 0 | 0.00 | 0.00 | 🔴 rodável | 0 trades mesmo pós-fixes, quarentena |
+| KEPOS | -2.078 | 164 | -36.33 | 45.69 | 🔴 rodável | pós k_sigma 2.0→1.0 dispara mas edge negativo |
 | MEDALLION | -3.690 | 203 | -35.15 | 34.77 | 🔴 rodável | edge negativo, quarentena |
 
 (DE SHAW run: `data/deshaw/2026-04-17_094931` — 2/7 overfit audit FAIL)
