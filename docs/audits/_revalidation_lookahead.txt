@@ -1,63 +1,39 @@
 # Look-ahead scan — 2026-04-17
 
-## Summary
-
-| Engine / File | Hits | OK | REVIEW | LEAK |
-| --- | --- | --- | --- | --- |
-| engines/citadel.py | 1 | 1 | 0 | 0 |
-| engines/kepos.py | 4 | 4 | 0 | 0 |
-| engines/medallion.py | 2 | 2 | 0 | 0 |
-| core/signals.py | 2 | 2 | 0 | 0 |
-| TOTAL | 9 | 9 | 0 | 0 |
-
-**Verdict: NO LEAKS DETECTED.**
-
-Todos os 9 hits continuam classificados como OK. O padrão dominante é
-`open[t+1]` usado para preço de execução da próxima barra, não para decisão na
-barra atual.
-
-## engines/citadel.py — 1 hit
+## engines/citadel.py  — 1 hits
 
 - line 868 `idx_plus_read`: `right = sym_rows[i+1] if i+1 < len(sym_rows) else ""`
-  -> OK: código de layout/reporting, sem leitura de preço futuro.
 
-## engines/renaissance.py — clean
+## engines/renaissance.py  — clean
 
-## engines/jump.py — clean
+## engines/jump.py  — clean
 
-## engines/deshaw.py — clean
+## engines/deshaw.py  — clean
 
-## engines/bridgewater.py — clean
+## engines/bridgewater.py  — clean
 
-## engines/kepos.py — 4 hits
+## engines/kepos.py  — 4 hits
 
 - line 232 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
-  -> OK: janela trailing terminando em `t`; `t+1` é limite exclusivo do slice.
 - line 276 `iloc_plus`: `entry = float(df["open"].iloc[t + 1])`
-  -> OK: execução na próxima barra.
 - line 300 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
-  -> OK: mesmo caso do slice trailing.
 - line 460 `iloc_plus`: `"entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,`
-  -> OK: metadata de logging da barra de execução.
 
-## engines/medallion.py — 2 hits
+## engines/medallion.py  — 2 hits
 
 - line 438 `iloc_plus`: `entry = float(df["open"].iloc[t + 1])`
-  -> OK: execução na próxima barra.
 - line 615 `iloc_plus`: `"entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,`
-  -> OK: metadata de logging.
 
-## core/signals.py — 2 hits
+## core/signals.py  — 2 hits
 
-- line 185 `iloc_plus`: `raw = df["open"].iloc[idx+1]`
-  -> OK: `calc_levels_chop()` usa próxima barra como execução; decisão vem de `idx`.
-- line 210 `iloc_plus`: `raw = df["open"].iloc[idx+1]`
-  -> OK: mesmo padrão em `calc_levels()`.
+- line 185 `iloc_plus`: `raw   = df["open"].iloc[idx+1]`
+- line 210 `iloc_plus`: `raw  = df["open"].iloc[idx+1]`
 
-## core/indicators.py — clean
+## core/indicators.py  — clean
 
-## core/portfolio.py — clean
+## core/portfolio.py  — clean
 
-## core/htf.py — clean
+## core/htf.py  — clean
 
-## core/harmonics.py — clean
+## core/harmonics.py  — clean
+

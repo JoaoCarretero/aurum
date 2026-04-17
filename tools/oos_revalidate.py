@@ -282,6 +282,17 @@ def _scan_lookahead(path: Path) -> list[dict[str, Any]]:
     return hits
 
 
+def _extract_function_signature(source: str, fn_name: str) -> str | None:
+    match = re.search(
+        rf"def\s+{re.escape(fn_name)}\s*\((.*?)\)\s*(?:->\s*[^:]+)?\s*:",
+        source,
+        re.DOTALL,
+    )
+    if not match:
+        return None
+    return match.group(1)
+
+
 def _scan_method_risks(spec: EngineSpec) -> list[str]:
     notes: list[str] = []
     script_text = _rel(spec.script).read_text(encoding="utf-8", errors="replace")
@@ -292,10 +303,9 @@ def _scan_method_risks(spec: EngineSpec) -> list[str]:
         # sentiment source is still missing that parameter, not engines whose
         # call sites simply don't pass it.
         for fn in ("fetch_funding_rate", "fetch_open_interest", "fetch_long_short_ratio"):
-            marker = f"def {fn}("
-            if marker not in sentiment_text:
+            signature = _extract_function_signature(sentiment_text, fn)
+            if signature is None:
                 continue
-            signature = sentiment_text.split(marker, 1)[1].split(":", 1)[0]
             if "end_time_ms" not in signature:
                 notes.append(
                     "LIVE_SENTIMENT_UNBOUNDED: "
