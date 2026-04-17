@@ -11,11 +11,11 @@ Design principles (v7 — HL2 / CS 1.6 palette):
   - Uniform padding constants. Every interactive element hovers.
 
 Tabs (agrupadas mkt / anl / ops no tab bar):
-  [1] EUA       US rates + FX + equity + commodities + crypto T1/T2
+  [1] EUA       US desk completo: rates, equities, macro, COT, institutions, news
   [2] BRASIL    IBOV + top B3 stocks + ADRs + BRL forex
   [3] CRIPTO    by network — BTC, ETH, SOL, HYPE, DeFi cross-chain, bots
-  [4] SINAIS    analytics cards + COT + calendar + live news
-  [5] MACRO     FRED econ indicators + banks/funds + insiders/13F
+  [4] SINAIS    analytics cards derivados
+  [5] MACRO     cross-market board: global indices, commodities, crypto macro
   [6] REDE      BTC on-chain + processes + VPS
   [7] LIVRO     macro P&L + theses + positions + regime
   [8] MOTORES   engine picker (shared with launcher)
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -125,6 +126,41 @@ def _attach_hover(widget: tk.Widget, default_border: str = BORDER,
     def _off(_e): widget.config(highlightbackground=default_border)
     widget.bind("<Enter>", _on)
     widget.bind("<Leave>", _off)
+
+
+def _event_link(event: dict) -> str:
+    raw = event.get("raw_json")
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    return str((payload or {}).get("link") or "").strip()
+
+
+def _open_event_link(event: dict) -> None:
+    link = _event_link(event)
+    if not link:
+        return
+    try:
+        webbrowser.open(link)
+    except Exception:
+        pass
+
+
+def _clickable_bg_row(parent, open_fn=None) -> tk.Frame:
+    row = tk.Frame(parent, bg=BG, cursor="hand2" if open_fn else "arrow",
+                   highlightbackground=BG, highlightthickness=1)
+    if open_fn:
+        def _on(_e=None):
+            row.configure(bg=BG2, highlightbackground=BORDER_H)
+        def _off(_e=None):
+            row.configure(bg=BG, highlightbackground=BG)
+        row.bind("<Enter>", _on)
+        row.bind("<Leave>", _off)
+        row.bind("<Button-1>", lambda _e: open_fn())
+    return row
 
 
 def _tile(parent, label, value, change="", change_color=WHITE,
@@ -305,6 +341,82 @@ def _two_col(parent) -> tuple[tk.Frame, tk.Frame]:
     return left, right
 
 
+def _panel_shell(parent, *, fill: str = "x", pady: tuple[int, int] = (0, 0)) -> tk.Frame:
+    shell = tk.Frame(parent, bg=PANEL,
+                     highlightbackground=BORDER, highlightthickness=1)
+    shell.pack(fill=fill, expand=(fill == "both"), padx=2, pady=pady)
+    inner = tk.Frame(shell, bg=PANEL)
+    inner.pack(fill=fill, expand=(fill == "both"), padx=6, pady=6)
+    return inner
+
+
+def _desk_banner(parent, metrics: dict, specs: list[tuple[str, str, str]]) -> None:
+    row = tk.Frame(parent, bg=PANEL)
+    row.pack(fill="x", pady=(0, 4))
+    for metric, label, fmt in specs:
+        info = metrics.get(metric) or {}
+        val = info.get("value")
+        if val is None:
+            value_txt = "\u2014"
+            change_txt = "no data"
+            change_color = DIM
+        else:
+            try:
+                value_txt = fmt.format(val)
+            except (ValueError, TypeError):
+                value_txt = str(val)
+            pct = _pct_change(val, info.get("prev"))
+            if pct is None:
+                change_txt = "flat"
+                change_color = DIM
+            else:
+                change_txt = f"{pct:+.2f}%"
+                change_color = GREEN if pct > 0 else (RED if pct < 0 else DIM)
+
+        tile = tk.Frame(row, bg=BG2,
+                        highlightbackground=BORDER, highlightthickness=1)
+        tile.pack(side="left", fill="both", expand=True, padx=1)
+        _attach_hover(tile)
+        tk.Label(tile, text=label, font=(FONT, 6, "bold"), fg=DIM2, bg=BG2,
+                 anchor="w").pack(fill="x", padx=6, pady=(4, 0))
+        tk.Label(tile, text=value_txt, font=(FONT, 10, "bold"), fg=WHITE, bg=BG2,
+                 anchor="w").pack(fill="x", padx=6)
+        tk.Label(tile, text=change_txt, font=(FONT, 7, "bold"), fg=change_color, bg=BG2,
+                 anchor="w").pack(fill="x", padx=6, pady=(0, 4))
+
+
+def _bind_scroll_canvas(canvas: tk.Canvas, window_id: int, pad_x: int = 0) -> None:
+    def _fit(_event=None):
+        live_w = max(canvas.winfo_width(), 1)
+        canvas.itemconfigure(window_id, width=max(live_w - pad_x, 1))
+        canvas.configure(scrollregion=canvas.bbox("all"))
+    canvas.bind("<Configure>", _fit)
+    _fit()
+
+
+def _wire_scroll_wheel(canvas: tk.Canvas, targets: list[tk.Widget] | None = None) -> None:
+    def _on_wheel(event):
+        try:
+            canvas.yview_scroll(-1 * (event.delta // 120), "units")
+        except Exception:
+            pass
+
+    def _enter(_event=None):
+        canvas.bind_all("<MouseWheel>", _on_wheel)
+
+    def _leave(_event=None):
+        try:
+            canvas.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+
+    canvas.bind("<Enter>", _enter)
+    canvas.bind("<Leave>", _leave)
+    for target in targets or []:
+        target.bind("<Enter>", _enter)
+        target.bind("<Leave>", _leave)
+
+
 def _render_bot_slots(parent, network: str,
                       outline: str = BORDER, accent_bg: str = AMBER):
     """Render bot watcher slots — uniform amber chip styling.
@@ -368,40 +480,205 @@ def _cot_matrix(parent, rows: list[tuple]):
         c = GREEN if v > 0 else (RED if v < 0 else WHITE)
         return s, c
 
-    # Header row
-    hdr = tk.Frame(parent, bg=BG); hdr.pack(fill="x", pady=(0, 1))
+    shell = tk.Frame(parent, bg=PANEL,
+                     highlightbackground=BORDER, highlightthickness=1)
+    shell.pack(fill="x", padx=2, pady=2)
+    hdr = tk.Frame(shell, bg=PANEL); hdr.pack(fill="x", pady=(3, 1), padx=2)
     for txt, w, align in [
         ("MARKET",        14, "w"),
         ("NC NET",        13, "e"),
         ("SWAP · BANKS",  14, "e"),
         ("MM · FUNDS",    14, "e"),
     ]:
-        tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM, bg=BG,
+        tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM, bg=PANEL,
                  width=w, anchor=align, padx=4).pack(side="left")
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(0, 1))
+    tk.Frame(shell, bg=BORDER, height=1).pack(fill="x", pady=(0, 1), padx=2)
 
     for label, nc, sw, mm in rows:
-        row = tk.Frame(parent, bg=BG); row.pack(fill="x")
-        _attach_hover(row, default_border=BG, hover_border=BG)  # no-op hover for row bg
+        metrics = [m for m in (nc, sw, mm) if m]
+        def _open_cot_detail(row_label=label, metric_names=metrics):
+            lines = [row_label]
+            for metric_name in metric_names:
+                lat = latest_macro(metric_name, n=5)
+                if not lat:
+                    lines.append(f"{metric_name}: no data")
+                    continue
+                values = ", ".join(f"{float(r['value']):+,.0f}" for r in lat[:3])
+                lines.append(f"{metric_name}: {values}")
+            try:
+                from tkinter import messagebox
+                messagebox.showinfo("COT detail", "\n".join(lines))
+            except Exception:
+                pass
+
+        row = _clickable_bg_row(shell, open_fn=_open_cot_detail if metrics else None)
+        row.pack(fill="x", padx=2, pady=1)
 
         tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                 fg=WHITE, bg=BG, width=14, anchor="w",
+                 fg=WHITE, bg=row.cget("bg"), width=14, anchor="w",
                  padx=4).pack(side="left")
         for metric, w in [(nc, 13), (sw, 14), (mm, 14)]:
             s, c = _val(metric)
             tk.Label(row, text=s, font=(FONT, 8),
-                     fg=c, bg=BG, width=w, anchor="e",
+                     fg=c, bg=row.cget("bg"), width=w, anchor="e",
                      padx=4).pack(side="left")
+        if metrics:
+            tk.Label(row, text="OPEN", font=(FONT, 6, "bold"),
+                     fg=AMBER, bg=row.cget("bg"), width=8, anchor="e").pack(side="right", padx=4)
+
+
+def _render_calendar_list(parent, title: str, only_us: bool = False):
+    from macro_brain.persistence.store import recent_events
+
+    _section(parent, title)
+    cal_events = recent_events(category="calendar", limit=30)
+    now_iso = datetime.utcnow().isoformat()
+    future = sorted([e for e in cal_events if e.get("ts", "") >= now_iso],
+                    key=lambda e: e.get("ts", ""))[:15]
+    if only_us:
+        future = [
+            e for e in future
+            if any(tok in ((e.get("entities") or [""])[0] or "").upper()
+                   for tok in ("FOMC", "FED", "CPI", "PCE", "NFP", "PAYROLL",
+                               "JOBLESS", "UNEMPLOYMENT", "GDP", "PMI",
+                               "RETAIL", "PPI", "MICHIGAN", "HOUSING",
+                               "INDUSTRIAL"))
+        ]
+    if future:
+        for e in future[:12]:
+            impact = e.get("impact", 0) or 0
+            label = (e.get("entities") or ["?"])[0] if e.get("entities") else "?"
+            date_s = e.get("ts", "")[:10]
+            imp_c = RED if impact >= 0.9 else (AMBER if impact >= 0.7 else DIM)
+            row = _clickable_bg_row(parent, open_fn=(lambda ev=e: _open_event_link(ev)) if _event_link(e) else None)
+            row.pack(fill="x", padx=2)
+            tk.Frame(row, bg=imp_c, width=3).pack(side="left", fill="y")
+            tk.Label(row, text=f" {date_s} ", font=(FONT, 8), fg=WHITE, bg=row.cget("bg"),
+                     width=12, anchor="w").pack(side="left")
+            tk.Label(row, text=label[:32], font=(FONT, 8, "bold"), fg=WHITE, bg=row.cget("bg"),
+                     width=30, anchor="w").pack(side="left")
+            tk.Label(row, text=f"{impact:.0%}", font=(FONT, 7), fg=imp_c, bg=row.cget("bg")).pack(side="left")
+            if _event_link(e):
+                tk.Label(row, text="OPEN", font=(FONT, 6, "bold"), fg=AMBER,
+                         bg=row.cget("bg")).pack(side="right", padx=4)
+    else:
+        tk.Label(parent, text="  (no upcoming releases)",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+
+
+def _render_news_list(parent, title: str, allowed_categories: tuple[str, ...], us_only: bool = False):
+    from macro_brain.persistence.store import recent_events
+
+    _section(parent, title)
+    events = recent_events(limit=120)
+    filtered = [
+        e for e in events
+        if (
+            e.get("source", "").startswith("rss:")
+            or str(e.get("source", "")).startswith("newsapi:")
+            or e.get("source") == "newsapi"
+        )
+        and str(e.get("category", "")).lower() in {c.lower() for c in allowed_categories}
+    ]
+    if us_only:
+        us_tokens = ("fed", "treasury", "fomc", "us ", "u.s.", "america", "american",
+                     "wall street", "nasdaq", "s&p", "sp500", "dow", "nyse",
+                     "cpi", "pce", "nfp", "payroll", "jobless", "yield", "dollar")
+        filtered = [
+            e for e in filtered
+            if any(tok in f"{e.get('headline', '')} {e.get('body', '')} {e.get('source', '')}".lower()
+                   for tok in us_tokens)
+            or str(e.get("category", "")).lower() in ("monetary", "institutional")
+        ]
+    for e in filtered[:15]:
+        sent = e.get("sentiment") or 0.0
+        impact = e.get("impact") or 0.0
+        sc = GREEN if sent > 0.2 else (RED if sent < -0.2 else DIM2)
+        src = str(e.get("source", "?")).replace("rss:", "").replace("newsapi:", "")[:14]
+        ca = str(e.get("category") or "?")[:10].upper()
+        hl = (e.get("headline") or "").strip()
+        age = _fmt_age(e.get("ts", ""))
+        row = _clickable_bg_row(parent, open_fn=(lambda ev=e: _open_event_link(ev)) if _event_link(e) else None)
+        row.pack(fill="x")
+        tk.Label(row, text=f"{age:<4}", font=(FONT, 7), fg=DIM, bg=row.cget("bg"),
+                 width=5, anchor="w").pack(side="left")
+        tk.Label(row, text=f"[{ca:<10}]", font=(FONT, 7, "bold"), fg=AMBER, bg=row.cget("bg"),
+                 width=13, anchor="w").pack(side="left")
+        tk.Label(row, text=src, font=(FONT, 7), fg=DIM2, bg=row.cget("bg"),
+                 width=15, anchor="w").pack(side="left")
+        tk.Label(row, text="█" * min(8, max(1, int(impact * 8))), font=(FONT, 6),
+                 fg=AMBER, bg=row.cget("bg"), width=9, anchor="w").pack(side="left")
+        tk.Label(row, text=f"{sent:+.2f}", font=(FONT, 7, "bold"), fg=sc, bg=row.cget("bg"),
+                 width=7, anchor="w").pack(side="left")
+        tk.Label(row, text=hl[:150], font=(FONT, 8), fg=WHITE, bg=row.cget("bg"),
+                 anchor="w").pack(side="left", fill="x", expand=True)
+        if _event_link(e):
+            tk.Label(row, text="OPEN", font=(FONT, 6, "bold"), fg=AMBER,
+                     bg=row.cget("bg")).pack(side="right", padx=4)
+    if not filtered:
+        tk.Label(parent, text="  (no news matching panel scope)",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+
+
+def _render_institutional_flows(parent, title: str):
+    from macro_brain.persistence.store import recent_events
+
+    insider_events = recent_events(category="insider", limit=10)
+    inst_events = recent_events(category="institutional", limit=10)
+    left, right = _two_col(parent)
+
+    _section(left, f"{title} · INSIDERS")
+    if insider_events:
+        shell = tk.Frame(left, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1)
+        shell.pack(fill="x", padx=2, pady=2)
+        for e in insider_events:
+            age = _fmt_age(e.get("ts", ""))
+            hl = (e.get("headline", "") or "").replace("INSIDER: ", "")
+            row = _clickable_bg_row(shell, open_fn=(lambda ev=e: _open_event_link(ev)) if _event_link(e) else None)
+            row.pack(fill="x", padx=2, pady=1)
+            tk.Label(row, text=f" {age:<4}", font=(FONT, 7), fg=DIM, bg=row.cget("bg"),
+                     width=6, anchor="w").pack(side="left")
+            tk.Label(row, text=hl[:60], font=(FONT, 8), fg=WHITE, bg=row.cget("bg"),
+                     anchor="w").pack(side="left", fill="x", expand=True)
+            if _event_link(e):
+                tk.Label(row, text="OPEN", font=(FONT, 6, "bold"), fg=AMBER,
+                         bg=row.cget("bg")).pack(side="right", padx=4)
+    else:
+        tk.Label(left, text="  (no insider filings)",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+
+    _section(right, f"{title} · 13F")
+    if inst_events:
+        shell = tk.Frame(right, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1)
+        shell.pack(fill="x", padx=2, pady=2)
+        for e in inst_events:
+            age = _fmt_age(e.get("ts", ""))
+            hl = (e.get("headline", "") or "").replace("13F FILING: ", "")
+            row = _clickable_bg_row(shell, open_fn=(lambda ev=e: _open_event_link(ev)) if _event_link(e) else None)
+            row.pack(fill="x", padx=2, pady=1)
+            tk.Label(row, text=f" {age:<4}", font=(FONT, 7), fg=DIM, bg=row.cget("bg"),
+                     width=6, anchor="w").pack(side="left")
+            tk.Label(row, text=hl[:60], font=(FONT, 8), fg=WHITE, bg=row.cget("bg"),
+                     anchor="w").pack(side="left", fill="x", expand=True)
+            if _event_link(e):
+                tk.Label(row, text="OPEN", font=(FONT, 6, "bold"), fg=AMBER,
+                         bg=row.cget("bg")).pack(side="right", padx=4)
+    else:
+        tk.Label(right, text="  (no 13F filings)",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
 
 
 # ── TAB RENDERERS ────────────────────────────────────────────
 
 def _render_markets_tab(parent):
-    """Rates | FX — Commodities | Equity — Crypto (full)."""
+    """USA desk — rates, equities, macro, COT, institutions and US news."""
+    _section(parent, "US DESK · MARKET NOW", pady_top=(0, 0))
     left, right = _two_col(parent)
     rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
                          "YIELD_SPREAD_10_2", "FED_RATE"])
-    _section(left, "US RATES · YIELDS", pady_top=(0, 0))
+    _section(left, "RATES · CURVE", pady_top=(0, 0))
     _grid(left, rates, [
         ("US13W",             "13W",     "{:.3f}%"),
         ("US5Y",              "5Y",      "{:.3f}%"),
@@ -413,7 +690,7 @@ def _render_markets_tab(parent):
 
     fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
                       "DXY_BROAD"])
-    _section(right, "FOREX · MAJOR PAIRS", pady_top=(0, 0))
+    _section(right, "DOLLAR · FX", pady_top=(0, 0))
     _grid(right, fx, [
         ("DXY",       "DXY",     "{:.2f}"),
         ("EUR_USD",   "EUR/USD", "{:.4f}"),
@@ -424,67 +701,171 @@ def _render_markets_tab(parent):
     ])
 
     left2, right2 = _two_col(parent)
-    cmd = _macro_map(["GOLD", "SILVER", "WTI_OIL", "BRENT_OIL",
-                       "COPPER", "NAT_GAS"])
-    _section(left2, "COMMODITIES", pady_top=(0, 0))
-    _grid(left2, cmd, [
-        ("GOLD",      "GOLD",    "${:,.0f}"),
-        ("SILVER",    "SILVER",  "${:.2f}"),
-        ("WTI_OIL",   "WTI",     "${:.2f}"),
-        ("BRENT_OIL", "BRENT",   "${:.2f}"),
-        ("COPPER",    "COPPER",  "${:.3f}"),
-        ("NAT_GAS",   "NAT GAS", "${:.3f}"),
-    ])
-
-    eq = _macro_map(["SP500", "NASDAQ", "DAX", "FTSE", "NIKKEI", "HSI", "VIX"])
-    _section(right2, "EQUITY · VOLATILITY", pady_top=(0, 0))
-    _grid(right2, eq, [
+    eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
+                     "GOLD", "WTI_OIL", "COPPER"])
+    _section(left2, "EQUITIES · RISK", pady_top=(0, 0))
+    _grid(left2, eq, [
         ("SP500",  "S&P 500", "{:,.0f}"),
         ("NASDAQ", "NASDAQ",  "{:,.0f}"),
-        ("DAX",    "DAX",     "{:,.0f}"),
-        ("FTSE",   "FTSE",    "{:,.0f}"),
-        ("NIKKEI", "NIKKEI",  "{:,.0f}"),
-        ("HSI",    "HSI",     "{:,.0f}"),
         ("VIX",    "VIX",     "{:.2f}"),
+        ("GOLD",   "GOLD",    "${:,.0f}"),
+        ("WTI_OIL","WTI",     "${:.2f}"),
+        ("COPPER", "COPPER",  "${:.3f}"),
+    ])
+    _grid(left2, eq, [
+        ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
     ])
 
-    c1 = _macro_map(["BTC_SPOT", "ETH_SPOT", "SOL_SPOT", "BNB_SPOT", "XRP_SPOT",
-                      "BTC_DOMINANCE", "TOTAL_CRYPTO_MCAP", "CRYPTO_FEAR_GREED"])
-    _section(parent, "CRYPTO TIER 1 · SENTIMENT")
-    _grid(parent, c1, [
-        ("BTC_SPOT",          "BTC",     "${:,.0f}"),
-        ("ETH_SPOT",          "ETH",     "${:,.1f}"),
-        ("SOL_SPOT",          "SOL",     "${:.2f}"),
-        ("BNB_SPOT",          "BNB",     "${:.0f}"),
-        ("XRP_SPOT",          "XRP",     "${:.3f}"),
-        ("BTC_DOMINANCE",     "BTC DOM", "{:.2f}%"),
-        ("TOTAL_CRYPTO_MCAP", "MKT CAP", "${:,.0f}"),
-        ("CRYPTO_FEAR_GREED", "F&G",     "{:.0f}/100"),
+    econ = _macro_map([
+        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
+        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
+        "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
+    ], n=30)
+    _section(right2, "MACRO SNAPSHOT · FRED", pady_top=(0, 0))
+    _grid(right2, econ, [
+        ("CPI_US",             "CPI",          "{:.2f}"),
+        ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
+        ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
+        ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
+        ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
+        ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
+        ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
+        ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
+    ])
+    _grid(right2, econ, [
+        ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
+        ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
     ])
 
-    c23 = _macro_map(["USDC_SPOT", "ADA_SPOT", "DOGE_SPOT", "AVAX_SPOT",
-                       "TRX_SPOT", "LINK_SPOT", "DOT_SPOT", "TON_SPOT",
-                       "POL_SPOT", "SHIB_SPOT", "LTC_SPOT", "BCH_SPOT",
-                       "NEAR_SPOT", "UNI_SPOT"])
-    _section(parent, "CRYPTO TIER 2-3")
-    _grid(parent, c23, [
-        ("USDC_SPOT", "USDC", "${:.4f}"),
-        ("ADA_SPOT",  "ADA",  "${:.4f}"),
-        ("DOGE_SPOT", "DOGE", "${:.5f}"),
-        ("AVAX_SPOT", "AVAX", "${:.2f}"),
-        ("TRX_SPOT",  "TRX",  "${:.4f}"),
-        ("LINK_SPOT", "LINK", "${:.2f}"),
-        ("DOT_SPOT",  "DOT",  "${:.3f}"),
+    _section(parent, "US DESK · POSITIONING")
+    _cot_matrix(parent, [
+        ("DXY",       "DXY_NET_LONGS",       None,               None),
+        ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
+        ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
+        ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
+        ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
+        ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
+        ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
+        ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
+        ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
     ])
-    _grid(parent, c23, [
-        ("TON_SPOT",  "TON",  "${:.2f}"),
-        ("POL_SPOT",  "POL",  "${:.4f}"),
-        ("SHIB_SPOT", "SHIB", "${:.8f}"),
-        ("LTC_SPOT",  "LTC",  "${:.2f}"),
-        ("BCH_SPOT",  "BCH",  "${:.2f}"),
-        ("NEAR_SPOT", "NEAR", "${:.3f}"),
-        ("UNI_SPOT",  "UNI",  "${:.3f}"),
+
+    _render_institutional_flows(parent, "INSTITUTIONAL FLOW")
+    _render_calendar_list(parent, "CALENDAR · FED · LABOR · INFLATION", only_us=True)
+
+    _render_news_list(parent, "US NEWSFLOW · FED · TREASURY · BANKS · STREET",
+                      allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
+                      us_only=True)
+def _render_markets_tab_v2(parent):
+    """USA desk reorganized into visual shells without changing data scope."""
+    overview = _panel_shell(parent, pady=(0, 6))
+    _section(overview, "US DESK · SNAPSHOT", pady_top=(0, 0))
+    snapshot = _macro_map([
+        "SP500", "US10Y", "DXY", "FED_RATE", "VIX", "CPI_US",
     ])
+    _desk_banner(overview, snapshot, [
+        ("SP500",    "S&P 500", "{:,.0f}"),
+        ("US10Y",    "US10Y",   "{:.3f}%"),
+        ("DXY",      "DXY",     "{:.2f}"),
+        ("FED_RATE", "FED",     "{:.2f}%"),
+        ("VIX",      "VIX",     "{:.2f}"),
+        ("CPI_US",   "CPI",     "{:.2f}"),
+    ])
+    tk.Label(overview,
+             text="  Price first, then curve and macro, then positioning, then institutional flow and news.",
+             font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w").pack(fill="x", padx=2, pady=(0, 2))
+
+    _section(parent, "US DESK · MARKET NOW", pady_top=(0, 0))
+    market_shell = _panel_shell(parent, pady=(0, 6))
+    left, right = _two_col(market_shell)
+    rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
+                        "YIELD_SPREAD_10_2", "FED_RATE"])
+    _section(left, "RATES · CURVE", pady_top=(0, 0))
+    _grid(left, rates, [
+        ("US13W",             "13W",     "{:.3f}%"),
+        ("US5Y",              "5Y",      "{:.3f}%"),
+        ("US10Y",             "10Y",     "{:.3f}%"),
+        ("US30Y",             "30Y",     "{:.3f}%"),
+        ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
+        ("FED_RATE",          "FED",     "{:.2f}%"),
+    ])
+
+    fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
+                     "DXY_BROAD"])
+    _section(right, "DOLLAR · FX", pady_top=(0, 0))
+    _grid(right, fx, [
+        ("DXY",       "DXY",     "{:.2f}"),
+        ("EUR_USD",   "EUR/USD", "{:.4f}"),
+        ("USD_JPY",   "USD/JPY", "{:.2f}"),
+        ("GBP_USD",   "GBP/USD", "{:.4f}"),
+        ("USD_CNY",   "USD/CNY", "{:.4f}"),
+        ("DXY_BROAD", "BROAD",   "{:.2f}"),
+    ])
+
+    left2, right2 = _two_col(market_shell)
+    eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
+                     "GOLD", "WTI_OIL", "COPPER"])
+    _section(left2, "EQUITIES · RISK", pady_top=(0, 0))
+    _grid(left2, eq, [
+        ("SP500",  "S&P 500", "{:,.0f}"),
+        ("NASDAQ", "NASDAQ",  "{:,.0f}"),
+        ("VIX",    "VIX",     "{:.2f}"),
+        ("GOLD",   "GOLD",    "${:,.0f}"),
+        ("WTI_OIL","WTI",     "${:.2f}"),
+        ("COPPER", "COPPER",  "${:.3f}"),
+    ])
+    _grid(left2, eq, [
+        ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
+    ])
+
+    econ = _macro_map([
+        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
+        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
+        "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
+    ], n=30)
+    _section(right2, "MACRO SNAPSHOT · FRED", pady_top=(0, 0))
+    _grid(right2, econ, [
+        ("CPI_US",             "CPI",          "{:.2f}"),
+        ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
+        ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
+        ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
+        ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
+        ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
+        ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
+        ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
+    ])
+    _grid(right2, econ, [
+        ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
+        ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
+    ])
+
+    _section(parent, "US DESK · POSITIONING")
+    positioning_shell = _panel_shell(parent, pady=(0, 6))
+    tk.Label(positioning_shell,
+             text="  CFTC futures positioning for dollar, rates, index futures and key US-linked macro trades.",
+             font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w").pack(fill="x", padx=2, pady=(0, 2))
+    _cot_matrix(positioning_shell, [
+        ("DXY",       "DXY_NET_LONGS",       None,               None),
+        ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
+        ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
+        ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
+        ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
+        ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
+        ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
+        ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
+        ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
+    ])
+
+    flow_shell = _panel_shell(parent, pady=(0, 6))
+    _section(flow_shell, "US DESK · FLOW WATCH", pady_top=(0, 0))
+    flow_left, flow_right = _two_col(flow_shell)
+    _render_institutional_flows(flow_left, "INSTITUTIONAL FLOW")
+    _render_calendar_list(flow_right, "CALENDAR · FED · LABOR · INFLATION", only_us=True)
+
+    news_shell = _panel_shell(parent, pady=(0, 0))
+    _render_news_list(news_shell, "US NEWSFLOW · FED · TREASURY · BANKS · STREET",
+                      allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
+                      us_only=True)
 
 
 def _render_br_tab(parent):
@@ -624,8 +1005,7 @@ def _render_crypto_tab(parent):
 
 
 def _render_insights_tab(parent):
-    """Analytics cards — COT | Calendar — Live news."""
-    from macro_brain.persistence.store import recent_events
+    """Derived cross-asset analytics only — no raw US desk feeds here."""
 
     try:
         from macro_brain.ml_engine.analytics import compute_all
@@ -657,187 +1037,66 @@ def _render_insights_tab(parent):
                      fg=DIM2, bg=PANEL, anchor="w", wraplength=180,
                      justify="left").pack(
                          fill="x", padx=PAD_TILE_INNER, pady=(0, 2))
-
-    _section(parent, "ECONOMIC CALENDAR · NEXT RELEASES")
-    cal_events = recent_events(category="calendar", limit=20)
-    now_iso = datetime.utcnow().isoformat()
-    future = sorted([e for e in cal_events if e.get("ts", "") >= now_iso],
-                    key=lambda e: e.get("ts", ""))[:12]
-    if future:
-        for e in future:
-            impact = e.get("impact", 0) or 0
-            label = (e.get("entities") or ["?"])[0] if e.get("entities") else "?"
-            date_s = e.get("ts", "")[:10]
-            imp_c = RED if impact >= 0.9 else (AMBER if impact >= 0.7 else DIM)
-            row = tk.Frame(parent, bg=BG); row.pack(fill="x", padx=2)
-            tk.Frame(row, bg=imp_c, width=3).pack(side="left", fill="y")
-            tk.Label(row, text=f" {date_s} ", font=(FONT, 8),
-                     fg=WHITE, bg=BG, width=12, anchor="w").pack(side="left")
-            tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG, width=28, anchor="w").pack(side="left")
-            tk.Label(row, text=f"{impact:.0%}", font=(FONT, 7),
-                     fg=imp_c, bg=BG).pack(side="left")
-    else:
-        tk.Label(parent, text="  (no upcoming releases)",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
-
-    _section(parent, "LIVE NEWS · INSTITUTIONAL FEEDS")
-    tabs_row = tk.Frame(parent, bg=BG)
-    tabs_row.pack(fill="x", pady=(0, PAD_ROW))
-    news_body = tk.Frame(parent, bg=BG); news_body.pack(fill="x")
-
-    def _render_news():
-        for w in news_body.winfo_children():
-            try: w.destroy()
-            except Exception: pass
-        all_e = recent_events(limit=100)
-        filt = [e for e in all_e
-                if (e.get("source", "").startswith("rss:") or
-                    e.get("source") == "newsapi" or
-                    e.get("category") in ("monetary", "macro", "geopolitics",
-                                          "crypto", "commodities"))
-                and e.get("category") != "sentiment"]
-        cat = _STATE["news_filter"].lower()
-        if cat != "all":
-            filt = [e for e in filt if e.get("category", "").lower() == cat]
-        for e in filt[:15]:
-            sent = e.get("sentiment") or 0.0
-            impact = e.get("impact") or 0.0
-            sc = GREEN if sent > 0.2 else (RED if sent < -0.2 else DIM2)
-            src = e.get("source", "?").replace("rss:", "").replace(
-                "newsapi:", "")[:12]
-            ca = (e.get("category") or "?")[:7].upper()
-            hl = (e.get("headline") or "").strip()
-            age = _fmt_age(e.get("ts", ""))
-            row = tk.Frame(news_body, bg=BG); row.pack(fill="x")
-            tk.Label(row, text=f"{age:<3}", font=(FONT, 7), fg=DIM,
-                     bg=BG, width=4, anchor="w").pack(side="left")
-            tk.Label(row, text=f"[{ca:<7}]", font=(FONT, 7, "bold"),
-                     fg=AMBER, bg=BG, width=10, anchor="w").pack(side="left")
-            tk.Label(row, text=src, font=(FONT, 7), fg=DIM2, bg=BG,
-                     width=13, anchor="w").pack(side="left")
-            imp_str = "█" * min(8, max(1, int(impact * 8)))
-            tk.Label(row, text=imp_str, font=(FONT, 6), fg=AMBER,
-                     bg=BG, width=9, anchor="w").pack(side="left")
-            tk.Label(row, text=f"{sent:+.2f}", font=(FONT, 7, "bold"),
-                     fg=sc, bg=BG, width=6, anchor="w").pack(side="left")
-            tk.Label(row, text=hl[:160], font=(FONT, 8), fg=WHITE, bg=BG,
-                     anchor="w").pack(side="left", fill="x", expand=True)
-        if not filt:
-            tk.Label(news_body, text="  (no news matching filter)",
-                     font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
-
-    def _set_filter(c):
-        _STATE["news_filter"] = c
-        for w in tabs_row.winfo_children():
-            try: w.destroy()
-            except Exception: pass
-        _build_news_tabs()
-        _render_news()
-
-    def _build_news_tabs():
-        cats = ["ALL", "MONETARY", "MACRO", "GEOPOLITICS",
-                "CRYPTO", "COMMODITIES"]
-        for c in cats:
-            active = (c == _STATE["news_filter"])
-            tab = tk.Label(
-                tabs_row, text=f" {c} ",
-                font=(FONT, 7, "bold"),
-                fg=BG if active else DIM2,
-                bg=AMBER if active else BG3,
-                cursor="hand2", padx=6, pady=2,
-            )
-            tab.pack(side="left", padx=1)
-            tab.bind("<Button-1>", lambda e, x=c: _set_filter(x))
-            if not active:
-                tab.bind("<Enter>",
-                         lambda e, t=tab: t.config(bg=BORDER_H))
-                tab.bind("<Leave>",
-                         lambda e, t=tab: t.config(bg=BG3))
-
-    _build_news_tabs()
-    _render_news()
+    _section(parent, "ANALYTICS SCOPE")
+    tk.Label(parent,
+             text="  Raw US calendar, news, COT and institutional flow moved to [1] EUA.",
+             font=(FONT, 8), fg=DIM2, bg=BG, anchor="w").pack(fill="x", padx=6)
 
 
 def _render_analysis_tab(parent):
-    """FRED econ indicators + banks/funds COT + insiders/13F."""
-    from macro_brain.persistence.store import recent_events
-
-    econ = _macro_map([
-        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
-        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "M2_MONEY_SUPPLY",
-        "FED_BALANCE_SHEET", "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION",
-        "FED_RATE", "US10Y", "YIELD_SPREAD_10_2",
-    ], n=30)
-    _section(parent, "ECONOMIC INDICATORS · FRED", pady_top=(0, 0))
-    _grid(parent, econ, [
-        ("CPI_US",             "CPI",            "{:.2f}"),
-        ("CORE_CPI_US",        "CORE CPI",       "{:.2f}"),
-        ("UNEMPLOYMENT_US",    "UNEMPLOYMENT",   "{:.2f}%"),
-        ("NONFARM_PAYROLLS",   "NFP",            "{:,.0f}"),
-        ("JOBLESS_CLAIMS",     "JOBLESS CLAIMS", "{:,.0f}"),
-        ("MICHIGAN_SENTIMENT", "MICHIGAN",       "{:.1f}"),
-    ])
-    _grid(parent, econ, [
-        ("M2_MONEY_SUPPLY",       "M2",            "{:,.0f}"),
-        ("FED_BALANCE_SHEET",     "FED BAL SHEET", "{:,.0f}"),
-        ("HOUSING_STARTS",        "HOUSING",       "{:,.0f}"),
-        ("INDUSTRIAL_PRODUCTION", "INDUST PROD",   "{:.2f}"),
-        ("FED_RATE",              "FED FUNDS",     "{:.2f}%"),
-        ("US10Y",                 "10Y YIELD",     "{:.2f}%"),
-    ])
-
-    _section(parent, "CFTC COT · POSITIONING MATRIX · weekly")
-    _cot_matrix(parent, [
-        # (label,      NC NET,             SWAP (banks),      MM (funds))
-        ("DXY",        "DXY_NET_LONGS",    None,              None),
-        ("EUR FX",     "EUR_FX_NET_LONGS", None,              None),
-        ("JPY FX",     "JPY_FX_NET_LONGS", None,              None),
-        ("GBP FX",     "GBP_FX_NET_LONGS", None,              None),
-        ("GOLD",       "GOLD_NET_LONGS",   "GOLD_SWAP_NET",   "GOLD_MM_NET"),
-        ("SILVER",     "SILVER_NET_LONGS", "SILVER_SWAP_NET", "SILVER_MM_NET"),
-        ("WTI CRUDE",  "WTI_NET_LONGS",    "WTI_SWAP_NET",    "WTI_MM_NET"),
-        ("BRENT",      None,               "BRENT_SWAP_NET",  "BRENT_MM_NET"),
-        ("COPPER",     None,               "COPPER_SWAP_NET", "COPPER_MM_NET"),
-        ("NAT GAS",    None,               "NAT_GAS_SWAP_NET", None),
-        ("SP500 ES",   "SP500_ES_NET_LONGS", None,            None),
-        ("BTC CME",    "BTC_CME_NET_LONGS", "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
-        ("ETH CME",    None,               "ETH_CME_SWAP_NET", "ETH_CME_MM_NET"),
-    ])
-
-    insider_events = recent_events(category="insider", limit=10)
-    inst_events = recent_events(category="institutional", limit=10)
+    """Cross-market macro board after US desk extraction to EUA."""
     left, right = _two_col(parent)
 
-    _section(left, "INSIDER TRADING · SEC FORM 4 (realtime)")
-    if insider_events:
-        for e in insider_events:
-            age = _fmt_age(e.get("ts", ""))
-            hl = (e.get("headline", "") or "").replace("INSIDER: ", "")
-            row = tk.Frame(left, bg=BG); row.pack(fill="x")
-            tk.Label(row, text=f" {age:<4}", font=(FONT, 7), fg=DIM,
-                     bg=BG, width=6, anchor="w").pack(side="left")
-            tk.Label(row, text=hl[:72], font=(FONT, 8),
-                     fg=WHITE, bg=BG, anchor="w").pack(
-                         side="left", fill="x", expand=True)
-    else:
-        tk.Label(left, text="  (no insider filings)",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+    global_mkts = _macro_map([
+        "DAX", "FTSE", "NIKKEI", "HSI",
+        "GOLD", "SILVER", "WTI_OIL", "BRENT_OIL",
+        "COPPER", "NAT_GAS",
+    ], n=30)
+    _section(left, "GLOBAL EQUITIES · COMMODITIES", pady_top=(0, 0))
+    _grid(left, global_mkts, [
+        ("DAX",       "DAX",     "{:,.0f}"),
+        ("FTSE",      "FTSE",    "{:,.0f}"),
+        ("NIKKEI",    "NIKKEI",  "{:,.0f}"),
+        ("HSI",       "HSI",     "{:,.0f}"),
+        ("GOLD",      "GOLD",    "${:,.0f}"),
+        ("WTI_OIL",   "WTI",     "${:.2f}"),
+        ("BRENT_OIL", "BRENT",   "${:.2f}"),
+    ])
+    _grid(left, global_mkts, [
+        ("SILVER",  "SILVER",  "${:.2f}"),
+        ("COPPER",  "COPPER",  "${:.3f}"),
+        ("NAT_GAS", "NAT GAS", "${:.3f}"),
+    ])
 
-    _section(right, "13F · INSTITUTIONAL HOLDINGS (quarterly)")
-    if inst_events:
-        for e in inst_events:
-            age = _fmt_age(e.get("ts", ""))
-            hl = (e.get("headline", "") or "").replace("13F FILING: ", "")
-            row = tk.Frame(right, bg=BG); row.pack(fill="x")
-            tk.Label(row, text=f" {age:<4}", font=(FONT, 7), fg=DIM,
-                     bg=BG, width=6, anchor="w").pack(side="left")
-            tk.Label(row, text=hl[:72], font=(FONT, 8),
-                     fg=WHITE, bg=BG, anchor="w").pack(
-                         side="left", fill="x", expand=True)
-    else:
-        tk.Label(right, text="  (no 13F filings)",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(pady=4)
+    cross = _macro_map([
+        "BTC_DOMINANCE", "TOTAL_CRYPTO_MCAP", "TOTAL_CRYPTO_VOL_24H",
+        "CRYPTO_FEAR_GREED", "DEFI_TOTAL_TVL", "DEFI_ETHEREUM_TVL",
+        "DEFI_SOLANA_TVL", "DEFI_BASE_TVL",
+    ], n=30)
+    _section(right, "CROSS-ASSET · CRYPTO MACRO", pady_top=(0, 0))
+    _grid(right, cross, [
+        ("BTC_DOMINANCE",     "BTC DOM",  "{:.2f}%"),
+        ("TOTAL_CRYPTO_MCAP", "MKT CAP",  "${:,.0f}"),
+        ("TOTAL_CRYPTO_VOL_24H", "VOL 24H", "${:,.0f}"),
+        ("CRYPTO_FEAR_GREED", "F&G",      "{:.0f}/100"),
+        ("DEFI_TOTAL_TVL",    "DEFI TVL", "${:,.0f}"),
+        ("DEFI_ETHEREUM_TVL", "ETH TVL",  "${:,.0f}"),
+        ("DEFI_SOLANA_TVL",   "SOL TVL",  "${:,.0f}"),
+        ("DEFI_BASE_TVL",     "BASE TVL", "${:,.0f}"),
+    ])
+
+    _section(parent, "GLOBAL POSITIONING · CFTC")
+    _cot_matrix(parent, [
+        ("EUR FX",    "EUR_FX_NET_LONGS",   None,               None),
+        ("JPY FX",    "JPY_FX_NET_LONGS",   None,               None),
+        ("GBP FX",    "GBP_FX_NET_LONGS",   None,               None),
+        ("GOLD",      "GOLD_NET_LONGS",     "GOLD_SWAP_NET",    "GOLD_MM_NET"),
+        ("SILVER",    "SILVER_NET_LONGS",   "SILVER_SWAP_NET",  "SILVER_MM_NET"),
+        ("WTI",       "WTI_NET_LONGS",      "WTI_SWAP_NET",     "WTI_MM_NET"),
+        ("BRENT",     None,                 "BRENT_SWAP_NET",   "BRENT_MM_NET"),
+        ("COPPER",    None,                 "COPPER_SWAP_NET",  "COPPER_MM_NET"),
+        ("ETH CME",   None,                 "ETH_CME_SWAP_NET", "ETH_CME_MM_NET"),
+    ])
 
 
 def _render_network_tab(parent):
@@ -1120,7 +1379,7 @@ def _render_engines_tab(parent):
 # separate from SINAIS / MACRO (análise), and from REDE / LIVRO /
 # MOTORES (operação). Labels are PT-BR / Valve-ish short.
 _TABS = [
-    ("EUA",      "1", _render_markets_tab,  "mkt"),
+    ("EUA",      "1", _render_markets_tab_v2,  "mkt"),
     ("BRASIL",   "2", _render_br_tab,       "mkt"),
     ("CRIPTO",   "3", _render_crypto_tab,   "mkt"),
     ("SINAIS",   "4", _render_insights_tab, "anl"),
@@ -1201,8 +1460,18 @@ def render(parent: tk.Widget, app=None) -> None:
     tab_bar = tk.Frame(outer, bg=BG)
     tab_bar.pack(fill="x", pady=(6, 0))
 
-    content = tk.Frame(outer, bg=BG)
-    content.pack(fill="both", expand=True, pady=(6, 0))
+    content_wrap = tk.Frame(outer, bg=BG)
+    content_wrap.pack(fill="both", expand=True, pady=(6, 0))
+    content_canvas = tk.Canvas(content_wrap, bg=BG, highlightthickness=0)
+    content_scroll = tk.Scrollbar(content_wrap, orient="vertical", command=content_canvas.yview)
+    content = tk.Frame(content_canvas, bg=BG)
+    content_window = content_canvas.create_window((0, 0), window=content, anchor="nw")
+    content.bind("<Configure>", lambda _e: content_canvas.configure(scrollregion=content_canvas.bbox("all")))
+    _bind_scroll_canvas(content_canvas, content_window, pad_x=4)
+    _wire_scroll_wheel(content_canvas, [content])
+    content_canvas.configure(yscrollcommand=content_scroll.set)
+    content_canvas.pack(side="left", fill="both", expand=True)
+    content_scroll.pack(side="right", fill="y")
 
     # Tab widget refs, keyed by tab_name — populated by _build_tabs
     # so _switch_tab can repaint styling without rebuilding the bar.
