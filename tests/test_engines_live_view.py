@@ -65,6 +65,44 @@ class TestBucketAssignment:
         assert assign_bucket(slug="renaissance", is_running=True, live_ready=False) == "RESEARCH"
 
 
+class TestStageBadges:
+    def test_bootstrap_stage_badge(self):
+        from launcher_support.engines_live_view import _stage_badge
+        label, _color = _stage_badge({"stage": "bootstrap_staging"})
+        assert label == "BOOTSTRAP"
+
+    def test_unknown_stage_badge_falls_back_to_uppercase(self):
+        from launcher_support.engines_live_view import _stage_badge
+        label, _color = _stage_badge({"stage": "shadow"})
+        assert label == "SHADOW"
+
+
+class TestCockpitSummaries:
+    def test_footer_hints_live_mode(self):
+        from launcher_support.engines_live_view import footer_hints
+        hints, warn = footer_hints(selected_bucket="LIVE", mode="live")
+        assert "ENTER monitor" in hints
+        assert "S stop" in hints
+        assert warn == "LIVE MODE - real orders enabled"
+
+    def test_cockpit_summary_counts(self):
+        from launcher_support.engines_live_view import cockpit_summary
+        cards = cockpit_summary(mode="paper", live_count=2, ready_count=1, research_count=5)
+        assert cards[0][0] == "DESK"
+        assert cards[0][1] == "PAPER"
+        assert ("RUNNING", "2", cards[1][2]) == cards[1]
+
+    def test_bucket_titles_are_operational(self):
+        from launcher_support.engines_live_view import bucket_title
+        assert bucket_title("LIVE") == "RUNNING NOW"
+        assert bucket_title("READY") == "READY TO LAUNCH"
+
+    def test_row_action_label_bootstrap_ready(self):
+        from launcher_support.engines_live_view import row_action_label
+        label, _color = row_action_label("READY", {"live_bootstrap": True, "live_ready": False})
+        assert label == "BOOTSTRAP"
+
+
 class TestModeCycle:
     def test_cycle_paper_to_demo(self):
         from launcher_support.engines_live_view import cycle_mode
@@ -183,3 +221,75 @@ class TestRunningEnginesByBucket:
         from launcher_support.engines_live_view import running_slugs_from_procs
         procs = [{"engine": "ghost", "status": "running", "alive": True, "pid": 9}]
         assert running_slugs_from_procs(procs) == {}
+
+
+class TestExperimentalSplit:
+    """All quarantined engines in EXPERIMENTAL_SLUGS must land in RESEARCH
+    bucket (not READY) so the cockpit can render them in their own cluster.
+    """
+
+    def test_quarantined_slugs_are_research_bucket(self):
+        from config.engines import (
+            ENGINES, LIVE_READY_SLUGS, LIVE_BOOTSTRAP_SLUGS,
+            EXPERIMENTAL_SLUGS,
+        )
+        from launcher_support.engines_live_view import assign_bucket
+        for slug in EXPERIMENTAL_SLUGS:
+            assert slug in ENGINES, f"{slug} missing from ENGINES registry"
+            bucket = assign_bucket(
+                slug=slug,
+                is_running=False,
+                live_ready=(slug in LIVE_READY_SLUGS),
+                live_bootstrap=(slug in LIVE_BOOTSTRAP_SLUGS),
+            )
+            assert bucket == "RESEARCH", (
+                f"{slug} should be RESEARCH (quarantined) but was {bucket}"
+            )
+
+    def test_experimental_not_empty(self):
+        from config.engines import EXPERIMENTAL_SLUGS
+        # Protects against future edits that zero out the set by mistake —
+        # the cockpit split relies on this cluster being non-empty.
+        assert len(EXPERIMENTAL_SLUGS) >= 1
+
+
+class TestFindLatestShadowRun:
+    def test_returns_none_when_no_runs_dir(self, tmp_path, monkeypatch):
+        from launcher_support import engines_live_view as elv
+        monkeypatch.chdir(tmp_path)
+        assert elv._find_latest_shadow_run() is None
+
+    def test_picks_most_recent_by_mtime(self, tmp_path, monkeypatch):
+        import json
+        import os
+        from launcher_support import engines_live_view as elv
+        monkeypatch.chdir(tmp_path)
+
+        shadow_root = tmp_path / "data" / "millennium_shadow"
+        for name, mtime in (("older", 1000.0), ("newer", 2000.0)):
+            run_dir = shadow_root / name
+            (run_dir / "state").mkdir(parents=True)
+            hb_path = run_dir / "state" / "heartbeat.json"
+            hb_path.write_text(json.dumps({"run_id": name, "status": "running"}))
+            os.utime(hb_path, (mtime, mtime))
+
+        result = elv._find_latest_shadow_run()
+        assert result is not None
+        run_dir, payload = result
+        assert run_dir.name == "newer"
+        assert payload["run_id"] == "newer"
+
+    def test_skips_runs_without_heartbeat(self, tmp_path, monkeypatch):
+        from launcher_support import engines_live_view as elv
+        monkeypatch.chdir(tmp_path)
+        orphan = tmp_path / "data" / "millennium_shadow" / "orphan"
+        orphan.mkdir(parents=True)
+        assert elv._find_latest_shadow_run() is None
+
+    def test_skips_corrupted_heartbeat(self, tmp_path, monkeypatch):
+        from launcher_support import engines_live_view as elv
+        monkeypatch.chdir(tmp_path)
+        bad = tmp_path / "data" / "millennium_shadow" / "bad" / "state"
+        bad.mkdir(parents=True)
+        (bad / "heartbeat.json").write_text("{not json")
+        assert elv._find_latest_shadow_run() is None

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import tkinter as tk
 from pathlib import Path
 from typing import Literal
@@ -43,19 +44,77 @@ _MODE_COLORS: dict[Mode, str] = {
     "testnet": MODE_TESTNET,
     "live":    MODE_LIVE,
 }
+_STAGE_STYLE: dict[str, tuple[str, str]] = {
+    "validated": ("VALIDATED", GREEN),
+    "bootstrap_staging": ("BOOTSTRAP", AMBER),
+    "research": ("RESEARCH", DIM2),
+    "experimental": ("EXPERIMENTAL", RED),
+    "quarantined": ("QUARANTINED", HAZARD),
+}
+_PROCS_CACHE: dict[str, object] = {"ts": 0.0, "rows": []}
 
 
-def assign_bucket(*, slug: str, is_running: bool, live_ready: bool) -> Bucket:
+def _stage_badge(meta: dict | None) -> tuple[str, str]:
+    key = str((meta or {}).get("stage") or "research").strip().lower()
+    if key in _STAGE_STYLE:
+        return _STAGE_STYLE[key]
+    return (key.upper() or "RESEARCH", DIM2)
+
+
+def footer_hints(*, selected_bucket: Bucket | None, mode: str) -> tuple[str, str]:
+    hints = ["ESC main", "UP/DOWN list"]
+    if selected_bucket == "LIVE":
+        hints += ["LEFT/RIGHT fleet", "ENTER monitor", "S stop", "L log"]
+    elif selected_bucket == "READY":
+        hints += ["ENTER launch", "M change desk"]
+    elif selected_bucket == "RESEARCH":
+        hints += ["B backtest", "ENTER backtest"]
+    else:
+        hints += ["ENTER select"]
+    hints += ["M cycle mode"]
+    warn = "LIVE MODE - real orders enabled" if mode == "live" else ""
+    return ("  ·  ".join(hints), warn)
+
+
+def cockpit_summary(*, mode: str, live_count: int, ready_count: int, research_count: int) -> list[tuple[str, str, str]]:
+    return [
+        ("DESK", mode.upper(), _MODE_COLORS.get(mode, CYAN)),
+        ("RUNNING", str(live_count), GREEN if live_count else DIM2),
+        ("READY", str(ready_count), AMBER_B if ready_count else DIM2),
+        ("RESEARCH", str(research_count), WHITE if research_count else DIM2),
+    ]
+
+
+def bucket_title(bucket: Bucket) -> str:
+    return {
+        "LIVE": "RUNNING NOW",
+        "READY": "READY TO LAUNCH",
+        "RESEARCH": "RESEARCH ONLY",
+    }[bucket]
+
+
+def row_action_label(bucket: Bucket, meta: dict | None) -> tuple[str, str]:
+    if bucket == "LIVE":
+        return ("MONITOR", GREEN)
+    if bucket == "READY":
+        if bool((meta or {}).get("live_bootstrap")) and not bool((meta or {}).get("live_ready")):
+            return ("BOOTSTRAP", AMBER)
+        return ("LAUNCH", GREEN)
+    return ("BACKTEST", DIM2)
+
+
+def assign_bucket(*, slug: str, is_running: bool, live_ready: bool, live_bootstrap: bool = False) -> Bucket:
     """Decide which bucket an engine belongs to in the cockpit view.
 
     Rules:
       - A running engine that is also live_ready → LIVE.
       - A non-running live_ready engine → READY.
-      - Anything not live_ready → RESEARCH (even if running, since it was
-        spawned through the backtest path and doesn't belong on the live
-        cockpit).
+      - A bootstrap-runnable engine also lands in READY so the cockpit can
+        expose its dedicated preflight runner without claiming it is
+        validated for production execution.
+      - Anything else → RESEARCH.
     """
-    if not live_ready:
+    if not live_ready and not live_bootstrap:
         return "RESEARCH"
     return "LIVE" if is_running else "READY"
 
@@ -175,6 +234,22 @@ def running_slugs_from_procs(procs: list[dict]) -> dict[str, dict]:
     return out
 
 
+def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict]:
+    now = time.monotonic()
+    cached_rows = _PROCS_CACHE.get("rows")
+    cached_ts = float(_PROCS_CACHE.get("ts") or 0.0)
+    if not force and cached_rows is not None and (now - cached_ts) <= ttl_s:
+        return list(cached_rows)  # type: ignore[arg-type]
+    try:
+        from core.proc import list_procs
+        rows = list_procs()
+    except Exception:
+        rows = []
+    _PROCS_CACHE["ts"] = now
+    _PROCS_CACHE["rows"] = list(rows)
+    return rows
+
+
 # ════════════════════════════════════════════════════════════════
 # Tkinter rendering — smoke-tested via launcher, not unit-tested
 # ════════════════════════════════════════════════════════════════
@@ -243,6 +318,14 @@ def render(launcher, parent, *, on_escape) -> dict:
             except Exception:
                 pass
         state["after_handles"] = []
+        # Cancel any pending shadow-panel refresh so it doesn't fire after
+        # the user has left the cockpit screen.
+        aid = state.pop("shadow_after_id", None)
+        if aid is not None:
+            try:
+                launcher.after_cancel(aid)
+            except Exception:
+                pass
 
     def set_mode(mode):
         if mode not in _MODE_ORDER:
@@ -277,7 +360,9 @@ def render(launcher, parent, *, on_escape) -> dict:
 
 def _build_header(parent, launcher, state) -> tk.Frame:
     h = tk.Frame(parent, bg=BG)
-    brand = tk.Frame(h, bg=BG)
+    top = tk.Frame(h, bg=BG)
+    top.pack(fill="x")
+    brand = tk.Frame(top, bg=BG)
     brand.pack(side="left", padx=(0, 12))
     logo = tk.Canvas(brand, width=18, height=18, bg=BG, highlightthickness=0)
     logo.pack(side="left", padx=(0, 6))
@@ -287,11 +372,11 @@ def _build_header(parent, launcher, state) -> tk.Frame:
         pass
     tk.Label(brand, text="AURUM", font=(FONT, 8, "bold"),
              fg=WHITE, bg=BG).pack(side="left", padx=(0, 10))
-    tk.Frame(h, bg=AMBER, width=3, height=22).pack(side="left", padx=(0, 8))
-    tk.Label(h, text="ENGINES", font=(FONT, 12, "bold"),
+    tk.Frame(top, bg=AMBER, width=3, height=22).pack(side="left", padx=(0, 8))
+    tk.Label(top, text="LIVE COCKPIT", font=(FONT, 12, "bold"),
              fg=AMBER, bg=BG).pack(side="left", padx=(0, 14))
 
-    pill_row = tk.Frame(h, bg=BG)
+    pill_row = tk.Frame(top, bg=BG)
     pill_row.pack(side="left")
     state["mode_pills"] = {}
     for mode in _MODE_ORDER:
@@ -303,7 +388,7 @@ def _build_header(parent, launcher, state) -> tk.Frame:
                   lambda _e, _m=mode: state["set_mode"](_m))
         state["mode_pills"][mode] = pill
 
-    right = tk.Frame(h, bg=BG)
+    right = tk.Frame(top, bg=BG)
     right.pack(side="right")
     state["desk_lbl"] = tk.Label(right, text="", font=(FONT, 6, "bold"),
                                  fg=DIM2, bg=BG)
@@ -311,6 +396,8 @@ def _build_header(parent, launcher, state) -> tk.Frame:
     state["counts_lbl"] = tk.Label(right, text="", font=(FONT, 7, "bold"),
                                     fg=DIM, bg=BG)
     state["counts_lbl"].pack(side="right", padx=(8, 0))
+    state["summary_row"] = tk.Frame(h, bg=BG)
+    state["summary_row"].pack(fill="x", pady=(8, 0))
 
     # Header bottom rule — turns RED when mode=live (set in _refresh_header)
     rule = tk.Frame(parent, bg=BORDER, height=1)
@@ -346,19 +433,12 @@ def _build_footer(parent, state) -> tk.Frame:
 
 
 def _refresh_footer(state):
-    selected = state.get("selected_bucket")
-    hints = ["ESC main", "▲▼ select"]
-    if selected == "LIVE":
-        hints += ["◄► fleet", "S stop", "L log"]
-    elif selected == "READY":
-        hints += ["ENTER run"]
-    elif selected == "RESEARCH":
-        hints += ["B backtest"]
-    hints += ["M cycle mode"]
-    state["footer_lbl"].configure(text="  ·  ".join(hints))
-    state["footer_warn_lbl"].configure(
-        text=("⚠ LIVE MODE — real orders will be placed"
-              if state["mode"] == "live" else ""))
+    hints, warn = footer_hints(
+        selected_bucket=state.get("selected_bucket"),
+        mode=state["mode"],
+    )
+    state["footer_lbl"].configure(text=hints)
+    state["footer_warn_lbl"].configure(text=warn)
 
 
 def _render_master_list(state, launcher):
@@ -367,28 +447,34 @@ def _render_master_list(state, launcher):
     for w in host.winfo_children():
         w.destroy()
 
-    from config.engines import ENGINES, LIVE_READY_SLUGS
-    try:
-        from core.proc import list_procs
-        procs = list_procs()
-    except Exception:
-        procs = []
+    from config.engines import (
+        ENGINES, LIVE_BOOTSTRAP_SLUGS, LIVE_READY_SLUGS, EXPERIMENTAL_SLUGS,
+    )
+    procs = _list_procs_cached()
     running = running_slugs_from_procs(procs)
 
     live_items: list[tuple[str, dict, dict]] = []
     ready_items: list[tuple[str, dict]] = []
     research_items: list[tuple[str, dict]] = []
+    experimental_items: list[tuple[str, dict]] = []
     for slug, meta in ENGINES.items():
         live_ready = slug in LIVE_READY_SLUGS
+        live_bootstrap = slug in LIVE_BOOTSTRAP_SLUGS
         bucket = assign_bucket(
             slug=slug,
             is_running=slug in running,
             live_ready=live_ready,
+            live_bootstrap=live_bootstrap,
         )
         if bucket == "LIVE":
             live_items.append((slug, meta, running[slug]))
         elif bucket == "READY":
             ready_items.append((slug, meta))
+        elif slug in EXPERIMENTAL_SLUGS:
+            # Split RESEARCH into a dedicated EXPERIMENTAL cluster so
+            # quarantined / no-edge engines don't get mixed with honest
+            # research candidates.
+            experimental_items.append((slug, meta))
         else:
             research_items.append((slug, meta))
 
@@ -396,7 +482,8 @@ def _render_master_list(state, launcher):
     state["ordered_items"] = (
         [(slug, "LIVE") for slug, _meta, _proc in live_items] +
         [(slug, "READY") for slug, _meta in ready_items] +
-        [(slug, "RESEARCH") for slug, _meta in research_items]
+        [(slug, "RESEARCH") for slug, _meta in research_items] +
+        [(slug, "RESEARCH") for slug, _meta in experimental_items]
     )
 
     # Scrollable container
@@ -425,31 +512,63 @@ def _render_master_list(state, launcher):
     _render_bucket(inner, "LIVE", live_items, state)
     _render_bucket(inner, "READY LIVE", ready_items, state)
     _render_bucket(inner, "RESEARCH", research_items, state)
+    _render_bucket(inner, "EXPERIMENTAL", experimental_items, state)
 
-    total = len(live_items) + len(ready_items) + len(research_items)
+    _render_summary_row(
+        state,
+        live_count=len(live_items),
+        ready_count=len(ready_items),
+        research_count=len(research_items) + len(experimental_items),
+    )
+
+    total = (len(live_items) + len(ready_items)
+             + len(research_items) + len(experimental_items))
     state["counts_lbl"].configure(
-        text=f"{total} engines  ·  {len(live_items)} live")
+        text=f"{total} engines  ·  {len(live_items)} running")
+
+
+def _render_summary_row(state, *, live_count: int, ready_count: int, research_count: int):
+    host = state.get("summary_row")
+    if host is None:
+        return
+    for w in host.winfo_children():
+        w.destroy()
+    for label, value, color in cockpit_summary(
+        mode=state["mode"],
+        live_count=live_count,
+        ready_count=ready_count,
+        research_count=research_count,
+    ):
+        card = tk.Frame(host, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
+        card.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Label(card, text=label, fg=DIM2, bg=BG2,
+                 font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(6, 1))
+        tk.Label(card, text=value, fg=color, bg=BG2,
+                 font=(FONT, 9, "bold")).pack(anchor="w", padx=8, pady=(0, 6))
 
 
 def _render_bucket(parent, title, items, state):
     if not items:
         return
+    bucket = "LIVE" if title == "LIVE" else "RESEARCH" if title == "RESEARCH" else "READY"
     header = tk.Frame(parent, bg=BG)
     header.pack(fill="x", pady=(8, 2))
     tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
-    tk.Label(header, text=f"{title}", font=(FONT, 7, "bold"),
+    tk.Label(header, text=bucket_title(bucket), font=(FONT, 7, "bold"),
              fg=AMBER, bg=BG).pack(side="left")
     tk.Label(header, text=f"  · {len(items)}", font=(FONT, 7),
              fg=DIM, bg=BG).pack(side="left")
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
 
     is_live_bucket = title == "LIVE"
-    is_research = title == "RESEARCH"
+    # RESEARCH + EXPERIMENTAL share the locked-style row renderer —
+    # EXPERIMENTAL is a visual sub-cluster for quarantined engines.
+    is_research_like = title in ("RESEARCH", "EXPERIMENTAL")
     for tup in items:
         if is_live_bucket:
             slug, meta, proc = tup
             _render_row_live(parent, slug, meta, proc, state)
-        elif is_research:
+        elif is_research_like:
             slug, meta = tup
             _render_row_research(parent, slug, meta, state)
         else:
@@ -505,11 +624,7 @@ def _activate_selection(state, launcher):
 def _selected_proc(state):
     if state.get("selected_bucket") != "LIVE":
         return None
-    try:
-        from core.proc import list_procs
-        running = running_slugs_from_procs(list_procs())
-    except Exception:
-        return None
+    running = running_slugs_from_procs(_list_procs_cached())
     return running.get(state.get("selected_slug"))
 
 
@@ -543,10 +658,23 @@ def _render_row_live(parent, slug, meta, proc, state):
     sel = state.get("selected_slug") == slug
     row = _row_base(parent, slug, state, is_selected=sel)
     bg = row["bg"]
+    stage_label, stage_color = _stage_badge(meta)
+    action_label, action_color = row_action_label("RESEARCH", meta)
+    action_label, action_color = row_action_label("READY", meta)
+    action_label, action_color = row_action_label("LIVE", meta)
     tk.Label(row, text="●", fg=GREEN, bg=bg,
              font=(FONT, 9, "bold"), padx=4).pack(side="left")
     tk.Label(row, text=meta.get("display", slug.upper()),
              fg=WHITE, bg=bg, font=(FONT, 9, "bold")).pack(side="left")
+    tk.Label(row, text=f" {stage_label} ",
+             fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
+             padx=4, pady=1).pack(side="left", padx=(6, 0))
+    tk.Label(row, text=action_label,
+             fg=action_color, bg=bg, font=(FONT, 6, "bold")
+             ).pack(side="right", padx=(0, 8))
+    tk.Label(row, text=f" {action_label} ",
+             fg=action_color, bg=bg, font=(FONT, 6, "bold")
+             ).pack(side="right", padx=(0, 8))
     mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
     if mode_key in _MODE_ORDER:
         tk.Label(row, text=f" {mode_key.upper()} ",
@@ -569,9 +697,16 @@ def _render_row_ready(parent, slug, meta, state):
     sel = state.get("selected_slug") == slug
     row = _row_base(parent, slug, state, is_selected=sel)
     bg = row["bg"]
+    stage_label, stage_color = _stage_badge(meta)
     tk.Label(row, text=meta.get("display", slug.upper()),
              fg=WHITE, bg=bg, font=(FONT, 9, "bold"),
              padx=8).pack(side="left")
+    tk.Label(row, text=f" {stage_label} ",
+             fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
+             padx=4, pady=1).pack(side="left", padx=(0, 6))
+    tk.Label(row, text=action_label,
+             fg=action_color, bg=bg, font=(FONT, 6, "bold")
+             ).pack(side="right", padx=(0, 8))
     sub = _subtitle_for(slug, meta)
     if sub:
         tk.Label(row, text=sub, fg=DIM, bg=bg,
@@ -584,10 +719,14 @@ def _render_row_research(parent, slug, meta, state):
     sel = state.get("selected_slug") == slug
     row = _row_base(parent, slug, state, is_selected=sel)
     bg = row["bg"]
+    stage_label, stage_color = _stage_badge(meta)
     tk.Label(row, text="🔒", fg=DIM, bg=bg,
              font=(FONT, 8), padx=4).pack(side="left")
     tk.Label(row, text=meta.get("display", slug.upper()),
              fg=DIM, bg=bg, font=(FONT, 9)).pack(side="left")
+    tk.Label(row, text=f" {stage_label} ",
+             fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
+             padx=4, pady=1).pack(side="left", padx=(6, 0))
     sub = _subtitle_for(slug, meta)
     if sub:
         tk.Label(row, text=sub, fg=DIM2, bg=bg,
@@ -632,11 +771,15 @@ def _render_detail(state, launcher):
 def _render_detail_research(parent, slug, meta, state, launcher):
     name = meta.get("display", slug.upper())
     desc = meta.get("desc", "")
+    stage_label, stage_color = _stage_badge(meta)
 
     head = tk.Frame(parent, bg=PANEL)
     head.pack(fill="x", padx=12, pady=(10, 4))
     tk.Label(head, text=name, fg=AMBER, bg=PANEL,
              font=(FONT, 11, "bold")).pack(side="left")
+    tk.Label(head, text=f" {stage_label} ",
+             fg=BG, bg=stage_color, font=(FONT, 7, "bold"),
+             padx=6, pady=2).pack(side="right", padx=(0, 6))
     tk.Label(head, text=" [ RESEARCH ONLY ] ",
              fg=BG, bg=HAZARD, font=(FONT, 7, "bold"),
              padx=6, pady=2).pack(side="right")
@@ -946,17 +1089,212 @@ def _render_log_panel(parent, column, state, launcher, proc, snap):
     _schedule_log_tail(state, launcher, proc)
 
 
+def _find_latest_shadow_run() -> tuple[Path, dict] | None:
+    """Return (run_dir, heartbeat_payload) for the most recent shadow run,
+    or None when no heartbeat exists yet.
+
+    Runs live in data/millennium_shadow/<RUN_ID>/state/heartbeat.json.
+    Sorted by heartbeat mtime so a recently-stopped run ranks above a
+    stale one even if RUN_IDs sort differently.
+    """
+    root = Path("data/millennium_shadow")
+    if not root.exists():
+        return None
+    candidates: list[tuple[float, Path, dict]] = []
+    for sub in root.iterdir():
+        if not sub.is_dir():
+            continue
+        hb = sub / "state" / "heartbeat.json"
+        if not hb.exists():
+            continue
+        try:
+            payload = json.loads(hb.read_text(encoding="utf-8"))
+            mtime = hb.stat().st_mtime
+        except (OSError, json.JSONDecodeError):
+            continue
+        candidates.append((mtime, sub, payload))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[0], reverse=True)
+    _, run_dir, payload = candidates[0]
+    return run_dir, payload
+
+
+def _drop_shadow_kill(run_dir: Path, launcher, state) -> None:
+    """Drop a `.kill` flag so the shadow loop exits after the current tick."""
+    kill_path = run_dir / ".kill"
+    try:
+        kill_path.write_text("killed via cockpit\n", encoding="utf-8")
+    except OSError as exc:
+        try:
+            launcher.h_stat.configure(
+                text=f"SHADOW KILL fail: {type(exc).__name__}", fg=RED)
+        except Exception:
+            pass
+        return
+    try:
+        launcher.h_stat.configure(
+            text=f"SHADOW KILL flag dropped ({run_dir.name})", fg=AMBER)
+    except Exception:
+        pass
+    refresh = state.get("refresh")
+    if callable(refresh):
+        try:
+            launcher.after(250, refresh)
+        except Exception:
+            refresh()
+
+
+def _render_shadow_panel(parent, launcher, state, slug: str) -> None:
+    """Render SHADOW LOOP status card inside the MILLENNIUM detail.
+
+    Reads `data/millennium_shadow/<latest>/state/heartbeat.json` and shows
+    ticks_ok / ticks_fail / signals / last tick + STOP CTA when running.
+    Only active for the millennium slug — noop otherwise, so other engines
+    keep their existing detail layout untouched.
+
+    Auto-refreshes every 5s while a run is active so the cockpit reflects
+    tick progress without needing to navigate away and back.
+    """
+    if slug != "millennium":
+        return
+
+    # Cancel any prior shadow auto-refresh timer so a fresh render doesn't
+    # leak `after` callbacks every time the user bounces between engines.
+    old_aid = state.pop("shadow_after_id", None)
+    if old_aid is not None:
+        try:
+            launcher.after_cancel(old_aid)
+        except Exception:
+            pass
+
+    result = _find_latest_shadow_run()
+
+    shadow = tk.Frame(parent, bg=BG2,
+                      highlightbackground=BORDER_H, highlightthickness=1)
+    shadow.pack(fill="x", padx=12, pady=(0, 10))
+    # Stash the frame so the scheduled refresh can rebuild only this card.
+    state["shadow_panel_frame"] = shadow
+    state["shadow_panel_parent"] = parent
+    top = tk.Frame(shadow, bg=BG2)
+    top.pack(fill="x", padx=10, pady=(8, 4))
+    tk.Label(top, text="SHADOW LOOP", fg=AMBER_B, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
+
+    if result is None:
+        tk.Label(top, text="NONE", fg=DIM2, bg=BG2,
+                 font=(FONT, 7, "bold")).pack(side="right")
+        tk.Label(
+            shadow,
+            text=("Nenhum shadow run encontrado.\n"
+                  "Rode:  python tools/millennium_shadow.py "
+                  "--tick-sec 900 --run-hours 24"),
+            fg=DIM2, bg=BG2, font=(FONT, 7), justify="left", anchor="w",
+        ).pack(fill="x", padx=10, pady=(0, 8))
+        return
+
+    run_dir, hb = result
+    status = str(hb.get("status") or "unknown").upper()
+    status_color = GREEN if status == "RUNNING" else DIM2
+    tk.Label(top, text=f" {status} ", fg=BG, bg=status_color,
+             font=(FONT, 7, "bold"), padx=4).pack(side="right")
+
+    facts = tk.Frame(shadow, bg=BG2)
+    facts.pack(fill="x", padx=8, pady=(0, 4))
+    fail_n = int(hb.get("ticks_fail", 0) or 0)
+    _desk_metric(facts, "TICKS OK",
+                 str(hb.get("ticks_ok", 0)), GREEN)
+    _desk_metric(facts, "FAIL",
+                 str(fail_n), RED if fail_n > 0 else DIM2)
+    _desk_metric(facts, "SIGNALS",
+                 str(hb.get("novel_total", 0)), AMBER_B)
+    _desk_metric(facts, "TICK",
+                 f"{int(hb.get('tick_sec', 0) or 0)}s", WHITE)
+
+    last = hb.get("last_tick_at") or hb.get("stopped_at") or "—"
+    tk.Label(shadow,
+             text=f"RUN {hb.get('run_id','?')}  ·  last {last}",
+             fg=DIM, bg=BG2, font=(FONT, 7), anchor="w").pack(
+                 fill="x", padx=10, pady=(0, 4))
+
+    if status == "RUNNING":
+        stop_row = tk.Frame(shadow, bg=BG2)
+        stop_row.pack(fill="x", padx=10, pady=(0, 8))
+        kill_btn = tk.Label(stop_row, text=" STOP SHADOW ",
+                            fg=BG, bg=RED, font=(FONT, 7, "bold"),
+                            cursor="hand2", padx=6, pady=3)
+        kill_btn.pack(side="left")
+        kill_btn.bind("<Button-1>",
+                      lambda _e, _d=run_dir, _s=state:
+                          _drop_shadow_kill(_d, launcher, _s))
+        # Poll the heartbeat while the loop runs so the cockpit shows
+        # live tick progress. Rebuilds only the shadow card, not the
+        # whole detail pane, to avoid flicker elsewhere.
+        try:
+            aid = launcher.after(
+                5000,
+                lambda: _refresh_shadow_panel(launcher, state),
+            )
+            state["shadow_after_id"] = aid
+        except Exception:
+            pass
+    else:
+        reason = hb.get("stopped_reason") or "—"
+        tk.Label(shadow, text=f"stopped: {reason}",
+                 fg=DIM2, bg=BG2, font=(FONT, 7), anchor="w").pack(
+                     fill="x", padx=10, pady=(0, 8))
+
+
+def _refresh_shadow_panel(launcher, state) -> None:
+    """Rebuild the shadow card in-place from the latest heartbeat.
+
+    Only replaces the shadow frame — other widgets on the detail stay put.
+    Silently aborts if the user has navigated away (frame destroyed).
+    """
+    frame = state.get("shadow_panel_frame")
+    parent = state.get("shadow_panel_parent")
+    if frame is None or parent is None:
+        return
+    try:
+        if not frame.winfo_exists():
+            return
+    except Exception:
+        return
+    # Only refresh while the Millennium detail is still the active selection.
+    if state.get("selected_slug") != "millennium":
+        return
+    try:
+        frame.destroy()
+    except Exception:
+        return
+    _render_shadow_panel(parent, launcher, state, "millennium")
+
+
 def _render_detail_ready(parent, slug, meta, state, launcher):
     name = meta.get("display", slug.upper())
     desc = meta.get("desc", "")
     mode = state["mode"]
     run_color = _MODE_COLORS[mode]
+    meta_stage_label, meta_stage_color = _stage_badge(meta)
+    is_bootstrap = bool(meta.get("live_bootstrap")) and not bool(meta.get("live_ready"))
+    stage_label = " BOOTSTRAP READY " if is_bootstrap else " DEPLOY READY "
+    runner_label = "BOOTSTRAP" if is_bootstrap else "VALIDATED"
+    role_label = "STAGING" if is_bootstrap else "LAB"
+    route_label = "PREFLIGHT" if is_bootstrap else "UNIFIED"
+    mandate_text = (
+        "BOOTSTRAP -> PREFLIGHT -> ADAPTER BUILD\nNO REAL EXECUTION LOOP YET"
+        if is_bootstrap else
+        "RESEARCH -> EXECUTION\nSIGNAL -> RISK GATE -> MARKET"
+    )
+    cta_text = f"  {'BOOTSTRAP' if is_bootstrap else 'DEPLOY'} IN {mode.upper()}  "
 
     head = tk.Frame(parent, bg=PANEL)
     head.pack(fill="x", padx=12, pady=(10, 4))
     tk.Label(head, text=name, fg=AMBER, bg=PANEL,
              font=(FONT, 11, "bold")).pack(side="left")
-    tk.Label(head, text=" DEPLOY READY ", fg=BG, bg=GREEN,
+    tk.Label(head, text=f" {meta_stage_label} ", fg=BG, bg=meta_stage_color,
+             font=(FONT, 7, "bold"), padx=6, pady=2).pack(side="right", padx=(0, 6))
+    tk.Label(head, text=stage_label, fg=BG, bg=GREEN,
              font=(FONT, 7, "bold"), padx=6, pady=2).pack(side="right")
 
     if desc:
@@ -976,12 +1314,12 @@ def _render_detail_ready(parent, slug, meta, state, launcher):
              font=(FONT, 7, "bold")).pack(side="right")
     facts = tk.Frame(deck, bg=BG2)
     facts.pack(fill="x", padx=8, pady=(0, 8))
-    _desk_metric(facts, "RUNNER", "VALIDATED", GREEN)
-    _desk_metric(facts, "ROLE", "LAB", WHITE)
+    _desk_metric(facts, "RUNNER", runner_label, GREEN)
+    _desk_metric(facts, "ROLE", role_label, WHITE)
     _desk_metric(facts, "STACK", "LIVE", AMBER_B)
     _desk_metric(facts, "RISK", mode.upper(), run_color)
 
-    run = tk.Label(parent, text=f"  DEPLOY IN {mode.upper()}  ",
+    run = tk.Label(parent, text=cta_text,
                    fg=BG, bg=run_color, font=(FONT, 11, "bold"),
                    cursor="hand2", padx=8, pady=10)
     run.pack(fill="x", padx=12, pady=(0, 8))
@@ -1002,7 +1340,7 @@ def _render_detail_ready(parent, slug, meta, state, launcher):
     facts = tk.Frame(cfg_frame, bg=BG2)
     facts.pack(fill="x", padx=8, pady=(0, 6))
     _desk_metric(facts, "ACCOUNT", mode.upper(), run_color)
-    _desk_metric(facts, "ROUTING", "UNIFIED", WHITE)
+    _desk_metric(facts, "ROUTING", route_label, WHITE)
     _desk_metric(facts, "RISK", "DESK LIMITS", WHITE)
     lev = tk.Frame(cfg_frame, bg=BG2)
     lev.pack(fill="x", padx=10, pady=(0, 8))
@@ -1023,8 +1361,11 @@ def _render_detail_ready(parent, slug, meta, state, launcher):
     mandate.pack(fill="x", padx=12, pady=(0, 10))
     tk.Label(mandate, text="MANDATE", fg=AMBER_D, bg=BG2,
              font=(FONT, 7, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
-    tk.Label(mandate, text="RESEARCH -> EXECUTION\nSIGNAL -> RISK GATE -> MARKET",
+    tk.Label(mandate, text=mandate_text,
              fg=DIM2, bg=BG2, font=(FONT, 8), anchor="w", justify="left").pack(fill="x", padx=10, pady=(0, 8))
+
+    # Shadow loop status (MILLENNIUM only — noop for other engines).
+    _render_shadow_panel(parent, launcher, state, slug)
 
     actions = tk.Frame(parent, bg=PANEL)
     actions.pack(fill="x", padx=12, pady=(0, 12))
@@ -1117,11 +1458,8 @@ def _past_runs(launcher, slug):
 
 def _render_detail_live(parent, slug, meta, state, launcher):
     name = meta.get("display", slug.upper())
-    try:
-        from core.proc import list_procs
-        procs = list_procs()
-    except Exception:
-        procs = []
+    stage_label, stage_color = _stage_badge(meta)
+    procs = _list_procs_cached()
     running = running_slugs_from_procs(procs)
     proc = running.get(slug, {})
     snap = _runtime_snapshot(slug, proc)
@@ -1136,6 +1474,9 @@ def _render_detail_live(parent, slug, meta, state, launcher):
     head.pack(fill="x", padx=12, pady=(10, 4))
     tk.Label(head, text=name, fg=AMBER, bg=PANEL,
              font=(FONT, 11, "bold")).pack(side="left")
+    tk.Label(head, text=f" {stage_label} ",
+             fg=BG, bg=stage_color, font=(FONT, 7, "bold"),
+             padx=6, pady=2).pack(side="left", padx=(8, 0))
     right = tk.Frame(head, bg=PANEL)
     right.pack(side="right")
     tk.Label(right, text=f"{fleet_pos}/{max(len(fleet), 1)}", fg=DIM2, bg=PANEL,
