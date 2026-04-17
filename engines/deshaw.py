@@ -10,6 +10,22 @@ Pipeline:
   2. Z-score do spread com rolling window
   3. Half-life via OLS (Ornstein-Uhlenbeck)
   4. Entry: |z| > 2.0, Exit: z cruza 0, Stop: |z| > 3.5
+
+Edge status (2026-04-16)
+------------------------
+Defaults (NEWTON_ZSCORE_ENTRY=2.0) are flagged "NÃO USAR EM LIVE" — 18 prior
+iterations and no edge in crypto universe. 730d sweep confirmed:
+  defaults:           1741t ROI -15.4% Sharpe -0.68 DD 29.5%  (2/6 PASS)
+  z=2.5 exit=0.5:     same scale, worse audit                 (3/6 PASS)
+  z=3.0 exit=0.0 pvalue=0.05:           1060t ROI +3.09% Sharpe +0.14  (3/6 PASS)
+  z=3.0 exit=0.5 pvalue=0.05 hl=300:    1063t ROI +1.21% Sharpe +0.055 (3/6 PASS)
+  z=3.5 pvalue=0.05:  worse (over-selective)
+  z=3.0 exit=0.8/1.0: worse (over-protective, misses convergence)
+  4h:                 still negative
+First break-even config ever found. CLI overrides --z-entry / --z-exit /
+--pvalue / --hl-max / --max-hold / --size-mult enable further sweeps
+without touching config.params. Engine remains experimental — no live
+registration until walk-forward survives in 3+ years of data.
 """
 import sys
 if sys.stdout.encoding != "utf-8":
@@ -703,7 +719,38 @@ if __name__ == "__main__":
     _ap.add_argument("--basket", type=str, default=None)
     _ap.add_argument("--interval", type=str, default=None, help="Execution timeframe override (e.g. 1h, 4h)")
     _ap.add_argument("--no-menu", action="store_true")
+    # Experimental tuning overrides (do not modify config.params).
+    # When provided, these override the NEWTON_* globals for this run only.
+    _ap.add_argument("--z-entry", type=float, default=None,
+                     help="Override NEWTON_ZSCORE_ENTRY (default from config.params)")
+    _ap.add_argument("--z-exit", type=float, default=None,
+                     help="Override NEWTON_ZSCORE_EXIT")
+    _ap.add_argument("--z-stop", type=float, default=None,
+                     help="Override NEWTON_ZSCORE_STOP")
+    _ap.add_argument("--pvalue", type=float, default=None,
+                     help="Override NEWTON_COINT_PVALUE")
+    _ap.add_argument("--hl-max", type=int, default=None,
+                     help="Override NEWTON_HALFLIFE_MAX")
+    _ap.add_argument("--max-hold", type=int, default=None,
+                     help="Override NEWTON_MAX_HOLD")
+    _ap.add_argument("--size-mult", type=float, default=None,
+                     help="Override NEWTON_SIZE_MULT")
     _args, _ = _ap.parse_known_args()
+    # Apply overrides before any scan logic runs.
+    if _args.z_entry is not None:
+        NEWTON_ZSCORE_ENTRY = float(_args.z_entry)
+    if _args.z_exit is not None:
+        NEWTON_ZSCORE_EXIT = float(_args.z_exit)
+    if _args.z_stop is not None:
+        NEWTON_ZSCORE_STOP = float(_args.z_stop)
+    if _args.pvalue is not None:
+        NEWTON_COINT_PVALUE = float(_args.pvalue)
+    if _args.hl_max is not None:
+        NEWTON_HALFLIFE_MAX = int(_args.hl_max)
+    if _args.max_hold is not None:
+        NEWTON_MAX_HOLD = int(_args.max_hold)
+    if _args.size_mult is not None:
+        NEWTON_SIZE_MULT = float(_args.size_mult)
 
     print(f"\n{SEP}")
     print(f"  DE SHAW  ·  Statistical Mean Reversion")

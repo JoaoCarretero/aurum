@@ -34,13 +34,18 @@ Discipline
 Edge status (2026-04-16)
 ------------------------
 - 1h (730d, default defaults): no edge. WR ~35-41% with symmetric R:R → EV<0.
-- 4h (1460d, relaxed η 0.65/0.90): η gate strictly beats baseline on all
-  metrics BUT both are catastrophically negative (baseline ROI -1380%,
-  gated ROI -144%). Trend-follow 4h crypto has no positive edge in this
-  universe.
+- 4h (1460d bluechip, relaxed η 0.65/0.90): η gate strictly beats baseline
+  on all metrics BUT both are catastrophically negative (baseline ROI
+  -1380%, gated ROI -144%).
+- 4h (1460d layer1, relaxed η 0.50/0.95): same pattern — ALGO alone
+  produces -$2485 in 256 trades. No positive-baseline subset found.
+- 1d (2000d): too few bars vs hawkes warmup (2000); engine skips all
+  symbols. Would need hawkes_window_bars < 500 to even try.
 - H2-INV (mean-reversion in ENDO) already rejected in prior session.
-Engine remains experimental until a TF / trigger with positive baseline
-is found. Do NOT register in FROZEN_ENGINES.
+Conclusion: trend-follow with Hawkes ENDO gate is structurally
+incompatible with crypto 1h/4h in this universe. Engine archived as
+experimental — needs new signal base (not EMA cross) to justify revival.
+Do NOT register in FROZEN_ENGINES.
 """
 
 from __future__ import annotations
