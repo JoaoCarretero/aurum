@@ -1,0 +1,57 @@
+# Reprodutibilidade BEAR (2022-01..2023-01) — 2026-04-17
+
+**Metodologia:** rodar os 7 engines com `tools/oos_revalidate.py --window bear`
+nos mesmos params que o audit de 2026-04-16. Diff contra os valores
+reportados em `docs/audits/2026-04-16_oos_verdict.md`.
+
+## Commit state at run
+
+- Branch: `feat/phi-engine`
+- Único commit em `config/params.py` desde 2026-04-16: `31304f8`
+  (Hawkes lib + KEPOS/GRAHAM), não afeta engines não-Hawkes.
+
+## Tabela
+
+| Engine | Baseline Sharpe | Now Sharpe | Baseline n | Now n | Baseline ROI | Now ROI | Verdict |
+|---|---|---|---|---|---|---|---|
+| CITADEL | 5.677 | 5.677 | 240 | 240 | — | 45.59 | ✅ EXATO |
+| RENAISSANCE | 2.421 | 2.421 | 226 | 226 | 8.81 | 8.81 | ✅ EXATO |
+| JUMP | 3.15 | 3.15 | 110 | 110 | 16.36 | 16.36 | ✅ EXATO |
+| DE SHAW | -1.726 | -1.726 | 1819 | 1819 | -28.34 | -28.34 | ✅ EXATO |
+| BRIDGEWATER | 11.04 | 11.237 | 9194 | 7564 | 267.22 | 256.00 | ⚠️ METRICS OK / n_trades -17.7% |
+| KEPOS | 0 (não dispara) | 0 (não dispara) | — | — | — | — | ✅ EXATO (schema nested) |
+| MEDALLION | -3.218 | -3.218 | 173 | 173 | -38.12 | -38.12 | ✅ EXATO (schema nested) |
+
+## Análise
+
+- **6/7 exato** em Sharpe + n_trades + ROI + MDD. Reprodutibilidade
+  confirmada.
+- **BRIDGEWATER divergência**: Sharpe/ROI/MDD/Sortino praticamente iguais
+  (+1.8%, -4.2%, -2.1% respectivamente), mas **n_trades -17.7% (9194 →
+  7564)**. Possíveis causas:
+  - Cache de sentimento (funding rates, OI, LS ratio) atualizado entre
+    16→17 abril; series podem ter mais/menos ticks disponíveis no range.
+  - Não-determinismo em algum path de sentimento (ex: rolling z-score
+    com população mudada).
+  - Params dependentes de timing podem ter disparado contagem diferente
+    de entries.
+- **KEPOS/MEDALLION nested summary**: esses 2 engines escrevem
+  `summary.json` com schema `{engine, params, summary: {n_trades, ...}}`
+  em vez de metrics no top-level. Orchestrator `oos_revalidate.py` lê
+  top-level e acha None. Fix trivial pro orchestrator (extrair nested
+  se `summary` é dict aninhado). Por ora: ler nested manualmente.
+
+## Veredito reprodutibilidade
+
+**CONFIRMADO** pra CITADEL, RENAISSANCE, JUMP, DE SHAW, KEPOS, MEDALLION.
+
+**BRIDGEWATER** tem Sharpe/ROI dentro de margem (~2%), mas divergência
+em n_trades vale anotação no veredito final: o claim "Sharpe 11.04 / 267%
+ROI" é reprodutível em magnitude. O número exato depende do cache de
+sentimento no momento da run. Isso reforça a suspeita de bug/leak (edge
+real não depende de ticks de sentimento sendo atualizados).
+
+## Arquivos
+
+- Raw BEAR run: `data/audit/oos_revalidate_bear.json`
+- Baseline source: `docs/audits/2026-04-16_oos_verdict.md`
