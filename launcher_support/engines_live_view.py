@@ -934,81 +934,6 @@ def _desk_metric(parent, label, value, color):
     tk.Label(box, text=str(value), fg=color, bg=BG3, font=(FONT, 8, "bold")).pack(anchor="w", padx=8, pady=(0, 5))
 
 
-def _mode_bank_snapshot(launcher) -> dict[str, dict]:
-    snap: dict[str, dict] = {}
-    try:
-        from core.portfolio_monitor import PortfolioMonitor
-        paper = PortfolioMonitor.paper_state_load()
-        snap["paper"] = {
-            "status": "editable",
-            "detail": f"${float(paper.get('current_balance', 0) or 0):,.2f}",
-        }
-    except Exception:
-        snap["paper"] = {"status": "editable", "detail": "N/A"}
-
-    pm = None
-    try:
-        getter = getattr(launcher, "_get_portfolio_monitor", None)
-        if callable(getter):
-            pm = getter()
-    except Exception:
-        pm = None
-
-    for mode in ("demo", "testnet", "live"):
-        has_keys = False
-        try:
-            if pm is not None:
-                has_keys = bool(pm.has_keys(mode))
-        except Exception:
-            has_keys = False
-        snap[mode] = {
-            "status": "keys" if has_keys else "offline",
-            "detail": "BINANCE" if has_keys else "NO KEYS",
-        }
-    return snap
-
-
-def _open_paper_editor(launcher):
-    fn = getattr(launcher, "_dash_paper_edit_dialog", None)
-    if callable(fn):
-        fn()
-
-
-def _render_mode_bank(parent, launcher, active_mode: str, *, allow_paper_edit: bool = False):
-    snap = _mode_bank_snapshot(launcher)
-    box = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
-    box.pack(fill="x", padx=12, pady=(0, 8))
-    head = tk.Frame(box, bg=BG2)
-    head.pack(fill="x", padx=10, pady=(8, 4))
-    tk.Label(head, text="ENVIRONMENT BANK", fg=AMBER_D, bg=BG2,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(head, text="PAPER / DEMO / TESTNET / LIVE", fg=DIM2, bg=BG2,
-             font=(FONT, 6)).pack(side="right")
-    row = tk.Frame(box, bg=BG2)
-    row.pack(fill="x", padx=8, pady=(0, 8))
-    for mode in _MODE_ORDER:
-        item = snap.get(mode, {})
-        active = mode == active_mode
-        color = _MODE_COLORS[mode]
-        status = str(item.get("status", "-")).upper()
-        detail = str(item.get("detail", "-"))
-        card = tk.Frame(row, bg=(PANEL if active else BG3),
-                        highlightbackground=(color if active else BORDER),
-                        highlightthickness=1)
-        card.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        tk.Label(card, text=mode.upper(), fg=(color if active else DIM2),
-                 bg=card["bg"], font=(FONT, 7, "bold")).pack(anchor="w", padx=8, pady=(6, 1))
-        tk.Label(card, text=detail, fg=WHITE, bg=card["bg"],
-                 font=(FONT, 8, "bold")).pack(anchor="w", padx=8)
-        tk.Label(card, text=status, fg=DIM, bg=card["bg"],
-                 font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(1, 6))
-
-    if allow_paper_edit and active_mode == "paper":
-        actions = tk.Frame(box, bg=BG2)
-        actions.pack(fill="x", padx=10, pady=(0, 8))
-        _action_btn(actions, "EDIT PAPER BALANCE", AMBER_B, lambda: _open_paper_editor(launcher))
-
-
 def _render_live_book(parent, state, running):
     if not running:
         return
@@ -1290,80 +1215,67 @@ def _render_detail_ready(parent, slug, meta, state, launcher):
     cta_text = f"  {'BOOTSTRAP' if is_bootstrap else 'DEPLOY'} IN {mode.upper()}  "
 
     head = tk.Frame(parent, bg=PANEL)
-    head.pack(fill="x", padx=12, pady=(10, 4))
+    head.pack(fill="x", padx=12, pady=(8, 2))
     tk.Label(head, text=name, fg=AMBER, bg=PANEL,
              font=(FONT, 11, "bold")).pack(side="left")
     tk.Label(head, text=f" {meta_stage_label} ", fg=BG, bg=meta_stage_color,
-             font=(FONT, 7, "bold"), padx=6, pady=2).pack(side="right", padx=(0, 6))
+             font=(FONT, 7, "bold"), padx=6, pady=1).pack(side="right", padx=(0, 6))
     tk.Label(head, text=stage_label, fg=BG, bg=GREEN,
-             font=(FONT, 7, "bold"), padx=6, pady=2).pack(side="right")
+             font=(FONT, 7, "bold"), padx=6, pady=1).pack(side="right")
 
     if desc:
         tk.Label(parent, text=desc.upper(), fg=DIM2, bg=PANEL,
                  font=(FONT, 7), anchor="w", justify="left",
-                 wraplength=520).pack(fill="x", padx=12, pady=(0, 6))
+                 wraplength=520).pack(fill="x", padx=12, pady=(0, 4))
 
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
 
-    deck = tk.Frame(parent, bg=BG2, highlightbackground=BORDER_H, highlightthickness=1)
-    deck.pack(fill="x", padx=12, pady=(10, 8))
-    top = tk.Frame(deck, bg=BG2)
-    top.pack(fill="x", padx=10, pady=(8, 4))
-    tk.Label(top, text="DEPLOY DECK", fg=AMBER_B, bg=BG2,
+    # EXECUTION DESK — funde DEPLOY DECK + EXECUTION PROFILE. Mode pills
+    # no header ja cobrem PAPER/DEMO/TESTNET/LIVE, entao ENVIRONMENT BANK
+    # foi removido.
+    desk = tk.Frame(parent, bg=BG2, highlightbackground=BORDER_H, highlightthickness=1)
+    desk.pack(fill="x", padx=12, pady=(6, 4))
+    top = tk.Frame(desk, bg=BG2)
+    top.pack(fill="x", padx=10, pady=(6, 2))
+    tk.Label(top, text="EXECUTION DESK", fg=AMBER_B, bg=BG2,
              font=(FONT, 7, "bold")).pack(side="left")
     tk.Label(top, text=f"NEXT {mode.upper()}", fg=run_color, bg=BG2,
              font=(FONT, 7, "bold")).pack(side="right")
-    facts = tk.Frame(deck, bg=BG2)
-    facts.pack(fill="x", padx=8, pady=(0, 8))
+    facts = tk.Frame(desk, bg=BG2)
+    facts.pack(fill="x", padx=8, pady=(0, 4))
     _desk_metric(facts, "RUNNER", runner_label, GREEN)
-    _desk_metric(facts, "ROLE", role_label, WHITE)
-    _desk_metric(facts, "STACK", "LIVE", AMBER_B)
-    _desk_metric(facts, "RISK", mode.upper(), run_color)
-
-    run = tk.Label(parent, text=cta_text,
-                   fg=BG, bg=run_color, font=(FONT, 11, "bold"),
-                   cursor="hand2", padx=8, pady=10)
-    run.pack(fill="x", padx=12, pady=(0, 8))
-    run.bind("<Button-1>", lambda _e: _run_engine(launcher, slug, meta, state))
-
-    _render_mode_bank(parent, launcher, mode, allow_paper_edit=True)
-
+    _desk_metric(facts, "ROUTING", route_label, WHITE)
+    _desk_metric(facts, "ACCOUNT", mode.upper(), run_color)
+    _desk_metric(facts, "RISK", "DESK LIMITS", WHITE)
+    lev = tk.Frame(desk, bg=BG2)
+    lev.pack(fill="x", padx=10, pady=(0, 6))
+    tk.Label(lev, text="LEV", fg=DIM, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left", padx=(0, 6))
     cfg_store = state.setdefault("config", {})
     cfg = cfg_store.setdefault(slug, {"leverage": "2.0"})
-    cfg_frame = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
-    cfg_frame.pack(fill="x", padx=12, pady=(0, 8))
-    top_cfg = tk.Frame(cfg_frame, bg=BG2)
-    top_cfg.pack(fill="x", padx=10, pady=(8, 4))
-    tk.Label(top_cfg, text="EXECUTION PROFILE", fg=AMBER_D, bg=BG2,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(top_cfg, text="ROUTE AUTO", fg=DIM2, bg=BG2,
-             font=(FONT, 6, "bold")).pack(side="right")
-    facts = tk.Frame(cfg_frame, bg=BG2)
-    facts.pack(fill="x", padx=8, pady=(0, 6))
-    _desk_metric(facts, "ACCOUNT", mode.upper(), run_color)
-    _desk_metric(facts, "ROUTING", route_label, WHITE)
-    _desk_metric(facts, "RISK", "DESK LIMITS", WHITE)
-    lev = tk.Frame(cfg_frame, bg=BG2)
-    lev.pack(fill="x", padx=10, pady=(0, 8))
-    tk.Label(lev, text="LEVERAGE", fg=DIM, bg=BG2,
-             font=(FONT, 7)).pack(side="left", padx=(0, 8))
     for disp, val in _LEVERAGE_OPTS:
         active = cfg.get("leverage") == val
         pill = tk.Label(lev, text=f" {disp} ",
                         fg=(BG if active else DIM2),
                         bg=(AMBER if active else BG3),
                         font=(FONT, 7, "bold"),
-                        cursor="hand2", padx=4, pady=1)
+                        cursor="hand2", padx=4, pady=0)
         pill.pack(side="left", padx=(0, 3))
         pill.bind("<Button-1>",
                   lambda _e, _v=val, _d=cfg, _s=state: _set_cfg(_d, "leverage", _v, _s))
 
+    run = tk.Label(parent, text=cta_text,
+                   fg=BG, bg=run_color, font=(FONT, 10, "bold"),
+                   cursor="hand2", padx=8, pady=6)
+    run.pack(fill="x", padx=12, pady=(0, 4))
+    run.bind("<Button-1>", lambda _e: _run_engine(launcher, slug, meta, state))
+
     mandate = tk.Frame(parent, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
-    mandate.pack(fill="x", padx=12, pady=(0, 10))
-    tk.Label(mandate, text="MANDATE", fg=AMBER_D, bg=BG2,
-             font=(FONT, 7, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
-    tk.Label(mandate, text=mandate_text,
-             fg=DIM2, bg=BG2, font=(FONT, 8), anchor="w", justify="left").pack(fill="x", padx=10, pady=(0, 8))
+    mandate.pack(fill="x", padx=12, pady=(0, 4))
+    tk.Label(mandate, text=f"MANDATE  ·  {mandate_text.replace(chr(10), '  ·  ')}",
+             fg=DIM2, bg=BG2, font=(FONT, 7), anchor="w",
+             justify="left", wraplength=540).pack(
+                 fill="x", padx=10, pady=(6, 6))
 
     # Shadow loop status (MILLENNIUM only — noop for other engines).
     _render_shadow_panel(parent, launcher, state, slug)
@@ -1507,26 +1419,24 @@ def _render_detail_live(parent, slug, meta, state, launcher):
     _kpi_col(kpis, "PID",    str(proc.get("pid") or "-"), DIM2)
     _kpi_col(kpis, "SIGNAL", str(snap["last_signal"])[:28], WHITE)
 
-    _render_mode_bank(parent, launcher, mode_key, allow_paper_edit=(mode_key == "paper"))
-
+    # ENVIRONMENT BANK removido: mode pills no header ja indicam PAPER/
+    # DEMO/TESTNET/LIVE. Operating map fica mais compacto.
     ops = tk.Frame(parent, bg=BG2, highlightbackground=BORDER_H, highlightthickness=1)
-    ops.pack(fill="x", padx=12, pady=(0, 8))
+    ops.pack(fill="x", padx=12, pady=(4, 4))
     top = tk.Frame(ops, bg=BG2)
-    top.pack(fill="x", padx=10, pady=(8, 4))
+    top.pack(fill="x", padx=10, pady=(6, 2))
     tk.Label(top, text="OPERATING MAP", fg=AMBER_B, bg=BG2,
              font=(FONT, 7, "bold")).pack(side="left")
     tk.Label(top, text="LAB -> LIVE", fg=mode_color, bg=BG2,
              font=(FONT, 7, "bold")).pack(side="right")
     facts = tk.Frame(ops, bg=BG2)
-    facts.pack(fill="x", padx=8, pady=(0, 6))
+    facts.pack(fill="x", padx=8, pady=(0, 4))
     _desk_metric(facts, "MODE", mode_key.upper(), mode_color)
     _desk_metric(facts, "UPTIME", format_uptime(seconds=_uptime_seconds(proc)), WHITE)
     _desk_metric(facts, "DESK", f"{fleet_pos}/{max(len(fleet), 1)}", WHITE)
     _desk_metric(facts, "RISK", f"{snap['positions_count']} BOOKS", WHITE)
     _desk_metric(facts, "FEED", "ATTACHED" if snap["log_path"] else "OFFLINE",
                  GREEN if snap["log_path"] else RED)
-    tk.Label(ops, text="BOOK · TELEMETRY · CONTROL", fg=DIM2, bg=BG2,
-             font=(FONT, 8)).pack(anchor="w", padx=10, pady=(0, 8))
 
     lower = tk.Frame(parent, bg=PANEL)
     lower.pack(fill="both", expand=True, padx=12, pady=(0, 10))
