@@ -7,7 +7,7 @@ Persists to config/connections.json.
 import copy
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config.paths import CONNECTIONS_STATE_PATH
 from core.persistence import atomic_write_json
@@ -100,7 +100,7 @@ class ConnectionManager:
             self.state["connections"][provider]["connected"] = connected
             self.state["connections"][provider].update(kwargs)
             if connected:
-                self.state["connections"][provider]["last_ping"] = datetime.now().isoformat()
+                self.state["connections"][provider]["last_ping"] = datetime.now(timezone.utc).isoformat()
             self.save()
 
     _PING_CACHE_TTL_S = 8.0  # Avoid hammering the exchange — UI polls repeatedly

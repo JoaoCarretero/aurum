@@ -20,6 +20,8 @@ Thumbs.db
 
 # Keys & credentials — NUNCA versionar
 config/keys.json
+config/keys.json.enc
+config/connections.json
 config/vps.json
 config/vpn.json
 

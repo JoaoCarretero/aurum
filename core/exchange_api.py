@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import time
 from typing import Optional
 
 import requests
 
+
+log = logging.getLogger(__name__)
 
 _BASE_URLS = {
     "testnet": "https://testnet.binancefuture.com",
@@ -38,7 +41,12 @@ class BinanceFuturesAPI:
 
     # ── INTERNALS ─────────────────────────────────────────────
     def _signed_get(self, path: str, params: Optional[dict] = None):
-        """Issue an authenticated GET. Returns parsed JSON or None on failure."""
+        """Issue an authenticated GET. Returns parsed JSON or None on failure.
+
+        Returns None uniformly across failure modes (network / auth / parsing)
+        to keep callers simple, but logs them at distinct levels so operators
+        can tell connectivity blips apart from credential rejections.
+        """
         if not self.key or not self.secret:
             return None
         params = dict(params or {})
@@ -58,10 +66,32 @@ class BinanceFuturesAPI:
                 headers={"X-MBX-APIKEY": self.key},
                 timeout=_DEFAULT_TIMEOUT,
             )
-            if r.status_code != 200:
-                return None
+        except requests.exceptions.Timeout:
+            log.debug("binance %s %s timeout", self.mode, path)
+            return None
+        except requests.exceptions.ConnectionError as e:
+            log.debug("binance %s %s connection error: %s", self.mode, path, e)
+            return None
+        except requests.RequestException as e:
+            log.warning("binance %s %s request error: %s", self.mode, path, e)
+            return None
+
+        if r.status_code in (401, 403):
+            log.warning(
+                "binance %s %s auth rejected (HTTP %s) — key invalid or permissions missing",
+                self.mode, path, r.status_code,
+            )
+            return None
+        if r.status_code == 429 or r.status_code == 418:
+            log.warning("binance %s %s rate-limited (HTTP %s)", self.mode, path, r.status_code)
+            return None
+        if r.status_code != 200:
+            log.debug("binance %s %s HTTP %s: %s", self.mode, path, r.status_code, r.text[:200])
+            return None
+        try:
             return r.json()
-        except Exception:
+        except ValueError:
+            log.warning("binance %s %s returned non-JSON body", self.mode, path)
             return None
 
     # ── PUBLIC ENDPOINTS ──────────────────────────────────────

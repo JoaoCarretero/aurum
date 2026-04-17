@@ -13,8 +13,16 @@ Comandos:
 Config em config/keys.json:
   "telegram": {
       "bot_token": "123456:ABC-DEF...",
-      "chat_id":   "987654321"
+      "chat_id":   "987654321",
+      "allowed_user_ids": ["987654321"]   # optional — defaults to [chat_id]
   }
+
+Authorization model:
+  * chat_id identifies the conversation where we *send* notifications.
+  * allowed_user_ids is the allowlist of Telegram user IDs that may
+    *issue commands*. In DMs they coincide, but in groups chat_id is
+    the group's id while any member has their own user id — so the
+    two concepts must not be conflated.
 """
 
 import asyncio, json, logging, time
@@ -38,18 +46,28 @@ _POLL_INTERVAL = 2          # segundos entre polls de updates
 _MAX_MSG_LEN   = 4000       # Telegram limit ~4096
 
 
-def _load_telegram_config() -> tuple[str, str]:
-    """Retorna (bot_token, chat_id) ou ('','') se não configurado."""
+def _load_telegram_config() -> tuple[str, str, frozenset[str]]:
+    """Retorna (bot_token, chat_id, allowed_user_ids).
+
+    allowed_user_ids defaults to {chat_id} when the key is absent — preserves
+    the prior DM-only behavior without requiring existing configs to change.
+    Returns ('', '', frozenset()) when telegram is not configured.
+    """
     try:
         with open(_KEYS_PATH) as f:
             cfg = json.load(f)
         tg = cfg.get("telegram", {})
         token = tg.get("bot_token", "")
         chat  = str(tg.get("chat_id", ""))
-        return token, chat
+        raw_ids = tg.get("allowed_user_ids")
+        if raw_ids is None:
+            allowed = frozenset({chat}) if chat else frozenset()
+        else:
+            allowed = frozenset(str(x) for x in raw_ids if str(x))
+        return token, chat, allowed
     except Exception:
         runtime_health.record("telegram.config_load_failure")
-        return "", ""
+        return "", "", frozenset()
 
 
 class TelegramNotifier:
@@ -60,7 +78,7 @@ class TelegramNotifier:
 
     def __init__(self, engine: "LiveEngine"):
         self.engine = engine
-        self.token, self.chat_id = _load_telegram_config()
+        self.token, self.chat_id, self.allowed_user_ids = _load_telegram_config()
         self.enabled = bool(self.token and self.chat_id)
         self._offset = 0
         self._session = None      # aiohttp ou None
@@ -319,13 +337,19 @@ class TelegramNotifier:
                     chat_id = str(msg.get("chat", {}).get("id", ""))
                     text = msg.get("text", "").strip()
 
-                    # só responde ao chat configurado
+                    # só responde no chat configurado
                     if chat_id != self.chat_id:
                         continue
 
-                    # user auth: verify sender id matches chat_id
+                    # user auth: sender id must be in the explicit allowlist.
+                    # In a group, chat_id is the group — any member would pass
+                    # a chat-id-only check, so we require per-user authorization.
                     from_id = str(msg.get("from", {}).get("id", ""))
-                    if from_id != self.chat_id:
+                    if not self.allowed_user_ids or from_id not in self.allowed_user_ids:
+                        log.warning(
+                            f"Telegram command from unauthorized user id={from_id} "
+                            f"(chat_id={chat_id}) — rejected"
+                        )
                         continue
 
                     # rate limiting

@@ -135,7 +135,7 @@ _REST_BASE = {
     "paper":   None,
     "testnet": "https://testnet.binancefuture.com",
     "demo":    "https://demo-fapi.binance.com",
-    "live":    None,
+    "live":    "https://fapi.binance.com",
 }
 PAPER_SLIPPAGE    = 0.0003         # slippage base no paper mode (saída usa variação aleatória)
 CANDLE_BUFFER_N   = 600
@@ -556,7 +556,11 @@ class OrderManager:
             else:  # live
                 api_key, api_secret, key_source = _load_keys("live")
                 self.client = Client(api_key, api_secret, testnet=False)
-                log.info("Binance client — LIVE (capital real)")
+                # Assert the production endpoint explicitly — do not rely on library defaults.
+                self.client.FUTURES_URL        = "https://fapi.binance.com/fapi/v1"
+                self.client.FUTURES_DATA_URL   = "https://fapi.binance.com/futures/data"
+                self.client.FUTURES_COIN_URL   = "https://dapi.binance.com/dapi/v1"
+                log.info("Binance client — LIVE (fapi.binance.com, capital real)")
 
             # Expose the key source so the audit trail can capture it on engine
             # init. "encrypted" vs "plaintext" distinguishes whether a fallback

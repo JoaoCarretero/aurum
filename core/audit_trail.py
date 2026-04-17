@@ -18,10 +18,11 @@ Design notes
   engine at 30 trades/day × 30 days ≈ 900 rows ≈ <1MB). Simple
   rotation, no locks needed if the writer is single-threaded per
   engine.
-- **Hash chain optional.** Each row can include ``prev_hash`` pointing
+- **Hash chain on by default.** Each row includes ``prev_hash`` pointing
   at the SHA-256 of the previous row's canonical JSON encoding. Makes
   the trail tamper-evident: any retroactive edit breaks the chain from
-  that point forward. Enable via ``hash_chain=True`` on the writer.
+  that point forward. Pass ``hash_chain=False`` to opt out (not
+  recommended for live trading).
 - **Schema-lite.** Required fields are short and fixed; everything
   else goes under ``payload``. This module does not validate payloads
   — that's the caller's contract with the exchange adapter.
@@ -129,7 +130,7 @@ class AuditTrail:
     happens automatically based on the current UTC month."""
 
     def __init__(self, engine: str, strategy_ver: str,
-                 hash_chain: bool = False,
+                 hash_chain: bool = True,
                  audit_dir: Path = AUDIT_DIR) -> None:
         self.engine = engine
         self.strategy_ver = strategy_ver
