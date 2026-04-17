@@ -1089,7 +1089,7 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
     print(f"\n  {passou}/8  ·  {verdict}\n{SEP}\n")
     log.info(f"MS Veredito: {passou}/8  ROI={ratios['ret']:.2f}%  WR={wr:.1f}%  MaxDD={mdd_pct:.1f}%")
 
-def export_ms_json(all_trades, eq, mc, ratios):
+def export_ms_json(all_trades, eq, mc, ratios, mdd_pct=None):
     closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
     wr=sum(1 for t in closed if t["result"]=="WIN")/max(len(closed),1)*100
     confirmed_t=[t for t in closed if t.get("confirmed")]
@@ -1121,6 +1121,36 @@ def export_ms_json(all_trades, eq, mc, ratios):
     fname=str(MS_RUN_DIR/"reports"/f"multistrategy_{INTERVAL}_v1.json")
     atomic_write(Path(fname), json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     print(f"  JSON -> {fname}")
+    # Persist into canonical run index so MILLENNIUM shows up alongside
+    # directional engines in data/index.json.
+    try:
+        from core.run_manager import append_to_index
+        index_summary = {
+            "engine":       "MILLENNIUM",
+            "run_id":       RUN_ID,
+            "interval":     INTERVAL,
+            "period_days":  SCAN_DAYS,
+            "basket":       globals().get("BASKET_NAME", "default"),
+            "n_symbols":    len(globals().get("SYMBOLS", [])),
+            "n_candles":    globals().get("N_CANDLES"),
+            "n_trades":     len(closed),
+            "win_rate":     round(wr, 2),
+            "pnl":          round(sum(t["pnl"] for t in closed), 2),
+            "roi_pct":      ratios.get("ret"),
+            "sharpe":       ratios.get("sharpe"),
+            "sortino":      ratios.get("sortino"),
+            "max_dd_pct":   mdd_pct,
+        }
+        index_config = {
+            "INTERVAL":     INTERVAL,
+            "SCAN_DAYS":    SCAN_DAYS,
+            "N_CANDLES":    globals().get("N_CANDLES"),
+            "BASE_WEIGHTS": BASE_CAPITAL_WEIGHTS,
+            "BASKET_EFFECTIVE": globals().get("BASKET_NAME", "default"),
+        }
+        append_to_index(MS_RUN_DIR, index_summary, index_config)
+    except Exception as _e:
+        print(f"  index: {_e}")
     # Auto-persist to DB
     try:
         from core.db import save_run
@@ -1310,7 +1340,7 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
     stress_test(pnl_s)
 
     print_veredito_ms(portfolio_trades,eq,mdd_pct,mc,wf,ratios,wf_regime)
-    export_ms_json(portfolio_trades,eq,mc,ratios)
+    export_ms_json(portfolio_trades,eq,mc,ratios,mdd_pct=mdd_pct)
 
     # ── CHARTS ────────────────────────────────────────────────
     if GENERATE_PLOTS:
