@@ -10,6 +10,7 @@ All data from Binance public API (no auth required).
 """
 import logging
 import time
+from pathlib import Path
 import numpy as np
 import pandas as pd
 
@@ -18,6 +19,104 @@ log = logging.getLogger("THOTH")
 # rate limit helper
 _last_req = 0.0
 _REQ_GAP = 0.15  # 150ms between requests
+_SENTIMENT_CACHE_DIR = Path("data/sentiment")
+_PERIOD_MS = {
+    "5m": 5 * 60 * 1000,
+    "15m": 15 * 60 * 1000,
+    "30m": 30 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "2h": 2 * 60 * 60 * 1000,
+    "4h": 4 * 60 * 60 * 1000,
+    "6h": 6 * 60 * 60 * 1000,
+    "12h": 12 * 60 * 60 * 1000,
+    "1d": 24 * 60 * 60 * 1000,
+}
+
+
+def _cache_path(kind: str, symbol: str, period: str) -> Path:
+    return _SENTIMENT_CACHE_DIR / kind / f"{symbol}_{period}.csv"
+
+
+def _load_cached_frame(kind: str, symbol: str, period: str,
+                       columns: list[str]) -> pd.DataFrame | None:
+    path = _cache_path(kind, symbol, period)
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path)
+        if "time" not in df.columns:
+            return None
+        df["time"] = pd.to_datetime(df["time"])
+        missing = [col for col in columns if col not in df.columns]
+        if missing:
+            return None
+        return df[columns].sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    except Exception as e:
+        log.warning(f"{kind} cache {symbol} load error: {e}")
+        return None
+
+
+def _persist_cached_frame(kind: str, symbol: str, period: str, df: pd.DataFrame) -> None:
+    path = _cache_path(kind, symbol, period)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        out = df.copy()
+        out["time"] = pd.to_datetime(out["time"])
+        out = out.sort_values("time").drop_duplicates("time").reset_index(drop=True)
+        out.to_csv(path, index=False)
+    except Exception as e:
+        log.warning(f"{kind} cache {symbol} write error: {e}")
+
+
+def _merge_with_cache(kind: str, symbol: str, period: str,
+                      fresh_df: pd.DataFrame | None,
+                      columns: list[str]) -> pd.DataFrame | None:
+    cached = _load_cached_frame(kind, symbol, period, columns)
+    if fresh_df is None or fresh_df.empty:
+        return cached
+    merged = fresh_df[columns]
+    if cached is not None and not cached.empty:
+        merged = pd.concat([cached, fresh_df[columns]], ignore_index=True)
+    merged["time"] = pd.to_datetime(merged["time"])
+    merged = merged.sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    _persist_cached_frame(kind, symbol, period, merged)
+    return merged
+
+
+def _slice_cached_history(df: pd.DataFrame | None, period: str, limit: int,
+                          end_time_ms: int) -> pd.DataFrame | None:
+    if df is None or df.empty:
+        return None
+    period_ms = _PERIOD_MS.get(period)
+    if period_ms is None:
+        return None
+    end_ts = pd.to_datetime(end_time_ms, unit="ms")
+    window_start_ms = end_time_ms - max(limit - 1, 0) * period_ms
+    window_start_ts = pd.to_datetime(window_start_ms, unit="ms")
+    subset = df[df["time"] <= end_ts].sort_values("time").tail(limit).reset_index(drop=True)
+    if len(subset) < limit:
+        return None
+    first_ts = subset["time"].iloc[0]
+    if first_ts > window_start_ts:
+        return None
+    return subset
+
+
+def _fetch_binance_rows(url: str, params: dict, label: str) -> list[dict] | None:
+    try:
+        import requests
+        _rate_limit()
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code != 200:
+            log.warning(f"{label}: HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        if not data:
+            return None
+        return data
+    except Exception as e:
+        log.warning(f"{label} error: {e}")
+        return None
 
 
 def _rate_limit():
@@ -37,17 +136,11 @@ def fetch_funding_rate(symbol: str, limit: int = 100,
     returns the most recent `limit` rates ending NOW, introducing look-ahead.
     """
     try:
-        import requests
-        _rate_limit()
         url = "https://fapi.binance.com/fapi/v1/fundingRate"
         params: dict = {"symbol": symbol, "limit": limit}
         if end_time_ms is not None:
             params["endTime"] = int(end_time_ms)
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code != 200:
-            log.warning(f"funding rate {symbol}: HTTP {resp.status_code}")
-            return None
-        data = resp.json()
+        data = _fetch_binance_rows(url, params, f"funding rate {symbol}")
         if not data:
             return None
         df = pd.DataFrame(data)
@@ -69,17 +162,19 @@ def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200,
     recent observations ending NOW (look-ahead in backtest).
     """
     try:
-        import requests
-        _rate_limit()
+        cols = ["time", "oi", "oi_value"]
+        if end_time_ms is not None:
+            cached = _slice_cached_history(
+                _load_cached_frame("open_interest", symbol, period, cols),
+                period,
+                limit,
+                end_time_ms,
+            )
+            if cached is not None:
+                return cached
         url = "https://fapi.binance.com/futures/data/openInterestHist"
         params: dict = {"symbol": symbol, "period": period, "limit": limit}
-        if end_time_ms is not None:
-            params["endTime"] = int(end_time_ms)
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code != 200:
-            log.warning(f"OI {symbol}: HTTP {resp.status_code}")
-            return None
-        data = resp.json()
+        data = _fetch_binance_rows(url, params, f"OI {symbol}")
         if not data:
             return None
         df = pd.DataFrame(data)
@@ -91,7 +186,16 @@ def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200,
             "sumOpenInterest": "oi",
             "sumOpenInterestValue": "oi_value",
         })
-        return df[["time", "oi", "oi_value"]].sort_values("time").reset_index(drop=True)
+        merged = _merge_with_cache(
+            "open_interest",
+            symbol,
+            period,
+            df[cols].sort_values("time").reset_index(drop=True),
+            cols,
+        )
+        if end_time_ms is not None:
+            return _slice_cached_history(merged, period, limit, end_time_ms)
+        return merged.tail(limit).reset_index(drop=True) if merged is not None else None
     except Exception as e:
         log.warning(f"OI {symbol} error: {e}")
         return None
@@ -107,17 +211,19 @@ def fetch_long_short_ratio(symbol: str, period: str = "15m",
     (look-ahead in backtest).
     """
     try:
-        import requests
-        _rate_limit()
+        cols = ["time", "ls_ratio", "long_pct", "short_pct"]
+        if end_time_ms is not None:
+            cached = _slice_cached_history(
+                _load_cached_frame("long_short_ratio", symbol, period, cols),
+                period,
+                limit,
+                end_time_ms,
+            )
+            if cached is not None:
+                return cached
         url = "https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
         params: dict = {"symbol": symbol, "period": period, "limit": limit}
-        if end_time_ms is not None:
-            params["endTime"] = int(end_time_ms)
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code != 200:
-            log.warning(f"LS ratio {symbol}: HTTP {resp.status_code}")
-            return None
-        data = resp.json()
+        data = _fetch_binance_rows(url, params, f"LS ratio {symbol}")
         if not data:
             return None
         df = pd.DataFrame(data)
@@ -131,7 +237,16 @@ def fetch_long_short_ratio(symbol: str, period: str = "15m",
             "longAccount": "long_pct",
             "shortAccount": "short_pct",
         })
-        return df[["time", "ls_ratio", "long_pct", "short_pct"]].sort_values("time").reset_index(drop=True)
+        merged = _merge_with_cache(
+            "long_short_ratio",
+            symbol,
+            period,
+            df[cols].sort_values("time").reset_index(drop=True),
+            cols,
+        )
+        if end_time_ms is not None:
+            return _slice_cached_history(merged, period, limit, end_time_ms)
+        return merged.tail(limit).reset_index(drop=True) if merged is not None else None
     except Exception as e:
         log.warning(f"LS ratio {symbol} error: {e}")
         return None

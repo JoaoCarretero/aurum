@@ -9,12 +9,14 @@ Cobrem 3 fetchers HTTP (mockados) + 4 funções de scoring puras:
 """
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import core.sentiment as sentiment
 from core.sentiment import (
     composite_sentiment,
     fetch_funding_rate,
@@ -94,6 +96,48 @@ class TestFetchOpenInterest:
         with patch("requests.get", return_value=_mock_resp([])):
             assert fetch_open_interest("BTCUSDT") is None
 
+    def test_historical_slice_uses_local_cache_without_network(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
+        cache_dir = Path(tmp_path) / "open_interest"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "time": pd.date_range("2026-01-01 00:00:00", periods=5, freq="15min"),
+                "oi": [1000, 1001, 1002, 1003, 1004],
+                "oi_value": [50000, 50010, 50020, 50030, 50040],
+            }
+        ).to_csv(cache_dir / "BTCUSDT_15m.csv", index=False)
+
+        with patch("requests.get") as mock_get:
+            df = fetch_open_interest(
+                "BTCUSDT",
+                period="15m",
+                limit=3,
+                end_time_ms=int(pd.Timestamp("2026-01-01 01:00:00").timestamp() * 1000),
+            )
+
+        assert mock_get.call_count == 0
+        assert df is not None
+        assert df["oi"].tolist() == [1002, 1003, 1004]
+
+    def test_historical_probe_refreshes_cache_without_fake_endtime(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
+        payload = [
+            {
+                "timestamp": 1_700_000_000_000 + i * 900_000,
+                "sumOpenInterest": f"{1000.0 + i}",
+                "sumOpenInterestValue": f"{50000000.0 + i}",
+            }
+            for i in range(5)
+        ]
+        with patch("requests.get", return_value=_mock_resp(payload)) as mock_get:
+            df = fetch_open_interest("BTCUSDT", period="15m", limit=5, end_time_ms=123)
+
+        assert df is None
+        assert "endTime" not in mock_get.call_args.kwargs["params"]
+        cached = pd.read_csv(Path(tmp_path) / "open_interest" / "BTCUSDT_15m.csv")
+        assert len(cached) == 5
+
 
 # ────────────────────────────────────────────────────────────
 # fetch_long_short_ratio
@@ -113,6 +157,31 @@ class TestFetchLongShortRatio:
     def test_exception_returns_none(self):
         with patch("requests.get", side_effect=Exception("boom")):
             assert fetch_long_short_ratio("BTCUSDT") is None
+
+    def test_historical_slice_uses_local_cache_without_network(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
+        cache_dir = Path(tmp_path) / "long_short_ratio"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "time": pd.date_range("2026-01-01 00:00:00", periods=5, freq="15min"),
+                "ls_ratio": [0.8, 0.9, 1.0, 1.1, 1.2],
+                "long_pct": [0.44, 0.45, 0.46, 0.47, 0.48],
+                "short_pct": [0.56, 0.55, 0.54, 0.53, 0.52],
+            }
+        ).to_csv(cache_dir / "BTCUSDT_15m.csv", index=False)
+
+        with patch("requests.get") as mock_get:
+            df = fetch_long_short_ratio(
+                "BTCUSDT",
+                period="15m",
+                limit=2,
+                end_time_ms=int(pd.Timestamp("2026-01-01 01:00:00").timestamp() * 1000),
+            )
+
+        assert mock_get.call_count == 0
+        assert df is not None
+        assert df["ls_ratio"].tolist() == [1.1, 1.2]
 
 
 # ────────────────────────────────────────────────────────────
