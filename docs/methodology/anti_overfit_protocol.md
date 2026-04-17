@@ -274,6 +274,43 @@ Após OOS audit de 2026-04-16, sobrou curiosidade sobre:
 
 ---
 
+## Meta-trigger log
+
+Registro das vezes em que a regra meta do protocolo foi disparada
+("3 engines consecutivos arquivados → PAUSAR e revisar método").
+
+### 2026-04-17 — primeiro disparo
+
+**Engines arquivados/colapsados consecutivos:** DE SHAW (OOS Sharpe
+-1.73 BEAR 2022), KEPOS (0 trades com defaults), MEDALLION (OOS Sharpe
+-3.22).
+
+**Ação tomada (respeita o protocolo — método antes de re-calibração):**
+
+1. **Audit-o-auditor** (Bloco 0 plano 2026-04-17) — revalidar se o
+   veredito OOS era metodologicamente honesto antes de agir.
+   Resultado: 6/7 reprodutibilidade exata; BRIDGEWATER divergiu em
+   n_trades e Codex track'd root cause `LIVE_SENTIMENT_UNBOUNDED`.
+2. **Bugs funcionais encontrados e fixados:**
+   - `core/sentiment.py` — funding/OI/LS fetches não respeitavam
+     `end_time_ms` em backtest (commit `9b41c76`). BRIDGEWATER Sharpe
+     cai de 11.04 → 3.03 após fix (73% era bug, 3.03 é edge real).
+   - `engines/kepos.py` + `engines/medallion.py` — entry cost
+     asymmetry: aplicava SLIPPAGE+SPREAD só no exit (commit `18db6dc`).
+     ~3 bps/trade subestimados.
+   - `engines/kepos.py` — `eta_critical=0.95` unreachable em candle
+     data (commit `55857f3`). Baixado pra 0.75.
+3. **Quarentena formal** via `EXPERIMENTAL_SLUGS` em `config/engines.py`
+   (commit `cc4a642`) — DE SHAW e GRAHAM inicial; KEPOS/MEDALLION
+   pendem re-avaliação OOS pós-fixes.
+
+**Lição registrada:** o gatilho meta funcionou. Não foi "mais um iter"
+nos engines que falharam — foi investigação forense que revelou que
+parte do "colapso" era bug de código (BRIDGEWATER especialmente), e
+parte era limite de mercado genuíno (DE SHAW cointegração crypto).
+
+---
+
 ## Referências
 
 - López de Prado, M. (2014). *Deflated Sharpe Ratio*. Journal of Portfolio Management
