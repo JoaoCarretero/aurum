@@ -93,3 +93,38 @@ def format_uptime(*, seconds: float | int | None) -> str:
     h, rem = divmod(total, 3600)
     m, _ = divmod(rem, 60)
     return f"{h}h{m:02d}m" if h else f"{m}m"
+
+
+# Legacy proc-manager engine names → canonical slugs.
+# Matches the mapping in launcher.py::_strategies (_proc_to_slug).
+_PROC_TO_SLUG: dict[str, str] = {
+    "backtest":    "citadel",
+    "mercurio":    "jump",
+    "thoth":       "bridgewater",
+    "newton":      "deshaw",
+    "multi":       "millennium",
+    "prometeu":    "twosigma",
+    "renaissance": "renaissance",
+    "live":        "live",
+    "arb":         "janestreet",
+    "darwin":      "aqr",
+    "chronos":     "winton",
+    "kepos":       "kepos",
+    "graham":      "graham",
+}
+
+
+def running_slugs_from_procs(procs: list[dict]) -> dict[str, dict]:
+    """Filter live proc-manager rows into {slug: proc_row}.
+
+    A proc is considered running when status=='running' AND alive=True.
+    Unknown engine names are dropped silently.
+    """
+    out: dict[str, dict] = {}
+    for p in procs:
+        if p.get("status") != "running" or not p.get("alive"):
+            continue
+        slug = _PROC_TO_SLUG.get(p.get("engine"))
+        if slug:
+            out[slug] = p
+    return out

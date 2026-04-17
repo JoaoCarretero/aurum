@@ -154,3 +154,32 @@ class TestFormatUptime:
     def test_none_returns_em_dash(self):
         from launcher_support.engines_live_view import format_uptime
         assert format_uptime(seconds=None) == "—"
+
+
+class TestRunningEnginesByBucket:
+    def test_maps_citadel_proc_to_citadel_slug(self):
+        from launcher_support.engines_live_view import running_slugs_from_procs
+        procs = [{"engine": "backtest", "status": "running", "alive": True, "pid": 100}]
+        out = running_slugs_from_procs(procs)
+        # "backtest" is the legacy proc name for citadel.
+        assert "citadel" in out
+
+    def test_ignores_dead_procs(self):
+        from launcher_support.engines_live_view import running_slugs_from_procs
+        procs = [{"engine": "backtest", "status": "running", "alive": False, "pid": 100}]
+        assert running_slugs_from_procs(procs) == {}
+
+    def test_ignores_non_running_status(self):
+        from launcher_support.engines_live_view import running_slugs_from_procs
+        procs = [{"engine": "backtest", "status": "stopped", "alive": True, "pid": 100}]
+        assert running_slugs_from_procs(procs) == {}
+
+    def test_maps_arb_to_janestreet(self):
+        from launcher_support.engines_live_view import running_slugs_from_procs
+        procs = [{"engine": "arb", "status": "running", "alive": True, "pid": 7}]
+        assert "janestreet" in running_slugs_from_procs(procs)
+
+    def test_unknown_engine_name_dropped(self):
+        from launcher_support.engines_live_view import running_slugs_from_procs
+        procs = [{"engine": "ghost", "status": "running", "alive": True, "pid": 9}]
+        assert running_slugs_from_procs(procs) == {}
