@@ -736,6 +736,167 @@ def _past_runs(launcher, slug):
 
 
 def _render_detail_live(parent, slug, meta, state, launcher):
-    """Stub — filled in Task 11."""
-    tk.Label(parent, text=f"(live — task 11) {slug}",
-             fg=DIM, bg=PANEL, font=(FONT, 8)).pack(pady=20)
+    name = meta.get("display", slug.upper())
+
+    try:
+        from core.proc import list_procs
+        procs = list_procs()
+    except Exception:
+        procs = []
+    running = running_slugs_from_procs(procs)
+    proc = running.get(slug, {})
+    mode_key = (proc.get("engine_mode") or proc.get("mode") or "paper").lower()
+    mode_color = _MODE_COLORS.get(mode_key, CYAN)
+
+    head = tk.Frame(parent, bg=PANEL)
+    head.pack(fill="x", padx=12, pady=(10, 4))
+    tk.Label(head, text=name, fg=AMBER, bg=PANEL,
+             font=(FONT, 11, "bold")).pack(side="left")
+    right = tk.Frame(head, bg=PANEL)
+    right.pack(side="right")
+    tk.Label(right, text="●", fg=GREEN, bg=PANEL,
+             font=(FONT, 9, "bold")).pack(side="left")
+    tk.Label(right, text=f" {mode_key.upper()} ",
+             fg=BG, bg=mode_color, font=(FONT, 7, "bold"),
+             padx=4, pady=1).pack(side="left", padx=(4, 0))
+    started = proc.get("started")
+    if started:
+        try:
+            from datetime import datetime as _dt
+            secs = (_dt.now() - _dt.fromisoformat(started)).total_seconds()
+            tk.Label(right, text=f" · {format_uptime(seconds=secs)}",
+                     fg=DIM, bg=PANEL, font=(FONT, 8)).pack(side="left")
+        except Exception:
+            pass
+
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(4, 0))
+
+    kpis = tk.Frame(parent, bg=PANEL)
+    kpis.pack(fill="x", padx=12, pady=(10, 8))
+    _kpi_col(kpis, "PnL",         _fmt_pnl(proc.get("pnl")))
+    _kpi_col(kpis, "POSITIONS",   str(proc.get("positions") or 0))
+    _kpi_col(kpis, "TRADES",      str(proc.get("trades") or 0))
+    _kpi_col(kpis, "LAST SIGNAL", str(proc.get("last_signal") or "—")[:24])
+
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
+
+    log_header = tk.Frame(parent, bg=PANEL)
+    log_header.pack(fill="x", padx=12, pady=(8, 2))
+    tk.Label(log_header, text="LOG TAIL", fg=AMBER_D, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left")
+    _action_btn(log_header, "OPEN FULL", DIM,
+                lambda: _open_full_log(launcher, proc))
+
+    log_box = tk.Text(parent, height=10, bg=BG2, fg=WHITE,
+                      font=(FONT, 8), wrap="none",
+                      highlightbackground=BORDER, highlightthickness=1,
+                      state="disabled")
+    log_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+    state["log_box"] = log_box
+
+    _schedule_log_tail(state, launcher, proc)
+
+    actions = tk.Frame(parent, bg=PANEL)
+    actions.pack(fill="x", padx=12, pady=(0, 12))
+    stop_btn = tk.Label(actions, text="  STOP ENGINE  ",
+                        fg=WHITE, bg=RED,
+                        font=(FONT, 10, "bold"),
+                        cursor="hand2", padx=12, pady=8)
+    stop_btn.pack(side="left", padx=(0, 8))
+    _bind_hold_to_confirm(stop_btn,
+                          on_confirm=lambda: _stop_engine(launcher, state, proc),
+                          duration_ms=1500)
+    _action_btn(actions, "REPORTS", DIM,
+                lambda: _past_runs(launcher, slug))
+
+
+def _kpi_col(parent, label, value):
+    col = tk.Frame(parent, bg=PANEL)
+    col.pack(side="left", fill="x", expand=True)
+    tk.Label(col, text=label, fg=DIM, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(anchor="w")
+    tk.Label(col, text=value, fg=WHITE, bg=PANEL,
+             font=(FONT, 10, "bold")).pack(anchor="w")
+
+
+def _fmt_pnl(v):
+    if v is None:
+        return "—"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)[:10]
+    return f"{'+' if f >= 0 else ''}${f:,.2f}"
+
+
+def _schedule_log_tail(state, launcher, proc):
+    box = state.get("log_box")
+    if not box or not proc:
+        return
+    log_path = proc.get("log") or proc.get("log_path")
+    if not log_path:
+        return
+    try:
+        from pathlib import Path as _P
+        p = _P(log_path)
+        if p.exists():
+            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()[-15:]
+            box.configure(state="normal")
+            box.delete("1.0", "end")
+            box.insert("end", "\n".join(lines))
+            box.configure(state="disabled")
+            box.see("end")
+    except Exception:
+        pass
+    try:
+        aid = launcher.after(1000,
+                             lambda: _schedule_log_tail(state, launcher, proc))
+        state["after_handles"].append(aid)
+    except Exception:
+        pass
+
+
+def _open_full_log(launcher, proc):
+    log_path = proc.get("log") or proc.get("log_path")
+    if not log_path:
+        return
+    try:
+        import os
+        os.startfile(log_path)
+    except Exception:
+        pass
+
+
+def _bind_hold_to_confirm(widget, *, on_confirm, duration_ms):
+    """Fires on_confirm only if user holds MB1 for duration_ms."""
+    tok = {"aid": None}
+
+    def _down(_e=None):
+        tok["aid"] = widget.after(duration_ms, _fire)
+
+    def _up(_e=None):
+        if tok["aid"]:
+            try:
+                widget.after_cancel(tok["aid"])
+            except Exception:
+                pass
+            tok["aid"] = None
+
+    def _fire():
+        tok["aid"] = None
+        on_confirm()
+
+    widget.bind("<ButtonPress-1>", _down)
+    widget.bind("<ButtonRelease-1>", _up)
+    widget.bind("<Leave>", _up)
+
+
+def _stop_engine(launcher, state, proc):
+    try:
+        from core.proc import stop_proc
+        stop_proc(int(proc["pid"]), expected=proc)
+    except Exception:
+        return
+    refresh = state.get("refresh")
+    if callable(refresh):
+        refresh()
