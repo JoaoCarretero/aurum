@@ -1,0 +1,129 @@
+# Cost Symmetry Audit — 2026-04-17
+
+## Canonical cost path (core.signals.label_trade)
+
+label_trade() is a PATH simulator only — it returns (result, duration, exit_price,
+exit_reason). It does NOT apply costs directly. Costs are computed by the
+caller immediately after label_trade returns.
+
+The entry-side cost (SLIPPAGE+SPREAD) is baked into the entry price before
+label_trade is called, via calc_levels() in core/signals.py:
+
+  core/signals.py:211  slip = SLIPPAGE + SPREAD
+  core/signals.py:212  entry = raw * (1 + slip)   # BULLISH
+  core/signals.py:219  entry = raw * (1 - slip)   # BEARISH
+
+The exit-side costs (COMMISSION x2, SLIPPAGE+SPREAD) are applied post-label in
+each engine's inline PnL block. FUNDING is derived from duration returned by
+label_trade.
+
+Summary of what each engine must do for full C1+C2 coverage:
+  Entry side: SLIPPAGE+SPREAD baked into entry price (via calc_levels or equivalent)
+  PnL block:  COMMISSION on entry_cost + (COMMISSION + SLIPPAGE + SPREAD) on exit + FUNDING
+
+Components coverage in label_trade itself:
+- SLIPPAGE:   ✗ (applied upstream in calc_levels, not inside label_trade)
+- SPREAD:     ✗ (applied upstream in calc_levels, not inside label_trade)
+- COMMISSION: ✗ (applied in engine PnL block after label_trade)
+- FUNDING:    ✗ (applied in engine PnL block using duration from label_trade)
+
+Note: this is by design. label_trade is a path simulator, not a cost applier.
+
+
+## Per-engine classification
+
+| Engine      | Path        | SLIPPAGE_ENTRY | SPREAD_ENTRY | COMMISSION | FUNDING | Verdict        | Evidence (file:line)                                              |
+|-------------|-------------|----------------|--------------|------------|---------|----------------|-------------------------------------------------------------------|
+| citadel     | INLINE+core | ✓ (baked)      | ✓ (baked)    | ✓          | ✓       | OK             | engines/citadel.py:337-348 — entry via calc_levels:211, PnL inline |
+| renaissance | INLINE+core | ✓ (baked)      | ✓ (baked)    | ✓          | ✓       | OK             | core/harmonics.py:280,298-306 — scan_hermes applies all 4 comps  |
+| jump        | INLINE+core | ✓ (baked)      | ✓ (baked)    | ✓          | ✓       | OK             | engines/jump.py:271-280 — entry via calc_levels:211, PnL inline  |
+| deshaw      | INLINE      | ✓ (explicit)   | ✓ (explicit) | ✓          | ✓       | OK             | engines/deshaw.py:510-514 (entry slip), 372-382 (PnL block)      |
+| bridgewater | INLINE+core | ✓ (baked)      | ✓ (baked)    | ✓          | ✓       | OK             | engines/bridgewater.py:336,362-372 — entry via calc_levels:211   |
+| kepos       | INLINE      | ✗ MISSING      | ✗ MISSING    | ✓          | ✓       | BUG-SUSPECT    | engines/kepos.py:260 (raw open, no slip), 496-506 (PnL block)    |
+| medallion   | INLINE      | ✗ MISSING      | ✗ MISSING    | ✓          | ✓       | BUG-SUSPECT    | engines/medallion.py:438 (raw open, no slip), 664-674 (PnL block)|
+
+Legend:
+  ✓ (baked)    = slippage/spread applied to entry price upstream (in calc_levels or explicit entry calc)
+  ✓ (explicit) = slippage/spread applied explicitly in engine entry-price calculation
+  ✗ MISSING    = component not applied anywhere in entry path or PnL block
+
+
+## Bug-suspect flags
+
+### FLAG 1 — KEPOS: entry SLIPPAGE+SPREAD missing
+
+  engines/kepos.py:260
+      entry = float(df["open"].iloc[t + 1])
+      # No slip applied. Entry is raw next-bar open.
+
+  engines/kepos.py:496-506 (PnL function _pnl_with_costs)
+      slip_exit = SLIPPAGE + SPREAD   # ← applied only to EXIT side
+      entry_cost = entry * (1 + COMMISSION)   # ← only COMMISSION on entry
+
+  Impact: entry side understated by SLIPPAGE+SPREAD = 0.03% per trade.
+  For a long trade: entry_cost should be entry*(1+0.0003) but is entry*(1+0).
+  Net effect: PnL overstated by ~0.03% of entry notional per trade on entry.
+  Combined with symmetric overstatement on the exit side being correctly charged,
+  the bias is entry-side only: PnL inflated by (SLIPPAGE+SPREAD)*entry*size*LEVERAGE.
+
+  Magnitude estimate: 0.03% × avg_entry × avg_size × LEVERAGE per trade.
+  At LEVERAGE=10, avg_entry=100, avg_size=1: ~$0.30/trade.
+  Depends on trade count and position size. For ~500 trades: ~$150 total bias.
+
+### FLAG 2 — MEDALLION: entry SLIPPAGE+SPREAD missing (same pattern as KEPOS)
+
+  engines/medallion.py:438
+      entry = float(df["open"].iloc[t + 1])
+      # No slip applied. Entry is raw next-bar open.
+
+  engines/medallion.py:660-675 (PnL function _pnl_with_costs)
+      Comment reads: "Identical to citadel/kepos — intentional"
+      # This comment is misleading: CITADEL applies slip via calc_levels
+      # KEPOS/MEDALLION do not. The PnL function IS identical, but the
+      # input `entry` is NOT equivalent.
+
+  Impact: same as KEPOS. PnL inflated by ~SLIPPAGE+SPREAD per trade on entry.
+
+  Note: KEPOS and MEDALLION both failed OOS on 2026-04-16, so this bug
+  overstated their in-sample performance. It does not change their OOS verdict
+  (already flagged red), but confirms the in-sample Sharpe was inflated.
+
+
+## Notes on Bridgewater (priority suspect per task brief)
+
+BRIDGEWATER (claim: OOS Sharpe 11.04 / ROI 267%) was the primary concern.
+
+Static analysis shows cost coverage is COMPLETE for BRIDGEWATER:
+- Entry: uses calc_levels (core/signals.py:211) → SLIPPAGE+SPREAD baked in
+- PnL block: engines/bridgewater.py:362-372 applies all 4 components
+- No backtest_mode or cost-zeroing flag found anywhere
+
+Cost application is symmetric with CITADEL and JUMP.
+
+The anomalous OOS Sharpe cannot be explained by missing costs. Other
+explanations to investigate (not in scope of this audit):
+  - Signal leakage / look-ahead in sentiment indicators
+  - Overfitting to short OOS window
+  - Sentiment data (funding rates, OI, LS) using future values
+  See docs/audits/2026-04-16_oos_verdict.md for BRIDGEWATER bug-suspect classification.
+
+
+## Backtest mode / cost-zeroing flags
+
+Grep result: ZERO occurrences of backtest_mode, no_cost, zero_cost, skip_cost,
+COST_MULT, cost_factor across all 7 engine files and core/harmonics.py.
+
+No conditional cost-zeroing paths found.
+
+
+## Summary
+
+Engines with FULL cost coverage (all 4 components): 5/7
+  citadel, renaissance, jump, deshaw, bridgewater
+
+Engines with MISSING entry-side costs (SLIPPAGE+SPREAD on entry): 2/7
+  kepos, medallion
+
+Both flagged engines already have OOS verdict RED (collapsed/non-functional).
+The missing entry slip inflated their in-sample performance. Fix is diagnostic
+context only — these engines are not candidates for live deployment.
