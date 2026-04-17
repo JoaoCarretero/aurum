@@ -63,3 +63,54 @@ class TestBucketAssignment:
         # engines declared live_ready can occupy LIVE.
         from launcher_support.engines_live_view import assign_bucket
         assert assign_bucket(slug="renaissance", is_running=True, live_ready=False) == "RESEARCH"
+
+
+class TestModeCycle:
+    def test_cycle_paper_to_demo(self):
+        from launcher_support.engines_live_view import cycle_mode
+        assert cycle_mode("paper") == "demo"
+
+    def test_cycle_demo_to_testnet(self):
+        from launcher_support.engines_live_view import cycle_mode
+        assert cycle_mode("demo") == "testnet"
+
+    def test_cycle_testnet_to_live(self):
+        from launcher_support.engines_live_view import cycle_mode
+        assert cycle_mode("testnet") == "live"
+
+    def test_cycle_live_wraps_to_paper(self):
+        from launcher_support.engines_live_view import cycle_mode
+        assert cycle_mode("live") == "paper"
+
+    def test_cycle_unknown_falls_back_to_paper(self):
+        from launcher_support.engines_live_view import cycle_mode
+        assert cycle_mode("bogus") == "paper"
+
+
+class TestModePersistence:
+    def test_load_returns_paper_when_file_missing(self, tmp_path):
+        from launcher_support.engines_live_view import load_mode
+        assert load_mode(state_path=tmp_path / "ui_state.json") == "paper"
+
+    def test_load_returns_saved_mode(self, tmp_path):
+        from launcher_support.engines_live_view import load_mode, save_mode
+        sp = tmp_path / "ui_state.json"
+        save_mode("demo", state_path=sp)
+        assert load_mode(state_path=sp) == "demo"
+
+    def test_load_rejects_invalid_mode(self, tmp_path):
+        import json
+        from launcher_support.engines_live_view import load_mode
+        sp = tmp_path / "ui_state.json"
+        sp.write_text(json.dumps({"engines_live": {"mode": "bogus"}}))
+        assert load_mode(state_path=sp) == "paper"
+
+    def test_save_preserves_other_keys(self, tmp_path):
+        import json
+        from launcher_support.engines_live_view import save_mode
+        sp = tmp_path / "ui_state.json"
+        sp.write_text(json.dumps({"other_view": {"foo": 1}}))
+        save_mode("testnet", state_path=sp)
+        loaded = json.loads(sp.read_text())
+        assert loaded["other_view"] == {"foo": 1}
+        assert loaded["engines_live"]["mode"] == "testnet"

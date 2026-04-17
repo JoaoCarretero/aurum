@@ -14,9 +14,16 @@ Spec: docs/superpowers/specs/2026-04-16-engines-live-cockpit-design.md
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Literal
 
 Bucket = Literal["LIVE", "READY", "RESEARCH"]
+Mode = Literal["paper", "demo", "testnet", "live"]
+
+_MODE_ORDER: tuple[Mode, ...] = ("paper", "demo", "testnet", "live")
+_DEFAULT_MODE: Mode = "paper"
+_DEFAULT_STATE_PATH = Path("data/ui_state.json")
 
 
 def assign_bucket(*, slug: str, is_running: bool, live_ready: bool) -> Bucket:
@@ -32,3 +39,42 @@ def assign_bucket(*, slug: str, is_running: bool, live_ready: bool) -> Bucket:
     if not live_ready:
         return "RESEARCH"
     return "LIVE" if is_running else "READY"
+
+
+def cycle_mode(current: str) -> Mode:
+    """paper → demo → testnet → live → paper. Unknown input → paper."""
+    try:
+        idx = _MODE_ORDER.index(current)  # type: ignore[arg-type]
+    except ValueError:
+        return _DEFAULT_MODE
+    return _MODE_ORDER[(idx + 1) % len(_MODE_ORDER)]
+
+
+def load_mode(*, state_path: Path | None = None) -> Mode:
+    """Read engines_live.mode from ui_state.json. Missing/invalid → paper."""
+    path = state_path or _DEFAULT_STATE_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return _DEFAULT_MODE
+    mode = (data.get("engines_live") or {}).get("mode")
+    if mode in _MODE_ORDER:
+        return mode  # type: ignore[return-value]
+    return _DEFAULT_MODE
+
+
+def save_mode(mode: Mode, *, state_path: Path | None = None) -> None:
+    """Persist engines_live.mode into ui_state.json. Preserves other keys.
+
+    Uses atomic_write_json so a crashed write leaves the prior file intact.
+    """
+    from core.persistence import atomic_write_json
+    path = state_path or _DEFAULT_STATE_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    block = dict(data.get("engines_live") or {})
+    block["mode"] = mode
+    data["engines_live"] = block
+    atomic_write_json(path, data)
