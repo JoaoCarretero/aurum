@@ -1036,6 +1036,66 @@ _BT_COLS: list[tuple[str, int]] = [
 ]
 
 
+# ═══════════════════════════════════════════════════════════
+# BACKTEST RUNS TABLE — per-engine view (ENGINE column dropped)
+# ═══════════════════════════════════════════════════════════
+# Used by the right-bottom runs list in the BACKTEST tab after
+# the engine → run → metrics hierarchy refactor. Same char widths
+# as _BT_COLS so the existing row renderer can be reused; the
+# STRATEGY column is omitted because the list is already filtered
+# to a single engine (picked in the left panel).
+_BT_RUN_COLS: list[tuple[str, int]] = [
+    ("DATE / TIME",  19),
+    ("TF",            5),
+    ("DAYS",          5),
+    ("BASKET",       10),
+    ("RUN",          14),
+    ("TRADES",        8),
+    ("WIN%",          8),
+    ("PNL",          12),
+    ("SHARPE",        8),
+    ("DD",            8),
+]
+
+
+# ═══════════════════════════════════════════════════════════
+# BACKTEST ENGINE BADGES — OOS status glyphs for the left panel
+# ═══════════════════════════════════════════════════════════
+# Static map: CLAUDE.md engine table + 2026-04-16 OOS audit
+# verdicts. Keys cover both institutional slugs and their legacy
+# lowercase aliases (e.g. "thoth" → bridgewater) so runs written
+# before the engine rename still get the right glyph.
+_ENGINE_BADGES: dict[str, str] = {
+    "citadel":            "✅",
+    "backtest":           "✅",
+    "jump":               "✅",
+    "mercurio":           "✅",
+    "renaissance":        "⚠️",
+    "harmonics":          "⚠️",
+    "harmonics_backtest": "⚠️",
+    "bridgewater":        "🔴",
+    "thoth":              "🔴",
+    "deshaw":             "🔴",
+    "de_shaw":            "🔴",
+    "newton":             "🔴",
+    "kepos":              "🔴",
+    "medallion":          "🔴",
+    "phi":                "🆕",
+    "two_sigma":          "⚪",
+    "twosigma":           "⚪",
+    "prometeu":           "⚪",
+    "aqr":                "⚪",
+    "darwin":             "⚪",
+    "jane_street":        "⚪",
+    "janestreet":         "⚪",
+    "arbitrage":          "⚪",
+    "millennium":         "·",
+    "multistrategy":      "·",
+    "winton":             "·",
+    "graham":             "🗄️",
+}
+
+
 class App(tk.Tk):
     _SPLASH_DESIGN_W = 920
     _SPLASH_DESIGN_H = 640
