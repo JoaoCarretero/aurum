@@ -56,6 +56,24 @@ def _load_cached_frame(kind: str, symbol: str, period: str,
         return None
 
 
+def cached_coverage(kind: str, symbol: str, period: str) -> dict[str, object] | None:
+    columns_by_kind = {
+        "open_interest": ["time", "oi", "oi_value"],
+        "long_short_ratio": ["time", "ls_ratio", "long_pct", "short_pct"],
+    }
+    cols = columns_by_kind.get(kind)
+    if cols is None:
+        return None
+    df = _load_cached_frame(kind, symbol, period, cols)
+    if df is None or df.empty:
+        return None
+    return {
+        "rows": int(len(df)),
+        "start": df["time"].min().isoformat(),
+        "end": df["time"].max().isoformat(),
+    }
+
+
 def _persist_cached_frame(kind: str, symbol: str, period: str, df: pd.DataFrame) -> None:
     path = _cache_path(kind, symbol, period)
     try:

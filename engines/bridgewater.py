@@ -38,6 +38,7 @@ from core import (
 from core.sentiment import (
     fetch_funding_rate, fetch_open_interest, fetch_long_short_ratio,
     funding_zscore, oi_delta_signal, ls_ratio_signal, composite_sentiment,
+    cached_coverage,
 )
 from core.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
@@ -102,9 +103,7 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
     """
     funding_limit, oi_limit, ls_limit = _sentiment_limits(window_days)
     sentiment = {}
-    funding_ok = 0
-    oi_ok = 0
-    ls_ok = 0
+    missing_historical: list[str] = []
     for sym in symbols:
         log.info(f"  fetching sentiment  ·  {sym}  "
                  f"(funding={funding_limit} oi={oi_limit} ls={ls_limit})")
@@ -115,43 +114,74 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
         if fr_df is not None and len(fr_df) >= 10:
             data["funding_df"] = fr_df
             data["funding_z"] = funding_zscore(fr_df, window=THOTH_FUNDING_WINDOW)
-            funding_ok += 1
         else:
             data["funding_z"] = None
 
         # Open Interest
         oi_df = fetch_open_interest(sym, period="15m", limit=oi_limit, end_time_ms=end_time_ms)
         data["oi_df"] = oi_df
-        if oi_df is not None and len(oi_df) >= 10:
-            oi_ok += 1
+        data["oi_ready"] = oi_df is not None and len(oi_df) >= 10
 
         # Long/Short ratio
         ls_df = fetch_long_short_ratio(sym, period="15m", limit=ls_limit, end_time_ms=end_time_ms)
         if ls_df is not None and len(ls_df) >= 5:
             data["ls_signal"] = ls_ratio_signal(ls_df)
             data["ls_df"] = ls_df
-            ls_ok += 1
+            data["ls_ready"] = True
         else:
             data["ls_signal"] = None
+            data["ls_ready"] = False
 
         sentiment[sym] = data
+        if end_time_ms is not None:
+            reasons = []
+            if data.get("funding_z") is None:
+                reasons.append("funding")
+            if not data.get("oi_ready"):
+                cov = cached_coverage("open_interest", sym, "15m")
+                reasons.append(
+                    "oi(cache=empty)"
+                    if cov is None
+                    else f"oi(cache_end={cov['end']}, rows={cov['rows']})"
+                )
+            if not data.get("ls_ready"):
+                cov = cached_coverage("long_short_ratio", sym, "15m")
+                reasons.append(
+                    "ls(cache=empty)"
+                    if cov is None
+                    else f"ls(cache_end={cov['end']}, rows={cov['rows']})"
+                )
+            if reasons:
+                missing_historical.append(f"{sym}: {', '.join(reasons)}")
         log.info(f"    funding={'✓' if data.get('funding_z') is not None else '✗'}  "
                  f"oi={'✓' if oi_df is not None else '✗'}  "
                  f"ls={'✓' if data.get('ls_signal') is not None else '✗'}")
 
-    if end_time_ms is not None:
-        if oi_ok == 0 or ls_ok == 0:
-            raise RuntimeError(
-                "historical OI/LS sentiment unavailable for OOS window; "
-                "refusing to run BRIDGEWATER with funding-only degraded inputs"
-            )
-        if funding_ok == 0:
-            raise RuntimeError(
-                "historical funding sentiment unavailable for OOS window; "
-                "refusing to run BRIDGEWATER without reproducible sentiment inputs"
-            )
+    if end_time_ms is not None and missing_historical:
+        details = "; ".join(missing_historical[:5])
+        if len(missing_historical) > 5:
+            details += f"; ... (+{len(missing_historical) - 5} symbols)"
+        raise RuntimeError(
+            "historical sentiment unavailable for OOS window; "
+            "run tools/prewarm_sentiment_cache.py for the target basket/window. "
+            f"Missing coverage: {details}"
+        )
 
     return sentiment
+
+
+def _parse_symbols_override(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    symbols = []
+    for token in raw.split(","):
+        sym = token.strip().upper()
+        if not sym:
+            continue
+        if not sym.endswith("USDT"):
+            sym += "USDT"
+        symbols.append(sym)
+    return symbols or None
 
 
 def _align_series_to_candles(
@@ -588,6 +618,7 @@ if __name__ == "__main__":
     )
     _ap.add_argument("--days", type=int, default=None, help="Lookback window in days.")
     _ap.add_argument("--basket", type=str, default=None, help="Universe preset from BASKETS.")
+    _ap.add_argument("--symbols", default=None, help="Optional comma-separated symbols; overrides --basket.")
     _ap.add_argument("--interval", type=str, default=INTERVAL, help="Execution timeframe override for this run.")
     _ap.add_argument("--leverage", type=float, default=None, help="Leverage override for this run.")
     _ap.add_argument("--no-menu", action="store_true")
@@ -616,9 +647,12 @@ if __name__ == "__main__":
     _tf_per_hour = 60 / _TF_MINUTES.get(INTERVAL, 15)
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_per_hour)
 
-    BASKET_NAME = _args.basket or ENGINE_BASKETS.get("BRIDGEWATER", "default")
+    _symbols_override = _parse_symbols_override(_args.symbols)
+    BASKET_NAME = "custom" if _symbols_override else (_args.basket or ENGINE_BASKETS.get("BRIDGEWATER", "default"))
     from config.params import BASKETS
-    if BASKET_NAME in BASKETS:
+    if _symbols_override:
+        SYMBOLS = _symbols_override
+    elif BASKET_NAME in BASKETS:
         SYMBOLS = BASKETS[BASKET_NAME]
     elif not _args.no_menu:
         SYMBOLS = select_symbols(SYMBOLS)
