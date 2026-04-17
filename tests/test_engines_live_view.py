@@ -41,3 +41,25 @@ class TestModeColorAliases:
         assert MODE_DEMO == GREEN
         assert MODE_TESTNET == AMBER
         assert MODE_LIVE == RED
+
+
+class TestBucketAssignment:
+    def test_live_takes_precedence_over_ready(self):
+        from launcher_support.engines_live_view import assign_bucket
+        # Engine is live_ready AND currently running → LIVE bucket.
+        assert assign_bucket(slug="citadel", is_running=True, live_ready=True) == "LIVE"
+
+    def test_ready_when_not_running_and_live_ready(self):
+        from launcher_support.engines_live_view import assign_bucket
+        assert assign_bucket(slug="citadel", is_running=False, live_ready=True) == "READY"
+
+    def test_research_when_not_live_ready(self):
+        from launcher_support.engines_live_view import assign_bucket
+        assert assign_bucket(slug="renaissance", is_running=False, live_ready=False) == "RESEARCH"
+
+    def test_research_engine_running_stays_research(self):
+        # Edge case: a research engine spawned via backtest path is running.
+        # It should NOT jump into LIVE bucket of the cockpit view — only
+        # engines declared live_ready can occupy LIVE.
+        from launcher_support.engines_live_view import assign_bucket
+        assert assign_bucket(slug="renaissance", is_running=True, live_ready=False) == "RESEARCH"
