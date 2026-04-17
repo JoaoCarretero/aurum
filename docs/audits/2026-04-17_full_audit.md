@@ -378,5 +378,68 @@ Correções pós-audit ao documento original:
 
 ---
 
-**Gerado por:** 4 agentes paralelos (wave 1) + 2 agentes follow-up (wave 2), Claude Opus 4.7, em 2026-04-17.
+## 8. Addendum — Structural audit (wave 3)
+
+Dois agentes paralelos varreram dimensões estruturais não cobertas nas waves 1–2: grafo de imports/dependências e gestão de estado/configuração/paridade backtest↔live.
+
+### A. Arquitetura & dependências
+
+**Saúde geral: 7/10.** Camadas estão bem separadas (`core` ← `engines` ← `analysis`), a regra "engines não importam engines" é respeitada (só MILLENNIUM viola, documentado). Ciclos: zero. God-module em `launcher.py` (12.5k linhas mistura GUI + orquestração + lógica).
+
+**Findings acionáveis:**
+
+- **🟠 HIGH — `analysis/live_replay_test.py:34` viola camada** importando `engines.live.LiveEngine`. Analysis não deveria depender de engine concreto. Fix: extrair `LiveEngine` ou usar injeção via callable.
+
+- **🟡 MEDIUM — `core/engine_base.py` é dead code** (0 imports no codebase). Classe `EngineRuntime` (62 linhas) nunca foi adotada. Ou todos engines migram pra ela, ou deleta.
+
+- **🟡 MEDIUM — Duplicação massiva em 5 engines** (graham, kepos, live, medallion, phi). Funções repetidas: `_setup_logging` (5×), `_trades_to_serializable` (4×), `_pnl_with_costs` (4×), `_resolve_exit` (3×), `scan_symbol` (5×), `save_run` (4×), `run_backtest` (6×). ~200 linhas de boilerplate por engine que deveriam estar em `core/engine_utils.py`.
+
+- **🟡 MEDIUM — Pipeline comum `indicators → swing_structure → omega` duplicada em 8 engines**. Candidato a `core.data.apply_core_features(df)`.
+
+- **🟢 OK — Core é coeso**: `indicators.py` (176L/7fn), `portfolio.py` (140L/6fn), `signals.py` (315L/8fn) — propósitos únicos, tamanhos saudáveis.
+
+### B. Estado, config & paridade backtest↔live
+
+**Saúde geral: 8/10.** `config/params.py` realmente é single source (confirmado via `__all__` + `from config.params import *` em 8 engines). Custos, sinais, sizing, filtros e cooldowns todos têm paridade bitwise backtest↔live. Atomic writes aplicados. Audit trail robusto (append-only + hash chain).
+
+**Findings acionáveis:**
+
+- **🔴 CRITICAL — `AURUM.spec:8` inclui `config/` inteira no bundle**
+  ```python
+  datas=[('C:\\Users\\Joao\\OneDrive\\aurum.finance\\config', 'config')],
+  ```
+  Se o `.exe` for distribuído ou roubado, `keys.json` plaintext vaza junto. **Fix:** excluir `keys.json` dos `datas` + documentar uso de `AURUM_KEY_PASSWORD` + `keys.json.enc` em produção.
+
+- **🟠 HIGH — Timezone inconsistente**
+  `datetime.now()` (naive) em `launcher.py:1195`, `engines/citadel.py:75`, `core/engine_base.py:22-23`. Resto do sistema usa `datetime.now(timezone.utc)`. No VPS Linux UTC isso funciona por coincidência, mas RUN_IDs gerados no Windows (UTC-3) divergem. Fix: mecânico, substituir em todos.
+
+- **🟠 HIGH — Sem reconciliation automático de entry_price**
+  Live roda `fetch_account_positions()` no startup, mas não compara contra `positions.json`. Se processo morre entre `trail.write(intent)` e `place_order()`, o restart não sabe que o intent nunca virou ordem real. Precisa de `--reconcile-exchange` flag explícito que aborte se divergência > threshold.
+
+- **🟡 MEDIUM — Funding: discreto em backtest, contínuo em live**
+  Backtest aplica `FUNDING_PER_8H / periods × duration_periods`. Live acumula tick-by-tick. Trades que passam uma barreira de 8h podem divergir. Mitigado por `MAX_HOLD=96` (24h) mas não zerado.
+
+- **🟡 MEDIUM — Cache sprawl em `data/.cache/*.pkl.gz`** sem TTL. Cleanup manual. Acumula indefinidamente.
+
+- **🟢 OK — Backtest↔Live paridade confirmada** para: custos (SLIPPAGE+SPREAD+COMMISSION+FUNDING), `decide_direction`, `score_omega`, `position_size`, `SPEED_MIN`, `SESSION_BLOCK_HOURS`, `VETO_HOURS_UTC`, `STREAK_COOLDOWN`, `SYM_LOSS_COOLDOWN`.
+
+- **⚠️ Env vars dispersas sem registrador central:**
+  `AURUM_NO_CACHE`, `AURUM_JWT_SECRET`, `AURUM_MACRO_MODE`, `AURUM_CANARY_MODE`, `AURUM_CANARY_PCT`, `AURUM_PHASE_C_CAPTURE_*`, `AURUM_KEY_PASSWORD`, `AURUM_ARB_LATENCY_BPS`, `AURUM_HL_WHALES`. Não é bug mas é surface area crescente.
+
+### C. Prioridade consolidada (wave 3)
+
+| # | Severidade | Área | Fix |
+|---|-----------|------|-----|
+| 1 | 🔴 CRITICAL | Deploy | Remover `keys.json` do PyInstaller bundle |
+| 2 | 🟠 HIGH | Consistency | `datetime.now(timezone.utc)` em launcher/citadel/engine_base |
+| 3 | 🟠 HIGH | Arquitetura | `analysis/live_replay_test.py` — remover import de engine concreto |
+| 4 | 🟠 HIGH | Resilience | `--reconcile-exchange` flag no startup do live |
+| 5 | 🟡 MEDIUM | Duplicação | `core/engine_utils.py` centralizando `_pnl_with_costs` etc |
+| 6 | 🟡 MEDIUM | Cleanup | Deletar ou adotar `core/engine_base.py::EngineRuntime` |
+| 7 | 🟡 MEDIUM | Ops | Cache TTL cleanup tool |
+| 8 | 🟡 MEDIUM | Paridade | Funding continuous equivalente no backtest |
+
+---
+
+**Gerado por:** 4 agentes (wave 1) + 2 agentes (wave 2) + 2 agentes (wave 3 estrutural), Claude Opus 4.7, em 2026-04-17.
 **Arquivos de referência:** `docs/audits/2026-04-16_oos_verdict.md`, `docs/audits/2026-04-17_oos_revalidation.md`, `docs/methodology/anti_overfit_protocol.md`, `docs/sessions/2026-04-12_1505.md`.
