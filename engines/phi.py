@@ -26,6 +26,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -54,6 +55,7 @@ from config.params import (
 )
 from core.data import fetch_all, validate
 from core.fs import atomic_write
+from analysis.stats import calc_ratios, equity_stats
 
 log = logging.getLogger("PHI")
 _tl = logging.getLogger("PHI.trades")
@@ -100,6 +102,7 @@ class PhiParams:
     w_trend: float = 0.146
     w_regime: float = 0.090
     omega_phi_entry: float = 0.618
+    entry_mode: str = "continuation"
 
     # Sizing (Golden Convex)
     risk_per_trade: float = 0.01
@@ -111,6 +114,11 @@ class PhiParams:
     tp1_partial: float = 0.382
     tp2_partial: float = 0.382
     tp3_runner: float = 0.236
+    # Slippage robustness gate: reject setups where the first target sits
+    # within min_target_bp basis points of entry. Protects against tight
+    # fib geometries whose PnL is swallowed by execution friction.
+    # Default 0 = disabled (preserves baseline).
+    min_target_bp: float = 0.0
 
     # Kill-switch (% drawdown from equity high)
     kill_daily: float = 0.02618
@@ -119,6 +127,124 @@ class PhiParams:
     # Data window
     n_candles_5m: int = 210_000  # ~2 years at 5m
     max_bars_in_trade: int = 288  # 24h on 5m
+
+
+PHI_PRESETS: dict[str, dict[str, float | int]] = {
+    "native_stack": {
+        "tf_omega1": "4h",
+        "tf_omega2": "2h",
+        "tf_omega3": "1h",
+        "tf_omega4": "30m",
+        "tf_omega5": "15m",
+        "cluster_min_confluences": 2,
+        "adx_min": 10.0,
+        "ema200_distance_atr": 0.382,
+        "wick_ratio_min": 0.382,
+        "omega_phi_entry": 0.382,
+    },
+    "fractal_stack": {
+        "tf_omega1": "1d",
+        "tf_omega2": "4h",
+        "tf_omega3": "1h",
+        "tf_omega4": "15m",
+        "tf_omega5": "5m",
+        "cluster_min_confluences": 2,
+        "adx_min": 10.0,
+        "ema200_distance_atr": 0.382,
+        "wick_ratio_min": 0.382,
+        "omega_phi_entry": 0.382,
+    },
+    "majors_candidate": {
+        "cluster_min_confluences": 1,
+        "omega_phi_entry": 0.382,
+    },
+    "stagec_like": {
+        "cluster_min_confluences": 1,
+        "adx_min": 10.0,
+        "ema200_distance_atr": 0.382,
+        "wick_ratio_min": 0.382,
+        "omega_phi_entry": 0.382,
+    },
+    "reversal_candidate": {
+        "cluster_min_confluences": 1,
+        "adx_min": 10.0,
+        "ema200_distance_atr": 0.382,
+        "wick_ratio_min": 0.382,
+        "omega_phi_entry": 0.382,
+        "entry_mode": "reversal",
+    },
+}
+
+
+def _higher_timeframes(params: PhiParams) -> list[str]:
+    seen: list[str] = []
+    for tf in (params.tf_omega1, params.tf_omega2, params.tf_omega3, params.tf_omega4):
+        if tf == params.tf_omega5:
+            continue
+        if tf not in seen:
+            seen.append(tf)
+    return seen
+
+
+def _cluster_column_pairs(params: PhiParams) -> list[tuple[str, str]]:
+    pairs = []
+    for tf in _higher_timeframes(params):
+        pairs.append((f"fib_0.618_{tf}", f"swing_direction_{tf}"))
+    pairs.append(("fib_0.618", "swing_direction"))
+    return pairs
+
+
+def _trend_slope_cols(params: PhiParams) -> tuple[str, str]:
+    return (f"ema200_slope_{params.tf_omega1}", f"ema200_slope_{params.tf_omega2}")
+
+
+def _level_cols(params: PhiParams) -> dict[str, str]:
+    tf = params.tf_omega3
+    return {
+        "fib_786": f"fib_0.786_{tf}",
+        "fib_1272": f"fib_1.272_{tf}",
+        "fib_1618": f"fib_1.618_{tf}",
+        "fib_2618": f"fib_2.618_{tf}",
+        "atr": f"atr_{tf}",
+    }
+
+
+def _tf_bars_for_days(days: int, tf: str) -> int:
+    """Approximate bar budget for a lookback window plus warm-up."""
+    mins = _TF_MINUTES.get(tf, 5)
+    bars_per_day = max(1, int((24 * 60) / mins))
+    warmup_days = {
+        "1d": 120,
+        "4h": 45,
+        "1h": 21,
+        "15m": 10,
+        "5m": 7,
+    }.get(tf, 7)
+    return max(300, (days + warmup_days) * bars_per_day)
+
+
+def _phi_n_candles_map(params: PhiParams, days: int | None) -> dict[str, int]:
+    if days is None:
+        return {
+            params.tf_omega1: 800,
+            params.tf_omega2: 4_000,
+            params.tf_omega3: 16_000,
+            params.tf_omega4: 70_000,
+            params.tf_omega5: params.n_candles_5m,
+        }
+    return {
+        params.tf_omega1: _tf_bars_for_days(days, params.tf_omega1),
+        params.tf_omega2: _tf_bars_for_days(days, params.tf_omega2),
+        params.tf_omega3: _tf_bars_for_days(days, params.tf_omega3),
+        params.tf_omega4: _tf_bars_for_days(days, params.tf_omega4),
+        params.tf_omega5: _tf_bars_for_days(days, params.tf_omega5),
+    }
+
+
+def _end_to_ms(end: str | None) -> int | None:
+    if not end:
+        return None
+    return int(pd.Timestamp(end).timestamp() * 1000)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -407,22 +533,18 @@ def detect_cluster(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
     Direction is the sign of the sum of signed swing_direction values
     across contributing TFs (majority vote; ties = 0 = no-go).
 
-    Assumes TF columns are suffixed: fib_0.618_{1d,4h,1h,15m}, with the
-    5m (base) using unsuffixed fib_0.618 / swing_direction columns.
+    Assumes HTF columns are suffixed by their timeframe label, with the
+    base timeframe using unsuffixed fib_0.618 / swing_direction columns.
     """
     out = df.copy()
     n = len(out)
     tolerance = params.cluster_atr_tolerance * out["atr"]
     close = out["close"]
 
-    tf_keys = ["1d", "4h", "1h", "15m"]
-    fib_cols = [f"fib_0.618_{tf}" for tf in tf_keys] + ["fib_0.618"]
-    dir_cols = [f"swing_direction_{tf}" for tf in tf_keys] + ["swing_direction"]
-
     confluences = np.zeros(n, dtype=np.int8)
     signed_sum = np.zeros(n, dtype=np.int32)
 
-    for fc, dc in zip(fib_cols, dir_cols):
+    for fc, dc in _cluster_column_pairs(params):
         if fc not in out.columns:
             continue
         fib_vals = out[fc]
@@ -482,15 +604,16 @@ def compute_scoring(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
 
     Requires input columns:
       cluster_confluences, wick_ratio,
-      ema200_slope_1d, ema200_slope_4h,
+      ema200_slope_(params.tf_omega1), ema200_slope_(params.tf_omega2),
       volume, vol_ma20, regime_ok
     """
     out = df.copy()
     confluences = out["cluster_confluences"].astype(float)
     rejection = out["wick_ratio"].astype(float).clip(0, 1)
 
-    s1 = out["ema200_slope_1d"].fillna(0)
-    s2 = out["ema200_slope_4h"].fillna(0)
+    trend_col_1, trend_col_2 = _trend_slope_cols(params)
+    s1 = out.get(trend_col_1, pd.Series(0.0, index=out.index)).fillna(0)
+    s2 = out.get(trend_col_2, pd.Series(0.0, index=out.index)).fillna(0)
     tol = 1e-6
     same_sign = ((s1 > tol) & (s2 > tol)) | ((s1 < -tol) & (s2 < -tol))
     opposite = ((s1 > tol) & (s2 < -tol)) | ((s1 < -tol) & (s2 > tol))
@@ -499,7 +622,8 @@ def compute_scoring(df: pd.DataFrame, params: PhiParams) -> pd.DataFrame:
     trend_align.loc[opposite] = 0.0
 
     out["trend_alignment"] = trend_align
-    out["phi_score"] = (confluences / 5.0) * rejection * trend_align
+    max_confluences = max(1.0, float(len(_cluster_column_pairs(params))))
+    out["phi_score"] = (confluences / max_confluences) * rejection * trend_align
 
     volume_ok = (out["vol"] > out["vol_ma20"] * params.volume_mult).astype(float)
     regime_ok = out["regime_ok"].astype(float)
@@ -545,28 +669,74 @@ def phi_size(equity: float, entry: float, sl: float,
 # ════════════════════════════════════════════════════════════════════
 
 def calc_phi_levels(row, direction: int, params: PhiParams) -> dict:
-    """Compute SL/TP1/TP2/TP3 from Ω3 (1h) Fib levels + ATR buffer.
-
-    SL = fib_0.786_1h ± sl_atr_buffer * atr_1h (below for long, above for short)
-    TP1 = fib_1.272_1h (partial exit 38.2%)
-    TP2 = fib_1.618_1h (partial exit 38.2%)
-    TP3 = fib_2.618_1h (runner 23.6% + trailing)
-
-    `row` can be a dict-like or a pandas Series. Must contain:
-      fib_0.786_1h, fib_1.272_1h, fib_1.618_1h, fib_2.618_1h, atr_1h
-    """
-    sl_base = float(row["fib_0.786_1h"])
-    atr_1h = float(row["atr_1h"])
+    """Compute SL/TP1/TP2/TP3 from Ω3 Fib levels + ATR buffer."""
+    cols = _level_cols(params)
+    sl_base = float(row[cols["fib_786"]])
+    atr_tf = float(row[cols["atr"]])
     if direction == +1:
-        sl = sl_base - params.sl_atr_buffer * atr_1h
+        sl = sl_base - params.sl_atr_buffer * atr_tf
     else:
-        sl = sl_base + params.sl_atr_buffer * atr_1h
+        sl = sl_base + params.sl_atr_buffer * atr_tf
     return {
         "sl": float(sl),
-        "tp1": float(row["fib_1.272_1h"]),
-        "tp2": float(row["fib_1.618_1h"]),
-        "tp3": float(row["fib_2.618_1h"]),
+        "tp1": float(row[cols["fib_1272"]]),
+        "tp2": float(row[cols["fib_1618"]]),
+        "tp3": float(row[cols["fib_2618"]]),
     }
+
+
+def levels_geometry_ok(entry: float, levels: dict, direction: int) -> bool:
+    """True when stop/targets sit on the economically correct side of entry.
+
+    This blocks setups where entry already crossed beyond the invalidation
+    level. Without this gate, a long can be opened below its stop stack (or a
+    short above it), creating pathological same-bar "wins".
+    """
+    if direction == +1:
+        return levels["sl"] < entry < levels["tp1"] < levels["tp2"] < levels["tp3"]
+    if direction == -1:
+        return levels["sl"] > entry > levels["tp1"] > levels["tp2"] > levels["tp3"]
+    return False
+
+
+def infer_executable_direction(row, entry: float, params: PhiParams) -> tuple[int, dict | None]:
+    """Infer the only executable trade direction from raw Ω3 fib geometry.
+
+    Returns `(direction, levels)` where direction is:
+    - `+1` long geometry only
+    - `-1` short geometry only
+    - `0` ambiguous or invalid
+    """
+    cols = _level_cols(params)
+    base = {"close": float(row["close"])}
+    for key in cols.values():
+        base[key] = float(row[key])
+    long_levels = calc_phi_levels(base, +1, params)
+    short_levels = calc_phi_levels(base, -1, params)
+    long_ok = levels_geometry_ok(entry, long_levels, +1)
+    short_ok = levels_geometry_ok(entry, short_levels, -1)
+    if long_ok and not short_ok:
+        return +1, long_levels
+    if short_ok and not long_ok:
+        return -1, short_levels
+    return 0, None
+
+
+def resolve_entry_direction(swing_direction: int, trig_long: bool, trig_short: bool,
+                            entry_mode: str) -> int:
+    """Resolve operational side from trigger polarity plus thesis mode.
+
+    `continuation`: trigger side must match swing side.
+    `reversal`: trigger side must oppose swing side.
+    """
+    if trig_long and trig_short:
+        return 0
+    if not trig_long and not trig_short:
+        return 0
+    trigger_direction = +1 if trig_long else -1
+    if entry_mode == "reversal":
+        return trigger_direction if swing_direction == -trigger_direction else 0
+    return trigger_direction if swing_direction == trigger_direction else 0
 
 
 def update_phi_trailing(trade: dict, new_trail_price: float) -> None:
@@ -771,17 +941,63 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
         if t > cluster_armed_until:
             continue
 
-        direction = int(row.get("cluster_direction", 0))
-        if direction == 0:
+        swing_direction = int(row.get("cluster_direction", 0))
+        if swing_direction == 0:
             vetos["no_direction"] += 1
             continue
+
+        entry = float(df["open"].iloc[t + 1])
+        level_cols = _level_cols(params)
+        fib_786 = row.get(level_cols["fib_786"], np.nan)
+        fib_1272 = row.get(level_cols["fib_1272"], np.nan)
+        fib_1618 = row.get(level_cols["fib_1618"], np.nan)
+        fib_2618 = row.get(level_cols["fib_2618"], np.nan)
+        atr_1h = row.get(level_cols["atr"], row.get("atr", np.nan))
+        any_nan = any(
+            isinstance(v, float) and np.isnan(v)
+            for v in (fib_786, fib_1272, fib_1618, fib_2618, atr_1h)
+        )
+        if any_nan:
+            vetos["nan_levels"] += 1
+            continue
+
+        trig_long = bool(row.get("trigger_long", False))
+        trig_short = bool(row.get("trigger_short", False))
+        direction = resolve_entry_direction(swing_direction, trig_long, trig_short, params.entry_mode)
+        if direction == 0:
+            if trig_long or trig_short:
+                vetos["mode_mismatch"] += 1
+            else:
+                vetos["no_trigger"] += 1
+            continue
+
+        inferred_direction, levels = infer_executable_direction({
+            "close": float(row["close"]),
+            level_cols["fib_786"]: float(fib_786),
+            level_cols["fib_1272"]: float(fib_1272),
+            level_cols["fib_1618"]: float(fib_1618),
+            level_cols["fib_2618"]: float(fib_2618),
+            level_cols["atr"]: float(atr_1h),
+        }, entry, params)
+        if inferred_direction == 0 or levels is None:
+            vetos["invalid_geometry"] += 1
+            continue
+        if inferred_direction != direction:
+            vetos["direction_flip"] += 1
+            continue
+
+        if params.min_target_bp > 0.0:
+            target_bp = abs(levels["tp1"] - entry) / entry * 10000.0
+            if target_bp < params.min_target_bp:
+                vetos["tight_target"] += 1
+                continue
 
         if not bool(row.get("regime_ok", False)):
             vetos["regime_block"] += 1
             continue
 
-        # Macro filter: 1d slope sign
-        macro_slope = row.get("ema200_slope_1d", 0)
+        macro_col, _macro_confirmation_col = _trend_slope_cols(params)
+        macro_slope = row.get(macro_col, 0)
         if isinstance(macro_slope, float) and np.isnan(macro_slope):
             macro_slope = 0
         macro = int(np.sign(macro_slope or 0))
@@ -797,39 +1013,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             vetos["omega_low"] += 1
             continue
 
-        trig_long = bool(row.get("trigger_long", False))
-        trig_short = bool(row.get("trigger_short", False))
-        if direction == +1 and not trig_long:
-            vetos["no_trigger"] += 1
-            continue
-        if direction == -1 and not trig_short:
-            vetos["no_trigger"] += 1
-            continue
-
         size_scale = 1.0 if macro != 0 else params.range_size_scale
-
-        entry = float(df["open"].iloc[t + 1])
-        fib_786 = row.get("fib_0.786_1h", np.nan)
-        fib_1272 = row.get("fib_1.272_1h", np.nan)
-        fib_1618 = row.get("fib_1.618_1h", np.nan)
-        fib_2618 = row.get("fib_2.618_1h", np.nan)
-        atr_1h = row.get("atr_1h", row.get("atr", np.nan))
-        any_nan = any(
-            isinstance(v, float) and np.isnan(v)
-            for v in (fib_786, fib_1272, fib_1618, fib_2618, atr_1h)
-        )
-        if any_nan:
-            vetos["nan_levels"] += 1
-            continue
-
-        levels = calc_phi_levels({
-            "close": float(row["close"]),
-            "fib_0.786_1h": float(fib_786),
-            "fib_1.272_1h": float(fib_1272),
-            "fib_1.618_1h": float(fib_1618),
-            "fib_2.618_1h": float(fib_2618),
-            "atr_1h": float(atr_1h),
-        }, direction, params)
 
         phi_score = float(row.get("phi_score", 0.0))
         sz = phi_size(account, entry, levels["sl"], phi_score, params)
@@ -837,6 +1021,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             vetos["zero_size"] += 1
             continue
 
+        macro_label = "BULL" if macro == +1 else ("BEAR" if macro == -1 else "CHOP")
         open_trade = {
             "symbol": symbol,
             "direction": direction,
@@ -852,6 +1037,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             "notional": sz["notional"] * size_scale,
             "phi_score": phi_score,
             "omega_phi": omega,
+            "macro_bias": macro_label,
             "stage": 0,
             "partials": [],
         }
@@ -863,27 +1049,58 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 # Multi-symbol orchestration + summary + persistence
 # ════════════════════════════════════════════════════════════════════
 
-def prepare_symbol_frames(symbol: str, params: PhiParams) -> Optional[pd.DataFrame]:
+def prefetch_symbol_universe(symbols: list[str], params: PhiParams, days: int | None = None,
+                             end: str | None = None) -> tuple[dict[str, dict[str, pd.DataFrame]], dict[str, int]]:
+    """Fetch each PHI timeframe once for the whole symbol universe."""
+    tfs = [params.tf_omega5, params.tf_omega4, params.tf_omega3,
+           params.tf_omega2, params.tf_omega1]
+    n_candles_map = _phi_n_candles_map(params, days)
+    end_time_ms = _end_to_ms(end)
+    universe: dict[str, dict[str, pd.DataFrame]] = {}
+    for tf in tfs:
+        t0 = time.time()
+        universe[tf] = fetch_all(
+            symbols,
+            interval=tf,
+            n_candles=n_candles_map[tf],
+            futures=True,
+            end_time_ms=end_time_ms,
+        )
+        elapsed = round(time.time() - t0, 1)
+        ok = len(universe[tf])
+        log.info("Prefetch %s: %s/%s symbols in %.1fs", tf, ok, len(symbols), elapsed)
+    return universe, n_candles_map
+
+
+def prepare_symbol_frames(symbol: str, params: PhiParams,
+                          prefetched: dict[str, dict[str, pd.DataFrame]] | None = None,
+                          days: int | None = None,
+                          end: str | None = None) -> Optional[pd.DataFrame]:
     """Fetch all 5 TFs, compute features+zigzag+fibs per TF, merge HTFs
     onto the 5m base, and run cluster/regime/trigger/scoring.
     Returns the fully-prepared base df, or None on data failure."""
     tfs = [params.tf_omega5, params.tf_omega4, params.tf_omega3,
            params.tf_omega2, params.tf_omega1]
-    n_candles_map = {
-        params.tf_omega1: 800,
-        params.tf_omega2: 4_000,
-        params.tf_omega3: 16_000,
-        params.tf_omega4: 70_000,
-        params.tf_omega5: params.n_candles_5m,
-    }
+    n_candles_map = _phi_n_candles_map(params, days)
+    end_time_ms = _end_to_ms(end)
     frames: dict[str, pd.DataFrame] = {}
     for tf in tfs:
-        got = fetch_all([symbol], interval=tf, n_candles=n_candles_map[tf], futures=True)
-        df = got.get(symbol)
+        if prefetched is not None:
+            df = prefetched.get(tf, {}).get(symbol)
+        else:
+            got = fetch_all(
+                [symbol],
+                interval=tf,
+                n_candles=n_candles_map[tf],
+                futures=True,
+                end_time_ms=end_time_ms,
+            )
+            df = got.get(symbol)
         if df is None or len(df) < 300:
             log.warning("%s: insufficient data on %s (have=%s)",
                         symbol, tf, 0 if df is None else len(df))
             return None
+        validate(df, symbol)
         df = compute_features(df, params)
         df = compute_zigzag(df, params)
         df = compute_fibs(df, params)
@@ -904,7 +1121,10 @@ def prepare_symbol_frames(symbol: str, params: PhiParams) -> Optional[pd.DataFra
 
 
 def run_backtest(symbols: list[str], params: Optional[PhiParams] = None,
-                 initial_equity: float = ACCOUNT_SIZE) -> tuple[list[dict], dict, dict]:
+                 initial_equity: float = ACCOUNT_SIZE,
+                 days: int | None = None,
+                 end: str | None = None,
+                 profile: bool = False) -> tuple[list[dict], dict, dict]:
     """Run PHI across symbols. Returns (trades, summary, per_symbol)."""
     params = params or PhiParams()
     all_trades: list[dict] = []
@@ -912,30 +1132,46 @@ def run_backtest(symbols: list[str], params: Optional[PhiParams] = None,
     per_symbol: dict[str, dict] = {}
     sym_trades_map: dict[str, list[dict]] = {}
     sym_vetos_map: dict[str, dict] = {}
-    for sym in symbols:
-        log.info("Preparing %s ...", sym)
-        merged = prepare_symbol_frames(sym, params)
+    prefetched, n_candles_map = prefetch_symbol_universe(symbols, params, days=days, end=end)
+    for idx, sym in enumerate(symbols, 1):
+        t0 = time.time()
+        log.info("[%s/%s] Preparing %s ...", idx, len(symbols), sym)
+        merged = prepare_symbol_frames(sym, params, prefetched=prefetched, days=days, end=end)
         if merged is None:
             continue
+        t1 = time.time()
         trades, vetos = scan_symbol(merged, sym, params, initial_equity)
+        t2 = time.time()
         all_trades.extend(trades)
         sym_trades_map[sym] = trades
         sym_vetos_map[sym] = vetos
         for k, v in vetos.items():
             all_vetos[k] += v
-        log.info("%s: %d trades", sym, len(trades))
-    summary = compute_summary(all_trades, initial_equity)
+        log.info(
+            "[%s/%s] %s: %d trades | prep %.1fs | scan %.1fs",
+            idx, len(symbols), sym, len(trades), t1 - t0, t2 - t1
+        )
+    summary = compute_summary(all_trades, initial_equity, n_days=days)
     all_vetos_dict = dict(all_vetos)
     summary["vetos"] = all_vetos_dict
+    if profile:
+        summary["profile"] = {
+            "n_symbols": len(symbols),
+            "days": days,
+            "end": end,
+            "n_candles_map": n_candles_map,
+        }
     # Build per-symbol breakdown
     for sym in sym_trades_map:
-        sym_sum = compute_summary(sym_trades_map[sym], initial_equity)
+        sym_sum = compute_summary(sym_trades_map[sym], initial_equity, n_days=days)
         sym_sum["vetos"] = sym_vetos_map[sym]
         per_symbol[sym] = sym_sum
     return all_trades, summary, per_symbol
 
 
-def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE) -> dict:
+def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE,
+                    n_days: int | None = None,
+                    min_sample_for_ratios: int = 30) -> dict:
     """Sharpe, Sortino, Profit Factor, Win Rate, Max Drawdown, Expectancy (R)."""
     if not trades:
         return {
@@ -943,20 +1179,17 @@ def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE) ->
             "sharpe": 0.0, "sortino": 0.0, "max_drawdown": 0.0,
             "expectancy_r": 0.0,
             "final_equity": float(initial_equity), "total_pnl": 0.0,
+            "metrics_reliable": False,
+            "metrics_note": "insufficient_sample",
         }
     pnls = np.array([t["pnl"] for t in trades], dtype=float)
     wins = pnls[pnls > 0]
     losses = pnls[pnls < 0]
-    equity = initial_equity + np.cumsum(pnls)
-    peaks = np.maximum.accumulate(equity)
-    dd = (peaks - equity) / np.where(peaks > 0, peaks, 1.0)
-
-    ret_series = pnls / initial_equity
-    std_r = float(np.std(ret_series))
-    sharpe = (float(np.mean(ret_series)) / std_r * np.sqrt(len(ret_series))) if std_r > 0 else 0.0
-    downside = ret_series[ret_series < 0]
-    std_d = float(np.std(downside)) if len(downside) > 0 else 0.0
-    sortino = (float(np.mean(ret_series)) / std_d * np.sqrt(len(ret_series))) if std_d > 0 else 0.0
+    equity, _mdd_abs, mdd_pct, _streak = equity_stats(pnls.tolist(), initial_equity)
+    ratios = calc_ratios(pnls.tolist(), initial_equity, n_days=n_days or 365)
+    reliable_metrics = len(trades) >= min_sample_for_ratios
+    sharpe = float(ratios.get("sharpe") or 0.0) if reliable_metrics else 0.0
+    sortino = float(ratios.get("sortino") or 0.0) if reliable_metrics else 0.0
 
     if len(losses) > 0 and losses.sum() < 0:
         pf = float(wins.sum() / -losses.sum())
@@ -976,12 +1209,14 @@ def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE) ->
         "total_trades": len(trades),
         "win_rate": float(len(wins) / len(trades)),
         "profit_factor": pf,
-        "sharpe": float(sharpe),
-        "sortino": float(sortino),
-        "max_drawdown": float(dd.max()),
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "max_drawdown": float(mdd_pct / 100.0),
         "expectancy_r": expectancy_r,
         "final_equity": float(equity[-1]),
         "total_pnl": float(pnls.sum()),
+        "metrics_reliable": reliable_metrics,
+        "metrics_note": "" if reliable_metrics else "insufficient_sample",
     }
 
 
@@ -1067,10 +1302,16 @@ def _print_summary(summary: dict) -> None:
     print(f"  Profit factor      : {pf_str}")
     print(f"  Sharpe             : {summary['sharpe']:.3f}")
     print(f"  Sortino            : {summary['sortino']:.3f}")
+    if not summary.get("metrics_reliable", True):
+        note = summary.get("metrics_note") or "insufficient_sample"
+        print(f"  Ratio status       : n/a ({note})")
     print(f"  Max drawdown       : {summary['max_drawdown']*100:.2f}%")
     print(f"  Expectancy (R)     : {summary['expectancy_r']:.3f}")
     print(f"  Final equity       : ${summary['final_equity']:,.2f}")
     print(f"  Total PnL          : ${summary['total_pnl']:,.2f}")
+    profile = summary.get("profile")
+    if profile:
+        print(f"  Profile            : {profile.get('n_symbols', 0)} symbols | days={profile.get('days')}")
     vetos = summary.get("vetos", {})
     if vetos:
         print(f"\n  Vetos:")
@@ -1080,23 +1321,61 @@ def _print_summary(summary: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="PHI — AURUM Fibonacci Fractal Engine")
+    ap.add_argument("--preset", choices=sorted(PHI_PRESETS.keys()),
+                    help="Apply a named PHI research preset before CLI overrides")
     ap.add_argument("--symbols", default=None,
                     help="Comma-separated list (default: SYMBOLS from config.params)")
+    ap.add_argument("--basket", default=None,
+                    help="Basket name from config.params BASKETS (e.g. bluechip_active)")
+    ap.add_argument("--days", type=int, default=None,
+                    help="Lookback window in days for faster exploratory backtests")
+    ap.add_argument("--end", type=str, default=None,
+                    help="End date YYYY-MM-DD for historical validation windows")
     ap.add_argument("--out", default="data/phi",
                     help="Output base dir (default: data/phi)")
     ap.add_argument("--threshold-cluster", type=int, default=None,
                     help="Minimum TF confluences (default: 3)")
     ap.add_argument("--omega-entry", type=float, default=None,
                     help="Ω_PHI entry threshold (default: 0.618)")
+    ap.add_argument("--entry-mode", choices=("continuation", "reversal"), default=None,
+                    help="Map cluster swing to trade side explicitly")
+    ap.add_argument("--adx-min", type=float, default=None,
+                    help="Override ADX regime floor")
+    ap.add_argument("--wick-ratio-min", type=float, default=None,
+                    help="Override wick rejection floor")
+    ap.add_argument("--ema200-distance-atr", type=float, default=None,
+                    help="Override EMA200 distance ATR gate")
+    ap.add_argument("--volume-mult", type=float, default=None,
+                    help="Override relative volume trigger floor")
     ap.add_argument("--no-kill-switch", action="store_true")
+    ap.add_argument("--profile", action="store_true",
+                    help="Include runtime/profile metadata in summary.json")
     args = ap.parse_args()
 
-    symbols = [s.strip() for s in args.symbols.split(",")] if args.symbols else list(SYMBOLS)
+    if args.symbols:
+        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    elif args.basket:
+        symbols = list(BASKETS.get(args.basket, SYMBOLS))
+    else:
+        symbols = list(SYMBOLS)
     params = PhiParams()
+    if args.preset:
+        for field_name, value in PHI_PRESETS[args.preset].items():
+            setattr(params, field_name, value)
     if args.threshold_cluster is not None:
         params.cluster_min_confluences = args.threshold_cluster
     if args.omega_entry is not None:
         params.omega_phi_entry = args.omega_entry
+    if args.entry_mode is not None:
+        params.entry_mode = args.entry_mode
+    if args.adx_min is not None:
+        params.adx_min = args.adx_min
+    if args.wick_ratio_min is not None:
+        params.wick_ratio_min = args.wick_ratio_min
+    if args.ema200_distance_atr is not None:
+        params.ema200_distance_atr = args.ema200_distance_atr
+    if args.volume_mult is not None:
+        params.volume_mult = args.volume_mult
     if args.no_kill_switch:
         params.kill_daily = 1.0
         params.kill_weekly = 1.0
@@ -1116,9 +1395,15 @@ def main() -> int:
         "run_id": ts,
         "symbols": symbols,
         "initial_equity": float(ACCOUNT_SIZE),
+        "preset": args.preset,
+        "basket": args.basket,
+        "days": args.days,
+        "end": args.end,
         "cli_args": vars(args),
     }
-    trades, summary, per_sym = run_backtest(symbols, params, ACCOUNT_SIZE)
+    trades, summary, per_sym = run_backtest(
+        symbols, params, ACCOUNT_SIZE, days=args.days, end=args.end, profile=args.profile
+    )
     vetos = summary.pop("vetos", {})
     save_run(run_dir, trades, summary, params, vetos, per_sym, meta)
     _print_summary({**summary, "vetos": vetos})

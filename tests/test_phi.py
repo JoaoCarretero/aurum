@@ -228,6 +228,38 @@ def test_cluster_below_threshold():
     assert bool(out["cluster_active"].iloc[10]) == False
 
 
+def test_cluster_uses_dynamic_timeframe_stack():
+    n = 20
+    idx = pd.date_range("2024-01-01", periods=n, freq="15min")
+    params = PhiParams(
+        tf_omega1="4h",
+        tf_omega2="2h",
+        tf_omega3="1h",
+        tf_omega4="30m",
+        tf_omega5="15m",
+        cluster_min_confluences=2,
+    )
+    base = pd.DataFrame({
+        "time": idx,
+        "close": np.full(n, 100.0),
+        "atr": np.full(n, 1.0),
+        "fib_0.618_4h": np.full(n, 99.8),
+        "fib_0.618_2h": np.full(n, 100.1),
+        "fib_0.618_1h": np.full(n, 95.0),
+        "fib_0.618_30m": np.full(n, 110.0),
+        "fib_0.618": np.full(n, 100.2),
+        "swing_direction_4h": np.full(n, +1, dtype=np.int8),
+        "swing_direction_2h": np.full(n, +1, dtype=np.int8),
+        "swing_direction_1h": np.full(n, 0, dtype=np.int8),
+        "swing_direction_30m": np.full(n, 0, dtype=np.int8),
+        "swing_direction": np.full(n, +1, dtype=np.int8),
+    })
+    out = detect_cluster(base, params)
+    assert out["cluster_confluences"].iloc[0] == 3
+    assert bool(out["cluster_active"].iloc[0]) is True
+    assert out["cluster_direction"].iloc[0] == +1
+
+
 from engines.phi import check_regime_gates, check_golden_trigger, compute_scoring, phi_size
 
 
@@ -326,6 +358,30 @@ def test_scoring_no_cluster():
     assert out["omega_phi"].iloc[0] < 0.618
 
 
+def test_scoring_uses_dynamic_trend_columns():
+    params = PhiParams(
+        tf_omega1="4h",
+        tf_omega2="2h",
+        tf_omega3="1h",
+        tf_omega4="30m",
+        tf_omega5="15m",
+    )
+    n = 5
+    df = pd.DataFrame({
+        "cluster_confluences": np.full(n, 3, dtype=np.int8),
+        "cluster_active": np.full(n, True),
+        "wick_ratio": np.full(n, 1.0),
+        "ema200_slope_4h": np.full(n, 0.8),
+        "ema200_slope_2h": np.full(n, 0.3),
+        "vol": np.full(n, 2000.0),
+        "vol_ma20": np.full(n, 1000.0),
+        "regime_ok": np.full(n, True),
+    })
+    out = compute_scoring(df, params)
+    assert out["trend_alignment"].iloc[0] == pytest.approx(1.0)
+    assert out["phi_score"].iloc[0] > 0.0
+
+
 def test_sizing_respects_cap():
     """Notional capped at 2% of equity regardless of phi_score."""
     sz = phi_size(equity=10_000, entry=100.0, sl=99.0, phi_score=1.0, params=PhiParams())
@@ -342,7 +398,14 @@ def test_sizing_convex_with_phi_score():
     assert hi["risk_usd"] == pytest.approx(4.0 * lo["risk_usd"], rel=0.01)
 
 
-from engines.phi import KillSwitchState, calc_phi_levels, update_phi_trailing
+from engines.phi import (
+    KillSwitchState,
+    calc_phi_levels,
+    infer_executable_direction,
+    levels_geometry_ok,
+    resolve_entry_direction,
+    update_phi_trailing,
+)
 
 
 def test_kill_switch_daily():
@@ -400,6 +463,72 @@ def test_calc_phi_levels_short():
     assert levels["tp1"] == 88.0
 
 
+def test_levels_geometry_ok_rejects_crossed_entry():
+    long_levels = {"sl": 94.4, "tp1": 112.0, "tp2": 120.0, "tp3": 140.0}
+    short_levels = {"sl": 105.6, "tp1": 88.0, "tp2": 80.0, "tp3": 60.0}
+
+    assert levels_geometry_ok(100.0, long_levels, +1) is True
+    assert levels_geometry_ok(90.0, long_levels, +1) is False
+    assert levels_geometry_ok(100.0, short_levels, -1) is True
+    assert levels_geometry_ok(110.0, short_levels, -1) is False
+
+
+def test_infer_executable_direction_from_geometry():
+    row = {
+        "close": 100.0,
+        "fib_0.786_1h": 95.0,
+        "fib_1.272_1h": 112.0,
+        "fib_1.618_1h": 120.0,
+        "fib_2.618_1h": 140.0,
+        "atr_1h": 2.0,
+    }
+    direction, levels = infer_executable_direction(row, entry=100.0, params=PhiParams())
+    assert direction == +1
+    assert levels is not None
+    assert levels["tp1"] == 112.0
+
+    flipped_row = {
+        "close": 100.0,
+        "fib_0.786_1h": 105.0,
+        "fib_1.272_1h": 88.0,
+        "fib_1.618_1h": 80.0,
+        "fib_2.618_1h": 60.0,
+        "atr_1h": 2.0,
+    }
+    direction2, levels2 = infer_executable_direction(flipped_row, entry=100.0, params=PhiParams())
+    assert direction2 == -1
+    assert levels2 is not None
+    assert levels2["tp1"] == 88.0
+
+
+def test_calc_phi_levels_uses_dynamic_level_tf():
+    params = PhiParams(
+        tf_omega1="4h",
+        tf_omega2="2h",
+        tf_omega3="30m",
+        tf_omega4="15m",
+        tf_omega5="5m",
+    )
+    row = {
+        "fib_0.786_30m": 95.0,
+        "fib_1.272_30m": 112.0,
+        "fib_1.618_30m": 120.0,
+        "fib_2.618_30m": 140.0,
+        "atr_30m": 2.0,
+    }
+    levels = calc_phi_levels(row, direction=+1, params=params)
+    assert abs(levels["sl"] - 94.4) < 1e-6
+    assert levels["tp3"] == 140.0
+
+
+def test_resolve_entry_direction_modes():
+    assert resolve_entry_direction(+1, True, False, "continuation") == +1
+    assert resolve_entry_direction(+1, True, False, "reversal") == 0
+    assert resolve_entry_direction(-1, True, False, "reversal") == +1
+    assert resolve_entry_direction(-1, False, True, "continuation") == -1
+    assert resolve_entry_direction(+1, False, True, "reversal") == -1
+
+
 def test_trailing_monotonic_long():
     """Trailing SL only tightens in favor of the trade."""
     trade = {"direction": +1, "sl": 90.0, "trailing_sl": 90.0}
@@ -415,3 +544,92 @@ def test_trailing_monotonic_short():
     assert trade["trailing_sl"] == 105.0
     update_phi_trailing(trade, new_trail_price=107.0)
     assert trade["trailing_sl"] == 105.0
+
+
+# ════════════════════════════════════════════════════════════════════
+# Integration fixtures for scan_symbol (macro_bias, min_target_bp)
+# ════════════════════════════════════════════════════════════════════
+
+from engines.phi import scan_symbol
+
+
+def _scan_ready_df(n: int = 520, entry_t: int = 210, tp1_offset: float = 1.0) -> pd.DataFrame:
+    """Build a minimal merged df that lets scan_symbol fire exactly one long
+    trade around entry_t. All fib/atr columns for the 1h level-TF are fixed
+    constants so levels remain valid for the whole window.
+
+    `tp1_offset` lets tests dial how far TP1 sits above the entry — used by
+    the min_target_bp test.
+    """
+    idx = pd.date_range("2024-01-01", periods=n, freq="5min")
+    close = 100.0
+    entry_px = 100.0
+    sl_base = 99.0      # fib_0.786 → sl = 99 - 0.3*0.5 = 98.85
+    tp1 = entry_px + tp1_offset
+    tp2 = entry_px + max(tp1_offset * 2, 2.0)
+    tp3 = entry_px + max(tp1_offset * 3, 3.0)
+    df = pd.DataFrame({
+        "time": idx,
+        "open": np.full(n, close),
+        "high": np.full(n, close + 0.05),
+        "low": np.full(n, close - 0.05),
+        "close": np.full(n, close),
+        "vol": np.full(n, 1000.0),
+        "atr": np.full(n, 0.5),
+        "atr_1h": np.full(n, 0.5),
+        "fib_0.786_1h": np.full(n, sl_base),
+        "fib_1.272_1h": np.full(n, tp1),
+        "fib_1.618_1h": np.full(n, tp2),
+        "fib_2.618_1h": np.full(n, tp3),
+        "fib_0.618": np.full(n, close),
+        "cluster_active": np.full(n, False),
+        "cluster_direction": np.full(n, 0, dtype=np.int8),
+        "trigger_long": np.full(n, False),
+        "trigger_short": np.full(n, False),
+        "regime_ok": np.full(n, False),
+        "omega_phi": np.full(n, 0.0),
+        "phi_score": np.full(n, 0.0),
+        "ema200_slope_1d": np.full(n, 0.1),   # +1 macro → matches long
+        "ema200_slope_4h": np.full(n, 0.1),
+    })
+    df.loc[entry_t, "cluster_active"] = True
+    df.loc[entry_t, "cluster_direction"] = +1
+    df.loc[entry_t, "trigger_long"] = True
+    df.loc[entry_t, "regime_ok"] = True
+    df.loc[entry_t, "omega_phi"] = 0.9
+    df.loc[entry_t, "phi_score"] = 0.9
+    return df
+
+
+def test_scan_symbol_tags_macro_bias():
+    """A fired trade must carry a macro_bias label in {BULL, BEAR, CHOP}."""
+    df = _scan_ready_df()
+    trades, vetos = scan_symbol(df, "TESTUSDT", PhiParams())
+    assert len(trades) >= 1, f"expected at least 1 trade, got vetos={vetos}"
+    t0 = trades[0]
+    assert t0.get("macro_bias") in {"BULL", "BEAR", "CHOP"}
+    # Fixture uses positive ema200_slope_1d → BULL macro
+    assert t0["macro_bias"] == "BULL"
+
+
+def test_scan_symbol_min_target_bp_vetoes_tight_target():
+    """With min_target_bp=200, a TP1 sitting 100bp above entry must be rejected."""
+    # tp1_offset=1.0 on entry 100.0 → target distance = 100bp
+    df = _scan_ready_df(tp1_offset=1.0)
+    params = PhiParams(min_target_bp=200.0)
+    trades, vetos = scan_symbol(df, "TESTUSDT", params)
+    assert len(trades) == 0
+    assert vetos.get("tight_target", 0) >= 1
+
+
+def test_scan_symbol_min_target_bp_passes_when_target_wide():
+    """Same fixture but a wide TP1 (500bp) clears a 200bp floor."""
+    df = _scan_ready_df(tp1_offset=5.0)  # 500bp above entry 100.0
+    params = PhiParams(min_target_bp=200.0)
+    trades, vetos = scan_symbol(df, "TESTUSDT", params)
+    assert len(trades) >= 1, f"expected trade, got vetos={vetos}"
+
+
+def test_phi_params_min_target_bp_default_off():
+    """Default must preserve baseline behavior."""
+    assert PhiParams().min_target_bp == 0.0
