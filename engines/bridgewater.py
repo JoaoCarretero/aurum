@@ -89,6 +89,10 @@ def _sentiment_limits(window_days: int | None) -> tuple[int, int, int]:
     return funding, oi, ls
 
 
+def _scan_warmup_bars() -> int:
+    return max(200, W_NORM, PIVOT_N * 3) + 10
+
+
 def collect_sentiment(symbols: list, end_time_ms: int | None = None,
                       window_days: int | None = None) -> dict:
     """
@@ -184,6 +188,23 @@ def _parse_symbols_override(raw: str | None) -> list[str] | None:
     return symbols or None
 
 
+def _filter_stale_market_data(all_dfs: dict[str, pd.DataFrame], interval: str) -> tuple[dict[str, pd.DataFrame], list[str]]:
+    if not all_dfs:
+        return all_dfs, []
+    tf_minutes = max(1, _TF_MINUTES.get(interval, 60))
+    freshest = max(pd.to_datetime(df["time"]).max() for df in all_dfs.values() if df is not None and len(df))
+    cutoff = freshest - pd.Timedelta(minutes=tf_minutes * 24)
+    kept: dict[str, pd.DataFrame] = {}
+    dropped: list[str] = []
+    for sym, df in all_dfs.items():
+        last_ts = pd.to_datetime(df["time"]).max()
+        if last_ts < cutoff:
+            dropped.append(sym)
+            continue
+        kept[sym] = df
+    return kept, dropped
+
+
 def _align_series_to_candles(
     candle_times: pd.Series,
     series: pd.Series | None,
@@ -258,7 +279,8 @@ def _align_oi_signal_to_candles(
 def scan_thoth(df: pd.DataFrame, symbol: str,
                macro_bias_series, corr: dict,
                htf_stack_dfs: dict | None = None,
-               sentiment_data: dict | None = None) -> tuple[list, dict]:
+               sentiment_data: dict | None = None,
+               scan_start_idx: int = 0) -> tuple[list, dict]:
     """
     Scan a symbol using sentiment + technical confirmation.
     """
@@ -271,7 +293,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     trades  = []
     vetos   = defaultdict(int)
     account = ACCOUNT_SIZE
-    min_idx = max(200, W_NORM, PIVOT_N * 3) + 10
+    min_idx = max(_scan_warmup_bars(), int(scan_start_idx))
 
     # Get sentiment data for this symbol
     sent = (sentiment_data or {}).get(symbol, {})
@@ -646,6 +668,8 @@ if __name__ == "__main__":
     # N_CANDLES scales with TF (15m=4/h, 1h=1/h, 4h=1/4h)
     _tf_per_hour = 60 / _TF_MINUTES.get(INTERVAL, 15)
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_per_hour)
+    WARMUP_BARS = _scan_warmup_bars()
+    FETCH_CANDLES = N_CANDLES + WARMUP_BARS
 
     _symbols_override = _parse_symbols_override(_args.symbols)
     BASKET_NAME = "custom" if _symbols_override else (_args.basket or ENGINE_BASKETS.get("BRIDGEWATER", "default"))
@@ -681,18 +705,22 @@ if __name__ == "__main__":
     log.info(f"BRIDGEWATER v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH OHLCV ──
-    print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
+    print(f"\n{SEP}\n  DADOS   {INTERVAL}   {FETCH_CANDLES:,} candles ({N_CANDLES:,} scan + {WARMUP_BARS} warmup)\n{SEP}")
     _fetch_syms = list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms:
         _fetch_syms.insert(0, MACRO_SYMBOL)
     all_dfs = fetch_all(
         _fetch_syms,
         INTERVAL,
-        N_CANDLES,
+        FETCH_CANDLES,
         futures=True,
-        min_rows=min(300, N_CANDLES),
+        min_rows=min(300, FETCH_CANDLES),
         end_time_ms=END_TIME_MS,
     )
+    all_dfs, stale_symbols = _filter_stale_market_data(all_dfs, INTERVAL)
+    if stale_symbols:
+        print(f"  stale symbols skipped: {', '.join(sorted(stale_symbols))}")
+        log.warning(f"stale OHLCV skipped: {sorted(stale_symbols)}")
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -708,6 +736,22 @@ if __name__ == "__main__":
         end_time_ms=END_TIME_MS,
         window_days=SCAN_DAYS,
     )
+    eligible_symbols = [
+        s for s in SYMBOLS
+        if s in all_dfs
+        and s in sentiment_data
+        and sentiment_data[s].get("funding_z") is not None
+        and sentiment_data[s].get("oi_ready", sentiment_data[s].get("oi_df") is not None)
+        and sentiment_data[s].get("ls_ready", sentiment_data[s].get("ls_signal") is not None)
+    ]
+    skipped_sentiment = sorted([s for s in SYMBOLS if s in all_dfs and s not in eligible_symbols])
+    if skipped_sentiment:
+        print(f"  sentiment-incomplete symbols skipped: {', '.join(skipped_sentiment)}")
+        log.warning(f"sentiment-incomplete symbols skipped: {skipped_sentiment}")
+    if not eligible_symbols:
+        print("  sem simbolos com sentiment completo"); sys.exit(1)
+    all_dfs = {sym: all_dfs[sym] for sym in eligible_symbols}
+    SYMBOLS = eligible_symbols
 
     print_header()
 
@@ -718,7 +762,8 @@ if __name__ == "__main__":
 
     for sym, df in all_dfs.items():
         trades, vetos = scan_thoth(df, sym, macro_bias, corr,
-                                   sentiment_data=sentiment_data)
+                                   sentiment_data=sentiment_data,
+                                   scan_start_idx=max(0, len(df) - N_CANDLES))
         all_trades.extend(trades)
         for k, v in vetos.items():
             all_vetos[k] += v

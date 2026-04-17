@@ -164,3 +164,20 @@ def test_parse_symbols_override_normalizes_symbols():
         "ETHUSDT",
         "SOLUSDT",
     ]
+
+
+def test_scan_warmup_bars_has_room_for_indicator_lookbacks():
+    assert bridgewater._scan_warmup_bars() >= max(200, bridgewater.W_NORM, bridgewater.PIVOT_N * 3) + 10
+
+
+def test_filter_stale_market_data_drops_old_series():
+    fresh = pd.DataFrame({"time": pd.date_range("2026-04-16", periods=3, freq="1h")})
+    stale = pd.DataFrame({"time": pd.date_range("2026-04-10", periods=3, freq="1h")})
+
+    kept, dropped = bridgewater._filter_stale_market_data(
+        {"BTCUSDT": fresh, "MATICUSDT": stale},
+        "1h",
+    )
+
+    assert list(kept.keys()) == ["BTCUSDT"]
+    assert dropped == ["MATICUSDT"]
