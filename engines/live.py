@@ -592,23 +592,53 @@ class OrderManager:
             return {"fill_price": fill_price, "order_id": f"PAPER_{int(time.time())}",
                     "slippage": slip, "status": "FILLED"}
         else:
-            try:
-                # precision do símbolo (simplificado — idealmente via exchangeInfo)
-                qty = round(size, 3)
-                order = self.client.futures_create_order(
-                    symbol=symbol, side=side, type="MARKET", quantity=qty,
-                    reduceOnly=False
-                )
-                fill_price = float(order.get("avgPrice", signal_price))
-                real_slip  = abs(fill_price - signal_price) / signal_price
-                log.info(f"  LIVE {side} {symbol}  qty={qty}  fill={fill_price:.6f}  "
-                         f"slip={real_slip*100:.4f}%  order_id={order['orderId']}")
-                return {"fill_price": fill_price, "order_id": str(order["orderId"]),
-                        "slippage": real_slip, "status": order.get("status","?")}
-            except Exception as e:
-                log.error(f"  Order failed {symbol}: {e}")
-                return {"fill_price": signal_price, "order_id": "FAILED",
-                        "slippage": 0, "status": "FAILED"}
+            # precision do símbolo (simplificado — idealmente via exchangeInfo)
+            qty = round(size, 3)
+            # Run the sync python-binance call through an executor so a slow
+            # exchange cannot stall the event loop. ``asyncio.wait_for`` gives
+            # us an end-to-end timeout regardless of the library's internal
+            # connect/read limits; two retries with exponential backoff cover
+            # transient 5xx / connection resets without letting a real outage
+            # turn into a silently hanging order.
+            ORDER_TIMEOUT_S   = 10.0
+            ORDER_MAX_RETRIES = 2
+            last_err: Exception | None = None
+            loop = asyncio.get_event_loop()
+            for attempt in range(ORDER_MAX_RETRIES + 1):
+                try:
+                    order = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: self.client.futures_create_order(
+                                symbol=symbol, side=side, type="MARKET",
+                                quantity=qty, reduceOnly=False,
+                            ),
+                        ),
+                        timeout=ORDER_TIMEOUT_S,
+                    )
+                    fill_price = float(order.get("avgPrice", signal_price))
+                    real_slip  = abs(fill_price - signal_price) / signal_price
+                    log.info(f"  LIVE {side} {symbol}  qty={qty}  fill={fill_price:.6f}  "
+                             f"slip={real_slip*100:.4f}%  order_id={order['orderId']}"
+                             + (f"  (attempt={attempt+1})" if attempt else ""))
+                    return {"fill_price": fill_price, "order_id": str(order["orderId"]),
+                            "slippage": real_slip, "status": order.get("status","?")}
+                except asyncio.TimeoutError as e:
+                    last_err = e
+                    log.warning(
+                        f"  Order {symbol} timed out after {ORDER_TIMEOUT_S}s "
+                        f"(attempt {attempt+1}/{ORDER_MAX_RETRIES + 1})"
+                    )
+                except Exception as e:
+                    last_err = e
+                    log.error(
+                        f"  Order {symbol} failed (attempt {attempt+1}/{ORDER_MAX_RETRIES + 1}): {e}"
+                    )
+                if attempt < ORDER_MAX_RETRIES:
+                    await asyncio.sleep(0.5 * (2 ** attempt))
+            log.error(f"  Order {symbol} gave up after {ORDER_MAX_RETRIES + 1} attempts: {last_err}")
+            return {"fill_price": signal_price, "order_id": "FAILED",
+                    "slippage": 0, "status": "FAILED"}
 
     async def close_position(self, pos: "Position", exit_price: float) -> dict:
         """Fecha posição. Retorna fill_price real."""
@@ -1137,6 +1167,11 @@ class LiveEngine:
                     continue
 
                 # Build expected state from local
+                # Snapshot the positions list: _open_position / _close_position
+                # mutate self.positions from other asyncio tasks, so iterating
+                # the live list here can observe a mid-mutation shape. A local
+                # copy closes the race window for this dict build.
+                positions_snapshot = list(self.positions)
                 expected = {
                     "equity": self.account,
                     "positions": {
@@ -1144,7 +1179,7 @@ class LiveEngine:
                             "size":      p.size,
                             "direction": p.direction,
                             "entry":     p.entry,
-                        } for p in self.positions
+                        } for p in positions_snapshot
                     },
                 }
 
@@ -2197,7 +2232,15 @@ class LiveEngine:
             except Exception as e:
                 # [Item 3] Exponential backoff: 5s, 10s, 20s, … up to 300s
                 delay = min(5 * (2 ** _reconnect_attempts), 300)
-                log.warning(f"WS {symbol} erro: {e} — reconectando em {delay}s (tentativa {_reconnect_attempts + 1})")
+                # exc_info captures the full traceback so a silent crash in
+                # on_candle_close (indicator build, signal eval, order
+                # placement) leaves a stack behind instead of just the
+                # repr of the exception.
+                log.warning(
+                    f"WS {symbol} erro: {e} — reconectando em {delay}s "
+                    f"(tentativa {_reconnect_attempts + 1})",
+                    exc_info=True,
+                )
                 await asyncio.sleep(delay)
                 _reconnect_attempts += 1
 

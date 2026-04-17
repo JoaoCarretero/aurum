@@ -93,7 +93,14 @@ class TelegramNotifier:
         return _API.format(token=self.token, method=method)
 
     async def _post(self, method: str, data: dict) -> dict:
-        """POST assíncrono via thread pool (evita instalar aiohttp)."""
+        """POST assíncrono via thread pool (evita instalar aiohttp).
+
+        Returns the parsed JSON response on success. On transport failure,
+        non-2xx status, non-JSON body, or a Telegram ``ok=false`` payload we
+        return ``{}`` but record a health event and log the reason — the old
+        behavior silently swallowed 403s / rate limits so the operator never
+        noticed when the bot stopped reaching the chat.
+        """
         loop = asyncio.get_event_loop()
         try:
             client = TransportClient()
@@ -108,7 +115,6 @@ class TelegramNotifier:
                     )
                 ),
             )
-            return resp.json()
         except Exception as e:
             runtime_health.record("telegram.api_post_failure")
             log.log(
@@ -116,6 +122,22 @@ class TelegramNotifier:
                 f"Telegram API error ({method}): {e}",
             )
             return {}
+
+        try:
+            payload = resp.json()
+        except ValueError:
+            runtime_health.record("telegram.api_non_json")
+            log.warning(f"Telegram {method} returned non-JSON body")
+            return {}
+
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            runtime_health.record("telegram.api_ok_false")
+            log.warning(
+                f"Telegram {method} ok=false "
+                f"code={payload.get('error_code')} desc={payload.get('description', '')[:120]}"
+            )
+            return {}
+        return payload
 
     # ── SEND ──────────────────────────────────────────────────
     async def send(self, text: str, parse_mode: str = "HTML"):
