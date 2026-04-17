@@ -97,6 +97,47 @@ def _scan_window_can_close_trades(n_candles: int) -> bool:
     return int(n_candles) > (MAX_HOLD + 2)
 
 
+def _series_first_timestamp(series: pd.Series | None) -> pd.Timestamp | None:
+    if series is None or len(series) == 0:
+        return None
+    idx = getattr(series, "index", None)
+    if idx is None or len(idx) == 0:
+        return None
+    if pd.api.types.is_datetime64_any_dtype(idx):
+        return pd.Timestamp(idx.min())
+    return None
+
+
+def _sentiment_coverage_start(sent: dict | None) -> pd.Timestamp | None:
+    sent = sent or {}
+    starts: list[pd.Timestamp] = []
+
+    funding_z = sent.get("funding_z")
+    funding_start = _series_first_timestamp(funding_z)
+    if funding_start is not None:
+        starts.append(funding_start)
+
+    oi_df = sent.get("oi_df")
+    if oi_df is not None and len(oi_df):
+        starts.append(pd.to_datetime(oi_df["time"]).min())
+
+    ls_signal = sent.get("ls_signal")
+    ls_start = _series_first_timestamp(ls_signal)
+    if ls_start is not None:
+        starts.append(ls_start)
+
+    return max(starts) if starts else None
+
+
+def _coverage_scan_start_idx(df: pd.DataFrame, sent: dict | None, base_start_idx: int) -> int:
+    start_ts = _sentiment_coverage_start(sent)
+    if start_ts is None:
+        return int(base_start_idx)
+    candle_times = pd.to_datetime(df["time"])
+    coverage_idx = int(candle_times.searchsorted(start_ts, side="left"))
+    return max(int(base_start_idx), coverage_idx)
+
+
 def collect_sentiment(symbols: list, end_time_ms: int | None = None,
                       window_days: int | None = None) -> dict:
     """
@@ -800,11 +841,27 @@ if __name__ == "__main__":
     print(f"\n{SEP}\n  SCAN SENTIMENT\n{SEP}")
     all_trades = []
     all_vetos = defaultdict(int)
+    insufficient_coverage_symbols: list[str] = []
 
     for sym, df in all_dfs.items():
+        symbol_scan_start_idx = _coverage_scan_start_idx(
+            df,
+            sentiment_data.get(sym),
+            max(0, len(df) - N_CANDLES),
+        )
+        remaining_scan_candles = len(df) - symbol_scan_start_idx
+        if not _scan_window_can_close_trades(remaining_scan_candles):
+            insufficient_coverage_symbols.append(sym)
+            log.warning(
+                "sentiment coverage too short for closed trades: %s scan_candles=%s max_hold=%s",
+                sym,
+                remaining_scan_candles,
+                MAX_HOLD,
+            )
+            continue
         trades, vetos = scan_thoth(df, sym, macro_bias, corr,
                                    sentiment_data=sentiment_data,
-                                   scan_start_idx=max(0, len(df) - N_CANDLES))
+                                   scan_start_idx=symbol_scan_start_idx)
         all_trades.extend(trades)
         for k, v in vetos.items():
             all_vetos[k] += v
@@ -812,6 +869,12 @@ if __name__ == "__main__":
     all_trades.sort(key=lambda t: t["timestamp"])
 
     closed = [t for t in all_trades if t["result"] in ("WIN", "LOSS")]
+    if insufficient_coverage_symbols:
+        skipped = ", ".join(sorted(insufficient_coverage_symbols))
+        print(f"  insufficient sentiment coverage skipped: {skipped}")
+        if not closed:
+            print(f"\n  insufficient sentiment coverage: need more cached OI/LS history to close trades")
+            sys.exit(0)
     if not closed:
         print(f"\n  sem trades fechados"); sys.exit(1)
 

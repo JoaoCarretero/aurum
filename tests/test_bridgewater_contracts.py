@@ -175,6 +175,27 @@ def test_scan_window_can_close_trades_respects_max_hold():
     assert bridgewater._scan_window_can_close_trades(bridgewater.MAX_HOLD + 2) is False
 
 
+def test_sentiment_coverage_start_uses_latest_channel_start():
+    sent = {
+        "funding_z": pd.Series([0.1, 0.2], index=pd.to_datetime(["2026-04-01", "2026-04-02"])),
+        "oi_df": pd.DataFrame({"time": pd.to_datetime(["2026-04-03", "2026-04-04"]), "oi": [1.0, 1.1]}),
+        "ls_signal": pd.Series([-0.5, -1.0], index=pd.to_datetime(["2026-04-05", "2026-04-06"])),
+    }
+
+    assert bridgewater._sentiment_coverage_start(sent) == pd.Timestamp("2026-04-05")
+
+
+def test_coverage_scan_start_idx_respects_sentiment_start():
+    df = pd.DataFrame({"time": pd.date_range("2026-04-01", periods=10, freq="1h")})
+    sent = {
+        "funding_z": pd.Series([0.1], index=pd.to_datetime(["2026-04-01 00:00:00"])),
+        "oi_df": pd.DataFrame({"time": pd.to_datetime(["2026-04-01 04:00:00"]), "oi": [1.0]}),
+        "ls_signal": pd.Series([-0.5], index=pd.to_datetime(["2026-04-01 06:00:00"])),
+    }
+
+    assert bridgewater._coverage_scan_start_idx(df, sent, 2) == 6
+
+
 def test_filter_stale_market_data_drops_old_series():
     fresh = pd.DataFrame({"time": pd.date_range("2026-04-16", periods=3, freq="1h")})
     stale = pd.DataFrame({"time": pd.date_range("2026-04-10", periods=3, freq="1h")})
