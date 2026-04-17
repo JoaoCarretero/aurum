@@ -15,14 +15,22 @@ gatilho.
 
 ## Objetivo
 
-Alinhar o estado do repo com a realidade OOS **e** fortalecer o método
-anti-overfit **antes** de qualquer nova tentativa de recalibração. Sem
-isso, re-calibrar os colapsados vira fishing expedition.
+1. **Validar** que o veredito OOS de ontem é metodologicamente honesto
+   (audit-o-auditor) — antes de agir sobre ele.
+2. **Alinhar** o estado do repo com o veredito (uma vez confirmado ou
+   corrigido) — params.py honestos, quarentena dos quebrados.
+3. **Fortalecer** o método anti-overfit (DSR, WF genuíno, flag
+   EXPERIMENTAL, pre-commit hook) — antes de qualquer nova tentativa
+   de recalibração. Sem isso, re-calibrar os colapsados vira fishing
+   expedition.
 
 ## Princípio organizador
 
-Três blocos em ordem estrita:
+Quatro blocos em ordem estrita. **Bloco 0 é gate**: se invalidar o
+audit, blocos 1-3 mudam.
 
+0. **Validar o audit OOS** — audit-o-auditor. Antes de agir sobre o
+   veredito de ontem, confirmar que ele é metodologicamente honesto.
 1. **Método** — infra que torna overfit detectável/prevenível.
 2. **Limpeza** — alinhar claims em `params.py` e quarentenar engines
    quebrados. Nenhum número inflado fica em FROZEN ou no registry default.
@@ -31,6 +39,94 @@ Três blocos em ordem estrita:
 
 **Recalibração dos quebrados = sessão separada, depois deste design.** Não
 entra aqui por princípio.
+
+---
+
+## Bloco 0 — Validar o audit OOS (GATE)
+
+Audit-o-auditor. Se qualquer etapa falhar, o veredito de ontem é
+revisado **antes** de blocos 1-3 rodarem.
+
+### 0.1 Reprodutibilidade bit-a-bit
+
+- Script `tools/oos_revalidate.py` que:
+  - Faz checkout do commit em que o audit original rodou
+    (`6385565` ou o mais próximo com flag `--end` já mergeada).
+  - Re-roda os 7 engines com **exatamente** os mesmos params/janela
+    (`2022-01-01 → 2023-01-01`) e mesma seed.
+  - Diffa report JSON: Sharpe/Sortino/ROI/MDD/n_trades batem ± 0.1%?
+- Se divergir, investigar: seed não-determinística, data reload,
+  params.py mudou, cache corrompido. **Não prossegue até bater.**
+
+### 0.2 Simetria de custos
+
+- Grep/audit em cada engine OOS-testado pra confirmar:
+  - `SLIPPAGE`, `SPREAD`, `COMMISSION`, `FUNDING_PER_8H` aplicados
+    no pipeline de PnL (não zerados, não pulados).
+  - Nenhum código path de "backtest mode" que skipa custos.
+- BRIDGEWATER é o primeiro suspeito (267% ROI). Se encontrar path
+  sem custos, veredito "bug suspect" vira "bug confirmado", forense do
+  Bloco 3 começa aqui mesmo.
+
+### 0.3 Multi-janela OOS
+
+Janela única é viés de amostragem. Rodar os 7 engines em:
+
+- **BEAR puro:** 2022-01-01 → 2023-01-01 (já rodada).
+- **BULL puro:** 2020-07-01 → 2021-07-01.
+- **CHOP/transição:** 2019-06-01 → 2020-03-01.
+
+Veredito revisado:
+- ✅ edge real: sobrevive (Sharpe > 0) em 2+ janelas com sample
+  significativo (>50 trades).
+- ⚠️ edge de regime: sobrevive em 1 janela clara, degrada noutras.
+- 🔴 overfit: colapsa em 2+ janelas ou não-disparou.
+
+CITADEL já foi em 2 janelas (2022 BEAR + 2021 BULL). Falta 1 (CHOP).
+JUMP, RENAISSANCE, BRIDGEWATER, DE SHAW, KEPOS, MEDALLION: 2 janelas
+extras cada.
+
+### 0.4 Sample-size floor
+
+- Qualquer engine com `n_trades < 50` numa janela recebe veredito
+  `INSUFFICIENT_SAMPLE`, não `COLLAPSED`.
+- KEPOS com 0 trades não é "quebrado", é "não-disparou com defaults" —
+  distinção importante pra decisão de quarentena.
+
+### 0.5 DSR nos sobreviventes
+
+Aplicar deflated Sharpe (Bailey & López de Prado) nos que passaram:
+
+- Estimar `n_trials` histórico pra cada engine (git log + grep por
+  `iter_` em params.py + memória de sessões).
+- Calcular DSR pra CITADEL e JUMP nas janelas OOS positivas.
+- DSR > 0 com p < 0.05 → edge robusto. DSR < 0 → claim inflado por
+  multiple testing.
+
+### 0.6 Look-ahead bias scan
+
+Grep nos 7 engines + `core/` por padrões suspeitos:
+
+- `.shift(-` (uso de valor futuro)
+- `iloc[i+` com leitura
+- `close` do candle atual usado em decisão que executa no mesmo candle
+- `future_` / `ahead_` / `peek_` em nomes
+
+Cada hit vira auditoria manual. Se confirmar leak, invalida o
+backtest inteiro do engine.
+
+### 0.7 Output do Bloco 0
+
+`docs/audits/2026-04-17_oos_revalidation.md` com:
+- Tabela reprodutibilidade (bate/não-bate por engine).
+- Tabela custos (todos aplicados? sim/não por engine).
+- Tabela multi-janela (Sharpe em cada regime).
+- DSR pros sobreviventes.
+- Lista de look-ahead hits.
+- **Veredito final revisado por engine**, substituindo o de ontem.
+
+**Gate:** se veredito mudar pra algum engine, blocos 1-3 são re-escritos
+antes de executar. Se confirmar ontem, blocos 1-3 seguem como estão.
 
 ---
 
@@ -134,6 +230,17 @@ Script único `tools/forensic_bridgewater.py` que:
 
 ## Critérios de sucesso
 
+- [ ] `tools/oos_revalidate.py` existe, roda, produz
+      `docs/audits/2026-04-17_oos_revalidation.md` com veredito final
+      por engine.
+- [ ] Reprodutibilidade: todos os 7 engines batem ± 0.1% vs audit de
+      ontem **ou** divergência investigada e resolvida.
+- [ ] Simetria custos: tabela confirma C1+C2 aplicado em 7/7 (ou bug
+      localizado pra um engine específico).
+- [ ] Multi-janela: Sharpe reportado em 3 janelas (BEAR/BULL/CHOP) pros
+      7 engines.
+- [ ] DSR computado pra CITADEL e JUMP.
+- [ ] Look-ahead scan concluído, hits documentados.
 - [ ] `config/engines.py` tem `EXPERIMENTAL_SLUGS`, com 4 engines dentro.
 - [ ] `config/params.py` não tem nenhuma linha matching `iter\d+.*WINNER`
       nem claim `+5.65` pra RENAISSANCE.
@@ -173,13 +280,27 @@ Script único `tools/forensic_bridgewater.py` que:
 
 ## Ordem de build (sugerida)
 
-1. EXPERIMENTAL_SLUGS + banner warning nos 4 engines (Bloco 1.1 + 2.3)
-2. Comentários params.py limpos (Bloco 2.1 + 2.2)
-3. DSR em overfit_audit.py + plumbing save_run (Bloco 1.2)
-4. Pre-commit hook (Bloco 1.4)
-5. walkforward_v2.py esqueleto (Bloco 1.3)
-6. Meta-trigger log (Bloco 1.5)
-7. Forensic BRIDGEWATER (Bloco 3) — por último, rodada longa
+### Gate — Bloco 0 primeiro
+
+1. `tools/oos_revalidate.py` — reprodutibilidade (0.1)
+2. Simetria de custos — audit estático do código (0.2)
+3. DSR function em `overfit_audit.py` (0.5 precisa dela — antecipa 1.2)
+4. Multi-janela runs — 6 engines × 2 janelas novas = 12 runs (0.3)
+5. Look-ahead scan (0.6)
+6. Consolidar `docs/audits/2026-04-17_oos_revalidation.md` (0.7)
+
+**CHECKPOINT:** user revisa veredito. Se veredito mudar pra algum
+engine, blocos 1-3 reescritos antes de seguir.
+
+### Se veredito confirmado
+
+7. EXPERIMENTAL_SLUGS + banner warning (Bloco 1.1 + 2.3)
+8. Comentários params.py limpos (Bloco 2.1 + 2.2)
+9. DSR plumbing no save_run (Bloco 1.2 — função já existe do passo 3)
+10. Pre-commit hook (Bloco 1.4)
+11. walkforward_v2.py esqueleto (Bloco 1.3)
+12. Meta-trigger log (Bloco 1.5)
+13. Forensic BRIDGEWATER (Bloco 3) — rodada longa, por último
 
 ---
 
