@@ -1,0 +1,1052 @@
+[
+  {
+    "engine": "citadel",
+    "window": "bear_2022",
+    "window_label": "2022-01-01 -> 2023-01-01",
+    "regime": "BEAR",
+    "command": [
+      "C:\\Users\\Joao\\AppData\\Local\\Python\\bin\\python.exe",
+      "C:\\Users\\Joao\\OneDrive\\aurum.finance\\engines\\citadel.py",
+      "--days",
+      "360",
+      "--end",
+      "2023-01-01",
+      "--basket",
+      "default",
+      "--no-menu"
+    ],
+    "returncode": 0,
+    "status": "OK",
+    "stdout_tail": "  │ Median Final      $11,201     P5 (worst 5%)        $9,869  │\n  │ P95 (best)        $12,623     % Positivo              93%  │\n  │ Median MaxDD         5.8%     P95 MaxDD             15.5%  │\n  │ REGIME BREAKDOWN (macro) ─────────────────────────│\n  │ BEAR  140t  WR   56%  $ +1,140   avg $+8/trade     │\n  │ REGIME BREAKDOWN (HMM)  ──────────────────────────│\n  │ BULL    1t  WR    0%  $     -9   avgR +0.00  sort +0.00│\n  │ CONDITIONAL Omega SCORE ───────────────────────────│\n  │ 0.53-0.59    WR   56%  n=140  exp $+8.14              │\n  │ TOP VETO FILTERS ──────────────────────────────────│\n  │ regime             121472  59.7%  ▓▓▓▓▓▓▓▓▓▓▓·········  │\n  │ score_baixo         30549  15.0%  ▓▓▓·················  │\n  │ macro_bull_veto_sh  21013  10.3%  ▓▓··················  │\n  │ macro_bear_veto_lo  15140   7.4%  ▓···················  │\n  │ vol_extreme          5495   2.7%  ▓···················  │\n  └────────────────────────────────────────────────────┘\n  HTML → C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\runs\\citadel_2026-04-17_105158\\report.html\n  JSON → C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\runs\\citadel_2026-04-17_105158\\citadel_15m_v36.json\n\n  run → C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\runs\\citadel_2026-04-17_105158/",
+    "stderr_tail": "",
+    "run_dir": "data\\runs\\citadel_2026-04-17_105158",
+    "summary": {
+      "n_trades": 140,
+      "win_rate": 56.43,
+      "pnl": 1139.88,
+      "roi": 11.4,
+      "roi_pct": 11.4,
+      "sharpe": 2.149,
+      "sortino": 2.831,
+      "max_dd": 5.27,
+      "max_dd_pct": 5.27,
+      "final_equity": 11139.88,
+      "period_days": 360,
+      "n_symbols": 11,
+      "n_candles": 34560,
+      "interval": "15m",
+      "basket": "default"
+    },
+    "comparison": {
+      "ok": false,
+      "failures": 10,
+      "fields": [
+        {
+          "field": "n_trades",
+          "baseline": 240,
+          "fresh": 140,
+          "ok": false,
+          "detail": "41.667%"
+        },
+        {
+          "field": "win_rate",
+          "baseline": 60.83,
+          "fresh": 56.43,
+          "ok": false,
+          "detail": "7.233%"
+        },
+        {
+          "field": "pnl",
+          "baseline": 4559.05,
+          "fresh": 1139.88,
+          "ok": false,
+          "detail": "74.997%"
+        },
+        {
+          "field": "roi",
+          "baseline": 45.59,
+          "fresh": 11.4,
+          "ok": false,
+          "detail": "74.995%"
+        },
+        {
+          "field": "roi_pct",
+          "baseline": 45.59,
+          "fresh": 11.4,
+          "ok": false,
+          "detail": "74.995%"
+        },
+        {
+          "field": "sharpe",
+          "baseline": 5.677,
+          "fresh": 2.149,
+          "ok": false,
+          "detail": "62.145%"
+        },
+        {
+          "field": "sortino",
+          "baseline": 8.606,
+          "fresh": 2.831,
+          "ok": false,
+          "detail": "67.104%"
+        },
+        {
+          "field": "max_dd",
+          "baseline": 3.75,
+          "fresh": 5.27,
+          "ok": false,
+          "detail": "40.533%"
+        },
+        {
+          "field": "max_dd_pct",
+          "baseline": 3.75,
+          "fresh": 5.27,
+          "ok": false,
+          "detail": "40.533%"
+        },
+        {
+          "field": "final_equity",
+          "baseline": 14559.05,
+          "fresh": 11139.88,
+          "ok": false,
+          "detail": "23.485%"
+        },
+        {
+          "field": "period_days",
+          "baseline": 360,
+          "fresh": 360,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_symbols",
+          "baseline": 11,
+          "fresh": 11,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_candles",
+          "baseline": 34560,
+          "fresh": 34560,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "interval",
+          "baseline": "15m",
+          "fresh": "15m",
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "basket",
+          "baseline": "default",
+          "fresh": "default",
+          "ok": true,
+          "detail": "exact"
+        }
+      ]
+    }
+  },
+  {
+    "engine": "renaissance",
+    "window": "bear_2022",
+    "window_label": "2022-01-01 -> 2023-01-01",
+    "regime": "BEAR",
+    "command": [
+      "C:\\Users\\Joao\\AppData\\Local\\Python\\bin\\python.exe",
+      "C:\\Users\\Joao\\OneDrive\\aurum.finance\\engines\\renaissance.py",
+      "--days",
+      "360",
+      "--end",
+      "2023-01-01",
+      "--basket",
+      "bluechip",
+      "--no-menu"
+    ],
+    "returncode": 0,
+    "status": "OK",
+    "stdout_tail": "\n--------------------------------------------------------------------------------\n  METRICAS\n--------------------------------------------------------------------------------\n  Trades    242\n  W/L/F     206/36/0\n  WR        85.1%\n  ROI       +23.88%\n  Sharpe    6.673\n  Sortino   7.191\n  MaxDD     1.4%\n  Final     $12,387.72\n  PnL       $+2,387.72\n  json      C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\renaissance\\2026-04-17_105327\\reports\\renaissance_15m_v1.json\n  HTML      C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\renaissance\\2026-04-17_105327\\report.html\n\n--------------------------------------------------------------------------------\n  output  |  C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\renaissance\\2026-04-17_105327/\n--------------------------------------------------------------------------------\n",
+    "stderr_tail": "fetch_all: 4/20 símbolos FALTANDO: ['ARBUSDT', 'SUIUSDT', 'RENDERUSDT', 'FETUSDT']",
+    "run_dir": "data\\renaissance\\2026-04-17_105327",
+    "summary": {
+      "n_trades": 242,
+      "win_rate": 85.12,
+      "pnl": 2387.72,
+      "roi": 23.88,
+      "roi_pct": 23.88,
+      "sharpe": 6.673,
+      "sortino": 7.191,
+      "max_dd": 1.4,
+      "max_dd_pct": 1.4,
+      "final_equity": 12387.72,
+      "period_days": 360,
+      "n_symbols": 20,
+      "n_candles": 34560,
+      "interval": "15m",
+      "basket": "bluechip"
+    },
+    "comparison": {
+      "ok": false,
+      "failures": 10,
+      "fields": [
+        {
+          "field": "n_trades",
+          "baseline": 226,
+          "fresh": 242,
+          "ok": false,
+          "detail": "7.080%"
+        },
+        {
+          "field": "win_rate",
+          "baseline": 75.66,
+          "fresh": 85.12,
+          "ok": false,
+          "detail": "12.503%"
+        },
+        {
+          "field": "pnl",
+          "baseline": 881.24,
+          "fresh": 2387.72,
+          "ok": false,
+          "detail": "170.950%"
+        },
+        {
+          "field": "roi",
+          "baseline": 8.81,
+          "fresh": 23.88,
+          "ok": false,
+          "detail": "171.056%"
+        },
+        {
+          "field": "roi_pct",
+          "baseline": 8.81,
+          "fresh": 23.88,
+          "ok": false,
+          "detail": "171.056%"
+        },
+        {
+          "field": "sharpe",
+          "baseline": 2.421,
+          "fresh": 6.673,
+          "ok": false,
+          "detail": "175.630%"
+        },
+        {
+          "field": "sortino",
+          "baseline": 2.352,
+          "fresh": 7.191,
+          "ok": false,
+          "detail": "205.740%"
+        },
+        {
+          "field": "max_dd",
+          "baseline": 1.72,
+          "fresh": 1.4,
+          "ok": false,
+          "detail": "18.605%"
+        },
+        {
+          "field": "max_dd_pct",
+          "baseline": 1.72,
+          "fresh": 1.4,
+          "ok": false,
+          "detail": "18.605%"
+        },
+        {
+          "field": "final_equity",
+          "baseline": 10881.24,
+          "fresh": 12387.72,
+          "ok": false,
+          "detail": "13.845%"
+        },
+        {
+          "field": "period_days",
+          "baseline": 360,
+          "fresh": 360,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_symbols",
+          "baseline": 20,
+          "fresh": 20,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_candles",
+          "baseline": 34560,
+          "fresh": 34560,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "interval",
+          "baseline": "15m",
+          "fresh": "15m",
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "basket",
+          "baseline": "bluechip",
+          "fresh": "bluechip",
+          "ok": true,
+          "detail": "exact"
+        }
+      ]
+    }
+  },
+  {
+    "engine": "jump",
+    "window": "bear_2022",
+    "window_label": "2022-01-01 -> 2023-01-01",
+    "regime": "BEAR",
+    "command": [
+      "C:\\Users\\Joao\\AppData\\Local\\Python\\bin\\python.exe",
+      "C:\\Users\\Joao\\OneDrive\\aurum.finance\\engines\\jump.py",
+      "--days",
+      "360",
+      "--end",
+      "2023-01-01",
+      "--basket",
+      "bluechip",
+      "--no-menu"
+    ],
+    "returncode": 0,
+    "status": "OK",
+    "stdout_tail": "  |  E temporal       WARN  Decay=55% (moderate) |\n  |  F slippage       PASS  breakeven=37bp      |\n  +---------------------------------------------+\n  json  ·  data\\jump\\2026-04-17_105554\\reports\\jump_1h_v1.json\n2026-04-17 10:56:36,901  INFO   JSON → data\\jump\\2026-04-17_105554\\reports\\jump_1h_v1.json\n\n────────────────────────────────────────────────────────────────────────────────\n  VETOS\n────────────────────────────────────────────────────────────────────────────────\n   11358  vol_extreme\n      93  sym_cooldown\n      37  max_posicoes\n      36  streak_cooldown\n       5  agg_cap\n  HTML → data\\jump\\2026-04-17_105554\\report.html\n\n────────────────────────────────────────────────────────────────────────────────\n  output  ·  data\\jump\\2026-04-17_105554/\n────────────────────────────────────────────────────────────────────────────────\n",
+    "stderr_tail": "fetch_all: 3/20 símbolos FALTANDO: ['ARBUSDT', 'SUIUSDT', 'RENDERUSDT']",
+    "run_dir": "data\\jump\\2026-04-17_105554",
+    "summary": {
+      "n_trades": 110,
+      "win_rate": 63.64,
+      "pnl": 1214.43,
+      "roi": 12.14,
+      "roi_pct": 12.14,
+      "sharpe": 3.149,
+      "sortino": 6.15,
+      "max_dd": 1.25,
+      "max_dd_pct": 1.25,
+      "final_equity": 11214.43,
+      "period_days": 360,
+      "n_symbols": 20,
+      "n_candles": 8640,
+      "interval": "1h",
+      "basket": "bluechip"
+    },
+    "comparison": {
+      "ok": false,
+      "failures": 6,
+      "fields": [
+        {
+          "field": "n_trades",
+          "baseline": 110,
+          "fresh": 110,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "win_rate",
+          "baseline": 63.64,
+          "fresh": 63.64,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "pnl",
+          "baseline": 1636.38,
+          "fresh": 1214.43,
+          "ok": false,
+          "detail": "25.786%"
+        },
+        {
+          "field": "roi",
+          "baseline": 16.36,
+          "fresh": 12.14,
+          "ok": false,
+          "detail": "25.795%"
+        },
+        {
+          "field": "roi_pct",
+          "baseline": 16.36,
+          "fresh": 12.14,
+          "ok": false,
+          "detail": "25.795%"
+        },
+        {
+          "field": "sharpe",
+          "baseline": 3.15,
+          "fresh": 3.149,
+          "ok": true,
+          "detail": "0.032%"
+        },
+        {
+          "field": "sortino",
+          "baseline": 6.156,
+          "fresh": 6.15,
+          "ok": true,
+          "detail": "0.097%"
+        },
+        {
+          "field": "max_dd",
+          "baseline": 1.65,
+          "fresh": 1.25,
+          "ok": false,
+          "detail": "24.242%"
+        },
+        {
+          "field": "max_dd_pct",
+          "baseline": 1.65,
+          "fresh": 1.25,
+          "ok": false,
+          "detail": "24.242%"
+        },
+        {
+          "field": "final_equity",
+          "baseline": 11636.38,
+          "fresh": 11214.43,
+          "ok": false,
+          "detail": "3.626%"
+        },
+        {
+          "field": "period_days",
+          "baseline": 360,
+          "fresh": 360,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_symbols",
+          "baseline": 20,
+          "fresh": 20,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_candles",
+          "baseline": 8640,
+          "fresh": 8640,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "interval",
+          "baseline": "1h",
+          "fresh": "1h",
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "basket",
+          "baseline": "bluechip",
+          "fresh": "bluechip",
+          "ok": true,
+          "detail": "exact"
+        }
+      ]
+    }
+  },
+  {
+    "engine": "deshaw",
+    "window": "bear_2022",
+    "window_label": "2022-01-01 -> 2023-01-01",
+    "regime": "BEAR",
+    "command": [
+      "C:\\Users\\Joao\\AppData\\Local\\Python\\bin\\python.exe",
+      "C:\\Users\\Joao\\OneDrive\\aurum.finance\\engines\\deshaw.py",
+      "--days",
+      "360",
+      "--end",
+      "2023-01-01",
+      "--basket",
+      "bluechip",
+      "--no-menu"
+    ],
+    "returncode": 0,
+    "status": "OK",
+    "stdout_tail": "     586  pair_cooldown_active\n      45  pair_decay\n      10  pair_stop_cooldown\n       4  streak_cooldown\n  +-- OVERFIT AUDIT: 3/6 PASS  2 WARNING  1 FAIL -+\n  |  A walk-forward   FAIL  2/5 windows have negative expe |\n  |  B sensitivity    PASS  Smooth degradation across scor |\n  |  C concentration  WARN  MATICUSDT=54% of PnL |\n  |  D regime         PASS  2 regimes profitable |\n  |  E temporal       WARN  Decay=69% (moderate) |\n  |  F slippage       PASS  breakeven=35bp      |\n  +---------------------------------------------+\n  HTML → data\\deshaw\\2026-04-17_105639\\report.html\n  json  ·  data\\deshaw\\2026-04-17_105639\\reports\\deshaw_1h_v1.json\n2026-04-17 10:59:52,556  INFO   JSON → data\\deshaw\\2026-04-17_105639\\reports\\deshaw_1h_v1.json\n\n────────────────────────────────────────────────────────────────────────────────\n  output  ·  data\\deshaw\\2026-04-17_105639/\n────────────────────────────────────────────────────────────────────────────────\n",
+    "stderr_tail": "fetch_all: 3/20 s�mbolos FALTANDO: ['ARBUSDT', 'SUIUSDT', 'RENDERUSDT']",
+    "run_dir": "data\\deshaw\\2026-04-17_105639",
+    "summary": {
+      "n_trades": 80,
+      "win_rate": 87.5,
+      "pnl": 319.45,
+      "roi": 3.19,
+      "roi_pct": 3.19,
+      "sharpe": 1.324,
+      "sortino": 1.011,
+      "max_dd": 1.99,
+      "max_dd_pct": 1.99,
+      "final_equity": 10319.45,
+      "period_days": 360,
+      "n_symbols": 20,
+      "n_candles": 8640,
+      "interval": "1h",
+      "basket": "bluechip"
+    },
+    "comparison": {
+      "ok": false,
+      "failures": 10,
+      "fields": [
+        {
+          "field": "n_trades",
+          "baseline": 1819,
+          "fresh": 80,
+          "ok": false,
+          "detail": "95.602%"
+        },
+        {
+          "field": "win_rate",
+          "baseline": 75.92,
+          "fresh": 87.5,
+          "ok": false,
+          "detail": "15.253%"
+        },
+        {
+          "field": "pnl",
+          "baseline": -2834.26,
+          "fresh": 319.45,
+          "ok": false,
+          "detail": "111.271%"
+        },
+        {
+          "field": "roi",
+          "baseline": -28.34,
+          "fresh": 3.19,
+          "ok": false,
+          "detail": "111.256%"
+        },
+        {
+          "field": "roi_pct",
+          "baseline": -28.34,
+          "fresh": 3.19,
+          "ok": false,
+          "detail": "111.256%"
+        },
+        {
+          "field": "sharpe",
+          "baseline": -1.726,
+          "fresh": 1.324,
+          "ok": false,
+          "detail": "176.709%"
+        },
+        {
+          "field": "sortino",
+          "baseline": -1.571,
+          "fresh": 1.011,
+          "ok": false,
+          "detail": "164.354%"
+        },
+        {
+          "field": "max_dd",
+          "baseline": 30.66,
+          "fresh": 1.99,
+          "ok": false,
+          "detail": "93.509%"
+        },
+        {
+          "field": "max_dd_pct",
+          "baseline": 30.66,
+          "fresh": 1.99,
+          "ok": false,
+          "detail": "93.509%"
+        },
+        {
+          "field": "final_equity",
+          "baseline": 7165.74,
+          "fresh": 10319.45,
+          "ok": false,
+          "detail": "44.011%"
+        },
+        {
+          "field": "period_days",
+          "baseline": 360,
+          "fresh": 360,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_symbols",
+          "baseline": 20,
+          "fresh": 20,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_candles",
+          "baseline": 8640,
+          "fresh": 8640,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "interval",
+          "baseline": "1h",
+          "fresh": "1h",
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "basket",
+          "baseline": "bluechip",
+          "fresh": "bluechip",
+          "ok": true,
+          "detail": "exact"
+        }
+      ]
+    }
+  },
+  {
+    "engine": "bridgewater",
+    "window": "bear_2022",
+    "window_label": "2022-01-01 -> 2023-01-01",
+    "regime": "BEAR",
+    "command": [
+      "C:\\Users\\Joao\\AppData\\Local\\Python\\bin\\python.exe",
+      "C:\\Users\\Joao\\OneDrive\\aurum.finance\\engines\\bridgewater.py",
+      "--days",
+      "360",
+      "--end",
+      "2023-01-01",
+      "--basket",
+      "bluechip",
+      "--no-menu"
+    ],
+    "returncode": 0,
+    "status": "OK",
+    "stdout_tail": "   19867  max_posicoes\n   10618  vol_extreme\n    4936  streak_cooldown\n    2413  sym_cooldown\n      39  agg_cap\n  +-- OVERFIT AUDIT: 5/6 PASS  1 WARNING -----+\n  |  A walk-forward   PASS  All 5 windows have positive ex |\n  |  B sensitivity    PASS  Smooth degradation across scor |\n  |  C concentration  WARN  AVAXUSDT=61% of PnL |\n  |  D regime         PASS  2 regimes profitable |\n  |  E temporal       PASS  Decay=5% (edge holds) |\n  |  F slippage       PASS  breakeven=13bp      |\n  +---------------------------------------------+\n  HTML → data\\bridgewater\\2026-04-17_105954\\report.html\n  json  ·  data\\bridgewater\\2026-04-17_105954\\reports\\bridgewater_1h_v1.json\n\n────────────────────────────────────────────────────────────────────────────────\n  output  ·  data\\bridgewater\\2026-04-17_105954/\n────────────────────────────────────────────────────────────────────────────────\n",
+    "stderr_tail": "OI LINKUSDT: HTTP 400\nLS ratio LINKUSDT: HTTP 400\nOI DOTUSDT: HTTP 400\nLS ratio DOTUSDT: HTTP 400\nOI MATICUSDT: HTTP 400\nLS ratio MATICUSDT: HTTP 400\nOI ATOMUSDT: HTTP 400\nLS ratio ATOMUSDT: HTTP 400\nOI NEARUSDT: HTTP 400\nLS ratio NEARUSDT: HTTP 400\nOI INJUSDT: HTTP 400\nLS ratio INJUSDT: HTTP 400\nOI OPUSDT: HTTP 400\nLS ratio OPUSDT: HTTP 400\nOI FETUSDT: HTTP 400\nLS ratio FETUSDT: HTTP 400\nOI SANDUSDT: HTTP 400\nLS ratio SANDUSDT: HTTP 400\nOI AAVEUSDT: HTTP 400\nLS ratio AAVEUSDT: HTTP 400",
+    "run_dir": "data\\bridgewater\\2026-04-17_105954",
+    "summary": {
+      "n_trades": 4037,
+      "win_rate": 56.53,
+      "pnl": 8065.5,
+      "roi": 80.66,
+      "roi_pct": 80.66,
+      "sharpe": 4.934,
+      "sortino": 9.219,
+      "max_dd": 4.79,
+      "max_dd_pct": 4.79,
+      "final_equity": 18065.5,
+      "period_days": 360,
+      "n_symbols": 20,
+      "n_candles": 8640,
+      "interval": "1h",
+      "basket": "bluechip"
+    },
+    "comparison": {
+      "ok": false,
+      "failures": 10,
+      "fields": [
+        {
+          "field": "n_trades",
+          "baseline": 9194,
+          "fresh": 4037,
+          "ok": false,
+          "detail": "56.091%"
+        },
+        {
+          "field": "win_rate",
+          "baseline": 57.24,
+          "fresh": 56.53,
+          "ok": false,
+          "detail": "1.240%"
+        },
+        {
+          "field": "pnl",
+          "baseline": 26722.47,
+          "fresh": 8065.5,
+          "ok": false,
+          "detail": "69.818%"
+        },
+        {
+          "field": "roi",
+          "baseline": 267.22,
+          "fresh": 80.66,
+          "ok": false,
+          "detail": "69.815%"
+        },
+        {
+          "field": "roi_pct",
+          "baseline": 267.22,
+          "fresh": 80.66,
+          "ok": false,
+          "detail": "69.815%"
+        },
+        {
+          "field": "sharpe",
+          "baseline": 11.04,
+          "fresh": 4.934,
+          "ok": false,
+          "detail": "55.308%"
+        },
+        {
+          "field": "sortino",
+          "baseline": 19.971,
+          "fresh": 9.219,
+          "ok": false,
+          "detail": "53.838%"
+        },
+        {
+          "field": "max_dd",
+          "baseline": 6.77,
+          "fresh": 4.79,
+          "ok": false,
+          "detail": "29.247%"
+        },
+        {
+          "field": "max_dd_pct",
+          "baseline": 6.77,
+          "fresh": 4.79,
+          "ok": false,
+          "detail": "29.247%"
+        },
+        {
+          "field": "final_equity",
+          "baseline": 36722.47,
+          "fresh": 18065.5,
+          "ok": false,
+          "detail": "50.805%"
+        },
+        {
+          "field": "period_days",
+          "baseline": 360,
+          "fresh": 360,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_symbols",
+          "baseline": 20,
+          "fresh": 20,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_candles",
+          "baseline": 8640,
+          "fresh": 8640,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "interval",
+          "baseline": "1h",
+          "fresh": "1h",
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "basket",
+          "baseline": "bluechip",
+          "fresh": "bluechip",
+          "ok": true,
+          "detail": "exact"
+        }
+      ]
+    }
+  },
+  {
+    "engine": "kepos",
+    "window": "bear_2022",
+    "window_label": "2022-01-01 -> 2023-01-01",
+    "regime": "BEAR",
+    "command": [
+      "C:\\Users\\Joao\\AppData\\Local\\Python\\bin\\python.exe",
+      "C:\\Users\\Joao\\OneDrive\\aurum.finance\\engines\\kepos.py",
+      "--days",
+      "360",
+      "--end",
+      "2023-01-01",
+      "--basket",
+      "bluechip",
+      "--no-menu"
+    ],
+    "returncode": 0,
+    "status": "OK",
+    "stdout_tail": "    ADAUSDT       n=  0  W= 0  L= 0  pnl=$     +0.00\n    ATOMUSDT      n=  0  W= 0  L= 0  pnl=$     +0.00\n    AVAXUSDT      n=  0  W= 0  L= 0  pnl=$     +0.00\n    BNBUSDT       n=  0  W= 0  L= 0  pnl=$     +0.00\n    BTCUSDT       n=  0  W= 0  L= 0  pnl=$     +0.00\n    DOTUSDT       n=  0  W= 0  L= 0  pnl=$     +0.00\n    ETHUSDT       n=  0  W= 0  L= 0  pnl=$     +0.00\n    INJUSDT       n=  0  W= 0  L= 0  pnl=$     +0.00\n    LINKUSDT      n=  0  W= 0  L= 0  pnl=$     +0.00\n    MATICUSDT     n=  0  W= 0  L= 0  pnl=$     +0.00\n    NEARUSDT      n=  0  W= 0  L= 0  pnl=$     +0.00\n    OPUSDT        n=  0  W= 0  L= 0  pnl=$     +0.00\n    SANDUSDT      n=  0  W= 0  L= 0  pnl=$     +0.00\n    SOLUSDT       n=  0  W= 0  L= 0  pnl=$     +0.00\n    XRPUSDT       n=  7  W= 4  L= 3  pnl=$   +465.79\n\n  vetoes:\n    no_signal               485394\n\n  run → C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\kepos\\kepos_2026-04-17_1101",
+    "stderr_tail": "",
+    "run_dir": "data\\kepos\\kepos_2026-04-17_1101",
+    "summary": {
+      "n_trades": 7,
+      "win_rate": 57.14,
+      "pnl": 465.79,
+      "roi": null,
+      "roi_pct": 4.66,
+      "sharpe": 0.645,
+      "sortino": 20.08,
+      "max_dd": null,
+      "max_dd_pct": 4.2,
+      "final_equity": 10465.79,
+      "period_days": 360,
+      "n_symbols": null,
+      "n_candles": null,
+      "interval": "15m",
+      "basket": "bluechip"
+    },
+    "comparison": {
+      "ok": false,
+      "failures": 8,
+      "fields": [
+        {
+          "field": "n_trades",
+          "baseline": 0,
+          "fresh": 7,
+          "ok": false,
+          "detail": "zero-baseline"
+        },
+        {
+          "field": "win_rate",
+          "baseline": 0.0,
+          "fresh": 57.14,
+          "ok": false,
+          "detail": "zero-baseline"
+        },
+        {
+          "field": "pnl",
+          "baseline": 0.0,
+          "fresh": 465.79,
+          "ok": false,
+          "detail": "zero-baseline"
+        },
+        {
+          "field": "roi",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "roi_pct",
+          "baseline": 0.0,
+          "fresh": 4.66,
+          "ok": false,
+          "detail": "zero-baseline"
+        },
+        {
+          "field": "sharpe",
+          "baseline": 0.0,
+          "fresh": 0.645,
+          "ok": false,
+          "detail": "zero-baseline"
+        },
+        {
+          "field": "sortino",
+          "baseline": 0.0,
+          "fresh": 20.08,
+          "ok": false,
+          "detail": "zero-baseline"
+        },
+        {
+          "field": "max_dd",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "max_dd_pct",
+          "baseline": 0.0,
+          "fresh": 4.2,
+          "ok": false,
+          "detail": "zero-baseline"
+        },
+        {
+          "field": "final_equity",
+          "baseline": 10000.0,
+          "fresh": 10465.79,
+          "ok": false,
+          "detail": "4.658%"
+        },
+        {
+          "field": "period_days",
+          "baseline": 360,
+          "fresh": 360,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_symbols",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "n_candles",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "interval",
+          "baseline": "15m",
+          "fresh": "15m",
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "basket",
+          "baseline": "bluechip",
+          "fresh": "bluechip",
+          "ok": true,
+          "detail": "exact"
+        }
+      ]
+    }
+  },
+  {
+    "engine": "medallion",
+    "window": "bear_2022",
+    "window_label": "2022-01-01 -> 2023-01-01",
+    "regime": "BEAR",
+    "command": [
+      "C:\\Users\\Joao\\AppData\\Local\\Python\\bin\\python.exe",
+      "C:\\Users\\Joao\\OneDrive\\aurum.finance\\engines\\medallion.py",
+      "--days",
+      "360",
+      "--end",
+      "2023-01-01",
+      "--basket",
+      "bluechip",
+      "--no-menu"
+    ],
+    "returncode": 0,
+    "status": "OK",
+    "stdout_tail": "    AVAXUSDT      n= 10  W= 2  L= 8  pnl=$   -635.73\n    BNBUSDT       n= 10  W= 5  L= 5  pnl=$   -214.62\n    BTCUSDT       n= 10  W= 4  L= 6  pnl=$   -130.58\n    DOTUSDT       n= 10  W= 5  L= 5  pnl=$   -191.05\n    ETHUSDT       n= 10  W= 6  L= 4  pnl=$   -151.55\n    INJUSDT       n= 12  W= 7  L= 5  pnl=$    -58.39\n    LINKUSDT      n= 10  W= 4  L= 6  pnl=$   -241.02\n    MATICUSDT     n= 10  W= 3  L= 7  pnl=$   -553.74\n    NEARUSDT      n= 10  W= 6  L= 4  pnl=$    -34.02\n    OPUSDT        n= 20  W=12  L= 8  pnl=$    -46.05\n    SANDUSDT      n= 10  W= 3  L= 7  pnl=$   -690.84\n    SOLUSDT       n= 10  W= 6  L= 4  pnl=$    -30.19\n    XRPUSDT       n= 10  W= 4  L= 6  pnl=$   -239.83\n\n  top vetoes:\n    no_signal               507795\n    kelly_zero                4473\n    cooldown                   688\n\n  run → C:\\Users\\Joao\\OneDrive\\aurum.finance\\data\\medallion\\medallion_2026-04-17_1106",
+    "stderr_tail": "",
+    "run_dir": "data\\medallion\\medallion_2026-04-17_1106",
+    "summary": {
+      "n_trades": 172,
+      "win_rate": 47.67,
+      "pnl": -3850.59,
+      "roi": null,
+      "roi_pct": -38.51,
+      "sharpe": -3.305,
+      "sortino": -7.64,
+      "max_dd": null,
+      "max_dd_pct": 38.91,
+      "final_equity": 6149.41,
+      "period_days": 360,
+      "n_symbols": null,
+      "n_candles": null,
+      "interval": "15m",
+      "basket": "bluechip"
+    },
+    "comparison": {
+      "ok": false,
+      "failures": 8,
+      "fields": [
+        {
+          "field": "n_trades",
+          "baseline": 173,
+          "fresh": 172,
+          "ok": false,
+          "detail": "0.578%"
+        },
+        {
+          "field": "win_rate",
+          "baseline": 47.98,
+          "fresh": 47.67,
+          "ok": false,
+          "detail": "0.646%"
+        },
+        {
+          "field": "pnl",
+          "baseline": -3812.37,
+          "fresh": -3850.59,
+          "ok": false,
+          "detail": "1.003%"
+        },
+        {
+          "field": "roi",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "roi_pct",
+          "baseline": -38.12,
+          "fresh": -38.51,
+          "ok": false,
+          "detail": "1.023%"
+        },
+        {
+          "field": "sharpe",
+          "baseline": -3.218,
+          "fresh": -3.305,
+          "ok": false,
+          "detail": "2.704%"
+        },
+        {
+          "field": "sortino",
+          "baseline": -9.033,
+          "fresh": -7.64,
+          "ok": false,
+          "detail": "15.421%"
+        },
+        {
+          "field": "max_dd",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "max_dd_pct",
+          "baseline": 38.36,
+          "fresh": 38.91,
+          "ok": false,
+          "detail": "1.434%"
+        },
+        {
+          "field": "final_equity",
+          "baseline": 6187.63,
+          "fresh": 6149.41,
+          "ok": false,
+          "detail": "0.618%"
+        },
+        {
+          "field": "period_days",
+          "baseline": 360,
+          "fresh": 360,
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "n_symbols",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "n_candles",
+          "baseline": null,
+          "fresh": null,
+          "ok": true,
+          "detail": "both null"
+        },
+        {
+          "field": "interval",
+          "baseline": "15m",
+          "fresh": "15m",
+          "ok": true,
+          "detail": "exact"
+        },
+        {
+          "field": "basket",
+          "baseline": "bluechip",
+          "fresh": "bluechip",
+          "ok": true,
+          "detail": "exact"
+        }
+      ]
+    }
+  }
+]
