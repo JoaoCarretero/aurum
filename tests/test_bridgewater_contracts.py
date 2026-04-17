@@ -32,6 +32,61 @@ def test_align_oi_signal_to_candles_keeps_pre_series_window_at_zero():
     assert aligned.tolist() == [0.0, 0.0, 1.0, -1.0]
 
 
+def test_align_oi_signal_drops_stale_ticks_beyond_2h_tolerance():
+    """Bug 4 fix: when the last OI tick is > 2h before a candle, the aligner
+    must return 0 (no signal) instead of propagating a stale value."""
+    candle_times = pd.to_datetime([
+        "2026-01-01 10:00:00",  # close to tick
+        "2026-01-01 11:00:00",  # 2h after tick exactly — boundary OK
+        "2026-01-01 15:00:00",  # 6h after tick — MUST be dropped
+    ])
+    oi_signal_df = pd.DataFrame({
+        "time": pd.to_datetime(["2026-01-01 09:00:00"]),
+        "oi_signal": [0.8],
+    })
+    aligned = bridgewater._align_oi_signal_to_candles(pd.Series(candle_times), oi_signal_df)
+    assert aligned[0] == 0.8          # tick 1h old — fresh
+    assert aligned[1] == 0.8          # tick 2h old — within tolerance
+    assert aligned[2] == 0.0          # tick 6h old — stale, zeroed
+
+
+def test_align_series_rejects_rangeindex_series_bug1_fix():
+    """Bug 1 fix: a Series without DatetimeIndex must NOT be aligned
+    positionally (which fabricated sentiment signal across backtests).
+    Return all-default instead.
+    """
+    import numpy as np
+    candle_times = pd.Series(pd.to_datetime([
+        "2026-01-01 00:00:00",
+        "2026-01-01 01:00:00",
+        "2026-01-01 02:00:00",
+    ]))
+    rangeindex_series = pd.Series([0.9, -0.4, 0.5])  # has RangeIndex, not datetime
+    aligned = bridgewater._align_series_to_candles(candle_times, rangeindex_series)
+    assert np.array_equal(aligned, np.zeros(3))
+
+
+def test_align_series_respects_staleness_guard_bug4_fix():
+    """Bug 4 fix: searchsorted-based alignment must drop ticks older than
+    max_staleness. Without this, a single historical probe row would
+    propagate for years of subsequent candles.
+    """
+    import numpy as np
+    tick_times = pd.to_datetime(["2023-11-14 22:00:00", "2026-04-12 11:00:00"])
+    series = pd.Series([0.7, -0.3], index=tick_times)
+    candle_times = pd.Series(pd.to_datetime([
+        "2024-01-01 00:00:00",  # 1.5 months after 2023 tick — MUST be 0
+        "2025-06-01 00:00:00",  # 1.5 years after 2023 tick — MUST be 0
+        "2026-04-12 12:00:00",  # 1h after 2026 tick — uses real value
+        "2026-04-12 15:00:00",  # 4h after 2026 tick — stale, zeroed
+    ]))
+    aligned = bridgewater._align_series_to_candles(candle_times, series)
+    assert aligned[0] == 0.0
+    assert aligned[1] == 0.0
+    assert aligned[2] == -0.3
+    assert aligned[3] == 0.0
+
+
 def test_collect_sentiment_propagates_end_time_to_all_fetchers(monkeypatch):
     seen: dict[str, tuple[int, int | None]] = {}
 
@@ -222,3 +277,35 @@ def test_trade_sentiment_diagnostics_surfaces_neutral_oi_share():
     assert diagnostics["ls_distribution"] == {"-0.5": 2, "0.0": 1}
     assert diagnostics["funding_positive_pct"] == 66.67
     assert diagnostics["funding_negative_pct"] == 33.33
+
+
+# ────────────────────────────────────────────────────────────
+# scan_thoth research gates (2026-04-17) — kw-only signature contract
+# ────────────────────────────────────────────────────────────
+
+def test_scan_thoth_accepts_research_gates_as_keyword_only():
+    """Research gates are keyword-only to prevent accidental positional
+    calls from drifting into production wrappers.
+    """
+    import inspect
+    sig = inspect.signature(bridgewater.scan_thoth)
+    for name in ("strict_direction", "min_components",
+                 "min_dir_thresh", "exit_on_reversal"):
+        p = sig.parameters.get(name)
+        assert p is not None, f"missing kw-only param: {name}"
+        assert p.kind == inspect.Parameter.KEYWORD_ONLY, (
+            f"{name} must be keyword-only, got {p.kind}"
+        )
+
+
+def test_scan_thoth_research_gates_default_off():
+    """Default values must preserve the calibrated baseline.
+    Changing a default is a behavior change and requires explicit sign-off.
+    """
+    import inspect
+    sig = inspect.signature(bridgewater.scan_thoth)
+    defaults = {n: p.default for n, p in sig.parameters.items()}
+    assert defaults["strict_direction"] is False
+    assert defaults["min_components"] == 0
+    assert defaults["min_dir_thresh"] is None
+    assert defaults["exit_on_reversal"] is False

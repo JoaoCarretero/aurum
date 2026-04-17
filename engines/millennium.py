@@ -83,6 +83,9 @@ CONFLICT_ACTION       = "skip"
 # João: só pode ser re-julgada quando houver histórico de OI/LS suficiente
 # pra uma janela inteira relevante (cache de sentiment precisa cobrir 180d+
 # em todos os símbolos ativos). Em paralelo, audit rodando pra detectar bug.
+# 2026-04-17 ~20h: 4 bugs corrigidos em core/sentiment.py + bridgewater.py.
+# Pós-fix valida em 90d BTCUSDT com Sharpe 5.18, 5/6 overfit PASS, 50/50
+# direção. Mantida FORA do MILLENNIUM até baterias extras confirmarem.
 OPERATIONAL_ENGINES   = ("CITADEL", "RENAISSANCE", "JUMP")
 ENGINE_NATIVE_INTERVALS = {
     name: ENGINE_INTERVALS.get(name, INTERVAL)

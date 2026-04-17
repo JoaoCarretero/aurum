@@ -192,6 +192,12 @@ def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200,
                 return cached
         url = "https://fapi.binance.com/futures/data/openInterestHist"
         params: dict = {"symbol": symbol, "period": period, "limit": limit}
+        # Bug 2 fix: when caller is running OOS/backtest with end_time_ms,
+        # NEVER fetch without endTime. The Binance endpoint accepts endTime;
+        # pass it so we get the historical window instead of the live tail
+        # (which would be silent look-ahead).
+        if end_time_ms is not None:
+            params["endTime"] = int(end_time_ms)
         data = _fetch_binance_rows(url, params, f"OI {symbol}")
         if not data:
             return None
@@ -241,6 +247,10 @@ def fetch_long_short_ratio(symbol: str, period: str = "15m",
                 return cached
         url = "https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
         params: dict = {"symbol": symbol, "period": period, "limit": limit}
+        # Bug 2 fix: propagate endTime to the live fetch so OOS/backtest
+        # windows get the correct historical slice rather than the live tail.
+        if end_time_ms is not None:
+            params["endTime"] = int(end_time_ms)
         data = _fetch_binance_rows(url, params, f"LS ratio {symbol}")
         if not data:
             return None
@@ -277,19 +287,44 @@ def funding_zscore(funding_df: pd.DataFrame, window: int = 30) -> pd.Series:
     Z-score of funding rate over rolling window.
     Positive z = market overleveraged long.
     Negative z = market overleveraged short.
+
+    Returns a Series indexed by the funding tick DatetimeIndex so that
+    downstream temporal aligners (searchsorted on candle timestamps) work
+    correctly. Returning a RangeIndex here collapses candles to positional
+    alignment and fabricates signal across the backtest.
     """
     fr = funding_df["funding_rate"]
     roll_mean = fr.rolling(window, min_periods=5).mean()
     roll_std = fr.rolling(window, min_periods=5).std()
     z = (fr - roll_mean) / roll_std.replace(0, np.nan)
-    return z.fillna(0)
+    z = z.fillna(0)
+    if "time" in funding_df.columns:
+        z.index = pd.to_datetime(funding_df["time"]).to_numpy()
+    return z
 
 
 def oi_delta_signal(oi_df: pd.DataFrame, price_df: pd.DataFrame,
-                    window: int = 20) -> pd.DataFrame:
+                    window: int = 20, zscore_window: int = 200) -> pd.DataFrame:
     """
-    OI change vs price change analysis.
-    Returns DataFrame with columns: oi_delta, price_delta, oi_signal
+    OI change vs price change analysis — regime-adaptive z-score version.
+
+    Bug 5 fix (2026-04-17): the previous absolute thresholds (OI ±5%, price
+    ±1% over a 20-bar window) are regime-fragile. In the 2026 low-vol
+    regime, only 1.8% of BTC observations clear |OI delta| > 5% — OI signal
+    falls to 0 on 100% of trades, contributing nothing to the composite.
+
+    Fix: score oi_delta and price_delta by their z-score over a longer
+    rolling window (default 200 bars), with symmetric ±1σ/±2σ thresholds.
+    Adapts to the prevailing regime so the signal fires when OI moves
+    unusually relative to itself, not by a hardcoded percentage.
+
+    Signal logic preserved (direction semantics):
+      oi_up + px_dn : -1.0 (shorts accumulating — bearish continuation)
+      oi_dn + px_up :  1.0 (short squeeze — bullish)
+      oi_up + px_up :  0.3 (weak bullish — trend)
+      oi_dn + px_dn : -0.3 (weak bearish — capitulation)
+
+    Returns DataFrame with columns: oi_delta, price_delta, oi_signal.
     """
     merged = pd.merge_asof(
         price_df[["time", "close"]].sort_values("time"),
@@ -300,35 +335,63 @@ def oi_delta_signal(oi_df: pd.DataFrame, price_df: pd.DataFrame,
     merged["oi_delta"] = merged["oi"].pct_change(window).fillna(0)
     merged["price_delta"] = merged["close"].pct_change(window).fillna(0)
 
-    # OI up + price down = shorts accumulating (bearish continuation)
-    # OI down + price up = short squeeze (bullish)
-    signal = np.zeros(len(merged))
-    oi_up = merged["oi_delta"] > 0.05
-    oi_dn = merged["oi_delta"] < -0.05
-    px_up = merged["price_delta"] > 0.01
-    px_dn = merged["price_delta"] < -0.01
+    min_periods = max(20, min(50, len(merged) // 4))
+    oi_mean = merged["oi_delta"].rolling(zscore_window, min_periods=min_periods).mean()
+    oi_std = merged["oi_delta"].rolling(zscore_window, min_periods=min_periods).std()
+    px_mean = merged["price_delta"].rolling(zscore_window, min_periods=min_periods).mean()
+    px_std = merged["price_delta"].rolling(zscore_window, min_periods=min_periods).std()
 
-    signal = np.where(oi_up & px_dn, -1.0, signal)   # bearish
-    signal = np.where(oi_dn & px_up,  1.0, signal)    # bullish (squeeze)
-    signal = np.where(oi_up & px_up,  0.3, signal)    # weak bullish (trend)
-    signal = np.where(oi_dn & px_dn, -0.3, signal)    # weak bearish (capitulation)
+    oi_z = ((merged["oi_delta"] - oi_mean) / oi_std.replace(0, np.nan)).fillna(0).to_numpy()
+    px_z = ((merged["price_delta"] - px_mean) / px_std.replace(0, np.nan)).fillna(0).to_numpy()
+
+    # Symmetric ±1σ/±2σ thresholds on z-score; no asymmetry.
+    oi_move_up = oi_z >= 1.0
+    oi_move_dn = oi_z <= -1.0
+    px_move_up = px_z >= 1.0
+    px_move_dn = px_z <= -1.0
+
+    signal = np.zeros(len(merged))
+    signal = np.where(oi_move_up & px_move_dn, -1.0, signal)
+    signal = np.where(oi_move_dn & px_move_up,  1.0, signal)
+    signal = np.where(oi_move_up & px_move_up,  0.3, signal)
+    signal = np.where(oi_move_dn & px_move_dn, -0.3, signal)
 
     merged["oi_signal"] = signal
     return merged
 
 
-def ls_ratio_signal(ls_df: pd.DataFrame) -> pd.Series:
+def ls_ratio_signal(ls_df: pd.DataFrame, window: int = 672) -> pd.Series:
     """
-    Contrarian signal from Long/Short ratio.
-    Returns signal: positive = bullish (crowd is short), negative = bearish (crowd is long).
+    Contrarian signal from Long/Short ratio (rolling z-score).
+
+    Mechanism (Bug 3 fix — symmetric, regime-adaptive, non-overfit):
+      - Compute z-score of the ratio over a rolling window (default 672 ticks
+        = 1 week at 15m cadence). This adapts to the prevailing regime: a
+        persistent bull market with LS > 1 is the new baseline, and the
+        contrarian signal only fires on deviations from it.
+      - Symmetric thresholds: ±2σ strong, ±1σ weak. No asymmetry toward one
+        side (previous absolute thresholds 1.5/0.67 biased ~99% of signal
+        bearish in crypto bull).
+
+    Bug 1 fix: returns a Series indexed by the LS tick DatetimeIndex so
+    that temporal aligners map candles to the correct historical value.
+
+    Returns signal in [-1, +1]:
+      positive = bullish (crowd is unusually short → contrarian long)
+      negative = bearish (crowd is unusually long → contrarian short)
     """
-    ratio = ls_df["ls_ratio"]
-    # crowd too long → bearish
-    # crowd too short → bullish
-    signal = np.where(ratio > 2.0, -1.0,
-             np.where(ratio > 1.5, -0.5,
-             np.where(ratio < 0.5,  1.0,
-             np.where(ratio < 0.67, 0.5, 0.0))))
+    ratio = ls_df["ls_ratio"].astype(float)
+    min_periods = max(10, min(50, len(ratio) // 4))
+    roll_mean = ratio.rolling(window, min_periods=min_periods).mean()
+    roll_std = ratio.rolling(window, min_periods=min_periods).std()
+    z = (ratio - roll_mean) / roll_std.replace(0, np.nan)
+    z = z.fillna(0).to_numpy(dtype=float)
+    signal = np.where(z >  2.0, -1.0,
+             np.where(z >  1.0, -0.5,
+             np.where(z < -2.0,  1.0,
+             np.where(z < -1.0,  0.5, 0.0))))
+    if "time" in ls_df.columns:
+        return pd.Series(signal, index=pd.to_datetime(ls_df["time"]).to_numpy())
     return pd.Series(signal, index=ls_df.index)
 
 

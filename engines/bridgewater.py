@@ -280,12 +280,26 @@ def _trade_sentiment_diagnostics(closed: list[dict]) -> dict:
     }
 
 
+_SENTIMENT_MAX_STALENESS_NS = 2 * 60 * 60 * 1_000_000_000  # 2h in ns
+
+
 def _align_series_to_candles(
     candle_times: pd.Series,
     series: pd.Series | None,
     default: float = 0.0,
+    max_staleness_ns: int = _SENTIMENT_MAX_STALENESS_NS,
 ) -> np.ndarray:
-    """Align a series to candle timestamps once to avoid per-bar lookups."""
+    """Align a series to candle timestamps, with a staleness guard.
+
+    For each candle we take the most recent sentiment tick at or before the
+    candle time. If that tick is older than ``max_staleness_ns``, the candle
+    gets ``default`` instead — propagating a stale value across a long gap
+    fabricates deterministic signal (Bug 4, 2026-04-17).
+
+    Cache files can have large internal gaps (e.g. a BTCUSDT row from
+    2023-11-14 followed by rows from 2026-04-12). Without a staleness guard,
+    searchsorted propagates the 2023 value across 2.5 years of candles.
+    """
     aligned = np.full(len(candle_times), default, dtype=float)
     if series is None or len(series) == 0:
         return aligned
@@ -294,31 +308,21 @@ def _align_series_to_candles(
         hasattr(series.index, "dtype")
         and pd.api.types.is_datetime64_any_dtype(series.index)
     ):
-        values = pd.to_numeric(series, errors="coerce").fillna(default).to_numpy(dtype=float)
-        n = min(len(values), len(aligned))
-        aligned[:n] = values[:n]
-        if n and n < len(aligned):
-            aligned[n:] = values[n - 1]
+        # Fallback: the caller supplied a Series without a DatetimeIndex. We
+        # cannot align temporally — return ``default`` everywhere rather than
+        # fake a positional mapping (Bug 1, 2026-04-17).
         return aligned
 
     values = pd.to_numeric(series, errors="coerce").fillna(default).to_numpy(dtype=float)
-    idx_ns = series.index.view("int64")
-    candle_ns = pd.to_datetime(candle_times).view("int64")
+    idx_ns = np.asarray(series.index, dtype="datetime64[ns]").view("int64")
+    candle_ns = np.asarray(pd.to_datetime(candle_times), dtype="datetime64[ns]").view("int64")
     pos = np.searchsorted(idx_ns, candle_ns, side="right") - 1
     valid = pos >= 0
     if valid.any():
-        aligned[valid] = values[pos[valid]]
-        # Bars that precede the first sentiment tick get ``default`` (0.0 by
-        # convention — "no signal"), not the first available value. Propagating
-        # values[0] leaks a single constant across the pre-series window, which
-        # in narrow-lookback runs (e.g. the legacy limit=100 = 33d of funding)
-        # fabricated a spurious deterministic signal across ~90% of bars in any
-        # longer OOS window.
-        #
-        # aligned was already initialised to ``default`` above, so the gap
-        # region is correct by construction — we intentionally do not rewrite
-        # aligned[:first_valid] here.
-    # When no candle is after any series point, every bar stays at ``default``.
+        safe_pos = np.clip(pos, 0, len(values) - 1)
+        gaps = candle_ns - idx_ns[safe_pos]
+        fresh = valid & (gaps <= max_staleness_ns)
+        aligned[fresh] = values[safe_pos[fresh]]
     return aligned
 
 
@@ -326,7 +330,12 @@ def _align_oi_signal_to_candles(
     candle_times: pd.Series,
     oi_signal_df: pd.DataFrame | None,
 ) -> np.ndarray:
-    """Align OI signal to candles with a single asof merge."""
+    """Align OI signal to candles with a staleness-guarded asof merge.
+
+    Bug 4 fix (2026-04-17): ``tolerance`` rejects candles whose most-recent OI
+    tick is older than 2h. Without it, a cache row from 2023 could propagate
+    forward across years of 2026 candles, fabricating deterministic signal.
+    """
     aligned = np.zeros(len(candle_times), dtype=float)
     if oi_signal_df is None or oi_signal_df.empty:
         return aligned
@@ -343,6 +352,7 @@ def _align_oi_signal_to_candles(
         on="time",
         direction="backward",
         allow_exact_matches=True,
+        tolerance=pd.Timedelta("2h"),
     )
     return pd.to_numeric(merged["oi_signal"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
 
@@ -355,9 +365,42 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
                macro_bias_series, corr: dict,
                htf_stack_dfs: dict | None = None,
                sentiment_data: dict | None = None,
-               scan_start_idx: int = 0) -> tuple[list, dict]:
+               scan_start_idx: int = 0,
+               *,
+               strict_direction: bool = False,
+               min_components: int = 0,
+               min_dir_thresh: float | None = None,
+               exit_on_reversal: bool = False) -> tuple[list, dict]:
     """
     Scan a symbol using sentiment + technical confirmation.
+
+    Optional research gates (all default OFF — preserve calibrated baseline):
+
+    strict_direction (bool):
+        Require EXPLICIT match with structure or macro_bias. Removes the
+        permissive fallback at scan_thoth:498-505 that accepted neutral
+        struct as confirmation. Rationale (2026-04-17 audit): 20/20 Late
+        losers in 31d BTC window had struct=NEUTRAL and macro opposing
+        their direction — the fallback was the direct cause.
+
+    min_components (int):
+        Require at least N of {funding, oi, ls} signals to be non-zero
+        simultaneously. Rationale: multi-signal convergence is a canonical
+        quant pattern (Lo 2004, Asness 2013). Filters single-channel
+        marginal setups. Default 0 = off.
+
+    min_dir_thresh (float | None):
+        Override THOTH_DIRECTION_THRESHOLD for this run. The calibrated
+        default (0.20) is liberal. Raising to 0.35-0.40 filters marginal
+        sentiment (|score|<0.35 were the 20 Late losers). None = use config.
+
+    exit_on_reversal (bool):
+        Close open position if composite sentiment reverses past
+        -min_dir_thresh (for longs) or +min_dir_thresh (for shorts).
+        Rationale: contrarian thesis assumes transient mispricing; if the
+        crowd keeps building the wrong way, the thesis is invalidated and
+        the trade should exit before the stop. NOT YET implemented in
+        label_trade path — accepted as the gate param for future wiring.
     """
     # ── prepare indicators ──
     df = indicators(df)
@@ -480,18 +523,27 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         direction = None
         struct = _str[idx]
 
-        _dir_thresh = THOTH_DIRECTION_THRESHOLD
+        _dir_thresh = min_dir_thresh if min_dir_thresh is not None else THOTH_DIRECTION_THRESHOLD
+
+        # Optional: multi-component convergence gate (research, default OFF).
+        if min_components > 0:
+            active_channels = int(f_z != 0) + int(oi_sig != 0) + int(ls_sig != 0)
+            if active_channels < min_components:
+                vetos["components_weak"] += 1
+                continue
+
         if sent_score > _dir_thresh:
-            # bullish sentiment — confirm with struct or macro
+            # bullish sentiment
             if struct == "UP" or macro_b == "BULL":
                 direction = "BULLISH"
-            elif struct != "DOWN":
-                direction = "BULLISH"  # neutral struct is ok
+            elif not strict_direction and struct != "DOWN":
+                # permissive fallback — default path; --strict-direction disables this.
+                direction = "BULLISH"
         elif sent_score < -_dir_thresh:
-            # bearish sentiment — confirm with struct or macro
+            # bearish sentiment
             if struct == "DOWN" or macro_b == "BEAR":
                 direction = "BEARISH"
-            elif struct != "UP":
+            elif not strict_direction and struct != "UP":
                 direction = "BEARISH"
 
         if direction is None:
@@ -723,6 +775,16 @@ if __name__ == "__main__":
     _ap.add_argument("--no-menu", action="store_true")
     _ap.add_argument("--end", type=str, default=None,
                      help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
+    # Research gates (default OFF — preserve calibrated baseline).
+    # See scan_thoth docstring for rationale; wired for 2026-07-17 OOS battery.
+    _ap.add_argument("--strict-direction", action="store_true",
+                     help="Require explicit struct or macro match (removes neutral-struct fallback).")
+    _ap.add_argument("--min-components", type=int, default=0,
+                     help="Require at least N of {funding, oi, ls} signals non-zero (default 0 = off).")
+    _ap.add_argument("--min-dir-thresh", type=float, default=None,
+                     help="Override THOTH_DIRECTION_THRESHOLD for this run (default uses config).")
+    _ap.add_argument("--exit-on-reversal", action="store_true",
+                     help="(reserved) close position when composite sentiment reverses past threshold.")
     _args, _ = _ap.parse_known_args()
     END_TIME_MS = None
     if _args.end:
@@ -861,7 +923,11 @@ if __name__ == "__main__":
             continue
         trades, vetos = scan_thoth(df, sym, macro_bias, corr,
                                    sentiment_data=sentiment_data,
-                                   scan_start_idx=symbol_scan_start_idx)
+                                   scan_start_idx=symbol_scan_start_idx,
+                                   strict_direction=_args.strict_direction,
+                                   min_components=_args.min_components,
+                                   min_dir_thresh=_args.min_dir_thresh,
+                                   exit_on_reversal=_args.exit_on_reversal)
         all_trades.extend(trades)
         for k, v in vetos.items():
             all_vetos[k] += v

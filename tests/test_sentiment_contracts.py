@@ -108,7 +108,7 @@ class TestFetchOpenInterest:
             }
         ).to_csv(cache_dir / "BTCUSDT_15m.csv", index=False)
 
-        with patch("requests.get") as mock_get:
+        with patch.object(sentiment, "_fetch_binance_rows") as mock_fetch:
             df = fetch_open_interest(
                 "BTCUSDT",
                 period="15m",
@@ -116,11 +116,15 @@ class TestFetchOpenInterest:
                 end_time_ms=int(pd.Timestamp("2026-01-01 01:00:00").timestamp() * 1000),
             )
 
-        assert mock_get.call_count == 0
+        assert mock_fetch.call_count == 0
         assert df is not None
         assert df["oi"].tolist() == [1002, 1003, 1004]
 
-    def test_historical_probe_refreshes_cache_without_fake_endtime(self, tmp_path, monkeypatch):
+    def test_historical_probe_propagates_endtime_to_live_fetch(self, tmp_path, monkeypatch):
+        """When cache is insufficient for the requested OOS window, the live
+        fetch MUST carry endTime — otherwise Binance returns the live tail,
+        which is look-ahead in any backtest. Bug 2 fix (2026-04-17).
+        """
         monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
         payload = [
             {
@@ -133,10 +137,28 @@ class TestFetchOpenInterest:
         with patch("requests.get", return_value=_mock_resp(payload)) as mock_get:
             df = fetch_open_interest("BTCUSDT", period="15m", limit=5, end_time_ms=123)
 
-        assert df is None
-        assert "endTime" not in mock_get.call_args.kwargs["params"]
+        assert df is None  # end_time=123 (1970) is before the mocked payload
+        assert mock_get.call_args.kwargs["params"]["endTime"] == 123
         cached = pd.read_csv(Path(tmp_path) / "open_interest" / "BTCUSDT_15m.csv")
         assert len(cached) == 5
+
+    def test_live_fetch_without_end_time_ms_omits_endtime(self, tmp_path, monkeypatch):
+        """When no end_time_ms is given (live mode), endTime must NOT be
+        passed — that would cap the query unnecessarily.
+        """
+        monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
+        payload = [
+            {
+                "timestamp": 1_700_000_000_000 + i * 900_000,
+                "sumOpenInterest": f"{1000.0 + i}",
+                "sumOpenInterestValue": f"{50000000.0 + i}",
+            }
+            for i in range(5)
+        ]
+        with patch("requests.get", return_value=_mock_resp(payload)) as mock_get:
+            fetch_open_interest("BTCUSDT", period="15m", limit=5)
+
+        assert "endTime" not in mock_get.call_args.kwargs["params"]
 
     def test_live_fetch_returns_full_merged_cache_not_just_tail_limit(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
@@ -295,13 +317,26 @@ class TestOiDeltaSignal:
         out = oi_delta_signal(oi, price, window=10)
         assert set(out["oi_signal"].unique()).issubset({-1.0, -0.3, 0.0, 0.3, 1.0})
 
-    def test_oi_up_price_down_produces_bearish(self):
-        # OI sobe, preço cai → -1 (shorts acumulando)
-        price = self._make_price(n=50, start=100.0, drift=-0.5)  # forte queda
-        oi = self._make_oi(n=50, start=1_000.0, drift=20.0)      # forte alta OI
-        out = oi_delta_signal(oi, price, window=10)
+    def test_oi_surge_vs_price_crash_produces_bearish(self):
+        """Bug 5 fix: signal fires on STATISTICAL deviation, not absolute %.
+
+        A baseline of low-volatility noise followed by a sharp divergence
+        (OI surges while price crashes) must trigger -1.0 in the divergent
+        tail, demonstrating the z-score is doing its job.
+        """
+        n = 300
+        rng = np.random.default_rng(0)
+        times = pd.date_range("2026-01-01", periods=n, freq="15min")
+        # Quiet baseline for first 270 bars, then 30 bars of divergence
+        oi_base = 1000.0 + np.cumsum(rng.normal(0, 0.2, n))
+        price_base = 100.0 + np.cumsum(rng.normal(0, 0.05, n))
+        oi_base[270:] += np.arange(30) * 10        # OI rising fast in tail
+        price_base[270:] -= np.arange(30) * 0.8    # Price crashing in tail
+        oi = pd.DataFrame({"time": times, "oi": oi_base})
+        price = pd.DataFrame({"time": times, "close": price_base})
+        out = oi_delta_signal(oi, price, window=10, zscore_window=100)
         tail = out["oi_signal"].iloc[-10:]
-        assert (tail == -1.0).any()
+        assert (tail == -1.0).any(), f"tail signal = {tail.tolist()}"
 
     def test_flat_data_yields_zero_signal(self):
         # Sem variação em nenhum dos dois
@@ -310,42 +345,91 @@ class TestOiDeltaSignal:
         out = oi_delta_signal(oi, price, window=10)
         assert (out["oi_signal"] == 0.0).all()
 
+    def test_warmup_yields_zero_signal_before_min_periods(self):
+        """Bug 5 fix characterization: while the rolling z-score window has
+        fewer than min_periods observations, the signal must remain zero.
+        """
+        price = self._make_price(n=50, drift=-0.5)
+        oi = self._make_oi(n=50, drift=20.0)
+        out = oi_delta_signal(oi, price, window=10, zscore_window=200)
+        # First 20 bars are fully below any min_periods threshold → zero
+        assert (out["oi_signal"].iloc[:20] == 0.0).all()
+
 
 # ────────────────────────────────────────────────────────────
 # ls_ratio_signal
 # ────────────────────────────────────────────────────────────
 
 class TestLsRatioSignal:
-    def test_very_long_crowd_bearish(self):
-        df = pd.DataFrame({"ls_ratio": [2.5]})
-        s = ls_ratio_signal(df)
-        assert s.iloc[0] == -1.0
+    """Tests for the Bug-3-fix rolling z-score signal (2026-04-17).
 
-    def test_mildly_long_crowd_weakly_bearish(self):
-        df = pd.DataFrame({"ls_ratio": [1.7]})
-        s = ls_ratio_signal(df)
-        assert s.iloc[0] == -0.5
+    Mechanism: contrarian signal fires when ls_ratio deviates >=1σ (weak)
+    or >=2σ (strong) from its rolling 1-week mean. Symmetric by construction.
+    """
 
-    def test_very_short_crowd_bullish(self):
-        df = pd.DataFrame({"ls_ratio": [0.3]})
+    def test_warmup_is_zero_until_min_periods(self):
+        """Insufficient history -> signal is flat zero (no fake bias)."""
+        df = pd.DataFrame({"ls_ratio": [1.5] * 5})
         s = ls_ratio_signal(df)
-        assert s.iloc[0] == 1.0
+        assert (s == 0.0).all()
 
-    def test_mildly_short_crowd_weakly_bullish(self):
-        df = pd.DataFrame({"ls_ratio": [0.6]})
+    def test_constant_ratio_returns_zero(self):
+        """No variance -> std=0 -> z=NaN -> filled to 0 -> no signal."""
+        df = pd.DataFrame({"ls_ratio": [1.8] * 200})
         s = ls_ratio_signal(df)
-        assert s.iloc[0] == 0.5
+        assert (s == 0.0).all()
 
-    def test_neutral_ratio_zero_signal(self):
-        df = pd.DataFrame({"ls_ratio": [1.0]})
+    def test_strong_positive_deviation_is_bearish(self):
+        """Crowd unusually long (+2sigma) -> contrarian bearish = -1.0."""
+        base = [1.0] * 300
+        # Tail swings to ~1.5 — well above mean=1.0, std small
+        tail = [1.5] * 10
+        rng = np.random.default_rng(0)
+        # Add tiny noise to avoid zero std
+        noise = list(rng.normal(0, 0.01, 300))
+        ratios = [b + n for b, n in zip(base, noise)] + tail
+        df = pd.DataFrame({"ls_ratio": ratios})
         s = ls_ratio_signal(df)
-        assert s.iloc[0] == 0.0
+        # Last bar: z >> 2 -> signal -1.0
+        assert s.iloc[-1] == -1.0
+
+    def test_strong_negative_deviation_is_bullish(self):
+        """Crowd unusually short (-2sigma) -> contrarian bullish = +1.0."""
+        base = [1.0] * 300
+        tail = [0.5] * 10
+        rng = np.random.default_rng(0)
+        noise = list(rng.normal(0, 0.01, 300))
+        ratios = [b + n for b, n in zip(base, noise)] + tail
+        df = pd.DataFrame({"ls_ratio": ratios})
+        s = ls_ratio_signal(df)
+        assert s.iloc[-1] == 1.0
+
+    def test_symmetric_in_magnitude(self):
+        """Same deviation either direction must produce same |signal|."""
+        rng = np.random.default_rng(0)
+        noise_up = list(rng.normal(0, 0.01, 300))
+        rng2 = np.random.default_rng(0)
+        noise_dn = list(rng2.normal(0, 0.01, 300))
+        up = [1.0 + n for n in noise_up] + [1.3] * 5  # ~1.5 sigma above
+        dn = [1.0 + n for n in noise_dn] + [0.7] * 5  # ~1.5 sigma below
+        s_up = ls_ratio_signal(pd.DataFrame({"ls_ratio": up}))
+        s_dn = ls_ratio_signal(pd.DataFrame({"ls_ratio": dn}))
+        assert abs(s_up.iloc[-1]) == abs(s_dn.iloc[-1])
 
     def test_returns_pandas_series(self):
         df = pd.DataFrame({"ls_ratio": [1.0, 2.5, 0.3]})
         s = ls_ratio_signal(df)
         assert isinstance(s, pd.Series)
         assert len(s) == 3
+
+    def test_propagates_datetime_index_when_time_column_present(self):
+        """Bug 1 fix — returned Series must be indexed by event time so the
+        downstream aligner maps candles to the correct tick (not positional).
+        """
+        times = pd.date_range("2025-01-01", periods=4, freq="15min")
+        df = pd.DataFrame({"time": times, "ls_ratio": [1.0, 1.1, 1.2, 1.3]})
+        s = ls_ratio_signal(df)
+        assert pd.api.types.is_datetime64_any_dtype(s.index)
 
 
 # ────────────────────────────────────────────────────────────
