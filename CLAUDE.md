@@ -229,6 +229,43 @@ Data (Binance OHLCV+tbb)
 
 ## Regras para Claude Code
 
+### ⚠️ PROTOCOLO ANTI-OVERFIT (criado 2026-04-16 após OOS audit)
+
+**Qualquer sweep, grid search, bateria, iteração de params DEVE seguir**
+`docs/methodology/anti_overfit_protocol.md`. Não é opcional.
+
+**Resumo dos 5 princípios:**
+
+1. **Mecanismo > Iteração.** Hipótese escrita em 1 parágrafo ANTES de
+   abrir código. Sem mecanismo defensável, arquiva antes de começar.
+2. **Split antes de código.** Datas train/test/holdout hardcoded no topo
+   do engine. Não mudam.
+3. **Grid fechado.** Lista de N configs pré-registrada em
+   `docs/engines/<engine>/grid.md`. Commit antes de rodar.
+4. **DSR obrigatório.** Sharpe reportado SEM haircut por `n_trials` é
+   mentira disfarçada. Todo sweep computa DSR.
+5. **Regra de parada honra.** Falhou numa etapa → **ARQUIVA**. Sem
+   "reformular universo", sem "mais um iter".
+
+**Anti-patterns a REJEITAR:**
+- Comentários `iter_N WINNER` em `config/params.py` (trocar por
+  `tuned_on=[...], oos_sharpe=X`)
+- "Reformular até achar edge" (é fishing expedition)
+- Mesmo histórico pra tune e report
+- Cherry-pick de symbol ou regime
+
+**Regra meta:** 3 engines consecutivos arquivados → **PAUSAR e revisar
+método**, não continuar batendo.
+
+**Status OOS 2026-04-16 (referência):**
+- ✅ CITADEL, JUMP — edge real confirmado
+- ⚠️ RENAISSANCE — inflado 2×, real ~2.4
+- ⚠️ BRIDGEWATER — bug-suspect
+- 🔴 DE SHAW, KEPOS, MEDALLION — colapsaram ou não-funcionais
+- Ver `docs/audits/2026-04-16_oos_verdict.md`
+
+---
+
 ### ⚠️ CORE DE TRADING PROTEGIDO (qualquer agente: Claude, Codex, outros)
 
 **Estes 4 arquivos NÃO podem ser modificados sem aprovação explícita do Joao:**
