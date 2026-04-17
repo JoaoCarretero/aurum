@@ -32,7 +32,7 @@ def test_dsr_many_trials_penalizes_moderate_sharpe():
     dsr = deflated_sharpe_ratio(
         sharpe=1.5, n_trials=100, skew=0.0, kurtosis=3.0, n_obs=252
     )
-    assert 0.0 <= dsr < 0.8
+    assert dsr < 0.05  # z ≈ -11 underflows to 0.0 in float64 — DSR collapses
 
 
 def test_dsr_negative_skew_penalizes():
@@ -44,8 +44,14 @@ def test_dsr_negative_skew_penalizes():
 def test_dsr_returns_in_unit_interval():
     dsr = deflated_sharpe_ratio(sharpe=3.0, n_trials=50, skew=0.2, kurtosis=4.0, n_obs=500)
     assert 0.0 <= dsr <= 1.0
+    assert dsr > 0.90  # Sharpe=3 after 50 trials, E[max]~2.88: z > 0 → DSR high (actual ≈ 1.0)
 
 
 def test_expected_max_sharpe_zero_trials_raises():
     with pytest.raises(ValueError):
         expected_max_sharpe(n_trials=0)
+
+
+def test_dsr_invalid_n_obs_raises():
+    with pytest.raises(ValueError):
+        deflated_sharpe_ratio(sharpe=1.0, n_trials=10, skew=0.0, kurtosis=3.0, n_obs=1)
