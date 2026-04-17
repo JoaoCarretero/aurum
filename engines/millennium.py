@@ -1220,7 +1220,10 @@ def _load_dados(generate_plots):
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
     _fetch_syms=list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms: _fetch_syms.insert(0,MACRO_SYMBOL)
-    all_dfs=fetch_all(_fetch_syms)
+    # Use local INTERVAL/N_CANDLES (updated by _ask_periodo) instead of
+    # falling back to config.params defaults. Without this, changing the
+    # scan period in the menu had no effect on fetched data.
+    all_dfs=fetch_all(_fetch_syms, interval=INTERVAL, n_candles=N_CANDLES)
     for sym,df in all_dfs.items(): validate(df,sym)
     if not all_dfs: print("  Sem dados."); sys.exit(1)
     htf_stack_by_sym={}
