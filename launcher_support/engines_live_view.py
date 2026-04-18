@@ -1128,34 +1128,21 @@ def _get_tunnel_status_label() -> tuple[str, str]:
 def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     """Return (run_dir, heartbeat_payload) for the most recent shadow run.
 
-    Try cockpit_api client first (remoto via tunnel). Se ausente ou falha,
-    cai pro disco local (dev / shadow rodando na mesma máquina).
+    Le do ShadowPoller cache (atualizado em background thread) em vez
+    de fazer HTTP sync aqui no UI thread — HTTP sync congela TkInter
+    por ate timeout_sec quando o tunnel esta lento/down. Se nao tem
+    poller ativo, cai pro disco local (dev workflow preservado).
     """
-    # Remote path via cockpit API
-    client = _get_cockpit_client()
-    if client is not None:
-        try:
-            run = client.latest_run(engine="millennium")
-        except Exception:
-            run = None
-        if run:
-            virtual_dir = Path(f"remote://{run['run_id']}")
-            try:
-                hb = client.get_heartbeat(run["run_id"])
-            except Exception:
-                # list_runs worked but heartbeat didn't — keep [REMOTE]
-                # badge with whatever the summary carried, instead of
-                # silently degrading to a stale LOCAL run.
-                hb = {
-                    "run_id": run["run_id"],
-                    "status": run.get("status", "unknown"),
-                    "ticks_ok": 0, "ticks_fail": 0,
-                    "novel_total": run.get("novel_total", 0),
-                    "last_tick_at": run.get("last_tick_at"),
-                    "last_error": "heartbeat fetch failed",
-                    "tick_sec": 0,
-                }
-            return virtual_dir, hb
+    # Remote path via poller cache (nunca bloqueia)
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        poller = None
+    if poller is not None:
+        cached = poller.get_cached()
+        if cached is not None:
+            return cached  # (virtual_dir, heartbeat)
 
     # Local disk fallback (layout existente)
     root = Path("data/millennium_shadow")

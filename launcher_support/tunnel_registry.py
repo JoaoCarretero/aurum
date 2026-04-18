@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 
 _CURRENT: "TunnelManager | None" = None
+_SHADOW_POLLER: object | None = None
 
 
 def get_tunnel_manager() -> "TunnelManager | None":
@@ -30,7 +31,19 @@ def set_tunnel_manager(manager: "TunnelManager | None") -> None:
     _CURRENT = manager
 
 
+def get_shadow_poller() -> object | None:
+    """Retorna o ShadowPoller ativo (ou None)."""
+    return _SHADOW_POLLER
+
+
+def set_shadow_poller(poller: object | None) -> None:
+    """Registra o ShadowPoller no singleton. Chamado pelo launcher boot."""
+    global _SHADOW_POLLER
+    _SHADOW_POLLER = poller
+
+
 def reset_for_tests() -> None:
     """Helper pra tests limparem estado entre runs."""
-    global _CURRENT
+    global _CURRENT, _SHADOW_POLLER
     _CURRENT = None
+    _SHADOW_POLLER = None

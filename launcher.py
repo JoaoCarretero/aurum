@@ -1231,6 +1231,24 @@ class App(tk.Tk):
             # Tunnel falhou -> launcher segue em local-mode.
             self._aurum_tunnel = None
 
+        # ShadowPoller: le cockpit API em thread separada e cacheia.
+        # UI thread nunca faz HTTP sync (evita freeze da mainloop).
+        self._aurum_shadow_poller = None
+        try:
+            from launcher_support.shadow_poller import ShadowPoller
+            from launcher_support.tunnel_registry import set_shadow_poller
+            from launcher_support.engines_live_view import _get_cockpit_client
+            poller = ShadowPoller(
+                client_factory=_get_cockpit_client,
+                engine="millennium",
+                poll_sec=5.0,
+            )
+            poller.start()
+            set_shadow_poller(poller)
+            self._aurum_shadow_poller = poller
+        except Exception:
+            pass
+
     def _configure_windows_dpi(self) -> None:
         """Prefer per-monitor DPI awareness on Windows laptops with scaling."""
         if sys.platform != "win32":
@@ -12941,7 +12959,13 @@ class App(tk.Tk):
             if r:
                 try: sr.stop()
                 except Exception: pass
-        # Clean shutdown do SSH tunnel (ignorar falhas — launcher ta indo embora).
+        # Clean shutdown: shadow poller primeiro, depois tunnel.
+        poller = getattr(self, "_aurum_shadow_poller", None)
+        if poller is not None:
+            try:
+                poller.stop(timeout_sec=1.0)
+            except Exception:
+                pass
         tunnel = getattr(self, "_aurum_tunnel", None)
         if tunnel is not None:
             try:
