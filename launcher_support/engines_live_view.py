@@ -1511,7 +1511,9 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
 
     # Detail pane
     if hb is None:
-        _render_shadow_no_run(layout, launcher)
+        no_run_host = tk.Frame(layout, bg=PANEL)
+        no_run_host.pack(side="left", fill="both", expand=True)
+        _render_shadow_no_run(no_run_host, launcher)
         _schedule_shadow_refresh(launcher, state)
         return
 
@@ -1522,7 +1524,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     def _on_row_click(trade: dict):
         show_signal_detail(launcher, trade)
 
-    render_detail(
+    detail_frame = render_detail(
         parent=layout,
         engine_display=name,
         mode="shadow",
@@ -1536,7 +1538,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
 
     # Actions row — mantem logica de kill do fallback existente
     if status == "RUNNING" and run_dir is not None:
-        actions = tk.Frame(layout, bg=PANEL)
+        actions = tk.Frame(detail_frame, bg=PANEL)
         actions.pack(fill="x", padx=12, pady=(4, 10))
         kill_btn = tk.Label(actions, text=" STOP SHADOW ",
                             fg=BG, bg=RED, font=(FONT, 7, "bold"),
