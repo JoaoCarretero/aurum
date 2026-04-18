@@ -3,6 +3,8 @@ Description=AURUM · Cockpit API (read-only telemetry for shadow/paper/live runn
 Documentation=file:///srv/aurum.finance/docs/superpowers/specs/2026-04-18-cockpit-api-fase1a-design.md
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -29,6 +31,9 @@ ProtectSystem=strict
 ReadOnlyPaths=/srv/aurum.finance
 ReadWritePaths=/srv/aurum.finance/data
 PrivateTmp=yes
+ProtectHome=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
 
 StandardOutput=journal
 StandardError=journal

@@ -69,11 +69,21 @@ echo "[6/7] systemctl enable + start"
 sudo systemctl enable aurum_cockpit_api.service
 sudo systemctl restart aurum_cockpit_api.service
 
-# 7/7: probe
-sleep 3
+# 7/7: probe — retry loop tolera uvicorn boot lento
 echo "[7/7] probe /v1/healthz"
-READ_TOKEN_FROM_ENV=$(sudo grep '^AURUM_COCKPIT_READ_TOKEN=' "${ENV_FILE}" | cut -d= -f2-)
-curl -sf http://127.0.0.1:8787/v1/healthz | python3 -m json.tool
+for i in 1 2 3 4 5; do
+  if curl -sf http://127.0.0.1:8787/v1/healthz >/tmp/cockpit_healthz.json 2>/dev/null; then
+    python3 -m json.tool </tmp/cockpit_healthz.json
+    rm -f /tmp/cockpit_healthz.json
+    break
+  fi
+  if [ "${i}" = "5" ]; then
+    echo "  ERRO: /v1/healthz nao respondeu em 5 tentativas" >&2
+    sudo journalctl -u aurum_cockpit_api.service --no-pager -n 30 >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 echo
 echo "=== tudo pronto ==="
