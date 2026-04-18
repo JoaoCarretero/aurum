@@ -24,8 +24,18 @@ if [ ! -f "${UNIT_SRC}" ]; then
   exit 1
 fi
 
-# 1/7: smoke — imports OK
-echo "[1/7] smoke: python3 -c 'from tools.cockpit_api import build_app'"
+# 1/8: deps — fastapi + uvicorn (pinned em pyproject.toml)
+echo "[1/8] verificando fastapi + uvicorn"
+if ! python3 -c "import fastapi, uvicorn" 2>/dev/null; then
+  echo "  instalando fastapi>=0.100,<1 uvicorn>=0.23,<1"
+  # Tenta pip normal; fallback --break-system-packages pra Debian/Ubuntu PEP 668
+  sudo python3 -m pip install --quiet 'fastapi>=0.100,<1' 'uvicorn>=0.23,<1' 2>/dev/null \
+    || sudo python3 -m pip install --quiet --break-system-packages 'fastapi>=0.100,<1' 'uvicorn>=0.23,<1'
+fi
+echo "  OK"
+
+# 2/8: smoke — imports OK
+echo "[2/8] smoke: python3 -c 'from tools.cockpit_api import build_app'"
 (cd "${REPO_PATH}" && python3 -c "
 import os
 os.environ.setdefault('AURUM_COCKPIT_READ_TOKEN','dummy')
@@ -34,13 +44,13 @@ from tools.cockpit_api import build_app
 build_app()
 ") && echo "  OK"
 
-# 2/7: dir /etc/aurum
-echo "[2/7] mkdir -p ${ENV_DIR}"
+# 3/8: dir /etc/aurum
+echo "[3/8] mkdir -p ${ENV_DIR}"
 sudo mkdir -p "${ENV_DIR}"
 
-# 3/7: gera tokens (se env file nao existir)
+# 4/8: gera tokens (se env file nao existir)
 if [ ! -f "${ENV_FILE}" ]; then
-  echo "[3/7] gerando tokens em ${ENV_FILE}"
+  echo "[4/8] gerando tokens em ${ENV_FILE}"
   READ_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")
   ADMIN_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")
   sudo tee "${ENV_FILE}" >/dev/null <<EOF
@@ -50,27 +60,30 @@ EOF
   sudo chmod 600 "${ENV_FILE}"
   echo "  OK (tokens novos — vais precisar copiar pro launcher local)"
 else
-  echo "[3/7] ${ENV_FILE} ja existe — preservando tokens existentes"
+  echo "[4/8] ${ENV_FILE} ja existe — preservando tokens existentes"
 fi
 
-# 4/7: instala unit
-echo "[4/7] instalando ${UNIT_DST}"
+# 5/8: instala unit
+echo "[5/8] instalando ${UNIT_DST}"
 sed \
   -e "s|^User=.*|User=${SERVICE_USER}|" \
   -e "s|^WorkingDirectory=.*|WorkingDirectory=${REPO_PATH}|" \
   "${UNIT_SRC}" | sudo tee "${UNIT_DST}" >/dev/null
 
-# 5/7: reload
-echo "[5/7] systemctl daemon-reload"
+# 6/8: reload
+echo "[6/8] systemctl daemon-reload"
 sudo systemctl daemon-reload
 
-# 6/7: enable + start
-echo "[6/7] systemctl enable + start"
+# 7/8: reset-failed + enable + restart
+# reset-failed limpa estado caso StartLimitBurst=5 tenha sido atingido antes
+# (ex.: deploy anterior falhou por dep faltando e travou o service em failed)
+echo "[7/8] systemctl reset-failed + enable + restart"
+sudo systemctl reset-failed aurum_cockpit_api.service 2>/dev/null || true
 sudo systemctl enable aurum_cockpit_api.service
 sudo systemctl restart aurum_cockpit_api.service
 
-# 7/7: probe — retry loop tolera uvicorn boot lento
-echo "[7/7] probe /v1/healthz"
+# 8/8: probe — retry loop tolera uvicorn boot lento
+echo "[8/8] probe /v1/healthz"
 for i in 1 2 3 4 5; do
   if curl -sf http://127.0.0.1:8787/v1/healthz >/tmp/cockpit_healthz.json 2>/dev/null; then
     python3 -m json.tool </tmp/cockpit_healthz.json
