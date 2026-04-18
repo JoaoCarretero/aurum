@@ -55,6 +55,24 @@ _TICKER_LOCK = threading.Lock()
 _VPS_CFG_CACHE: dict[str, object] = {"mtime": None, "value": None}
 
 
+def _normalize_vps_host_user(host: str, user: str) -> tuple[str, str]:
+    clean_host = str(host or "").strip()
+    clean_user = str(user or "root").strip() or "root"
+    if "@" in clean_host:
+        embedded_user, embedded_host = clean_host.split("@", 1)
+        if embedded_host.strip():
+            clean_host = embedded_host.strip()
+        if embedded_user.strip():
+            clean_user = embedded_user.strip()
+    return clean_host, clean_user
+
+
+def _require_vps_host(cfg: dict[str, str]) -> dict[str, str]:
+    if str(cfg.get("host") or "").strip():
+        return cfg
+    raise ValueError("VPS host is not configured in config/vps.json")
+
+
 def canonical_engine_key(name) -> str:
     raw = str(name or "").strip().lower().replace(" ", "_")
     return LEGACY_ENGINE_ALIASES.get(raw, raw)
@@ -84,8 +102,10 @@ def load_vps_config() -> dict[str, str]:
         except (OSError, json.JSONDecodeError):
             data = {}
 
-    host = str(data.get("host") or "").strip()
-    user = str(data.get("user") or "root").strip() or "root"
+    host, user = _normalize_vps_host_user(
+        str(data.get("host") or "").strip(),
+        str(data.get("user") or "root").strip() or "root",
+    )
     port = str(data.get("port") or "22").strip() or "22"
     remote_dir = str(data.get("remote_dir") or VPS_PROJECT).strip() or VPS_PROJECT
     key_path = str(data.get("key_path") or "").strip()
@@ -95,7 +115,7 @@ def load_vps_config() -> dict[str, str]:
         "port": port,
         "key_path": key_path,
         "remote_dir": remote_dir,
-        "host_display": f"{user}@{host}" if host else VPS_HOST,
+        "host_display": f"{user}@{host}" if host else "UNCONFIGURED",
     }
     _VPS_CFG_CACHE["mtime"] = mtime
     _VPS_CFG_CACHE["value"] = dict(value)
@@ -111,7 +131,7 @@ def current_vps_project() -> str:
 
 
 def build_vps_ssh_command(cmd: str) -> list[str]:
-    cfg = load_vps_config()
+    cfg = _require_vps_host(load_vps_config())
     argv = [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
@@ -162,7 +182,7 @@ def run_vps_cmd(cmd: str, timeout: int = 10) -> str | None:
         if r.returncode == 0:
             return r.stdout
         return None
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (ValueError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
 

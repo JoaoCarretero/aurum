@@ -78,10 +78,10 @@ def footer_hints(*, selected_bucket: Bucket | None, mode: str) -> tuple[str, str
 
 def cockpit_summary(*, mode: str, live_count: int, ready_count: int, research_count: int) -> list[tuple[str, str, str]]:
     return [
-        ("DESK", mode.upper(), _MODE_COLORS.get(mode, CYAN)),
         ("RUNNING", str(live_count), GREEN if live_count else DIM2),
         ("READY", str(ready_count), AMBER_B if ready_count else DIM2),
         ("RESEARCH", str(research_count), WHITE if research_count else DIM2),
+        ("DESK", mode.upper(), _MODE_COLORS.get(mode, CYAN)),
     ]
 
 
@@ -93,6 +93,16 @@ def bucket_title(bucket: Bucket) -> str:
     }[bucket]
 
 
+def bucket_header_title(title: str) -> str:
+    if title == "LIVE":
+        return "RUNNING NOW"
+    if title == "READY LIVE":
+        return "READY TO LAUNCH"
+    if title == "EXPERIMENTAL":
+        return "EXPERIMENTAL"
+    return "RESEARCH ONLY"
+
+
 def row_action_label(bucket: Bucket, meta: dict | None) -> tuple[str, str]:
     if bucket == "LIVE":
         return ("MONITOR", GREEN)
@@ -101,6 +111,24 @@ def row_action_label(bucket: Bucket, meta: dict | None) -> tuple[str, str]:
             return ("BOOTSTRAP", AMBER)
         return ("LAUNCH", GREEN)
     return ("BACKTEST", DIM2)
+
+
+def initial_selection(
+    *,
+    live_items: list[tuple],
+    ready_items: list[tuple],
+    research_items: list[tuple],
+    experimental_items: list[tuple],
+) -> tuple[str, Bucket] | None:
+    if live_items:
+        return str(live_items[0][0]), "LIVE"
+    if ready_items:
+        return str(ready_items[0][0]), "READY"
+    if research_items:
+        return str(research_items[0][0]), "RESEARCH"
+    if experimental_items:
+        return str(experimental_items[0][0]), "RESEARCH"
+    return None
 
 
 def assign_bucket(*, slug: str, is_running: bool, live_ready: bool, live_bootstrap: bool = False) -> Bucket:
@@ -497,17 +525,17 @@ def _render_master_list(state, launcher):
     canvas.pack(side="left", fill="both", expand=True)
     vbar.pack(side="right", fill="y")
 
-    # Default selection: first LIVE, else first READY, else first RESEARCH
+    # Default selection: first LIVE, else first READY, else first RESEARCH,
+    # falling back to the EXPERIMENTAL cluster when it is the only content.
     if state.get("selected_slug") is None:
-        if live_items:
-            state["selected_slug"] = live_items[0][0]
-            state["selected_bucket"] = "LIVE"
-        elif ready_items:
-            state["selected_slug"] = ready_items[0][0]
-            state["selected_bucket"] = "READY"
-        elif research_items:
-            state["selected_slug"] = research_items[0][0]
-            state["selected_bucket"] = "RESEARCH"
+        selected = initial_selection(
+            live_items=live_items,
+            ready_items=ready_items,
+            research_items=research_items,
+            experimental_items=experimental_items,
+        )
+        if selected is not None:
+            state["selected_slug"], state["selected_bucket"] = selected
 
     _render_bucket(inner, "LIVE", live_items, state)
     _render_bucket(inner, "READY LIVE", ready_items, state)
@@ -550,11 +578,11 @@ def _render_summary_row(state, *, live_count: int, ready_count: int, research_co
 def _render_bucket(parent, title, items, state):
     if not items:
         return
-    bucket = "LIVE" if title == "LIVE" else "RESEARCH" if title == "RESEARCH" else "READY"
+    bucket = "LIVE" if title == "LIVE" else "RESEARCH" if title in ("RESEARCH", "EXPERIMENTAL") else "READY"
     header = tk.Frame(parent, bg=BG)
     header.pack(fill="x", pady=(8, 2))
     tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
-    tk.Label(header, text=bucket_title(bucket), font=(FONT, 7, "bold"),
+    tk.Label(header, text=bucket_header_title(title), font=(FONT, 7, "bold"),
              fg=AMBER, bg=BG).pack(side="left")
     tk.Label(header, text=f"  · {len(items)}", font=(FONT, 7),
              fg=DIM, bg=BG).pack(side="left")
@@ -659,8 +687,6 @@ def _render_row_live(parent, slug, meta, proc, state):
     row = _row_base(parent, slug, state, is_selected=sel)
     bg = row["bg"]
     stage_label, stage_color = _stage_badge(meta)
-    action_label, action_color = row_action_label("RESEARCH", meta)
-    action_label, action_color = row_action_label("READY", meta)
     action_label, action_color = row_action_label("LIVE", meta)
     tk.Label(row, text="●", fg=GREEN, bg=bg,
              font=(FONT, 9, "bold"), padx=4).pack(side="left")
@@ -670,9 +696,6 @@ def _render_row_live(parent, slug, meta, proc, state):
              fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
              padx=4, pady=1).pack(side="left", padx=(6, 0))
     tk.Label(row, text=action_label,
-             fg=action_color, bg=bg, font=(FONT, 6, "bold")
-             ).pack(side="right", padx=(0, 8))
-    tk.Label(row, text=f" {action_label} ",
              fg=action_color, bg=bg, font=(FONT, 6, "bold")
              ).pack(side="right", padx=(0, 8))
     mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
@@ -739,7 +762,7 @@ def _render_row_research(parent, slug, meta, state):
 def _subtitle_for(slug, meta) -> str:
     """Tagline fallback — extended later to read DB / BRIEFINGS."""
     desc = meta.get("desc") or ""
-    return desc[:44]
+    return desc[:32]
 
 
 def _render_detail(state, launcher):

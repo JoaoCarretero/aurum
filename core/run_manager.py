@@ -455,6 +455,28 @@ def list_runs(engine=None, last_n=20) -> list[dict]:
     return index[-last_n:]
 
 
+def _resolve_compare_run_dir(run_id: str) -> Path:
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return RUNS_DIR
+
+    direct = Path(run_id)
+    if direct.exists():
+        return direct
+
+    for row in reversed(_load_index()):
+        if str(row.get("run_id") or "").strip() != run_id:
+            continue
+        explicit_run_dir = str(row.get("run_dir") or "").strip()
+        if explicit_run_dir:
+            return Path(explicit_run_dir)
+        summary_path = str(row.get("summary_path") or "").strip()
+        if summary_path:
+            return Path(summary_path).parent
+
+    return RUNS_DIR / run_id
+
+
 # ── 7. compare_runs ───────────────────────────────────────────────────────
 
 def compare_runs(run_id_a: str, run_id_b: str) -> dict:
@@ -462,8 +484,8 @@ def compare_runs(run_id_a: str, run_id_b: str) -> dict:
 
     Returns {metrics_diff, config_diff, trade_count_diff}.
     """
-    dir_a = RUNS_DIR / run_id_a
-    dir_b = RUNS_DIR / run_id_b
+    dir_a = _resolve_compare_run_dir(run_id_a)
+    dir_b = _resolve_compare_run_dir(run_id_b)
 
     cfg_a = _load_json(dir_a / "config.json", {})
     cfg_b = _load_json(dir_b / "config.json", {})

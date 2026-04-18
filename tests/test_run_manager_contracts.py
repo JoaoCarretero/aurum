@@ -308,7 +308,7 @@ class TestListRuns:
 class TestCompareRuns:
     def _mkrun_with_files(self, runs, name, *, config, summary, trades):
         d = runs / name
-        d.mkdir()
+        d.mkdir(parents=True)
         (d / "config.json").write_text(json.dumps(config), encoding="utf-8")
         (d / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
         (d / "trades.json").write_text(json.dumps(trades), encoding="utf-8")
@@ -347,6 +347,32 @@ class TestCompareRuns:
         self._mkrun_with_files(runs, "B", config={}, summary={},
                                trades=[{"x": 1}])
         diff = rm.compare_runs("A", "B")
+        assert diff["trade_count_diff"] == {"a": 2, "b": 1}
+
+    def test_compare_runs_resolves_explicit_run_dir_from_index(self, isolated_dirs):
+        _, index = isolated_dirs
+        external_root = index.parent / "millennium"
+        run_a = self._mkrun_with_files(
+            external_root,
+            "run_a",
+            config={"X": 1},
+            summary={"sharpe": 2.0},
+            trades=[{"x": 1}, {"x": 2}],
+        )
+        run_b = self._mkrun_with_files(
+            external_root,
+            "run_b",
+            config={"X": 3},
+            summary={"sharpe": 2.5},
+            trades=[{"x": 1}],
+        )
+        index.write_text(json.dumps([
+            {"run_id": "millennium_a", "run_dir": str(run_a)},
+            {"run_id": "millennium_b", "run_dir": str(run_b)},
+        ]), encoding="utf-8")
+
+        diff = rm.compare_runs("millennium_a", "millennium_b")
+        assert diff["metrics_diff"]["sharpe"]["delta"] == pytest.approx(0.5)
         assert diff["trade_count_diff"] == {"a": 2, "b": 1}
 
 

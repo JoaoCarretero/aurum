@@ -88,19 +88,40 @@ class TestCockpitSummaries:
     def test_cockpit_summary_counts(self):
         from launcher_support.engines_live_view import cockpit_summary
         cards = cockpit_summary(mode="paper", live_count=2, ready_count=1, research_count=5)
-        assert cards[0][0] == "DESK"
-        assert cards[0][1] == "PAPER"
-        assert ("RUNNING", "2", cards[1][2]) == cards[1]
+        assert cards[0][0] == "RUNNING"
+        assert cards[0][1] == "2"
+        assert cards[-1] == ("DESK", "PAPER", cards[-1][2])
 
     def test_bucket_titles_are_operational(self):
         from launcher_support.engines_live_view import bucket_title
         assert bucket_title("LIVE") == "RUNNING NOW"
         assert bucket_title("READY") == "READY TO LAUNCH"
+        assert bucket_title("RESEARCH") == "RESEARCH ONLY"
+
+    def test_bucket_header_title_distinguishes_experimental(self):
+        from launcher_support.engines_live_view import bucket_header_title
+        assert bucket_header_title("EXPERIMENTAL") == "EXPERIMENTAL"
+        assert bucket_header_title("READY LIVE") == "READY TO LAUNCH"
 
     def test_row_action_label_bootstrap_ready(self):
         from launcher_support.engines_live_view import row_action_label
         label, _color = row_action_label("READY", {"live_bootstrap": True, "live_ready": False})
         assert label == "BOOTSTRAP"
+
+    def test_initial_selection_falls_back_to_experimental_when_needed(self):
+        from launcher_support.engines_live_view import initial_selection
+        selected = initial_selection(
+            live_items=[],
+            ready_items=[],
+            research_items=[],
+            experimental_items=[("deshaw", {"display": "DE SHAW"})],
+        )
+        assert selected == ("deshaw", "RESEARCH")
+
+    def test_experimental_bucket_uses_research_title(self):
+        title = "EXPERIMENTAL"
+        bucket = "LIVE" if title == "LIVE" else "RESEARCH" if title in ("RESEARCH", "EXPERIMENTAL") else "READY"
+        assert bucket == "RESEARCH"
 
 
 class TestModeCycle:
