@@ -87,3 +87,54 @@ def test_find_latest_shadow_run_local_fallback_when_client_none(tmp_path, monkey
     assert hb["run_id"] == "2026-04-18_0229"
     assert not str(run_dir).startswith("remote://")
     evv._COCKPIT_CLIENT_SINGLETON = None  # cleanup
+
+
+def test_tunnel_status_label_no_manager(monkeypatch):
+    """Sem launcher.get_tunnel_manager → badge ('—', DIM2)."""
+    import launcher_support.engines_live_view as evv
+    # Mock the lazy import to simulate 'launcher' being unimportable
+    # OR just verify current behavior when manager is None
+    monkeypatch.setattr(
+        "launcher.get_tunnel_manager", lambda: None, raising=False)
+    text, _fg = evv._get_tunnel_status_label()
+    assert text == "—"
+
+
+def test_tunnel_status_label_maps_enum_value():
+    """TunnelStatus.UP → label 'UP'."""
+    import launcher_support.engines_live_view as evv
+    from launcher_support.ssh_tunnel import TunnelStatus
+
+    class FakeManager:
+        status = TunnelStatus.UP
+
+    import launcher
+    original = getattr(launcher, "_TUNNEL_MANAGER_SINGLETON", None)
+    try:
+        launcher._TUNNEL_MANAGER_SINGLETON = FakeManager()
+        text, _fg = evv._get_tunnel_status_label()
+        assert text == "UP"
+    finally:
+        launcher._TUNNEL_MANAGER_SINGLETON = original
+
+
+def test_tunnel_status_label_all_states_mapped():
+    """Every TunnelStatus value has a color mapping (no KeyError)."""
+    import launcher_support.engines_live_view as evv
+    from launcher_support.ssh_tunnel import TunnelStatus
+
+    class FakeManager:
+        status = None
+
+    import launcher
+    original = getattr(launcher, "_TUNNEL_MANAGER_SINGLETON", None)
+    try:
+        fm = FakeManager()
+        launcher._TUNNEL_MANAGER_SINGLETON = fm
+        for status in TunnelStatus:
+            fm.status = status
+            text, fg = evv._get_tunnel_status_label()
+            assert text == status.value.upper()
+            assert fg is not None
+    finally:
+        launcher._TUNNEL_MANAGER_SINGLETON = original

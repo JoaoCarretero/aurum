@@ -1096,6 +1096,50 @@ _ENGINE_BADGES: dict[str, str] = {
 }
 
 
+_TUNNEL_MANAGER_SINGLETON = None
+
+
+def _boot_tunnel_manager():
+    """Lazy construct TunnelManager from keys.json -> vps_ssh block.
+
+    Returns None silently if config missing or malformed — launcher
+    keeps working in local-disk mode. See launcher_support/ssh_tunnel.py.
+    """
+    global _TUNNEL_MANAGER_SINGLETON
+    if _TUNNEL_MANAGER_SINGLETON is not None:
+        return _TUNNEL_MANAGER_SINGLETON
+    try:
+        from pathlib import Path as _Path
+        import json as _json
+        keys_path = _Path("config/keys.json")
+        if not keys_path.exists():
+            return None
+        data = _json.loads(keys_path.read_text(encoding="utf-8"))
+        block = data.get("vps_ssh")
+        if not block or not block.get("host"):
+            return None
+        from launcher_support.ssh_tunnel import TunnelConfig, TunnelManager
+        cfg = TunnelConfig(
+            host=block["host"],
+            user=block.get("user", "root"),
+            ssh_port=int(block.get("ssh_port", 22)),
+            local_port=int(block.get("local_port", 8787)),
+            remote_host=block.get("remote_host", "localhost"),
+            remote_port=int(block.get("remote_port", 8787)),
+            key_path=block.get("key_path"),
+        )
+        _TUNNEL_MANAGER_SINGLETON = TunnelManager(
+            cfg, log_dir=_Path("data/.cockpit_cache"))
+        return _TUNNEL_MANAGER_SINGLETON
+    except Exception:
+        return None
+
+
+def get_tunnel_manager():
+    """Public accessor for launcher_support.engines_live_view status indicator."""
+    return _TUNNEL_MANAGER_SINGLETON
+
+
 class App(tk.Tk):
     _SPLASH_DESIGN_W = 920
     _SPLASH_DESIGN_H = 640
@@ -1169,6 +1213,17 @@ class App(tk.Tk):
         self._splash()
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self._quit)
+
+        # SSH tunnel pro cockpit API — lifecycle amarrado no launcher.
+        # Nao bloqueia o boot: o watchdog sobe em thread separada.
+        try:
+            tunnel = _boot_tunnel_manager()
+            if tunnel is not None:
+                tunnel.start()
+                self._aurum_tunnel = tunnel
+        except Exception:
+            # Tunnel falhou -> launcher segue em local-mode.
+            self._aurum_tunnel = None
 
     def _configure_windows_dpi(self) -> None:
         """Prefer per-monitor DPI awareness on Windows laptops with scaling."""
@@ -12880,6 +12935,13 @@ class App(tk.Tk):
             if r:
                 try: sr.stop()
                 except Exception: pass
+        # Clean shutdown do SSH tunnel (ignorar falhas — launcher ta indo embora).
+        tunnel = getattr(self, "_aurum_tunnel", None)
+        if tunnel is not None:
+            try:
+                tunnel.stop(timeout_sec=3.0)
+            except Exception:
+                pass
         self.destroy()
 
 
