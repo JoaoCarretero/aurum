@@ -94,10 +94,35 @@ def test_format_signal_row_direction_variants():
     from launcher_support.engines_sidebar import format_signal_row
     ts = "2026-04-18T12:00"
     assert format_signal_row({"timestamp": ts, "symbol": "X", "direction": "LONG"})["dir"] == "L"
+    assert format_signal_row({"timestamp": ts, "symbol": "X", "direction": "BULL"})["dir"] == "L"
     assert format_signal_row({"timestamp": ts, "symbol": "X", "direction": "BULLISH"})["dir"] == "L"
     assert format_signal_row({"timestamp": ts, "symbol": "X", "direction": "SHORT"})["dir"] == "S"
+    assert format_signal_row({"timestamp": ts, "symbol": "X", "direction": "BEAR"})["dir"] == "S"
     assert format_signal_row({"timestamp": ts, "symbol": "X", "direction": "BEARISH"})["dir"] == "S"
     assert format_signal_row({"timestamp": ts, "symbol": "X", "direction": "???"})["dir"] == "?"
+
+
+def test_format_signal_row_date_only_timestamp_returns_dash():
+    """Reviewer findings: date-only timestamp (sem hora) retornava '2026-' bizarro.
+    Agora retorna '—' pra evitar output enganoso."""
+    from launcher_support.engines_sidebar import format_signal_row
+    cells = format_signal_row({
+        "timestamp": "2026-04-18",
+        "symbol": "BTC",
+        "direction": "LONG",
+    })
+    assert cells["time"] == "—"
+
+
+def test_format_signal_row_short_hh_mm_timestamp():
+    """String curta '12:00' já formatada deve ser preservada."""
+    from launcher_support.engines_sidebar import format_signal_row
+    cells = format_signal_row({
+        "timestamp": "12:00",
+        "symbol": "BTC",
+        "direction": "LONG",
+    })
+    assert cells["time"] == "12:00"
 
 
 def test_result_color_mapping():

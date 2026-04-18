@@ -63,11 +63,21 @@ def build_engine_rows(
 
 
 def _format_time(ts: str) -> str:
-    """Extrai HH:MM de um timestamp ISO ou string arbitrária."""
+    """Extrai HH:MM de um timestamp ISO ou string arbitrária.
+
+    Formato full ISO ("2026-04-18T19:02:15" ou "2026-04-18 19:02:15"):
+    retorna "19:02". Strings já curtas ("12:00"): retornam como estão.
+    Strings date-only ("2026-04-18") não produzem hora — retornam "—"
+    pra evitar output enganoso tipo "2026-".
+    """
     s = str(ts).replace("T", " ")
     if len(s) >= 16 and s[13] == ":":
         return s[11:16]
-    return s[:5]
+    # Short-form HH:MM already — preservar se primeiro char é dígito
+    # e :a quarta posição indica formato de hora.
+    if len(s) >= 5 and s[2] == ":" and s[:2].isdigit():
+        return s[:5]
+    return "—"
 
 
 def _short_symbol(sym: str) -> str:

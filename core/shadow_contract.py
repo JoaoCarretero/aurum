@@ -102,8 +102,8 @@ class TradeRecord(BaseModel):
     omega_momentum: float | None = None
     omega_pullback: float | None = None
 
-    struct: str | None = None
-    struct_str: float | None = None
+    struct: str | None = None             # swing_structure label: "UP" | "DOWN" | ...
+    struct_str: float | None = None       # struct strength 0-1
     rsi: float | None = None
     dist_ema21: float | None = None
     chop_trade: bool | None = None
