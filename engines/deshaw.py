@@ -100,6 +100,36 @@ _PAIR_MIN_TRAIN_TRADES = int(globals().get("NEWTON_PAIR_MIN_TRAIN_TRADES", 3))
 _PAIR_MIN_PROFIT_FACTOR = float(globals().get("NEWTON_PAIR_MIN_PROFIT_FACTOR", 1.1))
 
 
+def _runtime_newton_snapshot() -> dict:
+    """Capture the effective DE SHAW runtime params after CLI overrides."""
+    return {
+        "NEWTON_ZSCORE_ENTRY": float(NEWTON_ZSCORE_ENTRY),
+        "NEWTON_ZSCORE_EXIT": float(NEWTON_ZSCORE_EXIT),
+        "NEWTON_ZSCORE_STOP": float(NEWTON_ZSCORE_STOP),
+        "NEWTON_COINT_PVALUE": float(NEWTON_COINT_PVALUE),
+        "NEWTON_HALFLIFE_MIN": int(NEWTON_HALFLIFE_MIN),
+        "NEWTON_HALFLIFE_MAX": int(NEWTON_HALFLIFE_MAX),
+        "NEWTON_SPREAD_WINDOW": int(NEWTON_SPREAD_WINDOW),
+        "NEWTON_RECALC_EVERY": int(NEWTON_RECALC_EVERY),
+        "NEWTON_MAX_HOLD": int(NEWTON_MAX_HOLD),
+        "NEWTON_SIZE_MULT": float(NEWTON_SIZE_MULT),
+        "NEWTON_MIN_PAIRS": int(NEWTON_MIN_PAIRS),
+    }
+
+
+def _apply_runtime_snapshot_overrides(config: dict, basket_name: str) -> dict:
+    """Patch snapshot_config() output with the effective engine-local runtime."""
+    patched = dict(config)
+    patched.update(_runtime_newton_snapshot())
+    patched["INTERVAL"] = INTERVAL
+    patched["SCAN_DAYS"] = int(SCAN_DAYS)
+    patched["N_CANDLES"] = int(N_CANDLES)
+    patched["LEVERAGE"] = float(LEVERAGE)
+    patched["SYMBOLS"] = list(SYMBOLS)
+    patched["BASKET_EFFECTIVE"] = basket_name
+    return patched
+
+
 def _pair_stats_from_prices(a: np.ndarray, b: np.ndarray) -> dict | None:
     if not HAS_STATSMODELS:
         return None
@@ -1370,8 +1400,7 @@ if __name__ == "__main__":
     from core.run_manager import snapshot_config, save_run_artifacts, append_to_index
 
     roi = ratios["ret"]
-    _config = snapshot_config()
-    _config["BASKET_EFFECTIVE"] = BASKET_NAME
+    _config = _apply_runtime_snapshot_overrides(snapshot_config(), BASKET_NAME)
     _summary = {
         "basket": BASKET_NAME,
         "n_trades": len(closed),
