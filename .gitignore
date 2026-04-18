@@ -6,6 +6,9 @@ __pycache__/
 
 # Data outputs (grandes, nao versionar)
 data/
+# EXCEPTION: refactor baselines (small, must be versioned for regression tests)
+!data/refactor_baseline/
+!data/refactor_baseline/**
 
 # Logs
 *.log
