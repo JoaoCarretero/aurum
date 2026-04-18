@@ -101,3 +101,81 @@ def test_poller_thread_stays_alive_on_client_exception():
     assert poller._thread.is_alive()
     poller.stop(timeout_sec=0.5)
     assert poller.last_error is not None
+
+
+def test_poll_caches_trades():
+    """Poll com sucesso popula o cache de trades alem do heartbeat."""
+    from launcher_support.shadow_poller import ShadowPoller
+    client = MagicMock()
+    client.latest_run.return_value = {
+        "run_id": "r3", "status": "running", "novel_total": 3,
+        "last_tick_at": None,
+    }
+    client.get_heartbeat.return_value = {
+        "run_id": "r3", "status": "running",
+        "ticks_ok": 1, "ticks_fail": 0, "novel_total": 3,
+        "last_tick_at": None, "last_error": None, "tick_sec": 900,
+    }
+    client.get_trades.return_value = {
+        "run_id": "r3", "count": 2,
+        "trades": [
+            {"timestamp": "2026-04-18T03:00:00", "symbol": "BTCUSDT",
+             "strategy": "citadel", "direction": "long", "entry": 50000.0},
+            {"timestamp": "2026-04-18T03:05:00", "symbol": "ETHUSDT",
+             "strategy": "jump", "direction": "short", "entry": 3200.5},
+        ],
+    }
+    poller = ShadowPoller(client_factory=lambda: client)
+    poller._poll_once()
+
+    trades = poller.get_trades_cached()
+    assert len(trades) == 2
+    assert trades[0]["symbol"] == "BTCUSDT"
+    assert trades[1]["direction"] == "short"
+
+    # get_cached mantem a tupla (virtual_dir, heartbeat) pra compat.
+    cached = poller.get_cached()
+    assert cached is not None
+    virtual_dir, hb = cached
+    assert hb["run_id"] == "r3"
+    assert "r3" in str(virtual_dir).replace("\\", "/")
+
+    # snapshot retorna tudo junto.
+    snap = poller.get_snapshot()
+    assert snap is not None
+    assert snap.heartbeat["run_id"] == "r3"
+    assert len(snap.trades) == 2
+
+    # get_trades foi chamado com limit padrao (20).
+    client.get_trades.assert_called_once()
+    assert client.get_trades.call_args.kwargs.get("limit") == 20
+
+
+def test_poll_trades_failure_keeps_heartbeat():
+    """Se get_trades levanta, heartbeat persiste e trades_cached = []."""
+    from launcher_support.shadow_poller import ShadowPoller
+    client = MagicMock()
+    client.latest_run.return_value = {
+        "run_id": "r4", "status": "running", "novel_total": 0,
+        "last_tick_at": None,
+    }
+    client.get_heartbeat.return_value = {
+        "run_id": "r4", "status": "running",
+        "ticks_ok": 7, "ticks_fail": 0, "novel_total": 0,
+        "last_tick_at": "2026-04-18T03:10:00",
+        "last_error": None, "tick_sec": 900,
+    }
+    client.get_trades.side_effect = OSError("trades endpoint down")
+    poller = ShadowPoller(client_factory=lambda: client)
+    poller._poll_once()
+
+    # heartbeat foi cacheado com sucesso.
+    cached = poller.get_cached()
+    assert cached is not None
+    _, hb = cached
+    assert hb["ticks_ok"] == 7
+    assert hb["run_id"] == "r4"
+    # trades vira lista vazia, nao trava o poll.
+    assert poller.get_trades_cached() == []
+    # last_error fica limpo porque heartbeat deu certo — trades e bonus.
+    assert poller.last_error is None

@@ -32,9 +32,9 @@ from core.ui_palette import (
 )
 
 Bucket = Literal["LIVE", "READY", "RESEARCH"]
-Mode = Literal["paper", "demo", "testnet", "live"]
+Mode = Literal["paper", "demo", "testnet", "live", "shadow"]
 
-_MODE_ORDER: tuple[Mode, ...] = ("paper", "demo", "testnet", "live")
+_MODE_ORDER: tuple[Mode, ...] = ("paper", "demo", "testnet", "live", "shadow")
 _DEFAULT_MODE: Mode = "paper"
 _DEFAULT_STATE_PATH = Path("data/ui_state.json")
 
@@ -43,6 +43,9 @@ _MODE_COLORS: dict[Mode, str] = {
     "demo":    MODE_DEMO,
     "testnet": MODE_TESTNET,
     "live":    MODE_LIVE,
+    # SHADOW e observacional — usa amber distinto do vermelho LIVE pra
+    # deixar claro que nao executa ordens reais, so le o VPS.
+    "shadow":  AMBER_B,
 }
 _STAGE_STYLE: dict[str, tuple[str, str]] = {
     "validated": ("VALIDATED", GREEN),
@@ -469,6 +472,30 @@ def _refresh_footer(state):
     state["footer_warn_lbl"].configure(text=warn)
 
 
+def _shadow_active_slugs() -> set[str]:
+    """Return the set of engine slugs with an active shadow run visible.
+
+    Hoje so MILLENNIUM roda no cockpit API — o poller inteiro hardcoda
+    engine='millennium'. Se o cache tem payload, o slug esta ativo.
+    Futuro-proof: quando houver mais shadow runners, iterar pollers
+    registrados no tunnel_registry em vez de hardcode.
+    """
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        return set()
+    if poller is None:
+        return set()
+    try:
+        cached = poller.get_cached()
+    except Exception:
+        return set()
+    if cached is None:
+        return set()
+    return {"millennium"}
+
+
 def _render_master_list(state, launcher):
     """Mount the 3-bucket master list on state['master_host']."""
     host = state["master_host"]
@@ -480,6 +507,12 @@ def _render_master_list(state, launcher):
     )
     procs = _list_procs_cached()
     running = running_slugs_from_procs(procs)
+
+    # No modo SHADOW, so engines com shadow run visivel no poller
+    # aparecem. Quando nao ha nenhum, todos os buckets ficam vazios e
+    # a detail pane renderiza seu empty-state dedicado.
+    is_shadow_mode = state.get("mode") == "shadow"
+    shadow_slugs = _shadow_active_slugs() if is_shadow_mode else set()
 
     live_items: list[tuple[str, dict, dict]] = []
     ready_items: list[tuple[str, dict]] = []
@@ -505,6 +538,13 @@ def _render_master_list(state, launcher):
             experimental_items.append((slug, meta))
         else:
             research_items.append((slug, meta))
+
+    if is_shadow_mode:
+        live_items = [t for t in live_items if t[0] in shadow_slugs]
+        ready_items = [t for t in ready_items if t[0] in shadow_slugs]
+        research_items = [t for t in research_items if t[0] in shadow_slugs]
+        experimental_items = [
+            t for t in experimental_items if t[0] in shadow_slugs]
 
     state["live_running_slugs"] = [slug for slug, _meta, _proc in live_items]
     state["ordered_items"] = (
@@ -772,6 +812,23 @@ def _render_detail(state, launcher):
 
     slug = state.get("selected_slug")
     bucket = state.get("selected_bucket")
+
+    # SHADOW mode: dedicated render path regardless of bucket — the master
+    # list only contains engines with an active shadow run (filtered in
+    # _render_master_list), and the detail pane has its own layout focused
+    # on telemetry from the VPS cockpit API.
+    if state.get("mode") == "shadow":
+        if not slug:
+            _render_shadow_empty_state(host, launcher, state)
+            return
+        from config.engines import ENGINES
+        meta = ENGINES.get(slug, {})
+        card = tk.Frame(host, bg=PANEL,
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill="both", expand=True)
+        _render_detail_shadow(card, slug, meta, state, launcher)
+        return
+
     if not slug:
         tk.Label(host, text="(no selection)", fg=DIM, bg=BG,
                  font=(FONT, 8)).pack(pady=20)
@@ -1373,6 +1430,290 @@ def _refresh_shadow_panel(launcher, state) -> None:
     _render_shadow_panel(parent, launcher, state, "millennium")
 
 
+# ─── SHADOW mode detail view ───────────────────────────────────────
+# Layout completo dedicado pro modo SHADOW. Le do ShadowPoller cache
+# (nunca bloqueia o UI thread) e se auto-refresh a cada 5s via
+# launcher.after. Se a cache esta vazia, renderiza empty-state.
+
+def _render_detail_shadow(parent, slug, meta, state, launcher):
+    """Render the full SHADOW cockpit for `slug`.
+
+    Secoes top-to-bottom:
+      1. HEADER — engine name + TUNNEL badge + STATUS pill
+      2. HEALTH — TICKS OK / FAIL / SIGNALS / TICK com subtitles
+      3. RUN INFO — run_id, last_tick, last_error
+      4. LAST SIGNALS — table das ultimas 10 trades do /trades endpoint
+      5. ACTIONS — STOP SHADOW button (se RUNNING)
+    """
+    name = meta.get("display", slug.upper())
+
+    # Le cache do poller (instantaneo, thread-safe).
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        poller = None
+    cached = poller.get_cached() if poller is not None else None
+    try:
+        trades = (poller.get_trades_cached()
+                  if poller is not None else [])
+    except Exception:
+        trades = []
+
+    # ── SECTION 1: HEADER ──────────────────────────────────────
+    header = tk.Frame(parent, bg=PANEL)
+    header.pack(fill="x", padx=12, pady=(10, 8))
+    tk.Label(header, text=name, font=(FONT, 12, "bold"),
+             fg=WHITE, bg=PANEL).pack(side="left")
+    tun_text, tun_fg = _get_tunnel_status_label()
+    tk.Label(header, text="  TUNNEL:", fg=DIM2, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left", padx=(14, 0))
+    tk.Label(header, text=f" {tun_text}", fg=tun_fg, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left")
+
+    if cached is None:
+        _render_shadow_no_run(parent, launcher)
+        # Mesmo sem run ativo, re-tenta em 5s — o runner pode subir a
+        # qualquer momento.
+        _schedule_shadow_refresh(launcher, state)
+        return
+
+    run_dir, hb = cached
+    status = str(hb.get("status") or "unknown").upper()
+    status_color = GREEN if status == "RUNNING" else DIM2
+    tk.Label(header, text=f" {status} ", fg=BG, bg=status_color,
+             font=(FONT, 7, "bold"), padx=6).pack(side="right")
+
+    # ── SECTION 2: HEALTH ──────────────────────────────────────
+    health = tk.Frame(parent, bg=PANEL)
+    health.pack(fill="x", padx=12, pady=(4, 8))
+    tk.Label(health, text="HEALTH", font=(FONT, 7, "bold"),
+             fg=AMBER, bg=PANEL).pack(anchor="w", pady=(0, 4))
+    tk.Frame(health, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+
+    metrics_row = tk.Frame(health, bg=PANEL)
+    metrics_row.pack(fill="x")
+    fail_n = int(hb.get("ticks_fail", 0) or 0)
+    _shadow_metric_card(metrics_row, "TICKS OK",
+                        str(hb.get("ticks_ok", 0)),
+                        "ciclos completos",
+                        GREEN)
+    _shadow_metric_card(metrics_row, "TICKS FAIL",
+                        str(fail_n),
+                        "falhas de conexao",
+                        RED if fail_n > 0 else DIM2)
+    _shadow_metric_card(metrics_row, "SIGNALS",
+                        str(hb.get("novel_total", 0)),
+                        "sinais detectados",
+                        AMBER_B)
+    _shadow_metric_card(metrics_row, "TICK",
+                        f"{int(hb.get('tick_sec', 0) or 0)}s",
+                        "gap entre analises",
+                        WHITE)
+
+    # ── SECTION 3: RUN INFO ────────────────────────────────────
+    info_section = tk.Frame(parent, bg=PANEL)
+    info_section.pack(fill="x", padx=12, pady=(4, 8))
+    tk.Label(info_section, text="RUN INFO", font=(FONT, 7, "bold"),
+             fg=AMBER, bg=PANEL).pack(anchor="w", pady=(0, 4))
+    tk.Frame(info_section, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+
+    run_id = hb.get("run_id", "?")
+    source = "REMOTE" if _is_remote_run(run_dir) else "LOCAL"
+    last = hb.get("last_tick_at") or hb.get("stopped_at") or "—"
+    _shadow_info_row(info_section, "RUN ID", f"[{source}] {run_id}")
+    _shadow_info_row(info_section, "LAST TICK", str(last))
+    last_err = hb.get("last_error")
+    if last_err:
+        _shadow_info_row(info_section, "LAST ERROR", str(last_err), fg=RED)
+
+    # ── SECTION 4: LAST SIGNALS ────────────────────────────────
+    signals_section = tk.Frame(parent, bg=PANEL)
+    signals_section.pack(fill="both", expand=True, padx=12, pady=(4, 8))
+    header_row = tk.Frame(signals_section, bg=PANEL)
+    header_row.pack(fill="x", pady=(0, 4))
+    tk.Label(header_row, text="LAST SIGNALS", font=(FONT, 7, "bold"),
+             fg=AMBER, bg=PANEL).pack(side="left")
+    shown = min(len(trades), 10)
+    tk.Label(header_row, text=f"  · {shown} shown",
+             fg=DIM2, bg=PANEL, font=(FONT, 7)).pack(side="left", padx=(6, 0))
+    tk.Frame(signals_section, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+
+    # trades do endpoint vem ordenados por timestamp — mostra newest-first.
+    _render_signals_table(signals_section,
+                          trades[-10:][::-1] if trades else [])
+
+    # ── SECTION 5: ACTIONS ─────────────────────────────────────
+    if status == "RUNNING":
+        actions = tk.Frame(parent, bg=PANEL)
+        actions.pack(fill="x", padx=12, pady=(4, 10))
+        kill_btn = tk.Label(actions, text=" STOP SHADOW ",
+                            fg=BG, bg=RED, font=(FONT, 7, "bold"),
+                            cursor="hand2", padx=10, pady=4)
+        kill_btn.pack(side="left")
+        kill_btn.bind("<Button-1>",
+                      lambda _e, _d=run_dir, _s=state:
+                          _drop_shadow_kill(_d, launcher, _s))
+
+    # Poller atualiza cache a cada 5s. Re-renderiza a detail pane pra
+    # pegar novos dados (metrics, trades, status transitions).
+    _schedule_shadow_refresh(launcher, state)
+
+
+def _schedule_shadow_refresh(launcher, state) -> None:
+    """Agenda re-render em 5s. Idempotente entre renders (cada render gera
+    um novo after_handle, o refresh quebra a cadeia quando o modo muda)."""
+    try:
+        aid = launcher.after(5000,
+                             lambda: _refresh_shadow_detail(launcher, state))
+        state.setdefault("after_handles", []).append(aid)
+    except Exception:
+        pass
+
+
+def _refresh_shadow_detail(launcher, state) -> None:
+    """Rebuild the detail pane from the latest poller cache.
+
+    Sai cedo se o user navegou pra outro modo — evita rodar de novo
+    quando o detail pane ja nao e shadow. Caso contrario reusa
+    _render_detail que ja faz o roteamento de modo corretamente.
+    """
+    if state.get("mode") != "shadow":
+        return
+    try:
+        # Se o master_host nao existe mais (cockpit desmontado), aborta.
+        host = state.get("detail_host")
+        if host is None or not host.winfo_exists():
+            return
+    except Exception:
+        return
+    _render_detail(state, launcher)
+
+
+def _shadow_metric_card(parent, label, value, subtitle, color):
+    """Cartao compacto com titulo + valor + subtitulo explicativo."""
+    card = tk.Frame(parent, bg=BG2,
+                    highlightbackground=BORDER, highlightthickness=1)
+    card.pack(side="left", fill="both", expand=True, padx=(0, 6))
+    tk.Label(card, text=label, fg=DIM2, bg=BG2,
+             font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(6, 1))
+    tk.Label(card, text=value, fg=color, bg=BG2,
+             font=(FONT, 11, "bold")).pack(anchor="w", padx=8, pady=(0, 0))
+    tk.Label(card, text=subtitle, fg=DIM, bg=BG2,
+             font=(FONT, 6)).pack(anchor="w", padx=8, pady=(0, 6))
+
+
+def _shadow_info_row(parent, key, value, fg=WHITE):
+    row = tk.Frame(parent, bg=PANEL)
+    row.pack(fill="x", pady=(0, 2))
+    tk.Label(row, text=f"{key}:", fg=DIM2, bg=PANEL,
+             font=(FONT, 7, "bold"), width=12, anchor="w").pack(
+                 side="left", padx=(0, 4))
+    tk.Label(row, text=str(value), fg=fg, bg=PANEL,
+             font=(FONT, 7), anchor="w").pack(
+                 side="left", fill="x", expand=True)
+
+
+def _render_signals_table(parent, trades):
+    """Render compact table of signals. `trades` ordered newest-first."""
+    if not trades:
+        tk.Label(parent,
+                 text="(sem sinais ainda — aguardando primeiros ticks)",
+                 fg=DIM, bg=PANEL, font=(FONT, 7, "italic")).pack(
+                     anchor="w", pady=(4, 4))
+        return
+    # Header row
+    hdr = tk.Frame(parent, bg=BG2)
+    hdr.pack(fill="x", pady=(2, 0))
+    cols = [("TIME", 16), ("SYMBOL", 10), ("STRAT", 10),
+            ("DIR", 6), ("ENTRY", 12)]
+    for col_name, w in cols:
+        tk.Label(hdr, text=col_name, fg=DIM2, bg=BG2,
+                 font=(FONT, 6, "bold"),
+                 width=w, anchor="w").pack(side="left", padx=(4, 0))
+    # Data rows
+    for trade in trades:
+        row = tk.Frame(parent, bg=PANEL)
+        row.pack(fill="x", pady=(1, 0))
+        ts_raw = str(trade.get("timestamp", "—"))
+        ts = ts_raw[:19].replace("T", " ")
+        symbol = str(trade.get("symbol", "—"))
+        strat = str(trade.get("strategy", "—"))[:10]
+        direction = str(trade.get("direction", "—"))
+        dir_upper = direction.upper()
+        if dir_upper == "LONG":
+            dir_color = GREEN
+        elif dir_upper == "SHORT":
+            dir_color = RED
+        else:
+            dir_color = DIM
+        entry = trade.get("entry")
+        try:
+            entry_str = (f"{float(entry):,.4f}"
+                         if entry is not None else "—")
+        except (TypeError, ValueError):
+            entry_str = str(entry)[:12]
+        tk.Label(row, text=ts, fg=DIM, bg=PANEL, font=(FONT, 6),
+                 width=16, anchor="w").pack(side="left", padx=(4, 0))
+        tk.Label(row, text=symbol, fg=WHITE, bg=PANEL,
+                 font=(FONT, 6, "bold"),
+                 width=10, anchor="w").pack(side="left", padx=(4, 0))
+        tk.Label(row, text=strat, fg=DIM, bg=PANEL, font=(FONT, 6),
+                 width=10, anchor="w").pack(side="left", padx=(4, 0))
+        tk.Label(row, text=direction, fg=dir_color, bg=PANEL,
+                 font=(FONT, 6, "bold"),
+                 width=6, anchor="w").pack(side="left", padx=(4, 0))
+        tk.Label(row, text=entry_str, fg=WHITE, bg=PANEL, font=(FONT, 6),
+                 width=12, anchor="w").pack(side="left", padx=(4, 0))
+
+
+def _render_shadow_no_run(parent, launcher):
+    """Empty state: slug selecionado mas sem cache do poller."""
+    box = tk.Frame(parent, bg=PANEL)
+    box.pack(fill="both", expand=True, padx=20, pady=20)
+    tk.Label(box, text="NO SHADOW RUN VISIBLE", fg=DIM, bg=PANEL,
+             font=(FONT, 10, "bold")).pack(anchor="w")
+    tk.Label(box,
+             text=("Nenhum shadow run detectado via cockpit API.\n\n"
+                   "Verifica:\n"
+                   "  · TUNNEL status (precisa estar UP)\n"
+                   "  · shadow runner no VPS ativo:\n"
+                   "    sudo systemctl status millennium_shadow.service\n"
+                   "\n"
+                   "Pra iniciar manual:\n"
+                   "    python tools/millennium_shadow.py "
+                   "--tick-sec 900 --run-hours 24"),
+             fg=DIM2, bg=PANEL, font=(FONT, 7), justify="left",
+             anchor="w").pack(anchor="w", pady=(6, 0))
+
+
+def _render_shadow_empty_state(parent, launcher, state):
+    """Sem slug selecionado (nenhum engine tem shadow run ativo)."""
+    box = tk.Frame(parent, bg=BG)
+    box.pack(fill="both", expand=True, padx=20, pady=20)
+    tk.Label(box, text="SHADOW MODE", fg=AMBER, bg=BG,
+             font=(FONT, 12, "bold")).pack(anchor="w")
+    tun_text, tun_fg = _get_tunnel_status_label()
+    row = tk.Frame(box, bg=BG)
+    row.pack(fill="x", pady=(4, 12))
+    tk.Label(row, text="TUNNEL: ", fg=DIM2, bg=BG,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(row, text=tun_text, fg=tun_fg, bg=BG,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(box,
+             text=("Shadow roda estrategias no VPS em modo observacional:\n"
+                   "simula trades sem executar, mede edge real em OHLCV vivo.\n\n"
+                   "Nenhum shadow runner detectado. Pra iniciar um:\n"
+                   "  1. SSH no VPS\n"
+                   "  2. sudo systemctl start millennium_shadow.service\n"
+                   "  3. Volta aqui — aparece automatico em 5s"),
+             fg=DIM, bg=BG, font=(FONT, 7), justify="left",
+             anchor="w").pack(anchor="w")
+    # Re-tenta em 5s — quando o runner subir o master_list ja vai filtrar
+    # pra incluir o slug e proximo render cai no caminho com cache.
+    _schedule_shadow_refresh(launcher, state)
+
+
 def _render_detail_ready(parent, slug, meta, state, launcher):
     name = meta.get("display", slug.upper())
     desc = meta.get("desc", "")
@@ -1454,8 +1795,8 @@ def _render_detail_ready(parent, slug, meta, state, launcher):
              justify="left", wraplength=540).pack(
                  fill="x", padx=10, pady=(6, 6))
 
-    # Shadow loop status (MILLENNIUM only — noop for other engines).
-    _render_shadow_panel(parent, launcher, state, slug)
+    # Shadow telemetry lives no modo dedicado SHADOW agora — nao polui
+    # mais os modos paper/demo/testnet/live.
 
     actions = tk.Frame(parent, bg=PANEL)
     actions.pack(fill="x", padx=12, pady=(0, 12))

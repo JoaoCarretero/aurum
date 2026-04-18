@@ -134,3 +134,42 @@ def test_tunnel_status_label_all_states_mapped():
             assert fg is not None
     finally:
         tunnel_registry.reset_for_tests()
+
+
+def test_mode_shadow_in_mode_order():
+    """SHADOW e o 5o modo depois de paper/demo/testnet/live."""
+    from launcher_support.engines_live_view import _MODE_ORDER, _MODE_COLORS
+    assert _MODE_ORDER == ("paper", "demo", "testnet", "live", "shadow")
+    # Cada modo tem cor mapeada — sem isso _refresh_header levanta KeyError.
+    for mode in _MODE_ORDER:
+        assert mode in _MODE_COLORS
+        assert _MODE_COLORS[mode]  # nao-vazio
+    # Cycle completo: shadow -> paper.
+    from launcher_support.engines_live_view import cycle_mode
+    assert cycle_mode("live") == "shadow"
+    assert cycle_mode("shadow") == "paper"
+
+
+def test_shadow_active_slugs_empty_when_no_poller():
+    """Sem poller registrado, _shadow_active_slugs retorna set vazio."""
+    from launcher_support.engines_live_view import _shadow_active_slugs
+    from launcher_support import tunnel_registry
+    tunnel_registry.reset_for_tests()
+    assert _shadow_active_slugs() == set()
+
+
+def test_shadow_active_slugs_includes_millennium_when_cached():
+    """Com poller retornando cache, millennium entra no set."""
+    from launcher_support.engines_live_view import _shadow_active_slugs
+    from launcher_support import tunnel_registry
+    from pathlib import Path
+
+    class FakePoller:
+        def get_cached(self):
+            return (Path("remote://r1"), {"run_id": "r1", "status": "running"})
+
+    try:
+        tunnel_registry.set_shadow_poller(FakePoller())
+        assert _shadow_active_slugs() == {"millennium"}
+    finally:
+        tunnel_registry.reset_for_tests()

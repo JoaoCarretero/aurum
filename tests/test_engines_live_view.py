@@ -137,9 +137,14 @@ class TestModeCycle:
         from launcher_support.engines_live_view import cycle_mode
         assert cycle_mode("testnet") == "live"
 
-    def test_cycle_live_wraps_to_paper(self):
+    def test_cycle_live_to_shadow(self):
+        # SHADOW agora e o 5o modo; live -> shadow -> paper.
         from launcher_support.engines_live_view import cycle_mode
-        assert cycle_mode("live") == "paper"
+        assert cycle_mode("live") == "shadow"
+
+    def test_cycle_shadow_wraps_to_paper(self):
+        from launcher_support.engines_live_view import cycle_mode
+        assert cycle_mode("shadow") == "paper"
 
     def test_cycle_unknown_falls_back_to_paper(self):
         from launcher_support.engines_live_view import cycle_mode

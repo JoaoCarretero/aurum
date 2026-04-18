@@ -19,6 +19,7 @@ Uso tipico (wire pelo launcher boot):
     ...
     # UI thread:
     cached = poller.get_cached()  # (Path, heartbeat) or None, instantaneo
+    trades = poller.get_trades_cached()  # list[dict]
     ...
     # shutdown:
     poller.stop()
@@ -36,6 +37,21 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class _ShadowSnapshot:
+    """Estado completo de um poll bem-sucedido.
+
+    virtual_dir encode o run_id (remote://<id>) pra manter compat com
+    consumers existentes que tratam Path. heartbeat e o payload de
+    /v1/runs/{id}/heartbeat. trades e a ultima janela de sinais de
+    /v1/runs/{id}/trades?limit=N (lista vazia se o endpoint falhar).
+    """
+
+    virtual_dir: Path
+    heartbeat: dict
+    trades: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class ShadowPoller:
     """Polls cockpit API `latest_run` + `get_heartbeat` em thread daemon.
 
@@ -43,6 +59,7 @@ class ShadowPoller:
         client_factory: callable que retorna um cockpit_client (ou None)
         engine: nome do engine pra query (default 'millennium')
         poll_sec: intervalo entre pools (default 5s)
+        trades_limit: quantos sinais pegar por ciclo (default 20)
 
     O client_factory e chamado a cada poll pra pegar o client atual
     (caso tenha sido re-configurado no launcher rodando).
@@ -51,9 +68,10 @@ class ShadowPoller:
     client_factory: Callable[[], object | None]
     engine: str = "millennium"
     poll_sec: float = 5.0
+    trades_limit: int = 20
 
     _lock: threading.Lock = field(default_factory=threading.Lock)
-    _cache: tuple[Path, dict] | None = None
+    _cache: _ShadowSnapshot | None = None
     _last_poll_at: float = 0.0
     _last_error: str | None = None
     _thread: threading.Thread | None = None
@@ -81,7 +99,29 @@ class ShadowPoller:
             thread.join(timeout=timeout_sec)
 
     def get_cached(self) -> tuple[Path, dict] | None:
-        """Le o ultimo resultado conhecido. Nunca bloqueia."""
+        """Le o ultimo (virtual_dir, heartbeat) conhecido. Nunca bloqueia.
+
+        Mantido como tuple pra backward-compat com consumers existentes
+        (engines_live_view._find_latest_shadow_run). Pra trades, usar
+        get_trades_cached().
+        """
+        with self._lock:
+            snap = self._cache
+        if snap is None:
+            return None
+        return (snap.virtual_dir, snap.heartbeat)
+
+    def get_trades_cached(self) -> list[dict]:
+        """Le a ultima janela de sinais conhecida. Lista vazia se nada."""
+        with self._lock:
+            snap = self._cache
+        if snap is None:
+            return []
+        # Retorna copia rasa pra isolar o caller do cache compartilhado.
+        return list(snap.trades)
+
+    def get_snapshot(self) -> _ShadowSnapshot | None:
+        """Snapshot completo (virtual_dir + heartbeat + trades)."""
         with self._lock:
             return self._cache
 
@@ -135,7 +175,8 @@ class ShadowPoller:
         except Exception as exc:  # noqa: BLE001
             # latest_run OK mas heartbeat falhou — mantem badge REMOTE
             # com stub, igual comportamento ja existente em
-            # _find_latest_shadow_run.
+            # _find_latest_shadow_run. Sem heartbeat nao faz sentido
+            # tentar trades, entao lista vazia.
             hb = {
                 "run_id": run_id,
                 "status": run.get("status", "unknown"),
@@ -147,12 +188,26 @@ class ShadowPoller:
                 "tick_sec": 0,
             }
             with self._lock:
-                self._cache = (virtual_dir, hb)
+                self._cache = _ShadowSnapshot(
+                    virtual_dir=virtual_dir, heartbeat=hb, trades=[])
                 self._last_poll_at = time.time()
                 self._last_error = f"heartbeat failed: {type(exc).__name__}"
             return
+        # Trades sao bonus — falha nao invalida o heartbeat recem-colhido.
+        trades: list[dict] = []
+        try:
+            trades_resp = client.get_trades(run_id, limit=self.trades_limit)
+            raw_trades = (trades_resp or {}).get("trades") or []
+            if isinstance(raw_trades, list):
+                trades = [t for t in raw_trades if isinstance(t, dict)]
+        except Exception as exc:  # noqa: BLE001
+            # Nao perde o heartbeat — so loga. Cache com trades=[] e
+            # suficiente pra UI mostrar "(sem sinais ainda)".
+            logger.debug("shadow poller: get_trades failed: %s",
+                         type(exc).__name__)
         with self._lock:
-            self._cache = (virtual_dir, hb)
+            self._cache = _ShadowSnapshot(
+                virtual_dir=virtual_dir, heartbeat=hb, trades=trades)
             self._last_poll_at = time.time()
             self._last_error = None
 
