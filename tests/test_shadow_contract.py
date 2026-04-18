@@ -126,3 +126,90 @@ def test_compute_config_hash_stable_format():
     h = compute_config_hash()
     assert h.startswith("sha256:")
     assert len(h) == len("sha256:") + 16
+
+
+def test_trade_record_accepts_enriched_fields():
+    """TradeRecord should type-check all enriched fields from shadow_trades.jsonl."""
+    from core.shadow_contract import TradeRecord
+    record = TradeRecord(
+        timestamp="2026-04-18T12:00:00Z",
+        symbol="BTCUSDT",
+        strategy="CITADEL",
+        direction="BULLISH",
+        entry=65432.0,
+        stop=65120.0,
+        target=66950.0,
+        exit_p=66210.0,
+        rr=3.0,
+        duration=5,
+        result="WIN",
+        exit_reason="trailing",
+        size=285.4,
+        score=0.5363,
+        r_multiple=1.445,
+        macro_bias="BULL",
+        vol_regime="NORMAL",
+        omega_struct=0.75,
+        omega_flow=0.858,
+        omega_cascade=0.25,
+        omega_momentum=0.667,
+        omega_pullback=0.933,
+        struct="DOWN",
+        struct_str=0.75,
+        rsi=49.33,
+        dist_ema21=0.101,
+        chop_trade=False,
+        dd_scale=1.0,
+        corr_mult=1.0,
+        hmm_regime=None,
+        hmm_confidence=None,
+        shadow_run_id="2026-04-18_0229",
+    )
+    assert record.stop == 65120.0
+    assert record.result == "WIN"
+    assert record.omega_struct == 0.75
+    assert record.macro_bias == "BULL"
+
+
+def test_trade_record_legacy_record_deserializes():
+    """Legacy record without enriched fields should deserialize with defaults None."""
+    from core.shadow_contract import TradeRecord
+    record = TradeRecord(
+        timestamp="2026-04-17T12:00:00Z",
+        symbol="ETHUSDT",
+        strategy="JUMP",
+        direction="BEARISH",
+        entry=3210.5,
+    )
+    assert record.stop is None
+    assert record.result is None
+    assert record.omega_struct is None
+    assert record.macro_bias is None
+
+
+def test_trade_record_extra_fields_still_allowed():
+    """extra='allow' preserved — runner can evolve shape without breaking client."""
+    from core.shadow_contract import TradeRecord
+    record = TradeRecord(
+        timestamp="2026-04-18T12:00:00Z",
+        symbol="LINKUSDT",
+        strategy="CITADEL",
+        direction="BULLISH",
+        entry=14.23,
+        future_unknown_field="new_stuff",
+    )
+    dumped = record.model_dump()
+    assert dumped["future_unknown_field"] == "new_stuff"
+
+
+def test_trade_record_result_literal_validates():
+    """result accepts only 'WIN' | 'LOSS' | None."""
+    import pytest
+    from pydantic import ValidationError
+    from core.shadow_contract import TradeRecord
+    with pytest.raises(ValidationError):
+        TradeRecord(
+            timestamp="2026-04-18T12:00:00Z",
+            symbol="BTC", strategy="X", direction="L",
+            result="PARTIAL",
+        )

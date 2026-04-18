@@ -81,6 +81,41 @@ class TradeRecord(BaseModel):
     exit: float | None = None
     pnl: float | None = None
     shadow_observed_at: datetime | None = None
+
+    stop: float | None = None
+    target: float | None = None
+    exit_p: float | None = None
+    rr: float | None = None
+    duration: int | None = None
+    result: Literal["WIN", "LOSS"] | None = None
+    exit_reason: str | None = None
+    size: float | None = None
+    score: float | None = None
+    r_multiple: float | None = None
+
+    macro_bias: Literal["BULL", "BEAR", "CHOP"] | None = None
+    vol_regime: Literal["LOW", "NORMAL", "HIGH"] | None = None
+
+    omega_struct: float | None = None
+    omega_flow: float | None = None
+    omega_cascade: float | None = None
+    omega_momentum: float | None = None
+    omega_pullback: float | None = None
+
+    struct: str | None = None
+    struct_str: float | None = None
+    rsi: float | None = None
+    dist_ema21: float | None = None
+    chop_trade: bool | None = None
+
+    dd_scale: float | None = None
+    corr_mult: float | None = None
+
+    hmm_regime: str | None = None
+    hmm_confidence: float | None = None
+
+    shadow_run_id: str | None = None
+
     model_config = ConfigDict(extra="allow")
 
 
