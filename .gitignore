@@ -9,6 +9,11 @@ data/
 # EXCEPTION: refactor baselines (small, must be versioned for regression tests)
 !data/refactor_baseline/
 !data/refactor_baseline/**
+# EXCEPTION: core/data/ is a Python subpackage, not a data output dir
+!core/data/
+!core/data/**
+core/data/__pycache__/
+core/data/__pycache__/**
 
 # Logs
 *.log
