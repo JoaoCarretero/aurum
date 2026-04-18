@@ -185,6 +185,29 @@ class TestFetchOpenInterest:
         assert len(df) == 6
         assert df["oi"].tolist() == [1000, 1001, 1002, 1003, 1004, 1005]
 
+    def test_cached_loader_drops_corrupt_time_rows_instead_of_failing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sentiment, "_SENTIMENT_CACHE_DIR", tmp_path)
+        cache_dir = Path(tmp_path) / "open_interest"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "XRPUSDT_15m.csv").write_text(
+            "time,oi,oi_value\n"
+            "2026-03-18 14:30:00,1000,50000\n"
+            "0753.75146,1001,50010\n"
+            "2026-03-18 14:45:00,1002,50020\n",
+            encoding="utf-8",
+        )
+
+        df = sentiment._load_cached_frame(
+            "open_interest",
+            "XRPUSDT",
+            "15m",
+            ["time", "oi", "oi_value"],
+        )
+
+        assert df is not None
+        assert len(df) == 2
+        assert df["oi"].tolist() == [1000, 1002]
+
 
 # ────────────────────────────────────────────────────────────
 # fetch_long_short_ratio
@@ -310,6 +333,23 @@ class TestOiDeltaSignal:
         assert "oi_signal" in out.columns
         assert "oi_delta" in out.columns
         assert "price_delta" in out.columns
+
+    def test_normalizes_datetime_units_before_merge_asof(self):
+        """Pandas 3.14 rejects merge_asof on datetime64[ns] vs datetime64[us].
+
+        BRIDGEWATER swallows OI build exceptions, so this contract ensures
+        OI cannot silently disappear just because the cached OI frame and the
+        price frame carry different datetime units.
+        """
+        price = self._make_price(n=80)
+        oi = self._make_oi(n=80)
+        price["time"] = pd.to_datetime(price["time"]).astype("datetime64[ns]")
+        oi["time"] = pd.to_datetime(oi["time"]).astype("datetime64[us]")
+
+        out = oi_delta_signal(oi, price, window=10)
+
+        assert len(out) == len(price)
+        assert "oi_signal" in out.columns
 
     def test_signal_values_in_expected_set(self):
         price = self._make_price(drift=0.5)

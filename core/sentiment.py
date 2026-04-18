@@ -46,7 +46,8 @@ def _load_cached_frame(kind: str, symbol: str, period: str,
         df = pd.read_csv(path)
         if "time" not in df.columns:
             return None
-        df["time"] = pd.to_datetime(df["time"])
+        df["time"] = pd.to_datetime(df["time"], errors="coerce")
+        df = df.dropna(subset=["time"])
         missing = [col for col in columns if col not in df.columns]
         if missing:
             return None
@@ -326,9 +327,16 @@ def oi_delta_signal(oi_df: pd.DataFrame, price_df: pd.DataFrame,
 
     Returns DataFrame with columns: oi_delta, price_delta, oi_signal.
     """
+    price = price_df[["time", "close"]].copy()
+    oi = oi_df[["time", "oi"]].copy()
+    # Pandas 3.14 hardened merge_asof to reject datetime64 unit mismatches
+    # (for example ns vs us). Normalize both sides explicitly so OI cannot
+    # silently disappear in BRIDGEWATER due to a swallowed MergeError.
+    price["time"] = pd.to_datetime(price["time"]).astype("datetime64[ns]")
+    oi["time"] = pd.to_datetime(oi["time"]).astype("datetime64[ns]")
     merged = pd.merge_asof(
-        price_df[["time", "close"]].sort_values("time"),
-        oi_df[["time", "oi"]].sort_values("time"),
+        price.sort_values("time"),
+        oi.sort_values("time"),
         on="time",
     )
 
