@@ -5,7 +5,7 @@ from pathlib import Path
 from engines.janestreet import omega_score, scan_all
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "phase_c" / "arbitrage"
 
 

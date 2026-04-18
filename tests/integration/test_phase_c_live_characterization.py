@@ -10,7 +10,7 @@ from engines import live as live_mod
 from engines.live import LiveEngine, SignalEngine
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "phase_c" / "live"
 RECORDED_STATE = ROOT / "data" / "live" / "2026-04-09_1503" / "state" / "positions.json"
 

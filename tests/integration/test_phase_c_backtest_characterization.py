@@ -7,7 +7,7 @@ import pytest
 from core.analysis_export import _collect_run
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "phase_c" / "backtest"
 RUN_DIR = ROOT / "data" / "runs" / "citadel_2026-04-10_1122"
 
