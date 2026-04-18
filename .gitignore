@@ -58,6 +58,7 @@ dist/
 .pytest_local_tmp/
 .test_tmp/
 tests/_tmp/
+tests/_tmp_probe/
 pytest-cache-files-*/
 pytest-run-*/
 pytest_tmp_local*/
