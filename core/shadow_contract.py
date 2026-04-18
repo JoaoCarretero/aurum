@@ -1,0 +1,166 @@
+"""Shared contract for shadow/paper/live runners consumed by cockpit API.
+
+Runners write manifest.json + heartbeat.json to `<run_dir>/state/`. The
+cockpit API discovers runs via `find_runs` and validates payloads against
+these pydantic models. Cockpit client imports the same models for typed
+responses. One source of truth avoids schema drift.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+RunMode = Literal["shadow", "paper", "testnet", "live", "backtest"]
+RunStatus = Literal["running", "stopped", "failed"]
+
+
+class Manifest(BaseModel):
+    """Imutavel: escrito uma vez no start do runner."""
+    run_id: str
+    engine: str
+    mode: RunMode
+    started_at: datetime
+    commit: str
+    branch: str
+    config_hash: str
+    host: str
+    python_version: str | None = None
+
+
+class Heartbeat(BaseModel):
+    """Mutavel: atualizado a cada tick pelo runner.
+
+    extra='allow' — runner pode evoluir o shape; client consome o que
+    conhece e preserva o resto.
+    """
+    run_id: str
+    status: RunStatus
+    ticks_ok: int = 0
+    ticks_fail: int = 0
+    novel_total: int = 0
+    last_tick_at: datetime | None = None
+    last_error: str | None = None
+    tick_sec: int = 0
+    started_at: datetime | None = None
+    run_hours: float = 0.0
+    stopped_at: datetime | None = None
+    stopped_reason: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class RunSummary(BaseModel):
+    """Linha leve do /runs — o suficiente pra listar sem payloads pesados."""
+    run_id: str
+    engine: str
+    mode: RunMode
+    status: RunStatus
+    started_at: datetime
+    last_tick_at: datetime | None = None
+    novel_total: int = 0
+
+
+class RunDetail(BaseModel):
+    """Resposta de /runs/{id}: agrega manifest + heartbeat."""
+    manifest: Manifest
+    heartbeat: Heartbeat
+
+
+class TradeRecord(BaseModel):
+    """Schema permissivo — engine schema evolve; extra fields preservados."""
+    timestamp: datetime
+    symbol: str
+    strategy: str
+    direction: str
+    entry: float | None = None
+    exit: float | None = None
+    pnl: float | None = None
+    shadow_observed_at: datetime | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+# --- Discovery ------------------------------------------------
+
+def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
+    """Return run_dir paths containing a heartbeat.json, sorted by mtime DESC.
+
+    Honors existing layout: `data/{engine}_shadow/{run_id}/state/heartbeat.json`
+    AND future layout: `data/shadow/{engine}/{run_id}/state/heartbeat.json`.
+
+    If `engines` is given, restricts to those engine names.
+    """
+    runs: list[tuple[float, Path]] = []
+    if not data_root.exists():
+        return []
+    for engine_dir in data_root.iterdir():
+        if not engine_dir.is_dir():
+            continue
+        # Layout A: data/{engine}_shadow/{run_id}/
+        if engine_dir.name.endswith("_shadow"):
+            engine = engine_dir.name.removesuffix("_shadow")
+            if engines and engine not in engines:
+                continue
+            for run_dir in engine_dir.iterdir():
+                hb = run_dir / "state" / "heartbeat.json"
+                if hb.exists():
+                    runs.append((hb.stat().st_mtime, run_dir))
+        # Layout B: data/shadow/{engine}/{run_id}/
+        elif engine_dir.name == "shadow":
+            for sub_engine in engine_dir.iterdir():
+                if not sub_engine.is_dir():
+                    continue
+                if engines and sub_engine.name not in engines:
+                    continue
+                for run_dir in sub_engine.iterdir():
+                    hb = run_dir / "state" / "heartbeat.json"
+                    if hb.exists():
+                        runs.append((hb.stat().st_mtime, run_dir))
+    runs.sort(key=lambda t: t[0], reverse=True)
+    return [p for _, p in runs]
+
+
+def load_heartbeat(run_dir: Path) -> Heartbeat:
+    """Load and validate heartbeat.json. Raises pydantic ValidationError on bad shape."""
+    payload = json.loads((run_dir / "state" / "heartbeat.json").read_text(encoding="utf-8"))
+    return Heartbeat(**payload)
+
+
+def load_manifest(run_dir: Path) -> Manifest | None:
+    """Load manifest.json if present; return None for legacy runs that predate the file."""
+    path = run_dir / "state" / "manifest.json"
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return Manifest(**payload)
+
+
+# --- Config hash ----------------------------------------------
+
+_HASH_FIELDS = (
+    "SLIPPAGE", "SPREAD", "COMMISSION", "FUNDING_PER_8H",
+    "BASE_RISK", "MAX_RISK", "CONVEX_ALPHA",
+    "TARGET_RR", "STOP_ATR_M",
+    "SCORE_THRESHOLD", "SCORE_THRESHOLD_HIGH_VOL", "SCORE_THRESHOLD_LOW_VOL",
+    "OMEGA_WEIGHTS", "OMEGA_MIN_COMPONENT",
+    "MAX_OPEN_POSITIONS", "CORR_THRESHOLD", "CORR_SOFT_THRESHOLD",
+    "STREAK_COOLDOWN", "SYM_LOSS_COOLDOWN",
+)
+
+
+def compute_config_hash() -> str:
+    """Hash dos campos materialmente relevantes de config/params.py.
+
+    Estavel entre runs com mesma config; muda quando qualquer tuning rolou.
+    """
+    from config import params as P  # lazy to avoid circular imports
+    payload: dict[str, object] = {}
+    for field in _HASH_FIELDS:
+        if hasattr(P, field):
+            payload[field] = getattr(P, field)
+    serial = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return "sha256:" + hashlib.sha256(serial).hexdigest()[:16]
