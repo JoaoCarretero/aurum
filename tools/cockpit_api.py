@@ -157,6 +157,13 @@ def build_app() -> FastAPI:
         run_dir = _find_run_by_id(data_root, run_id)
         if run_dir is None:
             raise HTTPException(status_code=404, detail="run not found")
+        since_dt = None
+        if since:
+            try:
+                # fromisoformat accepts 'Z' suffix in Python 3.11+
+                since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="since must be ISO8601")
         jsonl = run_dir / "reports" / "shadow_trades.jsonl"
         if not jsonl.exists():
             return {"run_id": run_id, "count": 0, "trades": []}
@@ -171,8 +178,18 @@ def build_app() -> FastAPI:
                 records.append(_json.loads(ln))
             except ValueError:
                 continue
-        if since:
-            records = [r for r in records if str(r.get("timestamp", "")) > since]
+        if since_dt is not None:
+            def _ts_after(rec: dict) -> bool:
+                raw = rec.get("timestamp")
+                if not raw:
+                    return False
+                try:
+                    rec_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                except ValueError:
+                    return False
+                return rec_dt > since_dt
+
+            records = [r for r in records if _ts_after(r)]
         tail = records[-limit:]
         return {"run_id": run_id, "count": len(tail), "trades": tail}
 

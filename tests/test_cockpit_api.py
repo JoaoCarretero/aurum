@@ -206,3 +206,52 @@ def test_trades_limit_capped_at_500(tmp_path, client):
         headers={"Authorization": "Bearer READ123"},
     )
     assert r.status_code == 400  # exceeds max
+
+
+def test_trades_since_filter_works_with_z_suffix(tmp_path, client):
+    """since=...Z form should correctly filter records written with +00:00 offset."""
+    run_dir = _make_run(
+        tmp_path, "millennium_shadow", "r_since",
+        heartbeat={
+            "run_id": "r_since", "status": "running",
+            "ticks_ok": 1, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    reports = run_dir / "reports"
+    reports.mkdir()
+    (reports / "shadow_trades.jsonl").write_text("\n".join([
+        json.dumps({"timestamp": "2026-04-18T01:00:00+00:00", "symbol": "BTC",
+                    "strategy": "X", "direction": "LONG"}),
+        json.dumps({"timestamp": "2026-04-18T02:00:00+00:00", "symbol": "BTC",
+                    "strategy": "X", "direction": "LONG"}),
+        json.dumps({"timestamp": "2026-04-18T03:00:00+00:00", "symbol": "BTC",
+                    "strategy": "X", "direction": "LONG"}),
+    ]))
+    # Client uses the Z-suffix form (common human format)
+    r = client.get(
+        "/v1/runs/r_since/trades?since=2026-04-18T01:30:00Z",
+        headers={"Authorization": "Bearer READ123"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # Should return only the 02:00 and 03:00 entries
+    assert len(body["trades"]) == 2
+    assert body["trades"][0]["timestamp"] == "2026-04-18T02:00:00+00:00"
+
+
+def test_trades_since_invalid_format_returns_400(tmp_path, client):
+    """Malformed since query returns 400 rather than silently passing lex compare."""
+    _make_run(
+        tmp_path, "millennium_shadow", "r_bad_since",
+        heartbeat={
+            "run_id": "r_bad_since", "status": "running",
+            "ticks_ok": 0, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    r = client.get(
+        "/v1/runs/r_bad_since/trades?since=not-a-date",
+        headers={"Authorization": "Bearer READ123"},
+    )
+    assert r.status_code == 400
