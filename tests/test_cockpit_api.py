@@ -255,3 +255,50 @@ def test_trades_since_invalid_format_returns_400(tmp_path, client):
         headers={"Authorization": "Bearer READ123"},
     )
     assert r.status_code == 400
+
+
+def test_kill_requires_admin(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "r5",
+        heartbeat={
+            "run_id": "r5", "status": "running",
+            "ticks_ok": 0, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    # Read token rejected
+    r = client.post("/v1/runs/r5/kill", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 403
+
+
+def test_kill_drops_flag(tmp_path, client):
+    run_dir = _make_run(
+        tmp_path, "millennium_shadow", "r6",
+        heartbeat={
+            "run_id": "r6", "status": "running",
+            "ticks_ok": 0, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    r = client.post("/v1/runs/r6/kill", headers={"Authorization": "Bearer ADMIN456"})
+    assert r.status_code == 200
+    assert (run_dir / ".kill").exists()
+
+
+def test_kill_404_when_missing(client):
+    r = client.post("/v1/runs/missing/kill", headers={"Authorization": "Bearer ADMIN456"})
+    assert r.status_code == 404
+
+
+def test_kill_idempotent(tmp_path, client):
+    run_dir = _make_run(
+        tmp_path, "millennium_shadow", "r7",
+        heartbeat={
+            "run_id": "r7", "status": "running",
+            "ticks_ok": 0, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    (run_dir / ".kill").write_text("")  # already present
+    r = client.post("/v1/runs/r7/kill", headers={"Authorization": "Bearer ADMIN456"})
+    assert r.status_code == 200

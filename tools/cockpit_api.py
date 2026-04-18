@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,10 +101,14 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="unauthorized")
         token = header.removeprefix("Bearer ").strip()
         if admin:
-            if token != admin_token:
+            if not secrets.compare_digest(token, admin_token):
                 raise HTTPException(status_code=403, detail="admin scope required")
         else:
-            if token not in (read_token, admin_token):
+            # Compute BOTH compare_digest calls always (constant-time);
+            # don't short-circuit before the `or` to avoid timing leaks.
+            ok_read = secrets.compare_digest(token, read_token)
+            ok_admin = secrets.compare_digest(token, admin_token)
+            if not (ok_read or ok_admin):
                 raise HTTPException(status_code=401, detail="unauthorized")
 
     @app.exception_handler(HTTPException)
@@ -192,6 +197,15 @@ def build_app() -> FastAPI:
             records = [r for r in records if _ts_after(r)]
         tail = records[-limit:]
         return {"run_id": run_id, "count": len(tail), "trades": tail}
+
+    @app.post("/v1/runs/{run_id}/kill")
+    def run_kill(run_id: str, request: Request):
+        _check_auth(request, admin=True)
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        (run_dir / ".kill").touch()
+        return {"status": "kill_flag_dropped", "run_id": run_id}
 
     return app
 
