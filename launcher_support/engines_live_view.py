@@ -1104,16 +1104,26 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     if client is not None:
         try:
             run = client.latest_run(engine="millennium")
-            if run:
-                # Build a virtual run_dir for compatibility with the existing
-                # panel. The run_id doubles as the directory name; STOP button
-                # later uses _is_remote_run to route through the client.
-                virtual_dir = Path(f"remote://{run['run_id']}")
-                hb = client.get_heartbeat(run["run_id"])
-                return virtual_dir, hb
         except Exception:
-            # Circuit open ou qualquer outro erro → fallback local silencioso
-            pass
+            run = None
+        if run:
+            virtual_dir = Path(f"remote://{run['run_id']}")
+            try:
+                hb = client.get_heartbeat(run["run_id"])
+            except Exception:
+                # list_runs worked but heartbeat didn't — keep [REMOTE]
+                # badge with whatever the summary carried, instead of
+                # silently degrading to a stale LOCAL run.
+                hb = {
+                    "run_id": run["run_id"],
+                    "status": run.get("status", "unknown"),
+                    "ticks_ok": 0, "ticks_fail": 0,
+                    "novel_total": run.get("novel_total", 0),
+                    "last_tick_at": run.get("last_tick_at"),
+                    "last_error": "heartbeat fetch failed",
+                    "tick_sec": 0,
+                }
+            return virtual_dir, hb
 
     # Local disk fallback (layout existente)
     root = Path("data/millennium_shadow")
