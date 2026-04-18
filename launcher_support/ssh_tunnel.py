@@ -294,16 +294,30 @@ class TunnelManager:
         """Launch the ssh subprocess. Returns None on spawn failure."""
         cmd = self._build_cmd()
         logger.info("spawning ssh tunnel: %s", " ".join(cmd))
+        popen_kwargs: dict = dict(
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        # Windows: evita flash de cmd.exe ao spawnar ssh dentro do TkInter.
+        if os.name == "nt":
+            creationflags = 0
+            for flag_name in ("CREATE_NO_WINDOW", "DETACHED_PROCESS"):
+                flag = getattr(subprocess, flag_name, 0)
+                creationflags |= flag
+            if creationflags:
+                popen_kwargs["creationflags"] = creationflags
+            startupinfo = getattr(subprocess, "STARTUPINFO", None)
+            if startupinfo is not None:
+                si = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+                si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+                si.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+                popen_kwargs["startupinfo"] = si
         try:
             # Pipe stderr for classification; pipe stdout to the log file
             # directly (ssh -N produces nothing on stdout anyway).
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-            )
+            proc = subprocess.Popen(cmd, **popen_kwargs)
             return proc
         except (OSError, ValueError) as exc:
             logger.error("ssh spawn failed: %s", exc)
