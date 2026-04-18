@@ -19,7 +19,7 @@ def test_proc_registry_stays_in_sync_with_config_registry():
 
 
 def test_rooted_paths_contract():
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parent.parent.parent
     assert DATA_DIR == root / "data"
     assert AURUM_DB_PATH == root / "data" / "aurum.db"
     assert NEXUS_DB_PATH == root / "data" / "nexus.db"
