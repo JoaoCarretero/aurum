@@ -772,18 +772,18 @@ def _render_row_ready(parent, slug, meta, state):
     stage_label, stage_color = _stage_badge(meta)
     action_label, action_color = row_action_label("READY", meta)
     tk.Label(row, text=meta.get("display", slug.upper()),
-             fg=WHITE, bg=bg, font=(FONT, 9, "bold"),
-             padx=8).pack(side="left")
+             fg=WHITE, bg=bg, font=(FONT, 8, "bold"),
+             padx=6).pack(side="left")
     tk.Label(row, text=f" {stage_label} ",
              fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
-             padx=4, pady=1).pack(side="left", padx=(0, 6))
+             padx=3).pack(side="left", padx=(0, 4))
     tk.Label(row, text=action_label,
              fg=action_color, bg=bg, font=(FONT, 6, "bold")
-             ).pack(side="right", padx=(0, 8))
+             ).pack(side="right", padx=(0, 6))
     sub = _subtitle_for(slug, meta)
     if sub:
         tk.Label(row, text=sub, fg=DIM, bg=bg,
-                 font=(FONT, 7)).pack(side="left", padx=(4, 0))
+                 font=(FONT, 6)).pack(side="left", padx=(2, 0))
     for w in (row,) + tuple(row.winfo_children()):
         w.bind("<Button-1>", lambda _e, _s=slug: _select_slug(state, _s, "READY"))
 

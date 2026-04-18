@@ -60,6 +60,17 @@ def _result_color(v) -> str:
     return "DIM"
 
 
+def _tradingview_url(symbol) -> str | None:
+    # Perp symbol na Binance USDT-M -> BINANCE:<SYM>.P. Aceita 'BTCUSDT'
+    # ou 'BTC/USDT'. Retorna None se nao da pra formar URL confiavel.
+    if not symbol:
+        return None
+    sym = str(symbol).replace("/", "").replace("-", "").upper().strip()
+    if not sym.endswith("USDT") or len(sym) < 6:
+        return None
+    return f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}.P&interval=60"
+
+
 def _fmt_str_or_dash(v) -> str:
     if v is None or v == "":
         return "—"
@@ -203,7 +214,7 @@ def show(parent, trade: dict) -> None:
     _render_omega_section()
     _render_section("STRUCTURE", section_structure(trade))
 
-    # CLOSE BUTTON + ESC
+    # ACTIONS + ESC
     close_row = tk.Frame(top, bg=PANEL)
     close_row.pack(fill="x", padx=16, pady=(16, 12))
     close_btn = tk.Label(close_row, text="  ESC close  ", fg=BG, bg=DIM2,
@@ -211,6 +222,17 @@ def show(parent, trade: dict) -> None:
                          padx=8, pady=4)
     close_btn.pack(side="right")
     close_btn.bind("<Button-1>", lambda _e: top.destroy())
+
+    chart_url = _tradingview_url(symbol)
+    if chart_url:
+        def _open_chart(_e=None) -> None:
+            import webbrowser
+            webbrowser.open(chart_url)
+        chart_btn = tk.Label(close_row, text="  OPEN CHART  ", fg=BG, bg=AMBER,
+                             font=(FONT, 7, "bold"), cursor="hand2",
+                             padx=8, pady=4)
+        chart_btn.pack(side="right", padx=(0, 8))
+        chart_btn.bind("<Button-1>", _open_chart)
     top.bind("<Escape>", lambda _e: top.destroy())
     top.transient(parent)
     top.grab_set()

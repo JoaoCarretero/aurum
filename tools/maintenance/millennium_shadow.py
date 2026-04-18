@@ -159,6 +159,72 @@ def _append_trade(trade: dict) -> None:
         fh.flush()
 
 
+# Per-engine run dirs espelham o layout do backtest: data/<engine>_shadow/
+# <RUN_ID>/{reports,state}. Cada engine ganha seu proprio trades.jsonl +
+# manifest + summary — navegavel via launcher/runs e reports existentes.
+_PER_ENGINE_INITIALIZED: set[str] = set()
+
+
+def _engine_slug(trade: dict) -> str:
+    return str(trade.get("strategy") or "unknown").lower()
+
+
+def _engine_run_dir(slug: str) -> Path:
+    d = ROOT / "data" / f"{slug}_shadow" / RUN_ID
+    (d / "reports").mkdir(parents=True, exist_ok=True)
+    (d / "state").mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _append_per_engine(trade: dict) -> None:
+    slug = _engine_slug(trade)
+    run_dir = _engine_run_dir(slug)
+    if slug not in _PER_ENGINE_INITIALIZED:
+        manifest = {
+            "run_id": f"{slug}_shadow_{RUN_ID}",
+            "engine": slug,
+            "mode": "shadow",
+            "parent_run_id": RUN_ID,
+            "started_at": RUN_TS.isoformat(),
+        }
+        atomic_write(run_dir / "state" / "manifest.json",
+                     json.dumps(manifest, indent=2))
+        _PER_ENGINE_INITIALIZED.add(slug)
+    line = json.dumps(trade, ensure_ascii=True, default=str)
+    with open(run_dir / "reports" / "trades.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+        fh.flush()
+
+
+def _write_per_engine_summaries(ticks_ok: int, ticks_fail: int,
+                                stopped_reason: str) -> None:
+    stopped_at = datetime.now(timezone.utc).isoformat()
+    for slug in _PER_ENGINE_INITIALIZED:
+        run_dir = ROOT / "data" / f"{slug}_shadow" / RUN_ID
+        trades_path = run_dir / "reports" / "trades.jsonl"
+        n = 0
+        if trades_path.exists():
+            try:
+                with open(trades_path, encoding="utf-8") as fh:
+                    n = sum(1 for line in fh if line.strip())
+            except OSError:
+                n = 0
+        summary = {
+            "run_id": f"{slug}_shadow_{RUN_ID}",
+            "engine": slug,
+            "mode": "shadow",
+            "parent_run_id": RUN_ID,
+            "started_at": RUN_TS.isoformat(),
+            "stopped_at": stopped_at,
+            "stopped_reason": stopped_reason or "—",
+            "ticks_ok": ticks_ok,
+            "ticks_fail": ticks_fail,
+            "n_trades": n,
+        }
+        atomic_write(run_dir / "summary.json",
+                     json.dumps(summary, indent=2))
+
+
 def _trade_key(trade: dict) -> tuple:
     """Stable dedup key: engine + symbol + entry timestamp."""
     return (
@@ -168,12 +234,48 @@ def _trade_key(trade: dict) -> tuple:
     )
 
 
-def _run_tick(seen_keys: set) -> tuple[int, int, int]:
+def _fmt_num(v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if abs(f) >= 1000:
+        return f"{f:,.2f}"
+    return f"{f:.4g}"
+
+
+def _tg_signal(trade: dict) -> None:
+    # Um Telegram compacto por sinal novo. HTML mode ja tratado em _tg_send.
+    sym = str(trade.get("symbol") or "?").upper()
+    direction = str(trade.get("direction") or "?").upper()
+    engine = str(trade.get("strategy") or "?").upper()
+    entry = _fmt_num(trade.get("entry"))
+    stop = _fmt_num(trade.get("stop"))
+    target = _fmt_num(trade.get("target"))
+    rr = _fmt_num(trade.get("rr"))
+    size = _fmt_num(trade.get("size"))
+    ts = str(trade.get("timestamp") or "").replace("T", " ")[:16]
+    dir_emoji = "LONG" if direction.startswith("L") else "SHORT" if direction.startswith("S") else direction
+    tv_sym = sym.replace("/", "").replace("-", "")
+    chart = (f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_sym}.P&interval=60"
+             if tv_sym.endswith("USDT") and len(tv_sym) >= 6 else None)
+    lines = [
+        f"<b>SHADOW · {engine}</b>  {dir_emoji} {sym}",
+        f"entry <code>{entry}</code> · stop <code>{stop}</code> · tgt <code>{target}</code>",
+        f"RR <code>{rr}</code> · size <code>{size}</code> · ts <code>{ts}</code>",
+    ]
+    if chart:
+        lines.append(f'<a href="{chart}">chart</a>')
+    _tg_send("\n".join(lines))
+
+
+def _run_tick(seen_keys: set, notify: bool = True) -> tuple[int, int, int]:
     """Run one shadow tick. Returns (novel_count, total_scanned, engines_ok).
 
     Fetches fresh OHLCV, runs operational scans inside a stdout-silenced block
     (the engine prints verbosely), appends any novel trades to the JSONL, and
-    updates `seen_keys` in place.
+    updates `seen_keys` in place. When `notify=False` (first tick priming the
+    dedup set), skips Telegram pings — o historico nao e sinal vivo.
     """
     # Import inside the tick so config reloads pick up changes between ticks
     # if someone edits params.py while the loop runs.
@@ -202,7 +304,10 @@ def _run_tick(seen_keys: set) -> tuple[int, int, int]:
         record["shadow_run_id"] = RUN_ID
         record["shadow_observed_at"] = datetime.now(timezone.utc).isoformat()
         _append_trade(record)
+        _append_per_engine(record)
         novel += 1
+        if notify:
+            _tg_signal(record)
     return novel, len(all_trades), engines_ok
 
 
@@ -213,6 +318,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     ticks_ok = 0
     ticks_fail = 0
     novel_total = 0
+    first_tick = True
     stop_requested = {"flag": False, "reason": ""}
 
     def _handle_signal(signum, _frame):  # noqa: ARG001
@@ -261,7 +367,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
             break
 
         try:
-            novel, scanned, engines_ok = _run_tick(seen_keys)
+            novel, scanned, engines_ok = _run_tick(seen_keys, notify=not first_tick)
+            first_tick = False
             ticks_ok += 1
             novel_total += novel
             log.info(
@@ -327,6 +434,11 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         "ticks_fail": ticks_fail,
         "novel_total": novel_total,
     })
+    _write_per_engine_summaries(
+        ticks_ok=ticks_ok,
+        ticks_fail=ticks_fail,
+        stopped_reason=stop_requested["reason"] or "deadline",
+    )
     log.info(
         "SHADOW END ok=%d fail=%d novel=%d reason=%s",
         ticks_ok, ticks_fail, novel_total,

@@ -283,7 +283,7 @@ def render_detail(
     health = tk.Frame(frame, bg=PANEL)
     health.pack(fill="x", padx=12, pady=(0, 8))
     _pair_row(health, "ticks_ok", str(heartbeat.get("ticks_ok", "—")),
-              "uptime", _format_uptime(heartbeat.get("run_hours")))
+              "uptime", _uptime_from_heartbeat(heartbeat))
     _pair_row(health, "ticks_fail", str(heartbeat.get("ticks_fail", "—")),
               "novel", str(heartbeat.get("novel_total", "—")))
 
@@ -327,14 +327,29 @@ def _pair_row(parent, k1, v1, k2, v2) -> None:
              font=(FONT, 7, "bold"), anchor="w").pack(side="left")
 
 
-def _format_uptime(hours) -> str:
+def _uptime_from_heartbeat(hb: dict) -> str:
+    # `run_hours` no heartbeat eh o max-hours CLI arg (estatico), nao
+    # elapsed. Uptime real = (stopped_at | last_tick_at | now) - started_at.
+    from datetime import datetime, timezone
+    started = hb.get("started_at")
+    if not started:
+        return "—"
     try:
-        h = float(hours)
+        t0 = datetime.fromisoformat(str(started))
     except (TypeError, ValueError):
         return "—"
-    full_h = int(h)
-    mins = int((h - full_h) * 60)
-    return f"{full_h}h {mins}m"
+    ref = hb.get("stopped_at") or hb.get("last_tick_at")
+    t1 = None
+    if ref:
+        try:
+            t1 = datetime.fromisoformat(str(ref))
+        except (TypeError, ValueError):
+            t1 = None
+    if t1 is None:
+        t1 = datetime.now(t0.tzinfo or timezone.utc)
+    secs = max(0.0, (t1 - t0).total_seconds())
+    from launcher_support.engines_live_view import format_uptime
+    return format_uptime(seconds=secs)
 
 
 def _render_signals_table_rich(parent, trades: list[dict], on_row_click):
