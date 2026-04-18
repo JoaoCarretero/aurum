@@ -206,8 +206,12 @@ def show(parent, trade: dict) -> None:
     # CLOSE BUTTON + ESC
     close_row = tk.Frame(top, bg=PANEL)
     close_row.pack(fill="x", padx=16, pady=(16, 12))
-    tk.Label(close_row, text="  ESC close  ", fg=BG, bg=DIM2,
-             font=(FONT, 7, "bold"), cursor="hand2", padx=8, pady=4).pack(
-                 side="right")
+    close_btn = tk.Label(close_row, text="  ESC close  ", fg=BG, bg=DIM2,
+                         font=(FONT, 7, "bold"), cursor="hand2",
+                         padx=8, pady=4)
+    close_btn.pack(side="right")
+    close_btn.bind("<Button-1>", lambda _e: top.destroy())
     top.bind("<Escape>", lambda _e: top.destroy())
+    top.transient(parent)
+    top.grab_set()
     top.focus_set()
