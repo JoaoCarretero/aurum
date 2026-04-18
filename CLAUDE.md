@@ -173,9 +173,13 @@ aurum.finance/
 │   ├── aqr.py                 ← AQR evolutionary allocation
 │   └── renaissance.py         ← RENAISSANCE harmonic patterns
 ├── analysis/                   ← Analytics, walkforward, MC, plots
+├── api/                        ← REST server (auth, routes, risk_check, models)
 ├── bot/telegram.py            ← Telegram notifications + commands
-├── launcher.py                ← Bloomberg-terminal TkInter GUI
+├── launcher.py                ← Bloomberg-terminal TkInter GUI (~13k linhas)
+├── launcher_support/           ← Módulos consumidos pelo launcher (bootstrap, engines_live_view, execution, menu_data)
+├── macro_brain/                ← Macro brain cockpit standalone (brain, dashboard_view, bots/, ml_engine/, thesis/, position/)
 ├── aurum_cli.py               ← CLI interface
+├── deploy/                     ← Scripts de deploy VPS (install_shadow_vps.sh, millennium_shadow.service)
 ├── server/website/             ← React + Vite landing page
 ├── tests/                      ← pytest suite
 ├── tools/                      ← reconcile_runs.py and friends
