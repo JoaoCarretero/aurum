@@ -1,10 +1,10 @@
-# Shadow Gate Breakdown + Sidebar Institucional — Fase 2a+2b Design
+# Shadow Enriched Detail + Sidebar Institucional — Fase 2a+2b Design
 
-**Data:** 2026-04-18
-**Branch de trabalho:** `feat/phi-engine` (ou nova `feat/shadow-gate-sidebar`)
+**Data:** 2026-04-18 (revisto após leitura do código em 2026-04-18 PM)
+**Branch de trabalho:** `feat/phi-engine` (ou nova `feat/shadow-sidebar`)
 **Autor:** Claude (Opus 4.7), discussão com João
-**Status:** Aprovado pelo João; aguarda revisão do spec escrito antes de gerar plano.
-**Pré-requisitos:** Fase 1a (cockpit API read-only) e Fase 1b (auto-tunnel + last signals) já entregues nas sessões 2026-04-18_0940 e 2026-04-18_1044.
+**Status:** Revisto — aguarda review do João antes de gerar plano.
+**Pré-requisitos:** Fase 1a (cockpit API read-only) e Fase 1b (auto-tunnel + last signals) já entregues.
 
 ---
 
@@ -13,40 +13,54 @@
 O MILLENNIUM shadow roda no VPS (`vmi3200601`) desde 2026-04-18 02:29 UTC.
 O launcher Windows lê heartbeat + últimos 10 trades via SSH tunnel →
 cockpit API FastAPI → disco. Painel SHADOW mostra ticks_ok, novel_total,
-uptime, e tabela com `timestamp/symbol/direction/entry` dos trades.
+uptime, e tabela com `timestamp/symbol/direction/entry`.
 
-**Problema identificado pelo João (sessão 2026-04-18 cockpit funcional):**
+**Descoberta durante análise (2026-04-18 PM):**
 
-1. **"Mais dados se entra trade"** — a tabela mostra sinais detectados
-   mas não deixa claro se o sinal **teria sido executado** (passou todos
-   os gates de filtro + portfolio + sizing) ou foi **filtrado** (e por
-   qual gate). Shadow não executa — mas precisa discriminar "decisão
-   positiva de entrar" vs "sinal cru detectado". Sem isso, `novel_total=625`
-   é uma contagem de ruído misturado com sinal executável.
+O `shadow_trades.jsonl` já contém **trades pós-filtro com outcome conhecido**.
+Sample real (1 linha):
 
-2. **"Deixar mais simples com múltiplas engines"** — hoje só MILLENNIUM
-   tem shadow runner. Quando CITADEL/JUMP ganharem runners, o painel
-   atual (single engine full-width) não escala. O slug list
-   `_shadow_active_slugs` já é dinâmico (commit `9c1b877`), mas a
-   estrutura visual assume 1 engine.
+```json
+{
+  "symbol": "ARBUSDT", "timestamp": "2026-01-20 04:45:00",
+  "strategy": "CITADEL", "direction": "BEARISH",
+  "entry": 0.19304, "stop": 0.19490, "target": 0.18740, "exit_p": 0.19036,
+  "rr": 3.0, "duration": 5, "result": "WIN", "exit_reason": "trailing",
+  "pnl": 68.45, "size": 27633.13, "score": 0.5363, "r_multiple": 1.445,
+  "macro_bias": "BEAR", "vol_regime": "NORMAL", "struct": "DOWN",
+  "struct_str": 0.75, "cascade_n": 1, "taker_ma": 0.468, "rsi": 49.33,
+  "omega_struct": 0.75, "omega_flow": 0.858, "omega_cascade": 0.25,
+  "omega_momentum": 0.667, "omega_pullback": 0.933,
+  "chop_trade": false, "dd_scale": 1.0, "corr_mult": 1.0,
+  "hmm_regime": null, ...
+}
+```
 
-3. **Estética institucional** — alinhamento com aesthetic AURUM
-   (Bloomberg-terminal TkInter). Dense, monospace, pouca chrome, layout
-   master-detail.
+**Conclusão:** a data rica existe. O problema é puramente de apresentação:
+o launcher renderiza só 4 das ~30 colunas. A pergunta do João ("quero
+saber se entra trade") se resolve mostrando **mais colunas da tabela**,
+não criando stream novo.
 
-**Objetivo Fase 2a+2b:** resolver 1+2+3 num único ciclo spec→plan→code,
-estabelecendo a fundação de dados + layout pro resto do roadmap VPS
-(Fases 3a-3d).
+**Implicação no escopo original:**
+
+| Original | Revisto |
+|----------|---------|
+| Criar `GateOutcome` model | ❌ Removido — não há stream de "signal rejected" |
+| `would_enter` + `filter_reason` | ❌ Removido — todos trades no jsonl teriam entrado |
+| Hook em `millennium_shadow.py` | ❌ Removido — runner não muda |
+| Gate breakdown per signal | ❌ Removido — gates são internos ao backtest |
+| Sidebar institucional multi-engine | ✅ Mantido |
+| Tabela LAST SIGNALS enriquecida | ✅ Expandido (mais colunas) |
+| Row click → detail completo | ✅ Novo — popup com todos omega + struct |
+
+**Objetivo Fase 2a+2b revisto:** surface toda a info que já existe
+no trade record, num layout institucional multi-engine. Zero backend.
 
 **Não-objetivo:**
-- Editor de VPS settings (Fase 3a)
-- Start/stop remoto de runners (Fase 3b)
-- Editor de asset basket (Fase 3c)
-- Multi-engine orchestrator (Fase 3d)
-- Migrar gates pra `core/gates.py` genérico (deferido pra Fase 3
-  quando CITADEL/JUMP precisarem — YAGNI agora)
-- Alterar `core/indicators.py`, `core/signals.py`, `core/portfolio.py`,
-  `config/params.py` (PROTEGIDOS — ver CLAUDE.md)
+- Stream de sinais pre-filter (exigiria instrumentar `engines/millennium.py`)
+- Detecção de "quase-entrou" (inexistente no código atual)
+- Editor de VPS settings / remote start-stop / asset basket (Fases 3a-3d)
+- Alterar `core/*` protegido ou `config/params.py`
 
 ---
 
@@ -54,94 +68,74 @@ estabelecendo a fundação de dados + layout pro resto do roadmap VPS
 
 ```
 ┌─ VPS (vmi3200601) ────────────────────────────────────────┐
+│  tools/maintenance/millennium_shadow.py   (INALTERADO)     │
+│  tools/cockpit_api.py                     (INALTERADO)     │
 │                                                            │
-│  tools/millennium_shadow.py          (MODIFICADO)          │
-│    └─ loop: detect → build_trade_record_with_gates()       │
-│                                                            │
-│          Reaproveita:                                      │
-│            core/signals.py  (decide_direction, filtros)    │
-│            core/portfolio.py (portfolio_allows, size)      │
-│                                                            │
-│          Emite TradeRecord com:                            │
-│            - would_enter: bool                             │
-│            - gate_breakdown: list[GateOutcome]             │
-│            - filter_reason: str | None                     │
-│                                                            │
-│    └─ atomic_append → state/trades.jsonl                   │
-│                                                            │
-│  tools/cockpit_api.py                (INALTERADO)          │
-│    └─ /trades → pydantic extra='allow' passa novos campos  │
-│                                                            │
+│  Trade records já têm size/stop/target/rr/result/pnl/      │
+│  regime/omega_* — só precisam ser transportados.           │
 └─────────────┬──────────────────────────────────────────────┘
-              │ SSH tunnel gerenciado pelo launcher
+              │ SSH tunnel (launcher-managed)
               │ localhost:8787
 ┌─────────────┴──────────────────────────────────────────────┐
 │  Launcher (Windows)                                         │
 │                                                             │
-│  core/shadow_contract.py             (EXTENDIDO)            │
-│    └─ GateOutcome (NOVO modelo)                             │
-│    └─ TradeRecord (campos opcionais novos)                  │
+│  core/shadow_contract.py                 (MINIMAL EXTEND)   │
+│    └─ TradeRecord ganha campos opcionais pros dados que     │
+│       já existem no disk (stop, target, rr, result, pnl,    │
+│       size, score, macro_bias, vol_regime, omega_*, etc).   │
+│       extra='allow' já funciona, mas tipagem explícita      │
+│       ajuda o cockpit_client e os tests.                    │
 │                                                             │
-│  launcher_support/shadow_poller.py   (INALTERADO)           │
-│    └─ cachea /trades via cockpit_client                     │
+│  launcher_support/cockpit_client.py      (INALTERADO)       │
+│  launcher_support/shadow_poller.py       (INALTERADO)       │
 │                                                             │
-│  launcher_support/engines_sidebar.py (NOVO)                 │
-│    └─ render_sidebar(parent, engines, selected) → list fixa │
-│    └─ render_detail(parent, run_info) → painel flex         │
-│       ├─ health_section(hb)                                 │
+│  launcher_support/engines_sidebar.py     (NOVO)             │
+│    ├─ render_sidebar(parent, engines, selected, on_select)  │
+│    └─ render_detail(parent, run_ctx)                        │
+│       ├─ health_section(heartbeat)                          │
 │       ├─ run_info_section(manifest)                         │
-│       ├─ signals_table(trades) ← coluna status renderiza    │
-│       │                           would_enter / filter_reason│
-│       └─ actions_row()                                      │
+│       ├─ signals_table(trades)   ← colunas expandidas       │
+│       └─ actions_row(run_id)                                │
 │                                                             │
-│  launcher_support/engines_live_view.py (REFATORADO)         │
+│  launcher_support/signal_detail_popup.py (NOVO)             │
+│    └─ show(trade_record) — TkToplevel modal com             │
+│       todas as omega scores + struct + cascade + regime     │
+│                                                             │
+│  launcher_support/engines_live_view.py   (REFATORADO)       │
 │    └─ _render_detail_shadow delega pra engines_sidebar      │
 │    └─ Mesmo sidebar aplicado aos modos paper/demo/testnet/  │
 │       live (source muda: _PROCS_CACHE em vez de shadow      │
-│       poller, mas componente é o mesmo)                     │
+│       poller, mas component é o mesmo)                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **Decisões chave:**
 
-- **Gates ficam em `millennium_shadow.py` por ora.** Não migra pra
-  `core/gates.py` porque (a) só 1 engine precisa agora, (b) abstração
-  prematura viola YAGNI, (c) `core/` é protegido — adicionar arquivo
-  novo exige reconciliação com política do CLAUDE.md.
-- **`GateOutcome` é `list`, não `dict`.** Ordem importa pra debug
-  ("qual gate barrou primeiro"). Dict perde ordem cross-platform.
-- **`would_enter` é `bool | None`.** `None` = trade record legacy sem
-  breakdown; UI renderiza `—`. Retrocompatibilidade obrigatória.
-- **Sidebar é componente reutilizável.** Fase 2b aplica o MESMO sidebar
-  ao modo SHADOW e aos modos paper/demo/testnet/live. Source data
-  diferente, component layer idêntico.
+- **Backend zero.** `millennium_shadow.py`, `cockpit_api.py`, engines
+  e `config/params.py` ficam intactos. Sem CORE tocado.
+- **Contrato estende, não redefine.** Todos campos novos em
+  `TradeRecord` são `Optional`, default `None`. Legacy records
+  deserializam sem erro. `extra='allow'` vira redundante mas
+  tipagem explícita documenta o que o UI espera.
+- **Sidebar é componente reutilizável.** O MESMO sidebar renderiza
+  tanto modo SHADOW (dados do VPS via poller) quanto paper/demo/
+  testnet/live (dados locais via `_PROCS_CACHE`). Source data difere,
+  component layer é único.
+- **Row click → popup em vez de inline expand.** Popup TkToplevel
+  mantém a tabela densa (institucional) e evita re-layout do painel
+  quando user quer drill-down. Click outra row = popup refresh.
 
 ---
 
 ## Contrato de dados — `core/shadow_contract.py`
 
-### Modelo novo: `GateOutcome`
+### `TradeRecord` — extend com campos opcionais
 
-```python
-class GateOutcome(BaseModel):
-    """Resultado atômico de um gate.
-
-    Gates são avaliados em ordem determinística pelo runner. A lista de
-    GateOutcome em TradeRecord.gate_breakdown preserva essa ordem, o
-    que permite ao client identificar "qual foi o primeiro filtro a
-    barrar" sem scan completo.
-    """
-    name: str                  # ex: "regime", "chop", "correlation", "max_positions", "size_ok"
-    passed: bool
-    reason: str | None = None  # null quando passed=True; texto curto (<80 chars) quando False
-    value: float | None = None # valor numérico medido, opcional (ex: correlation=0.83, size=0.0)
-```
-
-### Modelo estendido: `TradeRecord`
+Só tipagem. Nenhum campo obrigatório novo. Valores vêm do disco.
 
 ```python
 class TradeRecord(BaseModel):
-    # Campos existentes (inalterados — retrocompat total)
+    # Campos existentes (inalterados)
     timestamp: datetime
     symbol: str
     strategy: str
@@ -151,10 +145,46 @@ class TradeRecord(BaseModel):
     pnl: float | None = None
     shadow_observed_at: datetime | None = None
 
-    # Campos novos — todos default-safe pra retrocompat com records no disco
-    would_enter: bool | None = None          # True sse todos gates pass E size > min
-    gate_breakdown: list[GateOutcome] = []   # vazia = não avaliado (record legacy)
-    filter_reason: str | None = None         # summary = primeiro gate.reason onde passed=False
+    # NOVOS — todos opcionais, refletem o shape do shadow_trades.jsonl atual
+    stop: float | None = None
+    target: float | None = None
+    exit_p: float | None = None            # preço real de saída
+    rr: float | None = None                # risk:reward ratio planejado
+    duration: int | None = None            # candles até saída
+    result: Literal["WIN", "LOSS"] | None = None
+    exit_reason: str | None = None         # "trailing", "stop_initial", "target", ...
+    size: float | None = None              # notional USD
+    score: float | None = None             # engine-specific entry score
+    r_multiple: float | None = None        # pnl / risk_inicial
+
+    # Regime context at entry
+    macro_bias: Literal["BULL", "BEAR", "CHOP"] | None = None
+    vol_regime: Literal["LOW", "NORMAL", "HIGH"] | None = None
+
+    # Omega breakdown (5D fractal — nem sempre presente; ex: JUMP não emite todos)
+    omega_struct: float | None = None
+    omega_flow: float | None = None
+    omega_cascade: float | None = None
+    omega_momentum: float | None = None
+    omega_pullback: float | None = None
+
+    # Structural context (optional; surface in popup if present)
+    struct: str | None = None              # "UP" | "DOWN" | ...
+    struct_str: float | None = None        # strength 0-1
+    rsi: float | None = None
+    dist_ema21: float | None = None
+    chop_trade: bool | None = None
+
+    # Scaling / risk multipliers (transparência)
+    dd_scale: float | None = None
+    corr_mult: float | None = None
+
+    # HMM regime (raramente presente — opcional)
+    hmm_regime: str | None = None
+    hmm_confidence: float | None = None
+
+    # Shadow-specific provenance (já existe)
+    shadow_run_id: str | None = None
 
     model_config = ConfigDict(extra="allow")
 ```
@@ -163,342 +193,274 @@ class TradeRecord(BaseModel):
 
 | Invariante | Regra |
 |-----------|-------|
-| Consistência | `would_enter == True` ⇔ `all(g.passed for g in gate_breakdown)` |
-| Razão de filtro | `filter_reason` == primeiro `g.reason` onde `g.passed is False`; `None` se `would_enter=True` |
-| Retrocompat | Record sem campos novos deserializa OK (defaults kickam in) |
-| Ordem | `gate_breakdown` preserva ordem de avaliação do runner |
-
-Invariantes são verificadas em unit tests — se violadas, pydantic não
-levanta mas o runner escreveu inconsistente. Teste dedicado
-`test_trade_record_invariants` fecha esse hole.
+| Retrocompat | Record legacy (só campos antigos) deserializa OK — defaults kickam in |
+| Extra fields | `extra='allow'` preservado — runner pode evoluir shape sem quebrar client |
+| Ordem semântica | Campos agrupados por tema (entry/exit, regime, omega, struct) pra leitura |
 
 ---
 
-## Runner — `tools/millennium_shadow.py`
+## Runner e Cockpit API
 
-### Nova função: `build_trade_record_with_gates()`
-
-Wrapea a lógica de decisão existente. **Não toca em `core/*` protegido** —
-apenas chama as funções que já existem (`core/signals.decide_direction`,
-`core/portfolio.portfolio_allows`, `core/portfolio.position_size`) e
-estrutura os retornos como `GateOutcome`.
-
-```python
-def build_trade_record_with_gates(
-    signal_raw: dict,            # {ts, symbol, direction, entry, indicators}
-    macro: str,                  # "BULL" | "BEAR" | "CHOP" (de detect_macro)
-    portfolio_state: dict,       # {open_positions, correlations}
-    params: dict,                # config.params
-) -> TradeRecord:
-    gates: list[GateOutcome] = []
-
-    # 1. Regime (reaproveita config.params.SCORE_BY_REGIME)
-    regime_allowed = signal_raw["direction"] in allowed_directions(macro, params)
-    gates.append(GateOutcome(
-        name="regime",
-        passed=regime_allowed,
-        reason=None if regime_allowed else f"regime={macro} veta {signal_raw['direction']}",
-        value=None,
-    ))
-
-    # 2. Chop filter (usa score existente de decide_direction)
-    chop_ok = signal_raw["indicators"].get("score_chop", 1.0) >= params["CHOP_THRESHOLD"]
-    gates.append(GateOutcome(
-        name="chop",
-        passed=chop_ok,
-        reason=None if chop_ok else "vol_regime=CHOP",
-        value=signal_raw["indicators"].get("score_chop"),
-    ))
-
-    # 3. Correlation (via portfolio_allows, already-computed cross-correlation)
-    corr_ok, corr_val = check_correlation(signal_raw["symbol"], portfolio_state, params)
-    gates.append(GateOutcome(
-        name="correlation",
-        passed=corr_ok,
-        reason=None if corr_ok else f"corr_max={corr_val:.2f}",
-        value=corr_val,
-    ))
-
-    # 4. Max open positions
-    n_open = len(portfolio_state.get("open_positions", []))
-    max_ok = n_open < params["MAX_OPEN_POSITIONS"]
-    gates.append(GateOutcome(
-        name="max_positions",
-        passed=max_ok,
-        reason=None if max_ok else f"open={n_open}/{params['MAX_OPEN_POSITIONS']}",
-        value=float(n_open),
-    ))
-
-    # 5. Size > min (Kelly × convex × dd_scale × omega_risk)
-    size = compute_size(signal_raw, portfolio_state, params)   # função existente
-    size_ok = size >= params["MIN_POSITION_SIZE_USD"]
-    gates.append(GateOutcome(
-        name="size_ok",
-        passed=size_ok,
-        reason=None if size_ok else f"size=${size:.2f} < min",
-        value=size,
-    ))
-
-    # Derivados
-    would_enter = all(g.passed for g in gates)
-    first_fail = next((g for g in gates if not g.passed), None)
-
-    return TradeRecord(
-        timestamp=signal_raw["ts"],
-        symbol=signal_raw["symbol"],
-        strategy="MILLENNIUM",
-        direction=signal_raw["direction"],
-        entry=signal_raw["entry"],
-        would_enter=would_enter,
-        gate_breakdown=gates,
-        filter_reason=first_fail.reason if first_fail else None,
-        shadow_observed_at=datetime.now(timezone.utc),
-    )
-```
-
-**Notas:**
-- `allowed_directions`, `check_correlation`, `compute_size` são
-  helpers LOCAIS em `millennium_shadow.py` que delegam pras funções
-  protegidas em `core/`. Pureza do CORE preservada.
-- Os nomes de gate acima (`regime`, `chop`, `correlation`,
-  `max_positions`, `size_ok`) viram enum implícito consumido pelo
-  cliente. Adicionar gate novo = append ao final; client tolera gates
-  desconhecidos (lista é genérica).
-
-### Call-site hook
-
-No loop principal de `millennium_shadow.py`, onde hoje há
-`detect_signals()` → `append_trade_record()`, substitui por:
-
-```python
-for signal in detect_signals(...):
-    record = build_trade_record_with_gates(
-        signal, macro, portfolio_state, params,
-    )
-    atomic_append_jsonl(trades_path, record.model_dump(mode="json"))
-```
+**Zero mudanças.** Runner emite dicts com 30+ campos via `_append_trade`.
+Cockpit API serializa via pydantic com `extra='allow'`. Já funciona.
 
 ---
 
-## Cockpit API — `tools/cockpit_api.py`
+## Launcher UI
 
-**Zero mudança de código.** `TradeRecord` com `ConfigDict(extra='allow')`
-já serializa os campos novos. Validação pelo `GateOutcome` roda no
-client-side deserialize.
-
-**Smoke pós-deploy:** endpoint `/v1/runs/{id}/trades` retorna JSON com
-`gate_breakdown: [{name, passed, reason, value}, ...]` — verificado em
-`tests/test_cockpit_api.py::test_trades_preserves_gate_breakdown`.
-
----
-
-## Launcher UI — `launcher_support/engines_sidebar.py` (NOVO)
-
-### Componente: `render_sidebar()`
+### Novo componente — `launcher_support/engines_sidebar.py`
 
 ```python
+"""Sidebar institucional + detail renderer reusável.
+
+Consumido por engines_live_view.py pra renderizar cockpit master-detail
+em todos os modos (shadow, paper, demo, testnet, live).
+
+Source data varia por modo (ShadowPoller cache pro shadow, _PROCS_CACHE
+pros locais), mas o component layer é único — garante consistência
+visual e DRY.
+"""
+from __future__ import annotations
+import tkinter as tk
+from typing import Callable
+
+from core.shadow_contract import Heartbeat, Manifest, TradeRecord
+from core.ui_palette import (
+    AMBER_B, BG, BORDER, DIM, DIM2, GREEN, RED, WHITE, PANEL, FONT,
+)
+
+# SIDEBAR_WIDTH é fixa — aproximação de 180px em FONT monospace
+SIDEBAR_WIDTH = 24  # char width
+
+
+class EngineRow:
+    def __init__(self, slug: str, display: str, active: bool,
+                 ticks: int | None, signals: int | None):
+        self.slug = slug
+        self.display = display       # "MILLENNIUM"
+        self.active = active         # tem run vivo?
+        self.ticks = ticks           # ticks_ok do heartbeat
+        self.signals = signals       # novel_total do heartbeat
+
+
 def render_sidebar(
     parent: tk.Widget,
-    engines: list[EngineRow],      # [(slug, display_name, status, summary), ...]
+    engines: list[EngineRow],
     selected_slug: str | None,
     on_select: Callable[[str], None],
 ) -> tk.Frame:
-    """Sidebar lateral fixa (width=180). Lista engines registradas (do
-    config/engines.py). Engine ativo = highlight AMBER_B. Engine sem
-    run = DIM2 + placeholder '—'."""
-```
+    """Lista de engines fixa à esquerda. Return frame parent."""
+    ...
 
-**Linha de engine:**
-```
-  ▸ MILLENNIUM       ← selecionado, amber bg
-    ✓ 41t · 625s     ← subline smaller, dim
-  ○ CITADEL          ← não selecionado
-    —                ← sem run ativo
-  ○ JUMP
-    —
-```
 
-### Componente: `render_detail()`
-
-```python
 def render_detail(
     parent: tk.Widget,
     engine: str,
-    mode: Mode,
+    mode: str,
     heartbeat: Heartbeat | None,
     manifest: Manifest | None,
     trades: list[TradeRecord],
+    on_row_click: Callable[[TradeRecord], None],
 ) -> tk.Frame:
-    """Painel detail flex (right). 4 seções: HEALTH, RUN INFO,
-    LAST SIGNALS (expandida), ACTIONS."""
+    """Detail pane flex. 4 seções."""
+    ...
 ```
 
-### Tabela LAST SIGNALS — coluna status expandida
+### Layout
 
-| time   | sym  | dir  | entry    | status                  |
-|--------|------|------|----------|-------------------------|
-| 19:02  | BTC  | LONG | 65432.0  | ✓ would_enter           |
-| 18:47  | ETH  | SHRT | 3210.5   | ✗ chop                  |
-| 18:45  | LINK | LONG | 14.23    | ✗ correlation=0.83      |
-| 18:30  | SOL  | LONG | 142.8    | —                       |
+```
+┌─ ENGINES LIVE — mode: [SHADOW] paper demo testnet live ──────────────────┐
+│                                                                           │
+│ ┌─ ENGINES ──────┐ ┌─ MILLENNIUM · shadow · [REMOTE] ──────────────────┐ │
+│ │ ▸ MILLENNIUM   │ │ HEALTH                                             │ │
+│ │   ✓ 41t · 625s │ │   ticks_ok  41         uptime  12h 4m              │ │
+│ │ ○ CITADEL      │ │   ticks_fail 0         novel   625                 │ │
+│ │   —            │ │                                                     │ │
+│ │ ○ JUMP         │ │ RUN INFO                                           │ │
+│ │   —            │ │   run_id  2026-04-18_0229   commit  9c1b877        │ │
+│ │ ○ RENAISSANCE  │ │   started 02:29 UTC         branch  feat/phi-engine│ │
+│ │   —            │ │                                                     │ │
+│ │ ○ BRIDGEWATER  │ │ LAST SIGNALS (click row for detail)                │ │
+│ │   —            │ │   time  sym   dir  entry    stop    rr  size  res  │ │
+│ │ ○ DE_SHAW      │ │   19:02 BTC   L    65432.0  65120   3.0 $285  WIN  │ │
+│ │   —            │ │   18:47 ETH   S    3210.5   3228.1  3.0 $147  WIN  │ │
+│ │ ○ JANE_STREET  │ │   18:45 LINK  L    14.23    14.02   3.0 $94   LOSS │ │
+│ │   —            │ │   18:30 SOL   L    142.8    140.1   3.0 $156  WIN  │ │
+│ │                │ │   ...                                               │ │
+│ │                │ │                                                     │ │
+│ │                │ │ ACTIONS  [REFRESH]  [VIEW LOGS]  [KILL]            │ │
+│ └────────────────┘ └─────────────────────────────────────────────────────┘ │
+│                                                                           │
+│ hints: ↑↓ select · ENTER expand · M cycle mode · ESC main                │
+└───────────────────────────────────────────────────────────────────────────┘
+```
 
-**Rules:**
-- `would_enter == True` → `✓ would_enter` em GREEN
-- `would_enter == False` → `✗ <short_reason>` em RED (truncado a 30 chars)
-- `would_enter is None` → `—` em DIM (legacy record pre-upgrade)
-- Reason vem de `filter_reason` pra evitar re-scan do `gate_breakdown`
-- Row clicada expande tooltip/popup com `gate_breakdown` completo
-  (deferido pra Fase 3 se escopo permitir — YAGNI agora, render linha
-  única bast)
+### Tabela LAST SIGNALS — colunas
+
+| Col | Field | Format | Width |
+|-----|-------|--------|-------|
+| time | `timestamp` | `%H:%M` | 6 |
+| sym | `symbol` | truncate 4 chars + pad | 5 |
+| dir | `direction` | `L` for BULLISH/LONG, `S` for BEARISH/SHORT | 3 |
+| entry | `entry` | `%.4g` (4 sig figs) | 9 |
+| stop | `stop` | `%.4g` | 9 |
+| rr | `rr` | `%.1f` | 4 |
+| size | `size` | `$%.0f` | 7 |
+| res | `result` | `WIN` em GREEN, `LOSS` em RED, `—` em DIM se None | 5 |
+
+Linhas clicáveis. Click → `show_signal_detail_popup(trade_record)`.
+
+### Novo componente — `launcher_support/signal_detail_popup.py`
+
+Popup TkToplevel modal sobre o launcher. Seções:
+
+```
+┌─ TRADE DETAIL — BTCUSDT · LONG · 19:02 ──────────────┐
+│                                                        │
+│ OUTCOME                                               │
+│   result    WIN          exit_reason  trailing        │
+│   pnl       +$285.40     exit_price   66210           │
+│   r_multiple 1.44        duration     5 candles       │
+│                                                        │
+│ ENTRY                                                  │
+│   entry  65432.0    stop  65120   target  66950       │
+│   rr     3.0        size  $285    score   0.54        │
+│                                                        │
+│ REGIME                                                 │
+│   macro_bias  BULL     vol_regime  NORMAL             │
+│   hmm_regime  —        chop_trade  false              │
+│   dd_scale    1.00     corr_mult   1.00               │
+│                                                        │
+│ OMEGA 5D                                              │
+│   struct    0.75   ████████░░                         │
+│   flow      0.86   █████████░                         │
+│   cascade   0.25   ███░░░░░░░                         │
+│   momentum  0.67   ███████░░░                         │
+│   pullback  0.93   █████████▉                         │
+│                                                        │
+│ STRUCTURE                                              │
+│   struct  DOWN     struct_str  0.75                   │
+│   rsi     49.3     dist_ema21  0.10   cascade_n  1    │
+│                                                        │
+│                                           [ESC close] │
+└────────────────────────────────────────────────────────┘
+```
+
+Omega bars são chars unicode (`█▉░`), monospace-aligned, compat
+TkInter. Sem libs de chart.
+
+Rules:
+- Campos com valor `None` no record: renderiza `—` em DIM
+- Popup fecha com ESC, click fora, ou botão X
+- Non-modal: próximo click em outra row refreshe o mesmo popup
 
 ### Paleta
 
-Reutiliza `core/ui_palette.py` — zero cor nova introduzida:
-- `AMBER_B` — highlight selected row
-- `GREEN` — would_enter ✓
-- `RED` — filter_reason ✗
-- `DIM2` — engine inactive, legacy ─
-- `PANEL` + `BORDER` — sidebar bg
+Reutiliza `core/ui_palette.py` — zero cor nova:
+- `AMBER_B` — highlight selected row/engine
+- `GREEN` — `WIN` / omega >= 0.66
+- `RED` — `LOSS` / omega < 0.33
+- `DIM` / `DIM2` — valores None, campos inativos
+- `PANEL` + `BORDER` — backgrounds
 
 ### Refactor em `engines_live_view.py`
 
-`_render_detail_shadow` é extraído pra `engines_sidebar.render_detail`.
-O render atual fica deprecated como fallback (comment-tagged
-`# TODO remove pós Fase 2b stable`).
-
-Aplicação aos outros modos: `_render_live_panel`, `_render_paper_panel`,
-etc passam a usar `engines_sidebar.render_sidebar` + `render_detail`.
-Source data muda (`_PROCS_CACHE` em vez de `shadow_poller.cache`), mas
-component layer é idêntico — single source of truth visual.
+- `_render_detail_shadow` delega pra `engines_sidebar.render_detail`
+- Modos paper/demo/testnet/live: `_render_live_panel` usa mesmo
+  sidebar + detail; source é `_PROCS_CACHE` em vez de poller
+- Antigo layout full-width preservado como fallback (comment-tagged
+  `# TODO remove após 2b stable` — deletar em PR de follow-up)
 
 ---
 
 ## Testing
 
 ### Suite atual
-- Baseline: `1223 passed, 7 skipped`
-- Meta pós-feature: `≥1235 passed` (≥12 tests novos)
+Baseline: `1223 passed, 7 skipped`
+Meta pós-feature: `≥1235 passed` (≥12 tests novos)
 
 ### Arquivos de teste
 
-| Arquivo | Novo/Extend | Cenários cobertos |
-|---------|-------------|-------------------|
-| `tests/test_shadow_contract.py` | extend | TradeRecord com novos campos, sem novos campos (legacy), GateOutcome invariants (`passed=True ⇒ reason is None`), serialize/deserialize round-trip |
-| `tests/test_millennium_shadow_gates.py` | NOVO | `build_trade_record_with_gates` em 6 cenários: all_pass, regime_fail, chop_fail, correlation_fail, max_pos_fail, size_fail. `filter_reason` sempre bate com o primeiro fail. Invariante `would_enter == all(passed)` sempre vale. |
-| `tests/test_cockpit_api.py` | extend | `/v1/runs/{id}/trades` retorna `gate_breakdown` quando presente no disk; tolera trades legacy sem o campo |
-| `tests/test_engines_sidebar.py` | NOVO | `render_sidebar` lista engines do registry, destaca selected, mostra `—` pra engines sem run; `render_detail` renderiza HEALTH/RUN INFO/LAST SIGNALS; signals table colore ✓/✗/—; trunca reason a 30 chars |
-| `tests/test_engines_live_view_cockpit.py` | extend | Integration: engines_live_view usa engines_sidebar componente; mesma sidebar aparece em modo SHADOW e modo paper/demo/testnet/live |
+| Arquivo | Novo/Extend | Cenários |
+|---------|-------------|----------|
+| `tests/test_shadow_contract.py` | extend | `TradeRecord` com novos campos; legacy sem; extra fields passam; `result` Literal valida; defaults None funcionam |
+| `tests/test_engines_sidebar.py` | NOVO | `EngineRow` construction; `render_sidebar` lista todas engines do registry (não só ativas); selected highlight AMBER_B; engine inactive mostra `—` DIM2; `render_detail` renderiza 4 seções; signals table renderiza N rows com colunas corretas |
+| `tests/test_signal_detail_popup.py` | NOVO | `show()` cria Toplevel com 5 seções; campos None renderizam `—`; omega bars corretos pra 0.0 / 0.5 / 1.0; ESC fecha; refresh com outro trade atualiza |
+| `tests/test_engines_live_view_cockpit.py` | extend | Sidebar aparece em modo SHADOW; mesma sidebar aparece em modo paper (source diferente, componente igual); row click dispara `signal_detail_popup.show` |
 
 ### Smoke manual (pós-deploy)
 
 1. `python launcher.py` → EXECUTE → ENGINES LIVE
-2. Confirma sidebar à esquerda com 9 engines listadas, MILLENNIUM
-   highlighted
-3. Click em outra engine → sidebar marca selection, detail vazio (sem
-   run ativo)
-4. Click MILLENNIUM → detail populado com HEALTH/RUN INFO/LAST SIGNALS
-5. Tabela LAST SIGNALS mostra misto de ✓ (verde) e ✗ (vermelho)
-6. Mode cycle M → paper mode → mesma sidebar aparece, detail muda pra
-   data local
+2. Sidebar à esquerda com 9 engines (MILLENNIUM, CITADEL, JUMP,
+   RENAISSANCE, BRIDGEWATER, DE_SHAW, JANE_STREET, TWO_SIGMA, AQR)
+3. Engine inactive (sem run) = texto DIM2 + `—`
+4. MILLENNIUM selecionado, detail populado com LAST SIGNALS rica
+5. Click em uma row → popup aparece com 5 seções, omega bars
+6. ESC fecha popup
+7. `M` cycla pra paper mode → mesma sidebar, detail muda pra data local
 
 ### Regression
 
-- `git diff feat/phi-engine -- core/indicators.py core/signals.py core/portfolio.py config/params.py`
-  deve retornar vazio. Verificação automática no plano de execução.
-- Re-rodar `pytest tests/test_millennium_shadow.py` existente garante
-  que o runner continua emitindo trade records válidos.
+- `git diff feat/phi-engine -- core/indicators.py core/signals.py core/portfolio.py core/risk/portfolio.py config/params.py`
+  deve retornar vazio. Verificado em step do plano.
+- `tools/maintenance/millennium_shadow.py` também **NÃO** toca
+  (apesar de não protegido, mudança arriscada pra runner que já tá
+  rodando no VPS).
 
 ---
 
 ## Rollout
 
-### Fase 2a (dados) — implementar primeiro
-1. `GateOutcome` + extensão `TradeRecord` em `core/shadow_contract.py`
-2. Tests de contrato (`test_shadow_contract.py`)
-3. `build_trade_record_with_gates` em `millennium_shadow.py`
-4. Tests do runner (`test_millennium_shadow_gates.py`)
-5. Deploy no VPS — novos trades começam a carregar breakdown.
-   Trades antigos continuam deserializando com defaults.
-6. Verificação: cockpit API `/trades` mostra campos novos.
+### Ordem implementação
 
-### Fase 2b (UI) — depois de 2a estável
-1. `engines_sidebar.py` (componente novo) + tests
-2. Refactor `engines_live_view.py` pra usar o componente
-3. Aplicar sidebar aos modos paper/demo/testnet/live (source muda)
-4. Smoke manual + polish (cores, alinhamento, bordas)
+1. **Contrato (shadow_contract.py)** — extend TradeRecord + tests
+2. **engines_sidebar.py** — render_sidebar + render_detail + tests
+3. **signal_detail_popup.py** — popup + tests
+4. **Refactor engines_live_view.py** — use novos componentes no modo SHADOW
+5. **Aplicar sidebar aos outros modos** (paper/demo/testnet/live)
+6. **Smoke manual** + commit
 
 ### Deploy sequence
-1. Merge `feat/shadow-gate-sidebar` → `feat/phi-engine`
-2. Push
-3. VPS: `git pull && sudo systemctl restart millennium_shadow.service`
-4. Launcher local: reabre (pega novo `engines_sidebar.py`)
-5. Observa 1h de trades novos no painel — gate_breakdown deve aparecer
-   em 100% dos novos records
 
-### Rollback (se algo der errado)
-- Trade records novos convivem com legacy — só reverter o git
-- `systemctl restart` volta ao runner anterior
-- UI reverte com launcher reabrindo no commit anterior
+1. Merge branch → `feat/phi-engine` → push
+2. VPS: **nenhuma ação** (zero backend)
+3. Launcher local: reabrir pra pegar código novo
+4. Observa UX 5min — tabela rica, row click, popup, modo cycle
+
+### Rollback
+
+- Se componente novo bugar, reverter em launcher fica trivial:
+  `_render_detail_shadow` antigo ainda existe na função (só deprecated)
+- Zero risco no runner ou cockpit — não tocados
 
 ---
 
 ## Backlog pós-Fase 2
 
-Listar no session log final pra rastrear:
+Rastreado no session log final:
 
 1. **Fase 3a — VPS settings UI** (host/port/tokens dentro do launcher)
 2. **Fase 3b — Remote start/stop** (POST admin API)
 3. **Fase 3c — Asset basket editor**
-4. **Fase 3d — Multi-engine orchestrator** (N runners simultâneos)
-5. **Fase 3e — VPN/tunnel hardening** (opcional — WireGuard vs SSH
-   com rotação)
-6. Migrar `build_trade_record_with_gates` pra `core/gates.py` quando
-   CITADEL ou JUMP ganhar shadow runner (então 2+ engines precisam =
-   justifica a abstração)
-7. Tooltip expansível na row LAST SIGNALS com gate_breakdown completo
-   (UX polish, deferido)
-8. Column sort/filter na tabela LAST SIGNALS (UX polish, deferido)
-
----
-
-## Questões abertas pro plano resolver
-
-O design assume algumas APIs/símbolos sem ter lido 100% do código. O
-plano de implementação deve resolver estas primeiro via leitura:
-
-1. **Nome real do param de tamanho mínimo.** Chutei
-   `MIN_POSITION_SIZE_USD` — verificar em `config/params.py` o nome
-   atual. Se não existir, usar o threshold que já é aplicado em
-   `core/portfolio.position_size`.
-2. **Nome real do score de chop.** Chutei `score_chop` — verificar
-   o campo retornado por `core/signals.decide_direction` ou
-   `core/signals.score_chop` (se existir). Adaptar a chave do dict.
-3. **Estrutura atual do loop em `tools/millennium_shadow.py`.** Plano
-   deve ler o loop antes de decidir onde inserir
-   `build_trade_record_with_gates`. Hook deve ser não-invasivo.
-4. **Schema atual de `trades.jsonl`.** Verificar se já tem
-   `shadow_observed_at` e outros campos — não duplicar.
-5. **Helpers em `core/`** pra reaproveitar:
-   `portfolio_allows`, `position_size`, `detect_macro`,
-   `decide_direction`. Plano lista assinaturas reais antes de escrever
-   o wrapper.
-
-Estas são "unknowns" aceitáveis pra spec (não são decisões de design)
-— são detalhes de implementação que o plano TDD naturalmente captura
-no primeiro task de leitura.
+4. **Fase 3d — Multi-engine orchestrator** (N runners simultâneos no VPS)
+5. **Fase 3e — VPN/tunnel hardening** (opcional)
+6. Signal detail popup: chart de mini-candles se render leve o permitir
+7. LAST SIGNALS column sort/filter
+8. Se quiser stream de pre-filter signals no futuro: exigiria
+   instrumentar `engines/millennium.py` e upstream — novo spec
+9. Deletar fallback antigo em `engines_live_view.py` após 2b stable
 
 ---
 
 ## Regras seguidas
 
 - ✅ Zero linha em `core/indicators.py`, `core/signals.py`,
-  `core/portfolio.py`, `config/params.py` (CORE protegido — CLAUDE.md)
-- ✅ Anti-overfit protocol: não aplicável (feature de observabilidade,
-  não é tune de params)
-- ✅ YAGNI: abstração `core/gates.py` deferida até 2+ engines precisarem
-- ✅ Single source of truth: `engines_sidebar.py` reutilizado em todos
-  modos (shadow, paper, demo, testnet, live)
-- ✅ Testes caracterizam comportamento — sem modificar código pra
-  teste passar
-- ✅ Atomic writes preservados (trades.jsonl atomic_append)
-- ✅ Retrocompat: trade records legacy deserializam com defaults
+  `core/risk/portfolio.py`, `config/params.py` (CORE protegido — CLAUDE.md)
+- ✅ Zero linha em `tools/maintenance/millennium_shadow.py` e
+  `tools/cockpit_api.py` (runner + API rodando no VPS — evita regressão)
+- ✅ Anti-overfit: não aplicável (observability, não é tune)
+- ✅ YAGNI: componente `engines_sidebar` implementado mínimo;
+  extras (sort/filter/chart) deferidos
+- ✅ Single source of truth: um componente sidebar para todos modos
+- ✅ Retrocompat: `TradeRecord` novos campos são Optional
+- ✅ Testes caracterizam comportamento — zero "ajustar código pra teste passar"
