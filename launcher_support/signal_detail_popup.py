@@ -133,5 +133,81 @@ def section_structure(trade: dict) -> list[tuple[str, str, str]]:
 
 
 def show(parent, trade: dict) -> None:
-    """Abre Toplevel modal com drill-down do trade. Tk-only; smoke-tested."""
-    raise NotImplementedError("Tk render added in Task 5")
+    """Abre Toplevel modal com detail completo do trade.
+
+    Seções: OUTCOME, ENTRY, REGIME, OMEGA 5D, STRUCTURE. Fecha com
+    ESC, click fora, ou botão X. Trade dict deve vir cru (de
+    _render_detail_shadow) — campos ausentes renderizam '—'.
+    """
+    import tkinter as tk
+    from core.ui_palette import (
+        AMBER, BG, BORDER, DIM, DIM2, FONT, GREEN, PANEL, RED, WHITE,
+    )
+
+    COLORS = {
+        "GREEN": GREEN, "RED": RED, "DIM": DIM, "DIM2": DIM2,
+        "WHITE": WHITE, "AMBER": AMBER,
+    }
+
+    symbol = trade.get("symbol", "?")
+    direction = trade.get("direction", "?")
+    time_str = str(trade.get("timestamp", "?")).replace("T", " ")[:16]
+
+    top = tk.Toplevel(parent)
+    top.title(f"Trade detail — {symbol}")
+    top.configure(bg=PANEL)
+    top.geometry("520x640")
+
+    # HEADER
+    hdr = tk.Frame(top, bg=PANEL)
+    hdr.pack(fill="x", padx=16, pady=(14, 6))
+    tk.Label(hdr,
+             text=f"{symbol}  ·  {direction}  ·  {time_str}",
+             fg=WHITE, bg=PANEL, font=(FONT, 11, "bold")).pack(anchor="w")
+
+    def _render_section(title: str, rows: list[tuple[str, str, str]]) -> None:
+        tk.Label(top, text=title, fg=AMBER, bg=PANEL,
+                 font=(FONT, 7, "bold")).pack(anchor="w", padx=16, pady=(10, 2))
+        tk.Frame(top, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(0, 4))
+        container = tk.Frame(top, bg=PANEL)
+        container.pack(fill="x", padx=16, pady=(0, 4))
+        for label, value, color_name in rows:
+            row = tk.Frame(container, bg=PANEL)
+            row.pack(fill="x", pady=(0, 1))
+            tk.Label(row, text=f"{label}:", fg=DIM2, bg=PANEL,
+                     font=(FONT, 7), width=14, anchor="w").pack(side="left")
+            tk.Label(row, text=str(value),
+                     fg=COLORS.get(color_name, WHITE), bg=PANEL,
+                     font=(FONT, 7, "bold"), anchor="w").pack(side="left")
+
+    def _render_omega_section() -> None:
+        tk.Label(top, text="OMEGA 5D", fg=AMBER, bg=PANEL,
+                 font=(FONT, 7, "bold")).pack(anchor="w", padx=16, pady=(10, 2))
+        tk.Frame(top, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(0, 4))
+        container = tk.Frame(top, bg=PANEL)
+        container.pack(fill="x", padx=16, pady=(0, 4))
+        for dim_name, value_str, bar in section_omega(trade):
+            row = tk.Frame(container, bg=PANEL)
+            row.pack(fill="x", pady=(0, 1))
+            tk.Label(row, text=f"{dim_name}:", fg=DIM2, bg=PANEL,
+                     font=(FONT, 7), width=12, anchor="w").pack(side="left")
+            tk.Label(row, text=value_str, fg=WHITE, bg=PANEL,
+                     font=(FONT, 7, "bold"), width=6,
+                     anchor="w").pack(side="left")
+            tk.Label(row, text=bar, fg=AMBER, bg=PANEL,
+                     font=(FONT, 7)).pack(side="left", padx=(4, 0))
+
+    _render_section("OUTCOME", section_outcome(trade))
+    _render_section("ENTRY", section_entry(trade))
+    _render_section("REGIME", section_regime(trade))
+    _render_omega_section()
+    _render_section("STRUCTURE", section_structure(trade))
+
+    # CLOSE BUTTON + ESC
+    close_row = tk.Frame(top, bg=PANEL)
+    close_row.pack(fill="x", padx=16, pady=(16, 12))
+    tk.Label(close_row, text="  ESC close  ", fg=BG, bg=DIM2,
+             font=(FONT, 7, "bold"), cursor="hand2", padx=8, pady=4).pack(
+                 side="right")
+    top.bind("<Escape>", lambda _e: top.destroy())
+    top.focus_set()
