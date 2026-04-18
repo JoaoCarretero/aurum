@@ -30,6 +30,12 @@ from core.ui_palette import (
     MODE_PAPER, MODE_DEMO, MODE_TESTNET, MODE_LIVE,
     FONT,
 )
+from launcher_support.engines_sidebar import (
+    build_engine_rows,
+    render_sidebar,
+    render_detail,
+)
+from launcher_support.signal_detail_popup import show as show_signal_detail
 
 Bucket = Literal["LIVE", "READY", "RESEARCH"]
 Mode = Literal["paper", "demo", "testnet", "live", "shadow"]
@@ -1438,19 +1444,39 @@ def _refresh_shadow_panel(launcher, state) -> None:
 # (nunca bloqueia o UI thread) e se auto-refresh a cada 5s via
 # launcher.after. Se a cache esta vazia, renderiza empty-state.
 
-def _render_detail_shadow(parent, slug, meta, state, launcher):
-    """Render the full SHADOW cockpit for `slug`.
+def _engine_registry_for_sidebar(state) -> list[dict]:
+    """Return list de {slug, display} pra sidebar. Inclui todas engines
+    exibidas no bucket LIVE/READY atual — evita depender de import
+    circular com launcher.ENGINES."""
+    by_bucket = state.get("engines_by_bucket") or {}
+    seen: set[str] = set()
+    out: list[dict] = []
+    for bucket in ("LIVE", "READY"):
+        for item in by_bucket.get(bucket, []):
+            slug = item.get("slug") or ""
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            out.append({
+                "slug": slug,
+                "display": item.get("display") or slug.upper(),
+            })
+    if not out:
+        slug = state.get("selected_slug") or "millennium"
+        out.append({"slug": slug, "display": slug.upper()})
+    return out
 
-    Secoes top-to-bottom:
-      1. HEADER — engine name + TUNNEL badge + STATUS pill
-      2. HEALTH — TICKS OK / FAIL / SIGNALS / TICK com subtitles
-      3. RUN INFO — run_id, last_tick, last_error
-      4. LAST SIGNALS — table das ultimas 10 trades do /trades endpoint
-      5. ACTIONS — STOP SHADOW button (se RUNNING)
+
+def _render_detail_shadow(parent, slug, meta, state, launcher):
+    """Render SHADOW cockpit delegando pra engines_sidebar component.
+
+    Sidebar mostra todas engines do registry; selected=slug. Detail
+    pane vem do poller cache (cockpit API via SSH tunnel). Row click
+    em LAST SIGNALS abre signal_detail_popup.
     """
     name = meta.get("display", slug.upper())
 
-    # Le cache do poller (instantaneo, thread-safe).
+    # Le cache do poller.
     try:
         from launcher_support.tunnel_registry import get_shadow_poller
         poller = get_shadow_poller()
@@ -1463,92 +1489,54 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     except Exception:
         trades = []
 
-    # ── SECTION 1: HEADER ──────────────────────────────────────
-    header = tk.Frame(parent, bg=PANEL)
-    header.pack(fill="x", padx=12, pady=(10, 8))
-    tk.Label(header, text=name, font=(FONT, 12, "bold"),
-             fg=WHITE, bg=PANEL).pack(side="left")
-    tun_text, tun_fg = _get_tunnel_status_label()
-    tk.Label(header, text="  TUNNEL:", fg=DIM2, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left", padx=(14, 0))
-    tk.Label(header, text=f" {tun_text}", fg=tun_fg, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left")
+    run_dir = None
+    hb = None
+    if cached is not None:
+        run_dir, hb = cached
 
-    if cached is None:
-        _render_shadow_no_run(parent, launcher)
-        # Mesmo sem run ativo, re-tenta em 5s — o runner pode subir a
-        # qualquer momento.
+    # Build registry pro sidebar — todas engines LIVE-ready do registro.
+    registry = _engine_registry_for_sidebar(state)
+    heartbeats = {slug: hb} if hb else {}
+    rows = build_engine_rows(registry, heartbeats)
+
+    # Master-detail layout
+    layout = tk.Frame(parent, bg=PANEL)
+    layout.pack(fill="both", expand=True)
+
+    def _on_engine_select(new_slug: str):
+        state["selected_slug"] = new_slug
+        _render_detail(state, launcher)
+
+    render_sidebar(layout, rows, selected_slug=slug, on_select=_on_engine_select)
+
+    # Detail pane
+    if hb is None:
+        _render_shadow_no_run(layout, launcher)
         _schedule_shadow_refresh(launcher, state)
         return
 
-    run_dir, hb = cached
+    tun_text, tun_color = _get_tunnel_status_label()
     status = str(hb.get("status") or "unknown").upper()
     status_color = GREEN if status == "RUNNING" else DIM2
-    tk.Label(header, text=f" {status} ", fg=BG, bg=status_color,
-             font=(FONT, 7, "bold"), padx=6).pack(side="right")
 
-    # ── SECTION 2: HEALTH ──────────────────────────────────────
-    health = tk.Frame(parent, bg=PANEL)
-    health.pack(fill="x", padx=12, pady=(4, 8))
-    tk.Label(health, text="HEALTH", font=(FONT, 7, "bold"),
-             fg=AMBER, bg=PANEL).pack(anchor="w", pady=(0, 4))
-    tk.Frame(health, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+    def _on_row_click(trade: dict):
+        show_signal_detail(launcher, trade)
 
-    metrics_row = tk.Frame(health, bg=PANEL)
-    metrics_row.pack(fill="x")
-    fail_n = int(hb.get("ticks_fail", 0) or 0)
-    _shadow_metric_card(metrics_row, "TICKS OK",
-                        str(hb.get("ticks_ok", 0)),
-                        "ciclos completos",
-                        GREEN)
-    _shadow_metric_card(metrics_row, "TICKS FAIL",
-                        str(fail_n),
-                        "falhas de conexao",
-                        RED if fail_n > 0 else DIM2)
-    _shadow_metric_card(metrics_row, "SIGNALS",
-                        str(hb.get("novel_total", 0)),
-                        "sinais detectados",
-                        AMBER_B)
-    _shadow_metric_card(metrics_row, "TICK",
-                        f"{int(hb.get('tick_sec', 0) or 0)}s",
-                        "gap entre analises",
-                        WHITE)
+    render_detail(
+        parent=layout,
+        engine_display=name,
+        mode="shadow",
+        heartbeat=hb,
+        manifest=None,
+        trades=trades,
+        on_row_click=_on_row_click,
+        status_badge_text=f"TUNNEL {tun_text}  ·  {status}",
+        status_badge_color=status_color,
+    )
 
-    # ── SECTION 3: RUN INFO ────────────────────────────────────
-    info_section = tk.Frame(parent, bg=PANEL)
-    info_section.pack(fill="x", padx=12, pady=(4, 8))
-    tk.Label(info_section, text="RUN INFO", font=(FONT, 7, "bold"),
-             fg=AMBER, bg=PANEL).pack(anchor="w", pady=(0, 4))
-    tk.Frame(info_section, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
-
-    run_id = hb.get("run_id", "?")
-    source = "REMOTE" if _is_remote_run(run_dir) else "LOCAL"
-    last = hb.get("last_tick_at") or hb.get("stopped_at") or "—"
-    _shadow_info_row(info_section, "RUN ID", f"[{source}] {run_id}")
-    _shadow_info_row(info_section, "LAST TICK", str(last))
-    last_err = hb.get("last_error")
-    if last_err:
-        _shadow_info_row(info_section, "LAST ERROR", str(last_err), fg=RED)
-
-    # ── SECTION 4: LAST SIGNALS ────────────────────────────────
-    signals_section = tk.Frame(parent, bg=PANEL)
-    signals_section.pack(fill="both", expand=True, padx=12, pady=(4, 8))
-    header_row = tk.Frame(signals_section, bg=PANEL)
-    header_row.pack(fill="x", pady=(0, 4))
-    tk.Label(header_row, text="LAST SIGNALS", font=(FONT, 7, "bold"),
-             fg=AMBER, bg=PANEL).pack(side="left")
-    shown = min(len(trades), 10)
-    tk.Label(header_row, text=f"  · {shown} shown",
-             fg=DIM2, bg=PANEL, font=(FONT, 7)).pack(side="left", padx=(6, 0))
-    tk.Frame(signals_section, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
-
-    # trades do endpoint vem ordenados por timestamp — mostra newest-first.
-    _render_signals_table(signals_section,
-                          trades[-10:][::-1] if trades else [])
-
-    # ── SECTION 5: ACTIONS ─────────────────────────────────────
-    if status == "RUNNING":
-        actions = tk.Frame(parent, bg=PANEL)
+    # Actions row — mantem logica de kill do fallback existente
+    if status == "RUNNING" and run_dir is not None:
+        actions = tk.Frame(layout, bg=PANEL)
         actions.pack(fill="x", padx=12, pady=(4, 10))
         kill_btn = tk.Label(actions, text=" STOP SHADOW ",
                             fg=BG, bg=RED, font=(FONT, 7, "bold"),
@@ -1558,8 +1546,6 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
                       lambda _e, _d=run_dir, _s=state:
                           _drop_shadow_kill(_d, launcher, _s))
 
-    # Poller atualiza cache a cada 5s. Re-renderiza a detail pane pra
-    # pegar novos dados (metrics, trades, status transitions).
     _schedule_shadow_refresh(launcher, state)
 
 
