@@ -24,3 +24,30 @@ def test_parse_mode_default_is_paper(monkeypatch):
     derived_live = args.mode == "live"
     assert derived_paper is True
     assert derived_live is False
+
+
+def test_hedge_monitor_detecta_delta_drift():
+    """Cenário protegido: arb cross-venue com uma perna parcialmente
+    fechada (rejeicao de ordem, slippage assimetrico). Hedge passa de
+    delta-neutral pra direcional silenciosamente."""
+    import engines.janestreet as js
+
+    monitor = js.HedgeMonitor(
+        imbalance_warn_pct=5.0,
+        imbalance_rehedge_pct=15.0,
+    )
+    monitor.register(symbol="BTCUSDT", v_a="binance", v_b="bybit", qty=1.0)
+
+    state = monitor._states["BTCUSDT"]
+    assert state.imbalance_pct == 0.0, "Hedge recém-registrado deve ter delta 0"
+
+    # Simular: perna A perdeu 30% via fill parcial
+    monitor.update_quantities("BTCUSDT", qty_a=0.7, qty_b=1.0)
+    state = monitor._states["BTCUSDT"]
+
+    assert state.imbalance_pct == pytest.approx(30.0), \
+        f"Esperava ~30% imbalance, foi {state.imbalance_pct}"
+    assert state.imbalance_pct > monitor.imb_warn, \
+        "Drift de 30% deveria exceder warn de 5%"
+    assert state.imbalance_pct > monitor.imb_rehedge, \
+        "Drift de 30% deveria exceder rehedge threshold de 15%"
