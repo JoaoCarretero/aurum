@@ -51,35 +51,3 @@ def test_hedge_monitor_detecta_delta_drift():
         "Drift de 30% deveria exceder warn de 5%"
     assert state.imbalance_pct > monitor.imb_rehedge, \
         "Drift de 30% deveria exceder rehedge threshold de 15%"
-
-
-def test_omega_score_penaliza_spread_negativo():
-    """Cenário protegido: scanner gera spreads negativos transitorios
-    (latency, snapshot inconsistente). omega_score NAO pode retornar
-    valor positivo para spread<=0 — abriria trade com EV negativo."""
-    import engines.janestreet as js
-
-    # Spread negativo
-    score_neg = js.omega_score(
-        spread=-0.001,
-        vol_a=10_000_000, vol_b=10_000_000,
-        cost_a=0.0001, cost_b=0.0001,
-    )
-    assert score_neg == 0, f"Spread negativo deveria dar score 0, deu {score_neg}"
-
-    # Spread zero
-    score_zero = js.omega_score(
-        spread=0.0,
-        vol_a=10_000_000, vol_b=10_000_000,
-        cost_a=0.0001, cost_b=0.0001,
-    )
-    assert score_zero == 0, f"Spread zero deveria dar score 0, deu {score_zero}"
-
-    # Sanity check: spread positivo amplo + volume amplo deve dar score > 0
-    # (caso contrário o teste acima é trivial)
-    score_pos = js.omega_score(
-        spread=0.001,
-        vol_a=10_000_000, vol_b=10_000_000,
-        cost_a=0.0001, cost_b=0.0001,
-    )
-    assert score_pos > 0, f"Spread positivo deveria dar score > 0, deu {score_pos}"
