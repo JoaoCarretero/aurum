@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_OUTPUT = ROOT / "docs" / "audits" / "2026-04-17_oos_revalidation.md"
 DEFAULT_PYTHON = Path(r"C:\Users\Joao\AppData\Local\Python\bin\python.exe")
 TOLERANCE_PCT = 0.1

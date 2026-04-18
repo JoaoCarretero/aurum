@@ -9,7 +9,7 @@ Usage:
 import subprocess, json, re, sys, os, time
 from pathlib import Path
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 PARAMS_FILE = ROOT / "config" / "params.py"
 OUT_DIR = ROOT / "data" / "validation" / time.strftime("%Y-%m-%d")
 OUT_DIR.mkdir(parents=True, exist_ok=True)

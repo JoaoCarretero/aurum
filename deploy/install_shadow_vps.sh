@@ -29,8 +29,8 @@ if [ ! -f "${UNIT_SRC}" ]; then
 fi
 
 # Smoke: Python consegue importar o runner?
-echo "[1/5] smoke: python tools/millennium_shadow.py --help"
-(cd "${REPO_PATH}" && python3 tools/millennium_shadow.py --help >/dev/null)
+echo "[1/5] smoke: python tools/maintenance/millennium_shadow.py --help"
+(cd "${REPO_PATH}" && python3 tools/maintenance/millennium_shadow.py --help >/dev/null)
 echo "  OK"
 
 # Instalar unit com User e WorkingDirectory ajustados.

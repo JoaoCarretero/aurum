@@ -34,7 +34,7 @@ def robust_rmtree(target: Path, retries: int = 3, pause: float = 0.5) -> bool:
     failure (log, retry, tombstone, etc).
 
     Used by the launcher backtest-delete flow and by
-    tools/reconcile_runs.py.
+    tools/reports/reconcile_runs.py.
     """
 
     def _on_exc(func, path, exc_info):  # type: ignore[no-untyped-def]

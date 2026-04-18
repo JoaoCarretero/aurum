@@ -14,7 +14,7 @@ WorkingDirectory=/srv/aurum.finance
 # Use `systemctl stop millennium-shadow` or `touch data/millennium_shadow/<run>/.kill`
 # to exit cleanly after the current tick.
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 tools/millennium_shadow.py --tick-sec 900 --run-hours 0
+ExecStart=/usr/bin/python3 tools/maintenance/millennium_shadow.py --tick-sec 900 --run-hours 0
 
 # Resource hygiene — one tick fetches ~11 symbols × 5 timeframes; ~200-400MB peak.
 MemoryMax=1G

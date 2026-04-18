@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from tools import prewarm_sentiment_cache as tool
+from tools.capture import prewarm_sentiment_cache as tool
 
 
 def test_resolve_symbols_uses_engine_basket_default():

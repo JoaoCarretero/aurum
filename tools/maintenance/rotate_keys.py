@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ! unknown mode '{mode}' — valid: {list(_VALID_MODES)}")
         return 3
 
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parent.parent.parent
     keys_path = root / "config" / "keys.json"
 
     print(f"  rotating '{mode}' in {keys_path.relative_to(root)}")

@@ -30,13 +30,13 @@ from collections import Counter
 from pathlib import Path
 
 # Ensure repo root on path when invoked as "python tools/reconcile_runs.py".
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from core.persistence import atomic_write_json
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 RUNS_DIR = ROOT / "data" / "runs"
 INDEX_PATH = ROOT / "data" / "index.json"
 

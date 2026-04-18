@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 # engine_key → (script_path, run_dir_parent, run_id_prefix)
 # prefix é usado pra filtrar novos dirs (CITADEL prefixa com "citadel_", os outros não)

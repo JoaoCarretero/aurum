@@ -1136,7 +1136,7 @@ def _render_shadow_panel(parent, launcher, state, slug: str) -> None:
         tk.Label(
             shadow,
             text=("Nenhum shadow run encontrado.\n"
-                  "Rode:  python tools/millennium_shadow.py "
+                  "Rode:  python tools/maintenance/millennium_shadow.py "
                   "--tick-sec 900 --run-hours 24"),
             fg=DIM2, bg=BG2, font=(FONT, 7), justify="left", anchor="w",
         ).pack(fill="x", padx=10, pady=(0, 8))

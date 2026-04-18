@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 TARGETS = [
     "engines/citadel.py", "engines/renaissance.py", "engines/jump.py",
     "engines/deshaw.py", "engines/bridgewater.py", "engines/kepos.py",

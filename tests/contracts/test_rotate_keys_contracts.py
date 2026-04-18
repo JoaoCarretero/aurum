@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from tools.rotate_keys import rotate, _VALID_MODES
+from tools.maintenance.rotate_keys import rotate, _VALID_MODES
 
 
 # Valid length test credentials (> 20 chars)

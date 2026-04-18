@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 PHASE_C_ROOT = ROOT / "tests" / "fixtures" / "phase_c"
 MANIFEST_PATH = PHASE_C_ROOT / "capture_manifest.json"
 CAPTURES_ROOT = PHASE_C_ROOT / "captures"

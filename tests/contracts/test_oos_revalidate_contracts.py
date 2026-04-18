@@ -1,4 +1,4 @@
-from tools import oos_revalidate
+from tools.audits import oos_revalidate
 
 
 def test_extract_function_signature_handles_type_annotations():

@@ -1,7 +1,7 @@
 """AURUM — OHLCV local cache.
 
 Transparent slice-from-disk layer that sits in front of core.data.fetch().
-Keeps Binance klines prefetched by tools/prefetch.py in a per-symbol
+Keeps Binance klines prefetched by tools/capture/prefetch.py in a per-symbol
 pickle+gzip file under data/.cache/.
 
 Design notes:

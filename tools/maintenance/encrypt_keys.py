@@ -38,7 +38,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parent.parent.parent
     plaintext = root / "config" / "keys.json"
     encrypted = root / "config" / "keys.json.enc"
 
