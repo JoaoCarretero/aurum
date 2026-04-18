@@ -55,7 +55,7 @@ if not log.handlers:
 SEP = "─" * 80
 
 # ── RUN IDENTITY ─────────────────────────────────────────────
-RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
 RUN_DIR = Path(f"data/bridgewater/{RUN_ID}")
 (RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
 (RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)
@@ -63,6 +63,17 @@ RUN_DIR = Path(f"data/bridgewater/{RUN_ID}")
 _fh = logging.FileHandler(RUN_DIR / "logs" / "thoth.log", encoding="utf-8")
 _fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s"))
 log.addHandler(_fh)
+
+RUNTIME_PRESET_NAME = "legacy"
+RUNTIME_STRICT_DIRECTION = False
+RUNTIME_MIN_COMPONENTS = 0
+RUNTIME_MIN_DIR_THRESH = None
+RUNTIME_DISABLE_OI = False
+RUNTIME_ALLOWED_MACRO_REGIMES = None
+RUNTIME_POST_TRADE_COOLDOWN_BARS = 0
+RUNTIME_REGIME_THRESHOLDS = None
+RUNTIME_SYMBOL_HEALTH = None
+RUNTIME_MIN_COVERAGE_FRACTION = 0.70
 
 
 # ══════════════════════════════════════════════════════════════
@@ -136,6 +147,32 @@ def _coverage_scan_start_idx(df: pd.DataFrame, sent: dict | None, base_start_idx
     candle_times = pd.to_datetime(df["time"])
     coverage_idx = int(candle_times.searchsorted(start_ts, side="left"))
     return max(int(base_start_idx), coverage_idx)
+
+
+def _coverage_eligibility(
+    df: pd.DataFrame,
+    sent: dict | None,
+    base_start_idx: int,
+    *,
+    min_fraction: float,
+) -> dict[str, object]:
+    scan_start_idx = _coverage_scan_start_idx(df, sent, base_start_idx)
+    total_scan_candles = max(0, len(df) - int(base_start_idx))
+    covered_scan_candles = max(0, len(df) - int(scan_start_idx))
+    coverage_fraction = (
+        covered_scan_candles / total_scan_candles
+        if total_scan_candles > 0 else 0.0
+    )
+    closeable = _scan_window_can_close_trades(covered_scan_candles)
+    eligible = closeable and coverage_fraction >= float(min_fraction)
+    return {
+        "scan_start_idx": int(scan_start_idx),
+        "covered_scan_candles": int(covered_scan_candles),
+        "total_scan_candles": int(total_scan_candles),
+        "coverage_fraction": float(round(coverage_fraction, 4)),
+        "closeable": bool(closeable),
+        "eligible": bool(eligible),
+    }
 
 
 def collect_sentiment(symbols: list, end_time_ms: int | None = None,
@@ -280,6 +317,120 @@ def _trade_sentiment_diagnostics(closed: list[dict]) -> dict:
     }
 
 
+def _resolve_runtime_preset(
+    preset: str,
+    *,
+    strict_direction: bool,
+    min_components: int,
+    min_dir_thresh: float | None,
+    disable_oi: bool,
+    enable_symbol_health: bool,
+    allowed_regimes: str | None,
+    post_trade_cooldown_bars: int,
+) -> dict:
+    """Resolve effective runtime gates for a named preset."""
+    name = (preset or "robust").strip().lower()
+    parsed_regimes = None
+    if allowed_regimes:
+        parsed_regimes = {
+            token.strip().upper()
+            for token in str(allowed_regimes).split(",")
+            if token.strip()
+        } or None
+    if name == "legacy":
+        return {
+            "preset": "legacy",
+            "strict_direction": bool(strict_direction),
+            "min_components": int(min_components),
+            "min_dir_thresh": min_dir_thresh,
+            "disable_oi": bool(disable_oi),
+            "allowed_macro_regimes": parsed_regimes,
+            "post_trade_cooldown_bars": max(0, int(post_trade_cooldown_bars)),
+            "regime_thresholds": None,
+            "symbol_health": None,
+        }
+    if name != "robust":
+        raise ValueError(f"unknown preset: {preset}")
+    return {
+        "preset": "robust",
+        "strict_direction": True if not strict_direction else bool(strict_direction),
+        "min_components": max(2, int(min_components)),
+        "min_dir_thresh": 0.35 if min_dir_thresh is None else float(min_dir_thresh),
+        "disable_oi": True if not disable_oi else bool(disable_oi),
+        "allowed_macro_regimes": parsed_regimes,
+        "post_trade_cooldown_bars": max(0, int(post_trade_cooldown_bars)),
+        "regime_thresholds": {"BEAR": 0.35, "BULL": 0.45, "CHOP": 0.55},
+        "symbol_health": None if not enable_symbol_health else {
+            "lookback": 8,
+            "block_min_trades": 5,
+            "block_expectancy": -0.35,
+            "block_loss_rate": 0.80,
+            "saturation_start": 6,
+            "saturation_full": 10,
+            "min_multiplier": 0.45,
+        },
+    }
+
+
+def _resolve_direction_threshold(
+    macro_bias: str,
+    default_threshold: float,
+    regime_thresholds: dict[str, float] | None,
+) -> float:
+    if not regime_thresholds:
+        return float(default_threshold)
+    regime = str(macro_bias or "CHOP").upper()
+    return float(regime_thresholds.get(regime, default_threshold))
+
+
+def _symbol_health_controls(
+    recent_closed: list[dict],
+    config: dict | None,
+) -> tuple[float, str | None]:
+    if not config:
+        return 1.0, None
+
+    lookback = max(1, int(config.get("lookback", 8)))
+    block_min_trades = max(1, int(config.get("block_min_trades", 5)))
+    saturation_start = max(1, int(config.get("saturation_start", 8)))
+    saturation_full = max(saturation_start, int(config.get("saturation_full", 14)))
+    min_multiplier = float(config.get("min_multiplier", 0.45))
+    block_expectancy = float(config.get("block_expectancy", -12.0))
+    block_loss_rate = float(config.get("block_loss_rate", 0.80))
+
+    sample = recent_closed[-lookback:]
+    if not sample:
+        return 1.0, None
+
+    quality_values = [
+        float(
+            t.get("r_multiple")
+            if t.get("r_multiple") is not None
+            else t.get("pnl", 0.0)
+        ) or 0.0
+        for t in sample
+    ]
+    expectancy = sum(quality_values) / len(sample)
+    losses = sum(1 for q in quality_values if q < 0)
+
+    loss_rate = losses / len(sample)
+
+    if len(sample) >= block_min_trades and expectancy <= block_expectancy and loss_rate >= block_loss_rate:
+        return 0.0, "symbol_health_block"
+
+    mult = 1.0
+    if len(sample) >= block_min_trades and expectancy < 0:
+        mult *= 0.65
+    if len(sample) > saturation_start:
+        span = max(1, saturation_full - saturation_start)
+        progress = min(1.0, (len(sample) - saturation_start) / span)
+        mult *= 1.0 - (1.0 - min_multiplier) * progress
+    if len(sample) >= block_min_trades and loss_rate >= 0.70:
+        mult *= 0.75
+
+    return max(min_multiplier, round(mult, 4)), None
+
+
 _SENTIMENT_MAX_STALENESS_NS = 2 * 60 * 60 * 1_000_000_000  # 2h in ns
 
 
@@ -367,6 +518,11 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
                sentiment_data: dict | None = None,
                scan_start_idx: int = 0,
                *,
+               disable_oi: bool = False,
+               allowed_macro_regimes: set[str] | None = None,
+               post_trade_cooldown_bars: int = 0,
+               regime_thresholds: dict[str, float] | None = None,
+               symbol_health: dict | None = None,
                strict_direction: bool = False,
                min_components: int = 0,
                min_dir_thresh: float | None = None,
@@ -416,18 +572,29 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     # Get sentiment data for this symbol
     sent = (sentiment_data or {}).get(symbol, {})
     funding_z_series = sent.get("funding_z")
-    oi_df = sent.get("oi_df")
+    oi_df = None if disable_oi else sent.get("oi_df")
     ls_signal_series = sent.get("ls_signal")
 
     # Build OI signal if available
     oi_signal_df = None
     _oi_available = False
+    _oi_build_error = None
     if oi_df is not None and len(oi_df) >= 10:
         try:
             oi_signal_df = oi_delta_signal(oi_df, df, window=THOTH_OI_WINDOW)
             _oi_available = True
-        except Exception:
-            pass
+        except Exception as exc:
+            _oi_build_error = exc
+
+    # BRIDGEWATER's thesis is funding + OI + LS. If OI history exists but the
+    # engine cannot transform it into a usable signal, skipping the symbol is
+    # safer than silently degrading to a different strategy.
+    if oi_df is not None and len(oi_df) >= 10 and not _oi_available:
+        if _oi_build_error is not None:
+            log.warning("OI signal build failed for %s: %s", symbol, _oi_build_error)
+        else:
+            log.warning("OI signal unavailable for %s despite ready OI history", symbol)
+        return [], {"oi_signal_unavailable": 1}
 
     # Renormalize weights when OI is unavailable so composite score
     # can still reach [-1, 1] range using funding + LS only.
@@ -470,6 +637,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     consecutive_losses = 0
     cooldown_until     = -1
     sym_cooldown_until: dict[str, int] = {}
+    recent_closed: list[dict] = []
 
     log.info(f"\n{'─'*60}\n  {symbol}\n{'─'*60}")
 
@@ -480,6 +648,9 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         macro_b = "CHOP"
         if macro_bias_series is not None:
             macro_b = macro_bias_series.iloc[min(idx, len(macro_bias_series) - 1)]
+        if allowed_macro_regimes and str(macro_b).upper() not in allowed_macro_regimes:
+            vetos[f"macro_block:{str(macro_b).upper()}"] += 1
+            continue
 
         peak_equity = max(peak_equity, account)
         current_dd = (peak_equity - account) / peak_equity if peak_equity > 0 else 0.0
@@ -523,7 +694,8 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         direction = None
         struct = _str[idx]
 
-        _dir_thresh = min_dir_thresh if min_dir_thresh is not None else THOTH_DIRECTION_THRESHOLD
+        _dir_thresh_base = min_dir_thresh if min_dir_thresh is not None else THOTH_DIRECTION_THRESHOLD
+        _dir_thresh = _resolve_direction_threshold(macro_b, _dir_thresh_base, regime_thresholds)
 
         # Optional: multi-component convergence gate (research, default OFF).
         if min_components > 0:
@@ -560,6 +732,10 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         score_reported = 0.50 + score * 0.50
 
         # Extra check: sentiment must be strong enough
+        # Respect the strategy thesis: do not run as funding-only when both
+        # positioning channels are flat.
+        if oi_sig == 0.0 and ls_sig == 0.0:
+            vetos["positioning_absent"] += 1; continue
         if abs(f_z) < 1.0 and abs(oi_sig) < 0.3 and abs(ls_sig) < 0.3:
             vetos["sentiment_fraco"] += 1; continue
 
@@ -578,7 +754,13 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         size = position_size(account, entry, stop, max(score, 0.53),
                              macro_b, direction, vol_r, dd_scale,
                              peak_equity=peak_equity)
-        size = round(size * corr_size_mult * trans_mult * THOTH_SIZE_MULT, 4)
+        health_mult, health_block = _symbol_health_controls(recent_closed, symbol_health)
+        if health_block is not None:
+            vetos[health_block] += 1
+            continue
+        if health_mult < 1.0:
+            vetos["symbol_health_scale"] += 1
+        size = round(size * corr_size_mult * trans_mult * THOTH_SIZE_MULT * health_mult, 4)
 
         # [L6] Aggregate notional cap.
         if size > 0:
@@ -618,6 +800,11 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
         else:
             consecutive_losses = 0
+        if post_trade_cooldown_bars > 0:
+            sym_cooldown_until[symbol] = max(
+                sym_cooldown_until.get(symbol, -1),
+                idx + int(post_trade_cooldown_bars),
+            )
 
         open_pos.append((idx + 1 + duration, symbol, size, entry))
 
@@ -641,6 +828,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             "vol_regime": vol_r,
             "dd_scale":   round(dd_scale, 2),
             "corr_mult":  round(corr_size_mult, 2),
+            "health_mult": round(health_mult, 3),
             "in_transition": in_transition,
             "trans_mult":    round(trans_mult, 2),
             "entry":      entry, "stop": stop, "target": target,
@@ -676,6 +864,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             "hmm_prob_chop":   (None if pd.isna(_hmm_pc[idx])  else round(float(_hmm_pc[idx]),  4)),
         }
         trades.append(t)
+        recent_closed.append(t)
         icon = "✓" if result == "WIN" else "✗"
         log.info(f"  {ts}  {icon}  {direction:8s}  sent={sent_score:+.2f}  "
                  f"fz={f_z:+.1f}  oi={oi_sig:+.1f}  ls={ls_sig:+.1f}  ${pnl:+.2f}")
@@ -696,6 +885,11 @@ def print_header():
     print(f"  BRIDGEWATER v1.0  ·  {RUN_ID}")
     print(f"  {len(SYMBOLS)} ativos  ·  {INTERVAL}  ·  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  funding w={THOTH_WEIGHT_FUNDING}  oi w={THOTH_WEIGHT_OI}  ls w={THOTH_WEIGHT_LS}")
+    print(f"  preset={RUNTIME_PRESET_NAME}  disable_oi={RUNTIME_DISABLE_OI}  strict_direction={RUNTIME_STRICT_DIRECTION}  min_components={RUNTIME_MIN_COMPONENTS}  min_dir_thresh={RUNTIME_MIN_DIR_THRESH}")
+    print(f"  allowed_macro_regimes={sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else 'ALL'}  post_trade_cooldown={RUNTIME_POST_TRADE_COOLDOWN_BARS}")
+    print(f"  regime_thresholds={RUNTIME_REGIME_THRESHOLDS or 'flat'}")
+    print(f"  symbol_health={RUNTIME_SYMBOL_HEALTH or 'off'}")
+    print(f"  min_coverage_fraction={RUNTIME_MIN_COVERAGE_FRACTION:.2f}")
     print(f"  {RUN_DIR}/")
     print(SEP)
 
@@ -734,6 +928,16 @@ def export_json(all_trades, eq, mc, ratios):
         "n_symbols": len(SYMBOLS),
         "account_size": ACCOUNT_SIZE,
         "leverage": LEVERAGE,
+        "preset": RUNTIME_PRESET_NAME,
+        "disable_oi": RUNTIME_DISABLE_OI,
+        "strict_direction": RUNTIME_STRICT_DIRECTION,
+        "min_components": RUNTIME_MIN_COMPONENTS,
+        "min_dir_thresh": RUNTIME_MIN_DIR_THRESH,
+        "allowed_macro_regimes": sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else None,
+        "post_trade_cooldown_bars": RUNTIME_POST_TRADE_COOLDOWN_BARS,
+        "regime_thresholds": RUNTIME_REGIME_THRESHOLDS,
+        "symbol_health": RUNTIME_SYMBOL_HEALTH,
+        "min_coverage_fraction": RUNTIME_MIN_COVERAGE_FRACTION,
         "n_trades": len(closed),
         "win_rate": round(wr, 2),
         "roi": round(ratios["ret"], 2),
@@ -775,6 +979,18 @@ if __name__ == "__main__":
     _ap.add_argument("--no-menu", action="store_true")
     _ap.add_argument("--end", type=str, default=None,
                      help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
+    _ap.add_argument("--preset", choices=["robust", "legacy"], default="robust",
+                     help="Runtime preset. robust=funding+LS with harder gates; legacy=historical baseline path.")
+    _ap.add_argument("--disable-oi", action="store_true",
+                     help="Disable OI channel for this run. Automatically enabled by preset=robust.")
+    _ap.add_argument("--enable-symbol-health", action="store_true",
+                     help="Enable adaptive per-symbol health control (research gate; default off).")
+    _ap.add_argument("--allowed-regimes", default=None,
+                     help="Optional comma-separated macro regimes to allow, e.g. BEAR or BEAR,BULL.")
+    _ap.add_argument("--min-coverage-fraction", type=float, default=0.70,
+                     help="Minimum fraction of the requested scan window that must have usable sentiment coverage.")
+    _ap.add_argument("--post-trade-cooldown-bars", type=int, default=0,
+                     help="Optional per-symbol cooldown after any closed trade. preset=robust defaults to 6.")
     # Research gates (default OFF — preserve calibrated baseline).
     # See scan_thoth docstring for rationale; wired for 2026-07-17 OOS battery.
     _ap.add_argument("--strict-direction", action="store_true",
@@ -793,6 +1009,27 @@ if __name__ == "__main__":
 
     if _args.interval:
         INTERVAL = _args.interval
+
+    _runtime = _resolve_runtime_preset(
+        _args.preset,
+        strict_direction=_args.strict_direction,
+        min_components=_args.min_components,
+        min_dir_thresh=_args.min_dir_thresh,
+        disable_oi=_args.disable_oi,
+        enable_symbol_health=_args.enable_symbol_health,
+        allowed_regimes=_args.allowed_regimes,
+        post_trade_cooldown_bars=_args.post_trade_cooldown_bars,
+    )
+    RUNTIME_PRESET_NAME = _runtime["preset"]
+    RUNTIME_STRICT_DIRECTION = _runtime["strict_direction"]
+    RUNTIME_MIN_COMPONENTS = _runtime["min_components"]
+    RUNTIME_MIN_DIR_THRESH = _runtime["min_dir_thresh"]
+    RUNTIME_DISABLE_OI = _runtime["disable_oi"]
+    RUNTIME_ALLOWED_MACRO_REGIMES = _runtime["allowed_macro_regimes"]
+    RUNTIME_POST_TRADE_COOLDOWN_BARS = _runtime["post_trade_cooldown_bars"]
+    RUNTIME_REGIME_THRESHOLDS = _runtime["regime_thresholds"]
+    RUNTIME_SYMBOL_HEALTH = _runtime["symbol_health"]
+    RUNTIME_MIN_COVERAGE_FRACTION = max(0.0, min(1.0, float(_args.min_coverage_fraction)))
 
     print(f"\n{SEP}")
     print(f"  BRIDGEWATER  ·  Macro Sentiment Contrarian")
@@ -836,6 +1073,11 @@ if __name__ == "__main__":
     print(f"\n{SEP}")
     print(f"  BRIDGEWATER  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
+    print(f"  preset={RUNTIME_PRESET_NAME}  disable_oi={RUNTIME_DISABLE_OI}  strict_direction={RUNTIME_STRICT_DIRECTION}  min_components={RUNTIME_MIN_COMPONENTS}  min_dir_thresh={RUNTIME_MIN_DIR_THRESH}")
+    print(f"  allowed_macro_regimes={sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else 'ALL'}  post_trade_cooldown={RUNTIME_POST_TRADE_COOLDOWN_BARS}")
+    print(f"  regime_thresholds={RUNTIME_REGIME_THRESHOLDS or 'flat'}")
+    print(f"  symbol_health={RUNTIME_SYMBOL_HEALTH or 'off'}")
+    print(f"  min_coverage_fraction={RUNTIME_MIN_COVERAGE_FRACTION:.2f}")
     print(f"  {RUN_DIR}/")
     print(SEP)
     if not _args.no_menu:
@@ -904,29 +1146,44 @@ if __name__ == "__main__":
     all_trades = []
     all_vetos = defaultdict(int)
     insufficient_coverage_symbols: list[str] = []
+    insufficient_coverage_details: list[str] = []
 
     for sym, df in all_dfs.items():
-        symbol_scan_start_idx = _coverage_scan_start_idx(
+        coverage = _coverage_eligibility(
             df,
             sentiment_data.get(sym),
             max(0, len(df) - N_CANDLES),
+            min_fraction=RUNTIME_MIN_COVERAGE_FRACTION,
         )
-        remaining_scan_candles = len(df) - symbol_scan_start_idx
-        if not _scan_window_can_close_trades(remaining_scan_candles):
+        symbol_scan_start_idx = int(coverage["scan_start_idx"])
+        remaining_scan_candles = int(coverage["covered_scan_candles"])
+        if not coverage["eligible"]:
             insufficient_coverage_symbols.append(sym)
+            insufficient_coverage_details.append(
+                f"{sym}({remaining_scan_candles}/{coverage['total_scan_candles']}="
+                f"{coverage['coverage_fraction']:.0%}, closeable={coverage['closeable']})"
+            )
             log.warning(
-                "sentiment coverage too short for closed trades: %s scan_candles=%s max_hold=%s",
+                "sentiment coverage insufficient: %s scan_candles=%s total_scan=%s coverage=%.2f closeable=%s min_required=%.2f",
                 sym,
                 remaining_scan_candles,
-                MAX_HOLD,
+                coverage["total_scan_candles"],
+                coverage["coverage_fraction"],
+                coverage["closeable"],
+                RUNTIME_MIN_COVERAGE_FRACTION,
             )
             continue
         trades, vetos = scan_thoth(df, sym, macro_bias, corr,
                                    sentiment_data=sentiment_data,
                                    scan_start_idx=symbol_scan_start_idx,
-                                   strict_direction=_args.strict_direction,
-                                   min_components=_args.min_components,
-                                   min_dir_thresh=_args.min_dir_thresh,
+                                   disable_oi=RUNTIME_DISABLE_OI,
+                                   allowed_macro_regimes=RUNTIME_ALLOWED_MACRO_REGIMES,
+                                   post_trade_cooldown_bars=RUNTIME_POST_TRADE_COOLDOWN_BARS,
+                                   regime_thresholds=RUNTIME_REGIME_THRESHOLDS,
+                                   symbol_health=RUNTIME_SYMBOL_HEALTH,
+                                   strict_direction=RUNTIME_STRICT_DIRECTION,
+                                   min_components=RUNTIME_MIN_COMPONENTS,
+                                   min_dir_thresh=RUNTIME_MIN_DIR_THRESH,
                                    exit_on_reversal=_args.exit_on_reversal)
         all_trades.extend(trades)
         for k, v in vetos.items():
@@ -938,6 +1195,9 @@ if __name__ == "__main__":
     if insufficient_coverage_symbols:
         skipped = ", ".join(sorted(insufficient_coverage_symbols))
         print(f"  insufficient sentiment coverage skipped: {skipped}")
+        print(f"  coverage rule: need >= {RUNTIME_MIN_COVERAGE_FRACTION:.0%} of requested scan window with closeable sentiment history")
+        for detail in sorted(insufficient_coverage_details)[:8]:
+            print(f"    {detail}")
         if not closed:
             print(f"\n  insufficient sentiment coverage: need more cached OI/LS history to close trades")
             sys.exit(0)
@@ -1029,6 +1289,16 @@ if __name__ == "__main__":
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,
         "engine": "BRIDGEWATER",
+        "preset": RUNTIME_PRESET_NAME,
+        "disable_oi": RUNTIME_DISABLE_OI,
+        "strict_direction": RUNTIME_STRICT_DIRECTION,
+        "min_components": RUNTIME_MIN_COMPONENTS,
+        "min_dir_thresh": RUNTIME_MIN_DIR_THRESH,
+        "allowed_macro_regimes": sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else None,
+        "post_trade_cooldown_bars": RUNTIME_POST_TRADE_COOLDOWN_BARS,
+        "regime_thresholds": RUNTIME_REGIME_THRESHOLDS,
+        "symbol_health": RUNTIME_SYMBOL_HEALTH,
+        "min_coverage_fraction": RUNTIME_MIN_COVERAGE_FRACTION,
     }
 
     save_run_artifacts(

@@ -251,6 +251,31 @@ def test_coverage_scan_start_idx_respects_sentiment_start():
     assert bridgewater._coverage_scan_start_idx(df, sent, 2) == 6
 
 
+def test_coverage_eligibility_requires_fraction_and_closeable_window():
+    df = pd.DataFrame({"time": pd.date_range("2026-04-01", periods=20, freq="1h")})
+    sent = {
+        "funding_z": pd.Series([0.1], index=pd.to_datetime(["2026-04-01 00:00:00"])),
+        "oi_df": pd.DataFrame({"time": pd.to_datetime(["2026-04-01 14:00:00"]), "oi": [1.0]}),
+        "ls_signal": pd.Series([-0.5], index=pd.to_datetime(["2026-04-01 14:00:00"])),
+    }
+
+    original_max_hold = bridgewater.MAX_HOLD
+    bridgewater.MAX_HOLD = 3
+    try:
+        out = bridgewater._coverage_eligibility(df, sent, 4, min_fraction=0.70)
+    finally:
+        bridgewater.MAX_HOLD = original_max_hold
+
+    assert out == {
+        "scan_start_idx": 14,
+        "covered_scan_candles": 6,
+        "total_scan_candles": 16,
+        "coverage_fraction": 0.375,
+        "closeable": True,
+        "eligible": False,
+    }
+
+
 def test_filter_stale_market_data_drops_old_series():
     fresh = pd.DataFrame({"time": pd.date_range("2026-04-16", periods=3, freq="1h")})
     stale = pd.DataFrame({"time": pd.date_range("2026-04-10", periods=3, freq="1h")})
@@ -279,6 +304,125 @@ def test_trade_sentiment_diagnostics_surfaces_neutral_oi_share():
     assert diagnostics["funding_negative_pct"] == 33.33
 
 
+def test_runtime_preset_robust_forces_disciplined_funding_ls_mode():
+    resolved = bridgewater._resolve_runtime_preset(
+        "robust",
+        strict_direction=False,
+        min_components=0,
+        min_dir_thresh=None,
+        disable_oi=False,
+        enable_symbol_health=False,
+        allowed_regimes=None,
+        post_trade_cooldown_bars=0,
+    )
+
+    assert resolved == {
+        "preset": "robust",
+        "strict_direction": True,
+        "min_components": 2,
+        "min_dir_thresh": 0.35,
+        "disable_oi": True,
+        "allowed_macro_regimes": None,
+        "post_trade_cooldown_bars": 0,
+        "regime_thresholds": {"BEAR": 0.35, "BULL": 0.45, "CHOP": 0.55},
+        "symbol_health": None,
+    }
+
+
+def test_runtime_preset_legacy_preserves_explicit_runtime_overrides():
+    resolved = bridgewater._resolve_runtime_preset(
+        "legacy",
+        strict_direction=True,
+        min_components=1,
+        min_dir_thresh=0.4,
+        disable_oi=True,
+        enable_symbol_health=True,
+        allowed_regimes="BEAR,BULL",
+        post_trade_cooldown_bars=3,
+    )
+
+    assert resolved == {
+        "preset": "legacy",
+        "strict_direction": True,
+        "min_components": 1,
+        "min_dir_thresh": 0.4,
+        "disable_oi": True,
+        "allowed_macro_regimes": {"BEAR", "BULL"},
+        "post_trade_cooldown_bars": 3,
+        "regime_thresholds": None,
+        "symbol_health": None,
+    }
+
+
+def test_runtime_preset_robust_can_enable_symbol_health():
+    resolved = bridgewater._resolve_runtime_preset(
+        "robust",
+        strict_direction=False,
+        min_components=0,
+        min_dir_thresh=None,
+        disable_oi=False,
+        enable_symbol_health=True,
+        allowed_regimes=None,
+        post_trade_cooldown_bars=0,
+    )
+
+    assert resolved["symbol_health"] == {
+        "lookback": 8,
+        "block_min_trades": 5,
+        "block_expectancy": -0.35,
+        "block_loss_rate": 0.80,
+        "saturation_start": 6,
+        "saturation_full": 10,
+        "min_multiplier": 0.45,
+    }
+
+
+def test_resolve_direction_threshold_uses_regime_specific_override():
+    assert bridgewater._resolve_direction_threshold("BEAR", 0.35, {"BEAR": 0.35, "BULL": 0.45}) == 0.35
+    assert bridgewater._resolve_direction_threshold("BULL", 0.35, {"BEAR": 0.35, "BULL": 0.45}) == 0.45
+    assert bridgewater._resolve_direction_threshold("CHOP", 0.35, {"BEAR": 0.35, "BULL": 0.45}) == 0.35
+
+
+def test_symbol_health_controls_block_on_strong_negative_expectancy():
+    recent_closed = [{"r_multiple": -0.6}] * 5
+
+    mult, reason = bridgewater._symbol_health_controls(
+        recent_closed,
+        {
+            "lookback": 8,
+            "block_min_trades": 5,
+            "block_expectancy": -0.35,
+            "block_loss_rate": 0.80,
+            "saturation_start": 6,
+            "saturation_full": 10,
+            "min_multiplier": 0.45,
+        },
+    )
+
+    assert mult == 0.0
+    assert reason == "symbol_health_block"
+
+
+def test_symbol_health_controls_scale_after_symbol_saturates():
+    recent_closed = [{"r_multiple": -0.1}] * 8
+
+    mult, reason = bridgewater._symbol_health_controls(
+        recent_closed,
+        {
+            "lookback": 8,
+            "block_min_trades": 5,
+            "block_expectancy": -0.35,
+            "block_loss_rate": 0.80,
+            "saturation_start": 6,
+            "saturation_full": 10,
+            "min_multiplier": 0.45,
+        },
+    )
+
+    assert reason is None
+    assert mult == 0.45
+
+
 # ────────────────────────────────────────────────────────────
 # scan_thoth research gates (2026-04-17) — kw-only signature contract
 # ────────────────────────────────────────────────────────────
@@ -289,7 +433,8 @@ def test_scan_thoth_accepts_research_gates_as_keyword_only():
     """
     import inspect
     sig = inspect.signature(bridgewater.scan_thoth)
-    for name in ("strict_direction", "min_components",
+    for name in ("disable_oi", "allowed_macro_regimes", "post_trade_cooldown_bars", "regime_thresholds",
+                 "symbol_health", "strict_direction", "min_components",
                  "min_dir_thresh", "exit_on_reversal"):
         p = sig.parameters.get(name)
         assert p is not None, f"missing kw-only param: {name}"
@@ -305,6 +450,11 @@ def test_scan_thoth_research_gates_default_off():
     import inspect
     sig = inspect.signature(bridgewater.scan_thoth)
     defaults = {n: p.default for n, p in sig.parameters.items()}
+    assert defaults["disable_oi"] is False
+    assert defaults["allowed_macro_regimes"] is None
+    assert defaults["post_trade_cooldown_bars"] == 0
+    assert defaults["regime_thresholds"] is None
+    assert defaults["symbol_health"] is None
     assert defaults["strict_direction"] is False
     assert defaults["min_components"] == 0
     assert defaults["min_dir_thresh"] is None
