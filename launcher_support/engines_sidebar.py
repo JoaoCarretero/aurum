@@ -33,19 +33,23 @@ def build_engine_rows(
 
     Returns:
         list[EngineRow] na ordem do registry. Engines sem heartbeat
-        retornam active=False + ticks/signals=None.
+        retornam active=False + ticks/signals=None. Engines com heartbeat
+        mas sem contadores (non-shadow) retornam active=True com
+        ticks/signals=None — sidebar renderiza so ✓ sem numeros.
     """
     rows: list[EngineRow] = []
     for item in registry:
         slug = item["slug"]
         hb = heartbeats.get(slug)
         if hb:
+            ticks_raw = hb.get("ticks_ok")
+            signals_raw = hb.get("novel_total")
             rows.append(EngineRow(
                 slug=slug,
                 display=item["display"],
                 active=True,
-                ticks=int(hb.get("ticks_ok", 0) or 0),
-                signals=int(hb.get("novel_total", 0) or 0),
+                ticks=int(ticks_raw) if ticks_raw is not None else None,
+                signals=int(signals_raw) if signals_raw is not None else None,
             ))
         else:
             rows.append(EngineRow(
@@ -207,7 +211,10 @@ def render_sidebar(
         sub = tk.Frame(item, bg=bg)
         sub.pack(fill="x", padx=6, pady=(0, 4))
         if row.active:
-            sub_text = f"  ✓ {row.ticks}t · {row.signals}s"
+            if row.ticks is not None and row.signals is not None:
+                sub_text = f"  ✓ {row.ticks}t · {row.signals}s"
+            else:
+                sub_text = "  ✓"
             sub_color = DIM if not is_sel else BG
         else:
             sub_text = "  —"

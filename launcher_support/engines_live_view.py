@@ -844,15 +844,13 @@ def _render_detail(state, launcher):
             if hb is not None:
                 heartbeats[slug] = hb
     else:
+        # Non-shadow modes nao tem poller com contadores — so marcamos
+        # o engine como active (sidebar renderiza ✓ sem numeros).
         for proc_row in (_PROCS_CACHE.get("rows") or []):
             proc_slug = proc_row.get("slug") or ""
             if not proc_slug:
                 continue
-            heartbeats[proc_slug] = {
-                "ticks_ok": 0,
-                "novel_total": 0,
-                "status": "running",
-            }
+            heartbeats[proc_slug] = {"status": "running"}
 
     registry = _engine_registry_for_sidebar(state)
     rows = build_engine_rows(registry, heartbeats)

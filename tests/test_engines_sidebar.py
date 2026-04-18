@@ -107,3 +107,15 @@ def test_result_color_mapping():
     assert result_color_name("LOSS") == "RED"
     assert result_color_name(None) == "DIM"
     assert result_color_name("") == "DIM"
+
+
+def test_build_engine_rows_active_engine_without_counts():
+    """Non-shadow heartbeat sem ticks_ok/novel_total → active=True mas ticks/signals=None."""
+    from launcher_support.engines_sidebar import build_engine_rows
+    registry = [{"slug": "citadel", "display": "CITADEL"}]
+    heartbeats = {"citadel": {"status": "running"}}
+    rows = build_engine_rows(registry, heartbeats)
+    assert len(rows) == 1
+    assert rows[0].active is True
+    assert rows[0].ticks is None
+    assert rows[0].signals is None
