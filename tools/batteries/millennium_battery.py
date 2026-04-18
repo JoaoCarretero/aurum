@@ -16,9 +16,9 @@ Outputs under ``data/millennium/battery_<run_id>/``:
         logs/               - multistrategy.log
 
 Usage:
-    python tools/millennium_battery.py
-    python tools/millennium_battery.py --windows 90 180 360 720
-    python tools/millennium_battery.py --windows 180 --account 25000
+    python tools/batteries/millennium_battery.py
+    python tools/batteries/millennium_battery.py --windows 90 180 360 720
+    python tools/batteries/millennium_battery.py --windows 180 --account 25000
 """
 from __future__ import annotations
 

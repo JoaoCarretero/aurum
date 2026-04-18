@@ -2,9 +2,9 @@
 AURUM Prefetch — warm local OHLCV cache from Binance.
 
 Examples:
-    python tools/prefetch.py --basket bluechip --days 3000
-    python tools/prefetch.py --basket bluechip_active --days 1800 --interval 15m
-    python tools/prefetch.py --spot --basket majors --days 90
+    python tools/capture/prefetch.py --basket bluechip --days 3000
+    python tools/capture/prefetch.py --basket bluechip_active --days 1800 --interval 15m
+    python tools/capture/prefetch.py --spot --basket majors --days 90
 """
 from __future__ import annotations
 

@@ -16,8 +16,8 @@ TARGETS = [
     "engines/citadel.py", "engines/renaissance.py", "engines/jump.py",
     "engines/deshaw.py", "engines/bridgewater.py", "engines/kepos.py",
     "engines/medallion.py",
-    "core/signals.py", "core/indicators.py", "core/portfolio.py",
-    "core/htf.py", "core/harmonics.py",
+    "core/signals.py", "core/indicators.py", "core/risk/portfolio.py",
+    "core/data/htf.py", "core/harmonics.py",
 ]
 
 PATTERNS = [

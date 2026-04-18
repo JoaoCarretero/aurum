@@ -12,7 +12,7 @@ manually.
 
 Usage
 -----
-    python tools/encrypt_keys.py
+    python tools/maintenance/encrypt_keys.py
 
     $ master password: ***************
     $ repeat:          ***************

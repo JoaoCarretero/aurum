@@ -9,9 +9,9 @@ no DB sem entry no index, 102 entries no index sem row no DB. O rebuild
 a partir do disco garante consistência forte.
 
 Uso:
-    python tools/rebuild_db.py                 # dry-run
-    python tools/rebuild_db.py --apply         # backup + wipe + rebuild
-    python tools/rebuild_db.py --apply --no-backup
+    python tools/maintenance/rebuild_db.py                 # dry-run
+    python tools/maintenance/rebuild_db.py --apply         # backup + wipe + rebuild
+    python tools/maintenance/rebuild_db.py --apply --no-backup
 """
 from __future__ import annotations
 

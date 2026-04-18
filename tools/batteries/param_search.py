@@ -2,7 +2,7 @@
 AURUM Param Search — grid search via monkey-patch (no file edits)
 ================================================================
 Usage:
-  python tools/param_search.py --engine newton \
+  python tools/batteries/param_search.py --engine newton \
     --param NEWTON_ZSCORE_STOP:2.0:3.5:0.5 \
     --param NEWTON_ZSCORE_ENTRY:1.5:2.5:0.5 \
     --days 90 --basket default

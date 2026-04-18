@@ -1691,7 +1691,7 @@ def _render_shadow_no_run(parent, launcher):
                    "    sudo systemctl status millennium_shadow.service\n"
                    "\n"
                    "Pra iniciar manual:\n"
-                   "    python tools/millennium_shadow.py "
+                   "    python tools/maintenance/millennium_shadow.py "
                    "--tick-sec 900 --run-hours 24"),
              fg=DIM2, bg=PANEL, font=(FONT, 7), justify="left",
              anchor="w").pack(anchor="w", pady=(6, 0))

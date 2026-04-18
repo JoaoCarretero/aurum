@@ -14,7 +14,7 @@ The engine scans run once per window — we cache `_collect_operational_trades`
 per window across all grid rows. Reweight + gate runs per row.
 
 Usage:
-    python tools/millennium_gate_grid.py --days 180
+    python tools/batteries/millennium_gate_grid.py --days 180
 """
 from __future__ import annotations
 

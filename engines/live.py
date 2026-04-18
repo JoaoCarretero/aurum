@@ -208,7 +208,7 @@ def _load_keys(mode: str) -> tuple[str, str, str]:
     At every error path (missing file, decrypt fails, empty block)
     the function falls through to the next source and ultimately
     exits with a clear message. Once the Joao has created the
-    encrypted file via ``tools/encrypt_keys.py`` and set
+    encrypted file via ``tools/maintenance/encrypt_keys.py`` and set
     AURUM_KEY_PASSWORD, the live engine will automatically prefer
     it over the plaintext file.
     """

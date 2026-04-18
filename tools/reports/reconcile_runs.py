@@ -8,8 +8,8 @@ The script NEVER touches files outside data/runs/ or data/index.json. It
 refuses to run if either target is missing or unreadable.
 
 Usage:
-    python tools/reconcile_runs.py              # print plan (dry-run)
-    python tools/reconcile_runs.py --apply      # prompt per item
+    python tools/reports/reconcile_runs.py              # print plan (dry-run)
+    python tools/reports/reconcile_runs.py --apply      # prompt per item
 
 Exit codes:
     0 — clean or all requested actions applied
@@ -29,7 +29,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-# Ensure repo root on path when invoked as "python tools/reconcile_runs.py".
+# Ensure repo root on path when invoked as "python tools/reports/reconcile_runs.py".
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))

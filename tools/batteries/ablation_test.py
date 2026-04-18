@@ -4,7 +4,7 @@ Runs the backtest 6 times: baseline + 5 with each component disabled.
 Compares metrics to identify which components contribute to the edge.
 
 Usage:
-    python tools/ablation_test.py [--days 180]
+    python tools/batteries/ablation_test.py [--days 180]
 """
 import subprocess, json, re, sys, os, time
 from pathlib import Path

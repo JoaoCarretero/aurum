@@ -61,7 +61,7 @@ MIN_OI_USD    = 200_000     # open interest floor
 HIGH_RISK_VOL = 2_000_000
 HIGH_RISK_OI  = 500_000
 
-_ROOT = Path(__file__).parent.parent
+_ROOT = Path(__file__).parent.parent.parent
 _ALERT_LOG_PATH = _ROOT / "data" / "funding_scanner" / "alert_log.json"
 ALERT_THROTTLE_S = 30 * 60  # 30 minutes per symbol
 

@@ -5,8 +5,8 @@ whose run_id is not already in the DB. Also ingests the legacy data/runs/
 citadel layout.
 
 Usage:
-    python tools/backfill_db_from_disk.py           # dry-run (report only)
-    python tools/backfill_db_from_disk.py --apply   # actually insert
+    python tools/maintenance/backfill_db_from_disk.py           # dry-run (report only)
+    python tools/maintenance/backfill_db_from_disk.py --apply   # actually insert
 
 Exit codes:
     0 — clean or applied

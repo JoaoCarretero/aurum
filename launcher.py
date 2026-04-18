@@ -649,8 +649,8 @@ BRIEFINGS_V2: dict[str, dict] = {
         "source_files": [
             "engines/citadel.py",
             "core/signals.py",
-            "core/portfolio.py",
-            "core/htf.py",
+            "core/risk/portfolio.py",
+            "core/data/htf.py",
         ],
         "main_function": ("engines/citadel.py", "scan_symbol"),
         "one_liner": "Omega 5D fractal trend-follower with MTF alignment "

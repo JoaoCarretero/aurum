@@ -2,7 +2,7 @@
 analysis.report_html module. Used to validate CSS/HTML polish changes
 without rerunning the backtest.
 
-Usage: python tools/regen_report.py data/jump/2026-04-17_133748
+Usage: python tools/reports/regen_report.py data/jump/2026-04-17_133748
 """
 from __future__ import annotations
 import json
@@ -65,5 +65,5 @@ def main(run_dir_str: str) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        raise SystemExit("usage: python tools/regen_report.py <run_dir>")
+        raise SystemExit("usage: python tools/reports/regen_report.py <run_dir>")
     main(sys.argv[1])

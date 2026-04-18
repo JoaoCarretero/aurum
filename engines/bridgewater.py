@@ -249,7 +249,7 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
             details += f"; ... (+{len(missing_historical) - 5} symbols)"
         raise RuntimeError(
             "historical sentiment unavailable for OOS window; "
-            "run tools/prewarm_sentiment_cache.py for the target basket/window. "
+            "run tools/capture/prewarm_sentiment_cache.py for the target basket/window. "
             f"Missing coverage: {details}"
         )
 

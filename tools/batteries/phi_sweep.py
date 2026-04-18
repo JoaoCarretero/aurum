@@ -7,9 +7,9 @@ param combo. This cuts a 30s/run full backtest down to <1s per combo
 once frames are cached.
 
 Usage:
-    python tools/phi_sweep.py                        # BNBUSDT, 24 combos
-    python tools/phi_sweep.py --symbols BNBUSDT,INJUSDT
-    python tools/phi_sweep.py --universe             # 11 symbols (slow)
+    python tools/batteries/phi_sweep.py                        # BNBUSDT, 24 combos
+    python tools/batteries/phi_sweep.py --symbols BNBUSDT,INJUSDT
+    python tools/batteries/phi_sweep.py --universe             # 11 symbols (slow)
 """
 from __future__ import annotations
 

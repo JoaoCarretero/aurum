@@ -19,9 +19,9 @@ same artifacts any normal MEDALLION run emits (trades.json, summary.json,
 index.json row). Downstream tools treat it identically.
 
 Usage:
-    python tools/medallion_grid.py                        # defaults
-    python tools/medallion_grid.py --days 365 --interval 1h
-    python tools/medallion_grid.py --basket bluechip_active --fast
+    python tools/batteries/medallion_grid.py                        # defaults
+    python tools/batteries/medallion_grid.py --days 365 --interval 1h
+    python tools/batteries/medallion_grid.py --basket bluechip_active --fast
 """
 from __future__ import annotations
 

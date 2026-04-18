@@ -123,7 +123,7 @@ ENGINE_DRAWDOWN_WARN_R = 2.0
 ENGINE_DRAWDOWN_HARD_R = 4.0
 ENGINE_DRAWDOWN_MIN_FACTOR = 0.45
 PORTFOLIO_EXECUTION_ENABLED = False  # TEMP: F_gate_off diagnostic — revert after
-# Gate config ajustada via tools/millennium_gate_grid.py 180d (2026-04-17):
+# Gate config ajustada via tools/batteries/millennium_gate_grid.py 180d (2026-04-17):
 # config "D_liberal" dominou baseline em Sharpe (+1.53), Sortino (+3.17),
 # PnL 2.5x, +19 trades (JUMP +18, CIT +2, REN -1), custo MDD +0.5pp.
 # Pesos + thresholds afrouxados pra deixar JUMP trabalhar em janelas

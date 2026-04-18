@@ -14,11 +14,11 @@ Output:
     <engine>.stdout.log — stdout/stderr completo de cada engine
 
 Uso:
-  python tools/longrun_battery.py                    # default: 360d bluechip, sequencial
-  python tools/longrun_battery.py --parallel 5       # paralelo (5 workers)
-  python tools/longrun_battery.py --smoke            # smoke: 30d, só citadel
-  python tools/longrun_battery.py --days 180
-  python tools/longrun_battery.py --engines citadel,jump
+  python tools/batteries/longrun_battery.py                    # default: 360d bluechip, sequencial
+  python tools/batteries/longrun_battery.py --parallel 5       # paralelo (5 workers)
+  python tools/batteries/longrun_battery.py --smoke            # smoke: 30d, só citadel
+  python tools/batteries/longrun_battery.py --days 180
+  python tools/batteries/longrun_battery.py --engines citadel,jump
 """
 import sys
 import json

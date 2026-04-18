@@ -617,7 +617,7 @@ def main():
 
     # Phase 3 (1500d validation) skipped — too slow for lunch window.
     # Top configs from Phase 2 at 360d already provide enough edge signal.
-    # Run manually later: python tools/autonomous_battery.py --phase3
+    # Run manually later: python tools/batteries/autonomous_battery.py --phase3
 
     elapsed = (time.time() - t0) / 60
     log.info(f"\n{SEP}\n  DONE - {elapsed:.1f}min · {len(ALL)} runs\n{SEP}")

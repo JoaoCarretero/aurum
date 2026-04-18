@@ -5,8 +5,8 @@ prefixed form canonical, but legacy rows (DB + index.json) still carry bare
 timestamps for runs written before that change. This tool migrates them.
 
 Usage:
-    python tools/normalize_run_ids.py           # dry-run
-    python tools/normalize_run_ids.py --apply
+    python tools/maintenance/normalize_run_ids.py           # dry-run
+    python tools/maintenance/normalize_run_ids.py --apply
 """
 from __future__ import annotations
 

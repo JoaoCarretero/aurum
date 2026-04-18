@@ -13,7 +13,7 @@ Why a CLI tool instead of editing keys.json by hand?
 
 Usage
 -----
-    python tools/rotate_keys.py testnet
+    python tools/maintenance/rotate_keys.py testnet
     # prompts: api_key:    ****
     #          api_secret: ****
     # writes:  config/keys.json.bak.YYYY-MM-DD_HHMMSS

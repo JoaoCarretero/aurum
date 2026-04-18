@@ -4,7 +4,7 @@ Varies key thresholds ±20% and measures impact on Sharpe.
 Fragile thresholds (>30% Sharpe change) suggest curve-fitting.
 
 Usage:
-    python tools/threshold_sensitivity.py [--days 180]
+    python tools/batteries/threshold_sensitivity.py [--days 180]
 """
 import subprocess, json, re, sys, os, time
 from pathlib import Path

@@ -27,9 +27,9 @@ What it does NOT do:
     like Ω scores and macro_bias; MEDALLION can gain one later if needed)
 
 Usage:
-  python tools/medallion_finalize.py                       # latest run
-  python tools/medallion_finalize.py <run_dir>             # specific
-  python tools/medallion_finalize.py <run_id>              # by id
+  python tools/batteries/medallion_finalize.py                       # latest run
+  python tools/batteries/medallion_finalize.py <run_dir>             # specific
+  python tools/batteries/medallion_finalize.py <run_id>              # by id
 """
 from __future__ import annotations
 

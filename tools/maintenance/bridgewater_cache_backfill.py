@@ -9,7 +9,7 @@ request fills an adjacent 5.2-day window. Stops when the API returns empty
 or overlaps existing cache completely.
 
 Usage:
-    python tools/bridgewater_cache_backfill.py --symbols BTCUSDT --period 15m
+    python tools/maintenance/bridgewater_cache_backfill.py --symbols BTCUSDT --period 15m
 """
 from __future__ import annotations
 

@@ -10,7 +10,7 @@ are required, no keys are loaded. The output is paper evidence for OOS
 validation of the ensemble under real-time candle arrival.
 
 Usage:
-    python tools/millennium_shadow.py --tick-sec 900 --run-hours 24
+    python tools/maintenance/millennium_shadow.py --tick-sec 900 --run-hours 24
 
 Kill gracefully by creating `<run_dir>/.kill` or by sending SIGINT.
 """

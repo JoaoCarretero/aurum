@@ -92,7 +92,7 @@ def test_risk_gate_config_loads_per_mode():
     import engines.janestreet as js
     from pathlib import Path
 
-    cfg_path = Path(__file__).parent.parent / "config" / "risk_gates.json"
+    cfg_path = Path(__file__).parent.parent.parent / "config" / "risk_gates.json"
     if not cfg_path.exists():
         pytest.skip("config/risk_gates.json ausente — teste depende do real config")
 
