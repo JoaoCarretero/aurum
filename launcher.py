@@ -1096,18 +1096,23 @@ _ENGINE_BADGES: dict[str, str] = {
 }
 
 
-_TUNNEL_MANAGER_SINGLETON = None
-
-
 def _boot_tunnel_manager():
     """Lazy construct TunnelManager from keys.json -> vps_ssh block.
 
     Returns None silently if config missing or malformed — launcher
-    keeps working in local-disk mode. See launcher_support/ssh_tunnel.py.
+    keeps working in local-disk mode. Singleton lives em
+    launcher_support/tunnel_registry pra sobreviver ao problema
+    __main__-vs-launcher (quando `python launcher.py` roda, o modulo
+    launcher vira `__main__` e `from launcher import X` de outro lugar
+    carrega um modulo separado sem o singleton).
     """
-    global _TUNNEL_MANAGER_SINGLETON
-    if _TUNNEL_MANAGER_SINGLETON is not None:
-        return _TUNNEL_MANAGER_SINGLETON
+    from launcher_support.tunnel_registry import (
+        get_tunnel_manager as _reg_get,
+        set_tunnel_manager as _reg_set,
+    )
+    current = _reg_get()
+    if current is not None:
+        return current
     try:
         from pathlib import Path as _Path
         import json as _json
@@ -1128,16 +1133,17 @@ def _boot_tunnel_manager():
             remote_port=int(block.get("remote_port", 8787)),
             key_path=block.get("key_path"),
         )
-        _TUNNEL_MANAGER_SINGLETON = TunnelManager(
-            cfg, log_dir=_Path("data/.cockpit_cache"))
-        return _TUNNEL_MANAGER_SINGLETON
+        manager = TunnelManager(cfg, log_dir=_Path("data/.cockpit_cache"))
+        _reg_set(manager)
+        return manager
     except Exception:
         return None
 
 
 def get_tunnel_manager():
-    """Public accessor for launcher_support.engines_live_view status indicator."""
-    return _TUNNEL_MANAGER_SINGLETON
+    """Public accessor — delega pro tunnel_registry singleton."""
+    from launcher_support.tunnel_registry import get_tunnel_manager as _reg_get
+    return _reg_get()
 
 
 class App(tk.Tk):

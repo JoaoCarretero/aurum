@@ -1096,11 +1096,13 @@ def _remote_run_id(run_dir: Path) -> str:
 def _get_tunnel_status_label() -> tuple[str, str]:
     """Return (text, fg_color) pro badge TUNNEL na linha de status.
 
-    Reads from launcher (lazy import to avoid circular dep). Returns
-    ("—", DIM2) if no TunnelManager is wired.
+    Le do launcher_support.tunnel_registry (nao de `launcher` direto)
+    pra escapar do __main__-vs-launcher: quando roda `python launcher.py`,
+    `from launcher import X` carrega UM SEGUNDO modulo com singleton None.
+    O registry em launcher_support é sempre a mesma instancia.
     """
     try:
-        from launcher import get_tunnel_manager
+        from launcher_support.tunnel_registry import get_tunnel_manager
         tm = get_tunnel_manager()
     except Exception:
         tm = None
