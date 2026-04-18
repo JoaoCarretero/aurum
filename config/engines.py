@@ -142,7 +142,7 @@ PROC_ENGINES = {
         "canonical": "medallion",
     },
     "prefetch": {
-        "script": "tools/prefetch.py",
+        "script": "tools/capture/prefetch.py",
         "display": "PREFETCH",
         "canonical": "prefetch",
     },

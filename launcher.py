@@ -7447,7 +7447,7 @@ class App(tk.Tk):
         Left  (60%): table of every cached file. Click pre-fills the
                      right-hand form in SYMBOL mode; DEL removes the file.
         Right (40%): download form — BASKET or SYMBOL mode, interval, days,
-                     market. DOWNLOAD button spawns tools/prefetch.py.
+                     market. DOWNLOAD button spawns tools/capture/prefetch.py.
         While a prefetch is alive the status line polls every 3s and the
         table refreshes so new rows appear as they land.
         """
@@ -11903,7 +11903,7 @@ class App(tk.Tk):
                     f"  data/runs/{run_id}/\n\n"
                     f"could not be deleted right now — usually OneDrive / "
                     f"antivirus is still holding a handle on a file inside.\n\n"
-                    f"Run `python tools/reconcile_runs.py --apply` in a "
+                    f"Run `python tools/reports/reconcile_runs.py --apply` in a "
                     f"minute or two and it will be cleaned up automatically.")
             else:
                 # Neither index nor disk changed — the run_id probably
