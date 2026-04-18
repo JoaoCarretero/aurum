@@ -821,32 +821,73 @@ def _render_detail(state, launcher):
 
     slug = state.get("selected_slug")
     bucket = state.get("selected_bucket")
+    mode = state.get("mode")
 
-    # SHADOW mode: dedicated render path regardless of bucket — the master
-    # list only contains engines with an active shadow run (filtered in
-    # _render_master_list), and the detail pane has its own layout focused
-    # on telemetry from the VPS cockpit API.
-    if state.get("mode") == "shadow":
+    # Master-detail com sidebar universal: renderiza sidebar primeiro
+    # (todas as engines do registry) e depois dispatcha o detail pane
+    # especifico do modo/bucket dentro de detail_inner.
+    layout = tk.Frame(host, bg=PANEL)
+    layout.pack(fill="both", expand=True)
+
+    # Heartbeats: em SHADOW vem do poller remoto; em modos locais,
+    # marca engines com PID ativo no _PROCS_CACHE como "active".
+    heartbeats: dict[str, dict] = {}
+    if mode == "shadow":
+        try:
+            from launcher_support.tunnel_registry import get_shadow_poller
+            poller = get_shadow_poller()
+            cached = poller.get_cached() if poller is not None else None
+        except Exception:
+            cached = None
+        if cached is not None and slug:
+            _, hb = cached
+            if hb is not None:
+                heartbeats[slug] = hb
+    else:
+        for proc_row in (_PROCS_CACHE.get("rows") or []):
+            proc_slug = proc_row.get("slug") or ""
+            if not proc_slug:
+                continue
+            heartbeats[proc_slug] = {
+                "ticks_ok": 0,
+                "novel_total": 0,
+                "status": "running",
+            }
+
+    registry = _engine_registry_for_sidebar(state)
+    rows = build_engine_rows(registry, heartbeats)
+
+    def _on_engine_select(new_slug: str):
+        state["selected_slug"] = new_slug
+        _render_detail(state, launcher)
+
+    render_sidebar(layout, rows, selected_slug=slug, on_select=_on_engine_select)
+
+    detail_inner = tk.Frame(layout, bg=PANEL)
+    detail_inner.pack(side="left", fill="both", expand=True)
+
+    # SHADOW mode: path dedicado (telemetria do VPS cockpit API).
+    if mode == "shadow":
         if not slug:
-            _render_shadow_empty_state(host, launcher, state)
+            _render_shadow_empty_state(detail_inner, launcher, state)
             return
         from config.engines import ENGINES
         meta = ENGINES.get(slug, {})
-        card = tk.Frame(host, bg=PANEL,
+        card = tk.Frame(detail_inner, bg=PANEL,
                         highlightbackground=BORDER, highlightthickness=1)
         card.pack(fill="both", expand=True)
         _render_detail_shadow(card, slug, meta, state, launcher)
         return
 
     if not slug:
-        tk.Label(host, text="(no selection)", fg=DIM, bg=BG,
+        tk.Label(detail_inner, text="(no selection)", fg=DIM, bg=BG,
                  font=(FONT, 8)).pack(pady=20)
         return
 
     from config.engines import ENGINES
     meta = ENGINES.get(slug, {})
 
-    card = tk.Frame(host, bg=PANEL,
+    card = tk.Frame(detail_inner, bg=PANEL,
                     highlightbackground=BORDER, highlightthickness=1)
     card.pack(fill="both", expand=True)
 
@@ -1468,11 +1509,8 @@ def _engine_registry_for_sidebar(state) -> list[dict]:
 
 
 def _render_detail_shadow(parent, slug, meta, state, launcher):
-    """Render SHADOW cockpit delegando pra engines_sidebar component.
-
-    Sidebar mostra todas engines do registry; selected=slug. Detail
-    pane vem do poller cache (cockpit API via SSH tunnel). Row click
-    em LAST SIGNALS abre signal_detail_popup.
+    """Render SHADOW cockpit detail pane — sidebar eh renderizada pelo
+    _render_detail upstream. Aqui soh cuidamos do detail pane + actions.
     """
     name = meta.get("display", slug.upper())
 
@@ -1494,26 +1532,9 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     if cached is not None:
         run_dir, hb = cached
 
-    # Build registry pro sidebar — todas engines LIVE-ready do registro.
-    registry = _engine_registry_for_sidebar(state)
-    heartbeats = {slug: hb} if hb else {}
-    rows = build_engine_rows(registry, heartbeats)
-
-    # Master-detail layout
-    layout = tk.Frame(parent, bg=PANEL)
-    layout.pack(fill="both", expand=True)
-
-    def _on_engine_select(new_slug: str):
-        state["selected_slug"] = new_slug
-        _render_detail(state, launcher)
-
-    render_sidebar(layout, rows, selected_slug=slug, on_select=_on_engine_select)
-
     # Detail pane
     if hb is None:
-        no_run_host = tk.Frame(layout, bg=PANEL)
-        no_run_host.pack(side="left", fill="both", expand=True)
-        _render_shadow_no_run(no_run_host, launcher)
+        _render_shadow_no_run(parent, launcher)
         _schedule_shadow_refresh(launcher, state)
         return
 
@@ -1525,7 +1546,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
         show_signal_detail(launcher, trade)
 
     detail_frame = render_detail(
-        parent=layout,
+        parent=parent,
         engine_display=name,
         mode="shadow",
         heartbeat=hb,
