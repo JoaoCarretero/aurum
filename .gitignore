@@ -6,6 +6,7 @@ __pycache__/
 
 # Data outputs (grandes, nao versionar)
 data/
+data/.cockpit_cache/
 
 # Logs
 *.log
