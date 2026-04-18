@@ -158,18 +158,37 @@ def test_shadow_active_slugs_empty_when_no_poller():
     assert _shadow_active_slugs() == set()
 
 
-def test_shadow_active_slugs_includes_millennium_when_cached():
-    """Com poller retornando cache, millennium entra no set."""
+def test_shadow_active_slugs_includes_engine_when_cached():
+    """Com poller retornando cache, slug do poller.engine entra no set."""
     from launcher_support.engines_live_view import _shadow_active_slugs
     from launcher_support import tunnel_registry
     from pathlib import Path
 
     class FakePoller:
+        engine = "millennium"
         def get_cached(self):
             return (Path("remote://r1"), {"run_id": "r1", "status": "running"})
 
     try:
         tunnel_registry.set_shadow_poller(FakePoller())
         assert _shadow_active_slugs() == {"millennium"}
+    finally:
+        tunnel_registry.reset_for_tests()
+
+
+def test_shadow_active_slugs_uses_dynamic_engine_attr():
+    """_shadow_active_slugs nao hardcode 'millennium' — le poller.engine."""
+    from launcher_support.engines_live_view import _shadow_active_slugs
+    from launcher_support import tunnel_registry
+    from pathlib import Path
+
+    class FakePoller:
+        engine = "citadel"  # hipotetico poller de outro engine
+        def get_cached(self):
+            return (Path("remote://rX"), {"run_id": "rX", "status": "running"})
+
+    try:
+        tunnel_registry.set_shadow_poller(FakePoller())
+        assert _shadow_active_slugs() == {"citadel"}
     finally:
         tunnel_registry.reset_for_tests()

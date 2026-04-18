@@ -476,10 +476,9 @@ def _refresh_footer(state):
 def _shadow_active_slugs() -> set[str]:
     """Return the set of engine slugs with an active shadow run visible.
 
-    Hoje so MILLENNIUM roda no cockpit API — o poller inteiro hardcoda
-    engine='millennium'. Se o cache tem payload, o slug esta ativo.
-    Futuro-proof: quando houver mais shadow runners, iterar pollers
-    registrados no tunnel_registry em vez de hardcode.
+    Le o slug diretamente de poller.engine — se cache tem payload, slug
+    esta ativo. Quando houver mais de um poller, isto evolui pra iterar
+    uma lista registrada no tunnel_registry.
     """
     try:
         from launcher_support.tunnel_registry import get_shadow_poller
@@ -494,7 +493,10 @@ def _shadow_active_slugs() -> set[str]:
         return set()
     if cached is None:
         return set()
-    return {"millennium"}
+    engine = getattr(poller, "engine", None)
+    if not isinstance(engine, str) or not engine:
+        return set()
+    return {engine}
 
 
 def _render_master_list(state, launcher):
