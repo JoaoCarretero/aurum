@@ -1093,6 +1093,36 @@ def _remote_run_id(run_dir: Path) -> str:
     return s
 
 
+def _get_tunnel_status_label() -> tuple[str, str]:
+    """Return (text, fg_color) pro badge TUNNEL na linha de status.
+
+    Reads from launcher (lazy import to avoid circular dep). Returns
+    ("—", DIM2) if no TunnelManager is wired.
+    """
+    try:
+        from launcher import get_tunnel_manager
+        tm = get_tunnel_manager()
+    except Exception:
+        tm = None
+    if tm is None:
+        return ("—", DIM2)
+    status = getattr(tm, "status", None)
+    if status is None:
+        return ("—", DIM2)
+    # TunnelStatus.value is a lowercase string: up/reconnecting/...
+    val = str(status.value).upper()
+    color_map = {
+        "UP": GREEN,
+        "STARTING": AMBER_B,
+        "RECONNECTING": AMBER_B,
+        "OFFLINE": RED,
+        "STOPPING": DIM2,
+        "IDLE": DIM2,
+        "DISABLED": DIM2,
+    }
+    return (val, color_map.get(val, DIM2))
+
+
 def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     """Return (run_dir, heartbeat_payload) for the most recent shadow run.
 
@@ -1252,6 +1282,13 @@ def _render_shadow_panel(parent, launcher, state, slug: str) -> None:
     if result is None:
         tk.Label(top, text="NONE", fg=DIM2, bg=BG2,
                  font=(FONT, 7, "bold")).pack(side="right")
+        tun_text, tun_fg = _get_tunnel_status_label()
+        tun_row = tk.Frame(shadow, bg=BG2)
+        tun_row.pack(fill="x", padx=10, pady=(2, 4))
+        tk.Label(tun_row, text="TUNNEL:", fg=DIM2, bg=BG2,
+                 font=(FONT, 7, "bold")).pack(side="left")
+        tk.Label(tun_row, text=f" {tun_text}", fg=tun_fg, bg=BG2,
+                 font=(FONT, 7, "bold")).pack(side="left")
         tk.Label(
             shadow,
             text=("Nenhum shadow run encontrado.\n"
@@ -1278,6 +1315,14 @@ def _render_shadow_panel(parent, launcher, state, slug: str) -> None:
                  str(hb.get("novel_total", 0)), AMBER_B)
     _desk_metric(facts, "TICK",
                  f"{int(hb.get('tick_sec', 0) or 0)}s", WHITE)
+
+    tun_text, tun_fg = _get_tunnel_status_label()
+    tun_row = tk.Frame(shadow, bg=BG2)
+    tun_row.pack(fill="x", padx=10, pady=(0, 2))
+    tk.Label(tun_row, text="TUNNEL:", fg=DIM2, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(tun_row, text=f" {tun_text}", fg=tun_fg, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
 
     last = hb.get("last_tick_at") or hb.get("stopped_at") or "—"
     source = "REMOTE" if _is_remote_run(run_dir) else "LOCAL"
