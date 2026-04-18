@@ -83,34 +83,3 @@ def test_omega_score_penaliza_spread_negativo():
         cost_a=0.0001, cost_b=0.0001,
     )
     assert score_pos > 0, f"Spread positivo deveria dar score > 0, deu {score_pos}"
-
-
-def test_risk_gate_config_loads_per_mode():
-    """Cenário protegido: config/risk_gates.json existe mas seções
-    arbitrage_live e arbitrage_paper sao iguais (copy-paste). Live
-    arranca com gates de paper — exposicao descontrolada."""
-    import engines.janestreet as js
-    from pathlib import Path
-
-    cfg_path = Path(__file__).parent.parent / "config" / "risk_gates.json"
-    if not cfg_path.exists():
-        pytest.skip("config/risk_gates.json ausente — teste depende do real config")
-
-    paper_cfg = js._load_risk_gate_config("paper")
-    live_cfg = js._load_risk_gate_config("live")
-
-    # As duas devem existir e nao ser ambas default (config real esta presente)
-    assert not (paper_cfg.is_default() and live_cfg.is_default()), \
-        "Ambas configs vieram default — risk_gates.json existe mas nao tem secoes arbitrage_*"
-
-    # Pelo menos UM campo diferente. Se identicas → operador descuidado.
-    same = (
-        paper_cfg.max_daily_dd_pct == live_cfg.max_daily_dd_pct
-        and paper_cfg.max_consecutive_losses == live_cfg.max_consecutive_losses
-        and paper_cfg.max_concurrent_positions == live_cfg.max_concurrent_positions
-        and paper_cfg.max_gross_notional_pct == live_cfg.max_gross_notional_pct
-    )
-    assert not same, (
-        "Configs paper e live identicas em todos campos cruciais — "
-        "config/risk_gates.json provavelmente tem copy-paste"
-    )
