@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -120,3 +121,50 @@ def test_drop_kill_requires_admin_token(cfg, tmp_cache):
     client = CockpitClient(cfg_no_admin, cache_dir=tmp_cache)
     with pytest.raises(PermissionError):
         client.drop_kill("r1")
+
+
+def test_http_404_does_not_trip_breaker(cfg, tmp_cache):
+    """HTTP 4xx é erro do caller, não do servidor — não conta no breaker."""
+    client = CockpitClient(cfg, cache_dir=tmp_cache)
+    err = urllib.error.HTTPError(
+        "http://localhost:8787/v1/runs", 404, "not found", hdrs={}, fp=None
+    )
+    with patch("urllib.request.urlopen", side_effect=err):
+        for _ in range(3):
+            with pytest.raises(urllib.error.HTTPError):
+                client.list_runs()
+            assert client._consecutive_failures == 0
+        # 4ª chamada: ainda HTTPError, NÃO CircuitOpen
+        with pytest.raises(urllib.error.HTTPError):
+            client.list_runs()
+        assert client._consecutive_failures == 0
+
+
+def test_http_500_trips_breaker(cfg, tmp_cache):
+    """HTTP 5xx indica problema no servidor — conta no breaker."""
+    client = CockpitClient(cfg, cache_dir=tmp_cache)
+    err = urllib.error.HTTPError(
+        "http://localhost:8787/v1/runs", 500, "server error", hdrs={}, fp=None
+    )
+    with patch("urllib.request.urlopen", side_effect=err):
+        for _ in range(3):
+            with pytest.raises(urllib.error.HTTPError):
+                client.list_runs()
+        # 4ª chamada: breaker aberto
+        with pytest.raises(CircuitOpen):
+            client.list_runs()
+
+
+def test_half_open_probe_failure_reopens(cfg, tmp_cache):
+    """Half-open: 1 probe; se falhar, breaker reabre imediatamente."""
+    client = CockpitClient(cfg, cache_dir=tmp_cache)
+    # Simula breaker que acabou de expirar
+    client._breaker_open_until = time.time() - 1
+    client._consecutive_failures = 3
+    with patch("urllib.request.urlopen", side_effect=OSError("conn refused")):
+        # Primeira chamada: probe do half-open — falha com OSError
+        with pytest.raises(OSError):
+            client.list_runs()
+        # Segunda chamada: breaker deve estar aberto de novo (probe falhou)
+        with pytest.raises(CircuitOpen):
+            client.list_runs()

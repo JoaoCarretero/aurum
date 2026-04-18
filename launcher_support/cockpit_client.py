@@ -41,6 +41,7 @@ class CockpitClient:
     cache_dir: Path
     _consecutive_failures: int = 0
     _breaker_open_until: float = 0.0
+    _half_open_probe: bool = False
     _BREAKER_THRESHOLD: int = 3
     _BREAKER_TIMEOUT_SEC: float = 300.0
 
@@ -93,16 +94,24 @@ class CockpitClient:
     # ─── Internals ─────────────────────────────────────────────
 
     def _check_breaker(self) -> None:
-        if self._breaker_open_until > time.time():
+        now = time.time()
+        if self._breaker_open_until > now:
             raise CircuitOpen(
-                f"breaker open for {self._breaker_open_until - time.time():.0f}s more"
+                f"breaker open for {self._breaker_open_until - now:.0f}s more"
             )
-        if self._breaker_open_until != 0 and self._breaker_open_until <= time.time():
-            # Half-open: reset counter, tenta 1 request
+        if self._breaker_open_until != 0.0 and self._breaker_open_until <= now:
+            # Transition open → half-open: allow a single probe.
             self._consecutive_failures = 0
             self._breaker_open_until = 0.0
+            self._half_open_probe = True
 
     def _record_failure(self) -> None:
+        if self._half_open_probe:
+            # Probe falhou → reabre breaker imediatamente.
+            self._half_open_probe = False
+            self._consecutive_failures = self._BREAKER_THRESHOLD
+            self._breaker_open_until = time.time() + self._BREAKER_TIMEOUT_SEC
+            return
         self._consecutive_failures += 1
         if self._consecutive_failures >= self._BREAKER_THRESHOLD:
             self._breaker_open_until = time.time() + self._BREAKER_TIMEOUT_SEC
@@ -110,6 +119,7 @@ class CockpitClient:
     def _record_success(self) -> None:
         self._consecutive_failures = 0
         self._breaker_open_until = 0.0
+        self._half_open_probe = False
 
     def _request(self, path: str, method: str = "GET",
                  auth: bool = True, admin: bool = False) -> dict | list:
@@ -128,6 +138,13 @@ class CockpitClient:
                 result = json.loads(body) if body else {}
                 self._record_success()
                 return result
+        except urllib.error.HTTPError as exc:
+            # 4xx é problema do caller (bad request / not found / unauthorized)
+            # — não indica trouble no servidor/conexão. Não conta no breaker.
+            # 5xx é problema do servidor — conta.
+            if 500 <= exc.code < 600:
+                self._record_failure()
+            raise
         except (urllib.error.URLError, OSError, TimeoutError):
             self._record_failure()
             raise
