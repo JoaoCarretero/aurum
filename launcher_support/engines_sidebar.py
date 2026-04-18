@@ -262,13 +262,19 @@ def render_detail(
     frame = tk.Frame(parent, bg=PANEL)
     frame.pack(side="left", fill="both", expand=True)
 
-    # HEADER
+    # HEADER — pulse dot verde quando RUNNING, nome grande, mode badge amber
     hdr = tk.Frame(frame, bg=PANEL)
     hdr.pack(fill="x", padx=12, pady=(10, 8))
-    tk.Label(hdr, text=f"{engine_display} · {mode}",
-             font=(FONT, 10, "bold"), fg=WHITE, bg=PANEL).pack(side="left")
+    is_running = "RUNNING" in (status_badge_text or "").upper()
+    dot_color = GREEN if is_running else DIM2
+    tk.Label(hdr, text="●", fg=dot_color, bg=PANEL,
+             font=(FONT, 13)).pack(side="left", padx=(0, 6))
+    tk.Label(hdr, text=engine_display,
+             font=(FONT, 13, "bold"), fg=WHITE, bg=PANEL).pack(side="left")
+    tk.Label(hdr, text=f"  {mode.upper()}",
+             font=(FONT, 8, "bold"), fg=AMBER, bg=PANEL).pack(side="left")
     if status_badge_text:
-        tk.Label(hdr, text=f"  {status_badge_text}", fg=status_badge_color,
+        tk.Label(hdr, text=f"   {status_badge_text}", fg=status_badge_color,
                  bg=PANEL, font=(FONT, 7, "bold")).pack(side="left")
 
     if heartbeat is None:
@@ -278,14 +284,26 @@ def render_detail(
         empty.pack(padx=12, pady=20, anchor="w")
         return frame
 
-    # HEALTH
+    # HEALTH — metric cards lado-a-lado (label pequeno, valor grande)
     _section_header(frame, "HEALTH")
     health = tk.Frame(frame, bg=PANEL)
-    health.pack(fill="x", padx=12, pady=(0, 8))
-    _pair_row(health, "ticks_ok", str(heartbeat.get("ticks_ok", "—")),
-              "uptime", _uptime_from_heartbeat(heartbeat))
-    _pair_row(health, "ticks_fail", str(heartbeat.get("ticks_fail", "—")),
-              "novel", str(heartbeat.get("novel_total", "—")))
+    health.pack(fill="x", padx=12, pady=(0, 10))
+    ticks_ok = heartbeat.get("ticks_ok")
+    ticks_fail = heartbeat.get("ticks_fail")
+    novel_total = heartbeat.get("novel_total")
+    fail_n = int(ticks_fail or 0)
+    novel_n = int(novel_total or 0)
+    _metric_card(health, "TICKS OK",
+                 "—" if ticks_ok is None else str(ticks_ok),
+                 GREEN if (ticks_ok or 0) > 0 else DIM2)
+    _metric_card(health, "FAIL",
+                 "—" if ticks_fail is None else str(ticks_fail),
+                 RED if fail_n > 0 else DIM2)
+    _metric_card(health, "SIGNALS",
+                 "—" if novel_total is None else str(novel_total),
+                 AMBER_B if novel_n > 0 else DIM2)
+    _metric_card(health, "UPTIME",
+                 _uptime_from_heartbeat(heartbeat), WHITE)
 
     # RUN INFO
     _section_header(frame, "RUN INFO")
@@ -312,6 +330,18 @@ def _section_header(parent, title: str) -> None:
     tk.Label(parent, text=title, fg=AMBER, bg=PANEL,
              font=(FONT, 7, "bold")).pack(anchor="w", padx=12, pady=(4, 2))
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(0, 4))
+
+
+def _metric_card(parent, label: str, value: str, color: str) -> None:
+    # Card institucional: label dim pequeno em cima, valor grande colorido
+    # embaixo. Cresce pra preencher a linha (expand=True).
+    box = tk.Frame(parent, bg=BG2, highlightbackground=BORDER,
+                   highlightthickness=1)
+    box.pack(side="left", fill="x", expand=True, padx=(0, 4))
+    tk.Label(box, text=label, fg=DIM2, bg=BG2,
+             font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(5, 1))
+    tk.Label(box, text=str(value), fg=color, bg=BG2,
+             font=(FONT, 11, "bold")).pack(anchor="w", padx=8, pady=(0, 6))
 
 
 def _pair_row(parent, k1, v1, k2, v2) -> None:
@@ -366,19 +396,26 @@ def _render_signals_table_rich(parent, trades: list[dict], on_row_click):
             ("SIZE", 7), ("RES", 5)]
     hdr = tk.Frame(parent, bg=BG2)
     hdr.pack(fill="x", pady=(2, 0))
+    # Barra vazia pra alinhar com o accent bar das rows abaixo
+    tk.Frame(hdr, bg=BG2, width=3).pack(side="left")
     for name, w in cols:
         tk.Label(hdr, text=name, fg=DIM2, bg=BG2,
-                 font=(FONT, 6, "bold"),
+                 font=(FONT, 7, "bold"),
                  width=w, anchor="w").pack(side="left", padx=(4, 0))
 
-    for trade in trades:
+    # Trade mais recente = primeiro da lista (chamador ja reversed).
+    for i, trade in enumerate(trades):
         cells = format_signal_row(trade)
         dir_color = GREEN if cells["dir"] == "L" else RED if cells["dir"] == "S" else DIM
         res_color_name = result_color_name(trade.get("result"))
         res_color = _COLORS.get(res_color_name, DIM)
+        is_latest = i == 0
 
         row = tk.Frame(parent, bg=PANEL, cursor="hand2")
         row.pack(fill="x", pady=(1, 0))
+        # Accent bar amber no sinal mais recente — marca "fresh"
+        accent = AMBER_B if is_latest else PANEL
+        tk.Frame(row, bg=accent, width=3).pack(side="left", fill="y")
 
         _cell(row, cells["time"], DIM, 6)
         _cell(row, cells["sym"], WHITE, 5, bold=True)
@@ -397,6 +434,6 @@ def _render_signals_table_rich(parent, trades: list[dict], on_row_click):
 
 
 def _cell(parent, text, fg, width, bold=False):
-    font = (FONT, 6, "bold") if bold else (FONT, 6)
+    font = (FONT, 7, "bold") if bold else (FONT, 7)
     tk.Label(parent, text=str(text), fg=fg, bg=PANEL, font=font,
              width=width, anchor="w").pack(side="left", padx=(4, 0))

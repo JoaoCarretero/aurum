@@ -319,10 +319,10 @@ def render(launcher, parent, *, on_escape) -> dict:
     body = tk.Frame(root, bg=BG)
     body.pack(fill="both", expand=True, padx=14, pady=(8, 0))
 
-    # Split 38/62 master/detail — weighted uniform columns so resize
-    # keeps the ratio stable.
-    body.grid_columnconfigure(0, weight=38, uniform="body")
-    body.grid_columnconfigure(1, weight=62, uniform="body")
+    # Split 28/72 master/detail — master compacto a esquerda, detail
+    # ganha espaco pra renderizar metric cards vivos.
+    body.grid_columnconfigure(0, weight=28, uniform="body")
+    body.grid_columnconfigure(1, weight=72, uniform="body")
     body.grid_rowconfigure(0, weight=1)
 
     state["master_host"] = tk.Frame(body, bg=BG)
