@@ -60,9 +60,25 @@ class MeanRevParams:
     rsi_short_min: float = 70.0
     atr_stop_mult: float = 2.0
     time_stop_bars: int = 96
+    # Exit geometry:
+    # - anchor: target the mean anchor itself.
+    # - partial_revert: target only a fraction of the distance back to anchor.
+    target_mode: str = "anchor"
+    target_reclaim_frac: float = 1.0
     risk_per_trade: float = 0.01
     notional_cap: float = 0.05
     min_atr_pct: float = 0.001  # skip bars with degenerate ATR
+    # Entry mode:
+    # - touch: enter as soon as the bar is extreme enough.
+    # - reversal_bar: require an extreme bar that also starts reverting.
+    # - close_back_inside: require prior bar extreme + current bar partially back in.
+    # - wick_reclaim: require intrabar overshoot + rejection wick back toward mean.
+    # - extreme_reclaim: require intrabar overshoot + close back inside a softer band.
+    entry_mode: str = "reversal_bar"
+    reclaim_atr_min: float = 0.75
+    reclaim_deviation_exit: float = 1.0
+    scale_in_levels: int = 1
+    scale_in_step_atr: float = 0.75
     # Diagnostic: flip direction to test if signals are trend-continuation
     # rather than mean-reversion. If --reverse produces positive edge, the
     # engine's name is wrong but the signal has value.
@@ -111,6 +127,8 @@ def compute_features(df: pd.DataFrame, params: MeanRevParams | None = None) -> p
     else:
         anchor = df["ema50"]
     df["deviation"] = (df["close"] - anchor) / atr
+    df["low_deviation"] = (df["low"] - anchor) / atr
+    df["high_deviation"] = (df["high"] - anchor) / atr
     df["anchor"] = anchor
     return df
 
@@ -121,9 +139,78 @@ _LOW_VOL_REGIMES = {"LOW", "NORMAL"}
 _HIGH_VOL_REGIMES = {"HIGH", "EXTREME"}
 
 
-def decide_entry(row: pd.Series, params: MeanRevParams) -> int:
+def _passes_entry_mode(row: pd.Series, prev_row: pd.Series | None,
+                       params: MeanRevParams, direction: int) -> bool:
+    if params.entry_mode == "touch":
+        return True
+
+    prev_dev = np.nan if prev_row is None else prev_row.get("deviation", np.nan)
+    close = row.get("close", np.nan)
+    open_ = row.get("open", np.nan)
+    dev = row.get("deviation", np.nan)
+    low_dev = row.get("low_deviation", np.nan)
+    high_dev = row.get("high_deviation", np.nan)
+    atr = row.get("atr", np.nan)
+    low = row.get("low", np.nan)
+    high = row.get("high", np.nan)
+
+    if params.entry_mode == "reversal_bar":
+        if np.isnan(close) or np.isnan(open_) or np.isnan(dev) or np.isnan(prev_dev):
+            return False
+        if direction == +1:
+            return close > open_ and dev > prev_dev
+        return close < open_ and dev < prev_dev
+
+    if params.entry_mode == "close_back_inside":
+        if np.isnan(dev) or np.isnan(prev_dev):
+            return False
+        if direction == +1:
+            return prev_dev <= -params.deviation_enter and dev > -params.deviation_enter
+        return prev_dev >= +params.deviation_enter and dev < +params.deviation_enter
+
+    if params.entry_mode == "wick_reclaim":
+        if np.isnan(atr) or atr <= 0 or np.isnan(close) or np.isnan(open_):
+            return False
+        if direction == +1:
+            reclaim = (close - low) / atr if not np.isnan(low) else np.nan
+            return (
+                not np.isnan(low_dev)
+                and low_dev <= -params.deviation_enter
+                and close > open_
+                and reclaim >= params.reclaim_atr_min
+            )
+        reclaim = (high - close) / atr if not np.isnan(high) else np.nan
+        return (
+            not np.isnan(high_dev)
+            and high_dev >= params.deviation_enter
+            and close < open_
+            and reclaim >= params.reclaim_atr_min
+        )
+
+    if params.entry_mode == "extreme_reclaim":
+        if direction == +1:
+            return (
+                not np.isnan(low_dev)
+                and not np.isnan(dev)
+                and low_dev <= -params.deviation_enter
+                and dev >= -params.reclaim_deviation_exit
+            )
+        return (
+            not np.isnan(high_dev)
+            and not np.isnan(dev)
+            and high_dev >= params.deviation_enter
+            and dev <= params.reclaim_deviation_exit
+        )
+
+    return True
+
+
+def decide_entry(row: pd.Series, params: MeanRevParams,
+                 prev_row: pd.Series | None = None) -> int:
     """Return +1 (long), -1 (short), or 0 (no entry)."""
     dev = row.get("deviation", np.nan)
+    low_dev = row.get("low_deviation", np.nan)
+    high_dev = row.get("high_deviation", np.nan)
     rsi = row.get("rsi", np.nan)
     atr_pct = row.get("atr_pct", np.nan)
     if np.isnan(dev) or np.isnan(rsi):
@@ -139,13 +226,22 @@ def decide_entry(row: pd.Series, params: MeanRevParams) -> int:
         if params.regime_filter == "high_vol" and regime not in _HIGH_VOL_REGIMES:
             return 0
 
-    long_sig = dev <= -params.deviation_enter and rsi <= params.rsi_long_max
-    short_sig = dev >= +params.deviation_enter and rsi >= params.rsi_short_min
+    if params.entry_mode in {"wick_reclaim", "extreme_reclaim"}:
+        long_sig = low_dev <= -params.deviation_enter and rsi <= params.rsi_long_max
+        short_sig = high_dev >= +params.deviation_enter and rsi >= params.rsi_short_min
+    else:
+        long_sig = dev <= -params.deviation_enter and rsi <= params.rsi_long_max
+        short_sig = dev >= +params.deviation_enter and rsi >= params.rsi_short_min
 
     if params.side_filter == "long_only":
         short_sig = False
     elif params.side_filter == "short_only":
         long_sig = False
+
+    if long_sig and not _passes_entry_mode(row, prev_row, params, +1):
+        long_sig = False
+    if short_sig and not _passes_entry_mode(row, prev_row, params, -1):
+        short_sig = False
 
     if long_sig:
         return -1 if params.reverse_direction else +1
@@ -159,6 +255,19 @@ def decide_entry(row: pd.Series, params: MeanRevParams) -> int:
 def _cost_per_notional() -> float:
     """Round-trip cost per unit of notional (open+close)."""
     return 2.0 * (SLIPPAGE + SPREAD + COMMISSION)
+
+
+def _bars_per_day(tf: str) -> int:
+    if tf.endswith("m"):
+        minutes = int(tf[:-1])
+        return max(1, int((24 * 60) / minutes))
+    if tf.endswith("h"):
+        hours = int(tf[:-1])
+        return max(1, int(24 / hours))
+    if tf.endswith("d"):
+        days = int(tf[:-1])
+        return max(1, int(1 / days)) if days else 1
+    raise ValueError(f"Unsupported timeframe: {tf}")
 
 
 def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
@@ -175,6 +284,8 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
     entry_px = float(open_bar["open"])
     atr_at_entry = float(entry_row["atr"])
     anchor_at_entry = float(entry_row.get("anchor", entry_row.get("ema50")))
+    scale_in_levels = max(1, int(params.scale_in_levels))
+    scale_step = abs(float(params.scale_in_step_atr)) * atr_at_entry
 
     if direction == +1:
         stop = entry_px - params.atr_stop_mult * atr_at_entry
@@ -182,13 +293,19 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
             # Trend-continuation target: symmetric to stop (RR=1:1)
             target = entry_px + params.atr_stop_mult * atr_at_entry
         else:
-            target = anchor_at_entry
+            if params.target_mode == "partial_revert":
+                target = entry_px + (anchor_at_entry - entry_px) * params.target_reclaim_frac
+            else:
+                target = anchor_at_entry
     else:
         stop = entry_px + params.atr_stop_mult * atr_at_entry
         if params.reverse_direction:
             target = entry_px - params.atr_stop_mult * atr_at_entry
         else:
-            target = anchor_at_entry
+            if params.target_mode == "partial_revert":
+                target = entry_px - (entry_px - anchor_at_entry) * params.target_reclaim_frac
+            else:
+                target = anchor_at_entry
 
     stop_distance = abs(entry_px - stop)
     if stop_distance <= 0:
@@ -197,11 +314,24 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
     # Size by risk: stop_distance * size (notional) = risk_per_trade * account
     # But we express size as fraction of account (notional/equity).
     account = ACCOUNT_SIZE
-    notional = (params.risk_per_trade * account * entry_px) / stop_distance
+    total_notional = (params.risk_per_trade * account * entry_px) / stop_distance
     max_notional = params.notional_cap * account * LEVERAGE
-    notional = min(notional, max_notional)
-    if notional <= 0:
+    total_notional = min(total_notional, max_notional)
+    if total_notional <= 0:
         return None
+    leg_notional = total_notional / scale_in_levels
+    filled_entries = [entry_px]
+
+    scale_prices: list[float] = []
+    for level in range(1, scale_in_levels):
+        if direction == +1:
+            fill_px = entry_px - level * scale_step
+        else:
+            fill_px = entry_px + level * scale_step
+        if (direction == +1 and fill_px <= stop) or (direction == -1 and fill_px >= stop):
+            break
+        scale_prices.append(fill_px)
+    next_scale_idx = 0
 
     # Simulate path bar-by-bar from entry_idx+1 to entry_idx+time_stop_bars
     exit_idx = None
@@ -210,8 +340,11 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
 
     for i in range(entry_idx + 1, min(entry_idx + 1 + params.time_stop_bars, len(df))):
         bar = df.iloc[i]
-        high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
+        high, low = float(bar["high"]), float(bar["low"])
         if direction == +1:
+            while next_scale_idx < len(scale_prices) and low <= scale_prices[next_scale_idx]:
+                filled_entries.append(scale_prices[next_scale_idx])
+                next_scale_idx += 1
             if low <= stop:
                 exit_idx, exit_px, reason = i, stop, "sl"
                 break
@@ -219,6 +352,9 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
                 exit_idx, exit_px, reason = i, target, "tp"
                 break
         else:
+            while next_scale_idx < len(scale_prices) and high >= scale_prices[next_scale_idx]:
+                filled_entries.append(scale_prices[next_scale_idx])
+                next_scale_idx += 1
             if high >= stop:
                 exit_idx, exit_px, reason = i, stop, "sl"
                 break
@@ -233,24 +369,29 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
         reason = "time_stop"
 
     # PnL in dollars
-    pnl_pct = (exit_px - entry_px) / entry_px * direction
+    avg_entry = float(sum(filled_entries) / len(filled_entries))
+    notional = leg_notional * len(filled_entries)
+    pnl_pct = (exit_px - avg_entry) / avg_entry * direction
     costs_pct = _cost_per_notional()
     net_pnl_pct = pnl_pct - costs_pct
-    pnl_usd = net_pnl_pct * notional / entry_px * entry_px  # = net_pnl_pct * notional
     pnl_usd = net_pnl_pct * notional
 
-    r_multiple = (pnl_pct - costs_pct) / (stop_distance / entry_px) if stop_distance else 0.0
+    risk_per_unit = abs(avg_entry - stop) / avg_entry
+    r_multiple = net_pnl_pct / risk_per_unit if risk_per_unit else 0.0
 
     return {
         "entry_idx": entry_idx + 1,
         "exit_idx": exit_idx,
         "direction": direction,
-        "entry": entry_px,
+        "entry": avg_entry,
+        "entry_initial": entry_px,
         "exit": exit_px,
         "stop": stop,
         "target": target,
         "atr_at_entry": atr_at_entry,
         "notional": notional,
+        "fills": len(filled_entries),
+        "scale_prices": scale_prices[:len(filled_entries) - 1],
         "pnl_pct": pnl_pct,
         "net_pnl_pct": net_pnl_pct,
         "pnl_usd": pnl_usd,
@@ -279,12 +420,13 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             continue
 
         row = df.iloc[i]
+        prev_row = df.iloc[i - 1] if i > 0 else None
         atr_val = row.get("atr")
         if pd.isna(atr_val) or float(atr_val) <= 0:
             vetos["degenerate_atr"] += 1
             continue
 
-        direction = decide_entry(row, params)
+        direction = decide_entry(row, params, prev_row=prev_row)
         if direction == 0:
             vetos["no_signal"] += 1
             continue
@@ -311,7 +453,7 @@ def run_backtest(symbols: list[str], params: MeanRevParams,
     }
     per_sym: dict[str, dict] = {}
 
-    candles_needed = int(days * 96)  # 15m = 96 bars/day
+    candles_needed = int(days * _bars_per_day(params.tf_exec))
     cache = fetch_all(symbols, interval=params.tf_exec, n_candles=candles_needed)
 
     for sym in symbols:
@@ -413,6 +555,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rsi-long-max", type=float, default=None)
     ap.add_argument("--rsi-short-min", type=float, default=None)
     ap.add_argument("--stop-mult", type=float, default=None)
+    ap.add_argument("--entry-mode", choices=["touch", "reversal_bar", "close_back_inside", "wick_reclaim", "extreme_reclaim"],
+                    default=None)
+    ap.add_argument("--target-mode", choices=["anchor", "partial_revert"], default=None)
+    ap.add_argument("--target-reclaim-frac", type=float, default=None)
+    ap.add_argument("--reclaim-atr-min", type=float, default=None)
+    ap.add_argument("--reclaim-deviation-exit", type=float, default=None)
+    ap.add_argument("--scale-in-levels", type=int, default=None)
+    ap.add_argument("--scale-in-step-atr", type=float, default=None)
     ap.add_argument("--reverse", action="store_true",
                     help="Flip entry direction (diagnostic for trend-continuation)")
     ap.add_argument("--out", default="data/meanrev")
@@ -438,6 +588,20 @@ def main(argv: list[str] | None = None) -> int:
         params.rsi_short_min = args.rsi_short_min
     if args.stop_mult is not None:
         params.atr_stop_mult = args.stop_mult
+    if args.entry_mode is not None:
+        params.entry_mode = args.entry_mode
+    if args.target_mode is not None:
+        params.target_mode = args.target_mode
+    if args.target_reclaim_frac is not None:
+        params.target_reclaim_frac = args.target_reclaim_frac
+    if args.reclaim_atr_min is not None:
+        params.reclaim_atr_min = args.reclaim_atr_min
+    if args.reclaim_deviation_exit is not None:
+        params.reclaim_deviation_exit = args.reclaim_deviation_exit
+    if args.scale_in_levels is not None:
+        params.scale_in_levels = args.scale_in_levels
+    if args.scale_in_step_atr is not None:
+        params.scale_in_step_atr = args.scale_in_step_atr
     if args.reverse:
         params.reverse_direction = True
 
