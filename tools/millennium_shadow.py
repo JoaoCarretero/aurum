@@ -110,6 +110,42 @@ _fh.setFormatter(_fmt)
 log.addHandler(_fh)
 
 
+def _git_describe() -> tuple[str, str]:
+    """Return (commit_short, branch). Empty strings on failure."""
+    import subprocess
+    def _run(args: list[str]) -> str:
+        try:
+            out = subprocess.check_output(
+                args, cwd=str(ROOT), text=True, timeout=2,
+                stderr=subprocess.DEVNULL,
+            )
+            return out.strip()
+        except (subprocess.SubprocessError, OSError):
+            return ""
+    return _run(["git", "rev-parse", "--short", "HEAD"]), _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+
+
+def _write_manifest(run_dir: Path, run_id: str, engine: str, mode: str) -> None:
+    """Write manifest.json once at runner start. Idempotent: overwrites if exists."""
+    import platform
+    import socket
+    from core.shadow_contract import compute_config_hash
+
+    commit, branch = _git_describe()
+    payload = {
+        "run_id": run_id,
+        "engine": engine,
+        "mode": mode,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "commit": commit or "unknown",
+        "branch": branch or "unknown",
+        "config_hash": compute_config_hash(),
+        "host": socket.gethostname(),
+        "python_version": platform.python_version(),
+    }
+    atomic_write(run_dir / "state" / "manifest.json", json.dumps(payload, indent=2))
+
+
 def _write_heartbeat(state: dict) -> None:
     payload = json.dumps(state, indent=2, ensure_ascii=True, default=str)
     atomic_write(HEARTBEAT_PATH, payload)
@@ -187,6 +223,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     with contextlib.suppress(AttributeError, ValueError):
         signal.signal(signal.SIGTERM, _handle_signal)
+
+    _write_manifest(RUN_DIR, run_id=RUN_ID, engine="millennium", mode="shadow")
 
     log.info("SHADOW START run=%s tick=%ds hours=%.1f dir=%s",
              RUN_ID, tick_sec, run_hours, RUN_DIR)
