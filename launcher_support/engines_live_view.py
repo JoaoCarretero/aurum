@@ -351,12 +351,13 @@ def render(launcher, parent, *, on_escape) -> dict:
         state["after_handles"] = []
         # Cancel any pending shadow-panel refresh so it doesn't fire after
         # the user has left the cockpit screen.
-        aid = state.pop("shadow_after_id", None)
-        if aid is not None:
-            try:
-                launcher.after_cancel(aid)
-            except Exception:
-                pass
+        for key in ("shadow_after_id", "shadow_refresh_aid"):
+            aid = state.pop(key, None)
+            if aid is not None:
+                try:
+                    launcher.after_cancel(aid)
+                except Exception:
+                    pass
 
     def set_mode(mode):
         if mode not in _MODE_ORDER:
@@ -1561,12 +1562,19 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
 
 
 def _schedule_shadow_refresh(launcher, state) -> None:
-    """Agenda re-render em 5s. Idempotente entre renders (cada render gera
-    um novo after_handle, o refresh quebra a cadeia quando o modo muda)."""
+    """Agenda re-render em 5s. Usa single-slot state['shadow_refresh_aid']
+    e cancela qualquer handle pendente antes de agendar — evita leak de
+    720 handles/hora ao re-renderizar a cada ciclo."""
+    prev_aid = state.pop("shadow_refresh_aid", None)
+    if prev_aid is not None:
+        try:
+            launcher.after_cancel(prev_aid)
+        except Exception:
+            pass
     try:
         aid = launcher.after(5000,
                              lambda: _refresh_shadow_detail(launcher, state))
-        state.setdefault("after_handles", []).append(aid)
+        state["shadow_refresh_aid"] = aid
     except Exception:
         pass
 
