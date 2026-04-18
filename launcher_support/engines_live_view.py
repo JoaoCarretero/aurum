@@ -1038,14 +1038,94 @@ def _render_log_panel(parent, column, state, launcher, proc, snap):
     _schedule_log_tail(state, launcher, proc)
 
 
-def _find_latest_shadow_run() -> tuple[Path, dict] | None:
-    """Return (run_dir, heartbeat_payload) for the most recent shadow run,
-    or None when no heartbeat exists yet.
+_COCKPIT_CLIENT_SINGLETON: object | None = None
 
-    Runs live in data/millennium_shadow/<RUN_ID>/state/heartbeat.json.
-    Sorted by heartbeat mtime so a recently-stopped run ranks above a
-    stale one even if RUN_IDs sort differently.
+
+def _get_cockpit_client():
+    """Lazy singleton. Returns None se config ausente ou invalida.
+
+    Config vem de config/keys.json bloco 'cockpit_api'. Uma vez resolvido
+    (positivo ou negativo), cacheia o resultado pra nao retry em cada
+    refresh do painel. Launcher vivo dura horas — tentar reabrir o
+    arquivo a cada 5s nao ajuda.
     """
+    global _COCKPIT_CLIENT_SINGLETON
+    if _COCKPIT_CLIENT_SINGLETON is not None:
+        return _COCKPIT_CLIENT_SINGLETON or None
+    keys_path = Path("config/keys.json")
+    if not keys_path.exists():
+        _COCKPIT_CLIENT_SINGLETON = False
+        return None
+    try:
+        data = json.loads(keys_path.read_text(encoding="utf-8"))
+        block = data.get("cockpit_api")
+        if not block or not block.get("base_url") or not block.get("read_token"):
+            _COCKPIT_CLIENT_SINGLETON = False
+            return None
+        from launcher_support.cockpit_client import CockpitClient, CockpitConfig
+        cfg = CockpitConfig(
+            base_url=block["base_url"],
+            read_token=block["read_token"],
+            admin_token=block.get("admin_token"),
+            timeout_sec=float(block.get("timeout_sec", 5.0)),
+        )
+        _COCKPIT_CLIENT_SINGLETON = CockpitClient(
+            cfg, cache_dir=Path("data/.cockpit_cache"))
+        return _COCKPIT_CLIENT_SINGLETON
+    except Exception:
+        _COCKPIT_CLIENT_SINGLETON = False
+        return None
+
+
+def _is_remote_run(run_dir: Path) -> bool:
+    # Path() on Windows normaliza "remote://x" pra "remote:\x" ou "remote:/x".
+    # Aceita as três formas pra robustez cross-platform.
+    s = str(run_dir).replace("\\", "/")
+    return s.startswith("remote:/") or s.startswith("remote://")
+
+
+def _remote_run_id(run_dir: Path) -> str:
+    s = str(run_dir).replace("\\", "/")
+    if s.startswith("remote://"):
+        return s[len("remote://"):]
+    if s.startswith("remote:/"):
+        return s[len("remote:/"):]
+    return s
+
+
+def _find_latest_shadow_run() -> tuple[Path, dict] | None:
+    """Return (run_dir, heartbeat_payload) for the most recent shadow run.
+
+    Try cockpit_api client first (remoto via tunnel). Se ausente ou falha,
+    cai pro disco local (dev / shadow rodando na mesma máquina).
+    """
+    # Remote path via cockpit API
+    client = _get_cockpit_client()
+    if client is not None:
+        try:
+            run = client.latest_run(engine="millennium")
+        except Exception:
+            run = None
+        if run:
+            virtual_dir = Path(f"remote://{run['run_id']}")
+            try:
+                hb = client.get_heartbeat(run["run_id"])
+            except Exception:
+                # list_runs worked but heartbeat didn't — keep [REMOTE]
+                # badge with whatever the summary carried, instead of
+                # silently degrading to a stale LOCAL run.
+                hb = {
+                    "run_id": run["run_id"],
+                    "status": run.get("status", "unknown"),
+                    "ticks_ok": 0, "ticks_fail": 0,
+                    "novel_total": run.get("novel_total", 0),
+                    "last_tick_at": run.get("last_tick_at"),
+                    "last_error": "heartbeat fetch failed",
+                    "tick_sec": 0,
+                }
+            return virtual_dir, hb
+
+    # Local disk fallback (layout existente)
     root = Path("data/millennium_shadow")
     if not root.exists():
         return None
@@ -1070,7 +1150,46 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
 
 
 def _drop_shadow_kill(run_dir: Path, launcher, state) -> None:
-    """Drop a `.kill` flag so the shadow loop exits after the current tick."""
+    """Drop a `.kill` flag so the shadow loop exits after the current tick.
+
+    Remote runs (virtual_dir = 'remote://<run_id>') route via cockpit
+    client POST /kill. Local runs write the file directly (previous behavior).
+    """
+    # Remote path via cockpit API
+    if _is_remote_run(run_dir):
+        client = _get_cockpit_client()
+        if client is None or not getattr(client.cfg, "admin_token", None):
+            try:
+                launcher.h_stat.configure(
+                    text="SHADOW KILL: admin_token ausente em keys.json",
+                    fg=RED)
+            except Exception:
+                pass
+            return
+        run_id = _remote_run_id(run_dir)
+        try:
+            client.drop_kill(run_id)
+        except Exception as exc:
+            try:
+                launcher.h_stat.configure(
+                    text=f"SHADOW KILL fail: {type(exc).__name__}", fg=RED)
+            except Exception:
+                pass
+            return
+        try:
+            launcher.h_stat.configure(
+                text=f"SHADOW KILL dispatched ({run_id})", fg=AMBER)
+        except Exception:
+            pass
+        refresh = state.get("refresh")
+        if callable(refresh):
+            try:
+                launcher.after(250, refresh)
+            except Exception:
+                refresh()
+        return
+
+    # Local path — preserves original file-write behavior
     kill_path = run_dir / ".kill"
     try:
         kill_path.write_text("killed via cockpit\n", encoding="utf-8")
@@ -1161,8 +1280,9 @@ def _render_shadow_panel(parent, launcher, state, slug: str) -> None:
                  f"{int(hb.get('tick_sec', 0) or 0)}s", WHITE)
 
     last = hb.get("last_tick_at") or hb.get("stopped_at") or "—"
+    source = "REMOTE" if _is_remote_run(run_dir) else "LOCAL"
     tk.Label(shadow,
-             text=f"RUN {hb.get('run_id','?')}  ·  last {last}",
+             text=f"[{source}]  RUN {hb.get('run_id','?')}  ·  last {last}",
              fg=DIM, bg=BG2, font=(FONT, 7), anchor="w").pack(
                  fill="x", padx=10, pady=(0, 4))
 
