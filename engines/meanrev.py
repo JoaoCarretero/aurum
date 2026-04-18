@@ -67,19 +67,59 @@ class MeanRevParams:
     # rather than mean-reversion. If --reverse produces positive edge, the
     # engine's name is wrong but the signal has value.
     reverse_direction: bool = False
+    # Regime gate: "any" = no gate. "low_vol" = only vol_regime in {LOW, NORMAL}.
+    # "high_vol" = only {HIGH, EXTREME}. Uses core.indicators vol_regime.
+    regime_filter: str = "any"
+    # Mean anchor: "ema50" = deviation from EMA50 (default). "vwap_daily" =
+    # deviation from session VWAP (rolling daily).
+    anchor_type: str = "ema50"
+    # Side gate: "both" (default), "long_only", "short_only".
+    side_filter: str = "both"
 
 
 # ── Features ────────────────────────────────────────────────────
 
-def compute_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Attach ema50, rsi, atr, and deviation = (close - ema50) / atr."""
+def _daily_vwap(df: pd.DataFrame) -> pd.Series:
+    """Rolling daily VWAP. Resets at UTC midnight per bar.
+
+    Falls back to cumsum over the whole frame if a datetime index isn't
+    available (ok for test data).
+    """
+    typical = (df["high"] + df["low"] + df["close"]) / 3.0
+    pv = typical * df["vol"]
+    if isinstance(df.index, pd.DatetimeIndex):
+        day = df.index.normalize()
+        cum_pv = pv.groupby(day).cumsum()
+        cum_v = df["vol"].groupby(day).cumsum()
+    else:
+        cum_pv = pv.cumsum()
+        cum_v = df["vol"].cumsum()
+    vwap = cum_pv / cum_v.replace(0, np.nan)
+    return vwap
+
+
+def compute_features(df: pd.DataFrame, params: MeanRevParams | None = None) -> pd.DataFrame:
+    """Attach ema50, rsi, atr, and deviation = (close - anchor) / atr."""
     df = core_indicators(df)
     atr = df["atr"].replace(0, np.nan)
-    df["deviation"] = (df["close"] - df["ema50"]) / atr
+    if params is not None and params.anchor_type == "vwap_daily":
+        if "vol" in df.columns:
+            df["vwap_daily"] = _daily_vwap(df)
+            anchor = df["vwap_daily"]
+        else:
+            anchor = df["ema50"]
+    else:
+        anchor = df["ema50"]
+    df["deviation"] = (df["close"] - anchor) / atr
+    df["anchor"] = anchor
     return df
 
 
 # ── Entry decision ──────────────────────────────────────────────
+
+_LOW_VOL_REGIMES = {"LOW", "NORMAL"}
+_HIGH_VOL_REGIMES = {"HIGH", "EXTREME"}
+
 
 def decide_entry(row: pd.Series, params: MeanRevParams) -> int:
     """Return +1 (long), -1 (short), or 0 (no entry)."""
@@ -90,9 +130,26 @@ def decide_entry(row: pd.Series, params: MeanRevParams) -> int:
         return 0
     if not np.isnan(atr_pct) and atr_pct < params.min_atr_pct * 100:
         return 0
-    if dev <= -params.deviation_enter and rsi <= params.rsi_long_max:
+
+    # Regime gate
+    if params.regime_filter != "any":
+        regime = row.get("vol_regime", "NORMAL")
+        if params.regime_filter == "low_vol" and regime not in _LOW_VOL_REGIMES:
+            return 0
+        if params.regime_filter == "high_vol" and regime not in _HIGH_VOL_REGIMES:
+            return 0
+
+    long_sig = dev <= -params.deviation_enter and rsi <= params.rsi_long_max
+    short_sig = dev >= +params.deviation_enter and rsi >= params.rsi_short_min
+
+    if params.side_filter == "long_only":
+        short_sig = False
+    elif params.side_filter == "short_only":
+        long_sig = False
+
+    if long_sig:
         return -1 if params.reverse_direction else +1
-    if dev >= +params.deviation_enter and rsi >= params.rsi_short_min:
+    if short_sig:
         return +1 if params.reverse_direction else -1
     return 0
 
@@ -117,7 +174,7 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
     open_bar = df.iloc[entry_idx + 1]
     entry_px = float(open_bar["open"])
     atr_at_entry = float(entry_row["atr"])
-    ema50_at_entry = float(entry_row["ema50"])
+    anchor_at_entry = float(entry_row.get("anchor", entry_row.get("ema50")))
 
     if direction == +1:
         stop = entry_px - params.atr_stop_mult * atr_at_entry
@@ -125,13 +182,13 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
             # Trend-continuation target: symmetric to stop (RR=1:1)
             target = entry_px + params.atr_stop_mult * atr_at_entry
         else:
-            target = ema50_at_entry
+            target = anchor_at_entry
     else:
         stop = entry_px + params.atr_stop_mult * atr_at_entry
         if params.reverse_direction:
             target = entry_px - params.atr_stop_mult * atr_at_entry
         else:
-            target = ema50_at_entry
+            target = anchor_at_entry
 
     stop_distance = abs(entry_px - stop)
     if stop_distance <= 0:
@@ -208,7 +265,7 @@ def simulate_trade(df: pd.DataFrame, entry_idx: int, direction: int,
 def scan_symbol(df: pd.DataFrame, symbol: str,
                 params: MeanRevParams) -> tuple[list[dict], dict[str, int]]:
     """Return list of trades and veto distribution for one symbol."""
-    df = compute_features(df)
+    df = compute_features(df, params)
     trades: list[dict] = []
     vetos: dict[str, int] = {
         "no_signal": 0, "position_open": 0, "degenerate_atr": 0, "end_of_data": 0,
