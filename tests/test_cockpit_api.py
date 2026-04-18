@@ -115,3 +115,94 @@ def test_runs_handles_legacy_no_manifest(tmp_path, client):
     assert len(runs) == 1
     assert runs[0]["engine"] == "millennium"  # derivado do diretório
     assert runs[0]["mode"] == "shadow"
+
+
+def test_run_detail_returns_manifest_and_heartbeat(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "r1",
+        heartbeat={
+            "run_id": "r1", "status": "running",
+            "ticks_ok": 3, "ticks_fail": 0, "novel_total": 42,
+            "last_tick_at": "2026-04-18T03:00:00+00:00",
+            "last_error": None, "tick_sec": 900,
+        },
+        manifest={
+            "run_id": "r1", "engine": "millennium", "mode": "shadow",
+            "started_at": "2026-04-18T02:29:38+00:00",
+            "commit": "abc", "branch": "feat/phi-engine",
+            "config_hash": "sha256:deadbeef", "host": "vmi3200601",
+        },
+    )
+    r = client.get("/v1/runs/r1", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["manifest"]["commit"] == "abc"
+    assert body["heartbeat"]["ticks_ok"] == 3
+
+
+def test_run_detail_404_when_missing(client):
+    r = client.get("/v1/runs/does_not_exist", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 404
+
+
+def test_heartbeat_fast_endpoint(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "r2",
+        heartbeat={
+            "run_id": "r2", "status": "running",
+            "ticks_ok": 1, "ticks_fail": 0, "novel_total": 10,
+            "last_tick_at": "2026-04-18T03:00:00+00:00",
+            "last_error": None, "tick_sec": 900,
+        },
+    )
+    r = client.get("/v1/runs/r2/heartbeat", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    assert r.json()["ticks_ok"] == 1
+
+
+def test_trades_tail(tmp_path, client):
+    run_dir = _make_run(
+        tmp_path, "millennium_shadow", "r3",
+        heartbeat={
+            "run_id": "r3", "status": "running",
+            "ticks_ok": 1, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    reports = run_dir / "reports"
+    reports.mkdir()
+    jsonl = reports / "shadow_trades.jsonl"
+    lines = []
+    for i in range(10):
+        lines.append(json.dumps({
+            "timestamp": f"2026-04-18T0{i}:00:00+00:00",
+            "symbol": "BTCUSDT", "strategy": "CITADEL",
+            "direction": "LONG", "entry": 50000.0 + i,
+        }))
+    jsonl.write_text("\n".join(lines) + "\n")
+
+    r = client.get(
+        "/v1/runs/r3/trades?limit=3",
+        headers={"Authorization": "Bearer READ123"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 3
+    # Últimos 3 — ordem preservada do arquivo
+    assert [t["entry"] for t in body["trades"]] == [50007.0, 50008.0, 50009.0]
+
+
+def test_trades_limit_capped_at_500(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "r4",
+        heartbeat={
+            "run_id": "r4", "status": "running",
+            "ticks_ok": 0, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    r = client.get(
+        "/v1/runs/r4/trades?limit=99999",
+        headers={"Authorization": "Bearer READ123"},
+    )
+    assert r.status_code == 400  # exceeds max

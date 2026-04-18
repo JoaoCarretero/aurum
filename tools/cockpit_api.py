@@ -123,6 +123,59 @@ def build_app() -> FastAPI:
         _check_auth(request)
         return [_summarize_run(p) for p in find_runs(data_root)]
 
+    @app.get("/v1/runs/{run_id}")
+    def run_detail(run_id: str, request: Request):
+        _check_auth(request)
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        hb = load_heartbeat(run_dir)
+        manifest = load_manifest(run_dir)
+        if manifest is None:
+            engine, mode = _engine_from_dir(run_dir)
+            manifest = Manifest(
+                run_id=hb.run_id, engine=engine, mode=mode,
+                started_at=hb.last_tick_at or datetime.now(timezone.utc),
+                commit="unknown", branch="unknown",
+                config_hash="unknown", host="unknown",
+            )
+        return RunDetail(manifest=manifest, heartbeat=hb)
+
+    @app.get("/v1/runs/{run_id}/heartbeat", response_model=Heartbeat)
+    def run_heartbeat(run_id: str, request: Request):
+        _check_auth(request)
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return load_heartbeat(run_dir)
+
+    @app.get("/v1/runs/{run_id}/trades")
+    def run_trades(run_id: str, request: Request, limit: int = 50, since: str | None = None):
+        _check_auth(request)
+        if limit < 1 or limit > 500:
+            raise HTTPException(status_code=400, detail="limit must be 1..500")
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        jsonl = run_dir / "reports" / "shadow_trades.jsonl"
+        if not jsonl.exists():
+            return {"run_id": run_id, "count": 0, "trades": []}
+        lines = jsonl.read_text(encoding="utf-8").splitlines()
+        records = []
+        for ln in lines:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                import json as _json
+                records.append(_json.loads(ln))
+            except ValueError:
+                continue
+        if since:
+            records = [r for r in records if str(r.get("timestamp", "")) > since]
+        tail = records[-limit:]
+        return {"run_id": run_id, "count": len(tail), "trades": tail}
+
     return app
 
 
