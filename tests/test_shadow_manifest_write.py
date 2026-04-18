@@ -17,7 +17,7 @@ def test_shadow_writes_manifest_on_help_smoke(tmp_path, monkeypatch):
     # but capture writes to a temp RUN_DIR
     sys.path.insert(0, str(ROOT))
     from core.shadow_contract import Manifest
-    from tools.millennium_shadow import _write_manifest  # NEW symbol
+    from tools.maintenance.millennium_shadow import _write_manifest  # NEW symbol
 
     run_dir = tmp_path / "data" / "millennium_shadow" / "2026-04-18_0000"
     (run_dir / "state").mkdir(parents=True)
