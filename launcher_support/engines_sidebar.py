@@ -147,3 +147,224 @@ def result_color_name(result) -> str:
     if result == "LOSS":
         return "RED"
     return "DIM"
+
+
+# ─── Tk rendering ─────────────────────────────────────────────────
+# Render functions criam widgets — smoke-tested manualmente via launcher.
+# Pure helpers acima sao unit-tested em tests/test_engines_sidebar.py.
+
+import tkinter as tk
+from typing import Callable
+
+from core.ui_palette import (
+    AMBER, AMBER_B, BG, BG2, BORDER, DIM, DIM2, FONT, GREEN,
+    PANEL, RED, WHITE,
+)
+
+
+_COLORS = {
+    "GREEN": GREEN, "RED": RED, "DIM": DIM, "DIM2": DIM2,
+    "WHITE": WHITE, "AMBER": AMBER, "AMBER_B": AMBER_B,
+}
+
+
+def render_sidebar(
+    parent: tk.Widget,
+    engines: list[EngineRow],
+    selected_slug: str | None,
+    on_select: Callable[[str], None],
+) -> tk.Frame:
+    """Sidebar lateral fixa — lista engines do registry.
+
+    Engine active: linha clicavel com ticks/signals. Inactive: DIM2
+    com '—'. Selected: highlight AMBER_B bg.
+    """
+    frame = tk.Frame(parent, bg=PANEL, width=180)
+    frame.pack(side="left", fill="y")
+    frame.pack_propagate(False)
+
+    tk.Label(frame, text="ENGINES", fg=AMBER, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(anchor="w", padx=10, pady=(10, 4))
+    tk.Frame(frame, bg=BORDER, height=1).pack(fill="x", padx=8)
+
+    for row in engines:
+        is_sel = row.slug == selected_slug
+        bg = AMBER_B if is_sel else PANEL
+        fg_marker = WHITE if is_sel else (WHITE if row.active else DIM2)
+        fg_text = BG if is_sel else (WHITE if row.active else DIM2)
+        marker = "▸" if is_sel else ("✓" if row.active else "○")
+
+        item = tk.Frame(frame, bg=bg, cursor="hand2")
+        item.pack(fill="x", padx=6, pady=1)
+
+        top = tk.Frame(item, bg=bg)
+        top.pack(fill="x", padx=6, pady=(4, 0))
+        tk.Label(top, text=marker, fg=fg_marker, bg=bg,
+                 font=(FONT, 7, "bold")).pack(side="left")
+        tk.Label(top, text=f" {row.display}", fg=fg_text, bg=bg,
+                 font=(FONT, 7, "bold")).pack(side="left")
+
+        sub = tk.Frame(item, bg=bg)
+        sub.pack(fill="x", padx=6, pady=(0, 4))
+        if row.active:
+            sub_text = f"  ✓ {row.ticks}t · {row.signals}s"
+            sub_color = DIM if not is_sel else BG
+        else:
+            sub_text = "  —"
+            sub_color = DIM2
+        tk.Label(sub, text=sub_text, fg=sub_color, bg=bg,
+                 font=(FONT, 6)).pack(anchor="w")
+
+        def _handler(_e, _slug=row.slug):
+            on_select(_slug)
+        item.bind("<Button-1>", _handler)
+        for child in item.winfo_children():
+            child.bind("<Button-1>", _handler)
+            for grand in child.winfo_children():
+                grand.bind("<Button-1>", _handler)
+
+    return frame
+
+
+def render_detail(
+    parent: tk.Widget,
+    engine_display: str,
+    mode: str,
+    heartbeat: dict | None,
+    manifest: dict | None,
+    trades: list[dict],
+    on_row_click: Callable[[dict], None],
+    status_badge_text: str = "",
+    status_badge_color: str = DIM2,
+) -> tk.Frame:
+    """Detail pane flex — HEALTH / RUN INFO / LAST SIGNALS / ACTIONS.
+
+    Usa dados crus (heartbeat dict, trade dict) — sem dependencia de
+    pydantic (client side tolera shapes extendidos).
+    """
+    frame = tk.Frame(parent, bg=PANEL)
+    frame.pack(side="left", fill="both", expand=True)
+
+    # HEADER
+    hdr = tk.Frame(frame, bg=PANEL)
+    hdr.pack(fill="x", padx=12, pady=(10, 8))
+    tk.Label(hdr, text=f"{engine_display} · {mode}",
+             font=(FONT, 10, "bold"), fg=WHITE, bg=PANEL).pack(side="left")
+    if status_badge_text:
+        tk.Label(hdr, text=f"  {status_badge_text}", fg=status_badge_color,
+                 bg=PANEL, font=(FONT, 7, "bold")).pack(side="left")
+
+    if heartbeat is None:
+        empty = tk.Label(frame,
+                         text="(engine sem run ativo — selecione outra ou inicie)",
+                         fg=DIM, bg=PANEL, font=(FONT, 8, "italic"))
+        empty.pack(padx=12, pady=20, anchor="w")
+        return frame
+
+    # HEALTH
+    _section_header(frame, "HEALTH")
+    health = tk.Frame(frame, bg=PANEL)
+    health.pack(fill="x", padx=12, pady=(0, 8))
+    _pair_row(health, "ticks_ok", str(heartbeat.get("ticks_ok", "—")),
+              "uptime", _format_uptime(heartbeat.get("run_hours")))
+    _pair_row(health, "ticks_fail", str(heartbeat.get("ticks_fail", "—")),
+              "novel", str(heartbeat.get("novel_total", "—")))
+
+    # RUN INFO
+    _section_header(frame, "RUN INFO")
+    info = tk.Frame(frame, bg=PANEL)
+    info.pack(fill="x", padx=12, pady=(0, 8))
+    run_id = heartbeat.get("run_id", "—")
+    commit = (manifest or {}).get("commit", "—")
+    branch = (manifest or {}).get("branch", "—")
+    started = heartbeat.get("started_at", "—")
+    _pair_row(info, "run_id", str(run_id), "commit", str(commit))
+    _pair_row(info, "started", str(started)[:19], "branch", str(branch))
+
+    # LAST SIGNALS
+    _section_header(frame, f"LAST SIGNALS  ·  click row for detail")
+    signals = tk.Frame(frame, bg=PANEL)
+    signals.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+    _render_signals_table_rich(signals, trades[-10:][::-1] if trades else [],
+                               on_row_click=on_row_click)
+
+    return frame
+
+
+def _section_header(parent, title: str) -> None:
+    tk.Label(parent, text=title, fg=AMBER, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(anchor="w", padx=12, pady=(4, 2))
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(0, 4))
+
+
+def _pair_row(parent, k1, v1, k2, v2) -> None:
+    row = tk.Frame(parent, bg=PANEL)
+    row.pack(fill="x", pady=(0, 2))
+    tk.Label(row, text=f"{k1}:", fg=DIM2, bg=PANEL,
+             font=(FONT, 7)).pack(side="left", padx=(0, 4))
+    tk.Label(row, text=str(v1), fg=WHITE, bg=PANEL,
+             font=(FONT, 7, "bold"), width=18, anchor="w").pack(side="left")
+    tk.Label(row, text=f"{k2}:", fg=DIM2, bg=PANEL,
+             font=(FONT, 7)).pack(side="left", padx=(12, 4))
+    tk.Label(row, text=str(v2), fg=WHITE, bg=PANEL,
+             font=(FONT, 7, "bold"), anchor="w").pack(side="left")
+
+
+def _format_uptime(hours) -> str:
+    try:
+        h = float(hours)
+    except (TypeError, ValueError):
+        return "—"
+    full_h = int(h)
+    mins = int((h - full_h) * 60)
+    return f"{full_h}h {mins}m"
+
+
+def _render_signals_table_rich(parent, trades: list[dict], on_row_click):
+    """Tabela com colunas time/sym/dir/entry/stop/rr/size/res. Rows clicaveis."""
+    if not trades:
+        tk.Label(parent,
+                 text="(sem sinais ainda — aguardando primeiros ticks)",
+                 fg=DIM, bg=PANEL, font=(FONT, 7, "italic")).pack(
+                     anchor="w", pady=(4, 4))
+        return
+
+    cols = [("TIME", 6), ("SYM", 5), ("DIR", 4),
+            ("ENTRY", 9), ("STOP", 9), ("RR", 4),
+            ("SIZE", 7), ("RES", 5)]
+    hdr = tk.Frame(parent, bg=BG2)
+    hdr.pack(fill="x", pady=(2, 0))
+    for name, w in cols:
+        tk.Label(hdr, text=name, fg=DIM2, bg=BG2,
+                 font=(FONT, 6, "bold"),
+                 width=w, anchor="w").pack(side="left", padx=(4, 0))
+
+    for trade in trades:
+        cells = format_signal_row(trade)
+        dir_color = GREEN if cells["dir"] == "L" else RED if cells["dir"] == "S" else DIM
+        res_color_name = result_color_name(trade.get("result"))
+        res_color = _COLORS.get(res_color_name, DIM)
+
+        row = tk.Frame(parent, bg=PANEL, cursor="hand2")
+        row.pack(fill="x", pady=(1, 0))
+
+        _cell(row, cells["time"], DIM, 6)
+        _cell(row, cells["sym"], WHITE, 5, bold=True)
+        _cell(row, cells["dir"], dir_color, 4, bold=True)
+        _cell(row, cells["entry"], WHITE, 9)
+        _cell(row, cells["stop"], DIM, 9)
+        _cell(row, cells["rr"], WHITE, 4)
+        _cell(row, cells["size"], WHITE, 7)
+        _cell(row, cells["res"], res_color, 5, bold=True)
+
+        def _click(_e, _t=trade):
+            on_row_click(_t)
+        row.bind("<Button-1>", _click)
+        for child in row.winfo_children():
+            child.bind("<Button-1>", _click)
+
+
+def _cell(parent, text, fg, width, bold=False):
+    font = (FONT, 6, "bold") if bold else (FONT, 6)
+    tk.Label(parent, text=str(text), fg=fg, bg=PANEL, font=font,
+             width=width, anchor="w").pack(side="left", padx=(4, 0))
