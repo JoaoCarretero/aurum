@@ -20,7 +20,7 @@ export function Technology() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ IV</span>
+            <span className="section__num">§ VI</span>
             <h2 className="section__title">
               Nine engines. One <em>orchestrator.</em>
             </h2>

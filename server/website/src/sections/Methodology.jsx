@@ -7,7 +7,7 @@ export function Methodology() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ II</span>
+            <span className="section__num">§ III</span>
             <h2 className="section__title">
               The anti-overfit <em>protocol.</em>
             </h2>

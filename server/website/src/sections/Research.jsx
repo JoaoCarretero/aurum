@@ -7,7 +7,7 @@ export function Research() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ VI</span>
+            <span className="section__num">§ VIII</span>
             <h2 className="section__title">
               Research <em>notes.</em>
             </h2>

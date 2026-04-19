@@ -30,7 +30,7 @@ export function Contact() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head section__head--center">
-            <span className="section__num">§ VII</span>
+            <span className="section__num">§ IX</span>
             <h2 className="section__title">
               Invitation only. Limited <em>capacity.</em>
             </h2>

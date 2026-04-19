@@ -7,7 +7,7 @@ export function Principles() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ V</span>
+            <span className="section__num">§ VII</span>
             <h2 className="section__title">
               Seven operating <em>principles.</em>
             </h2>

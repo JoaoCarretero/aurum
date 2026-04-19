@@ -16,7 +16,7 @@ export function Performance() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ III</span>
+            <span className="section__num">§ IV</span>
             <h2 className="section__title">
               Performance, <em>out-of-sample.</em>
             </h2>
