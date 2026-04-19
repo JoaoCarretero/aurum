@@ -9537,6 +9537,7 @@ class App(tk.Tk):
         self._dash_cockpit_snap: dict = {}
         self._dash_cockpit_stream = None      # subprocess.Popen handle while streaming
         self._dash_cockpit_streaming = False  # bool
+        self._dash_cockpit_stream_pending = False
 
         # Navigation
         self._kb("<Escape>", self._dash_exit_to_markets)
@@ -12325,6 +12326,8 @@ class App(tk.Tk):
             head = self._dash_widgets.get(("cp_log_head",))
             if head: head.configure(text=" LIVE LOG (polled every 5s) ")
             return
+        if getattr(self, "_dash_cockpit_stream_pending", False):
+            return
 
         # Start stream
         log_text = self._dash_widgets.get(("cp_log_text",))
@@ -12333,74 +12336,130 @@ class App(tk.Tk):
             log_text.delete("1.0", "end")
             log_text.insert("1.0", "— starting live stream... —\n")
             log_text.configure(state="disabled")
+        btn = self._dash_widgets.get(("cp_stream_btn",))
+        if btn:
+            btn.configure(text="  STARTING...  ", bg=AMBER)
+        head = self._dash_widgets.get(("cp_log_head",))
+        if head:
+            head.configure(text=" LIVE LOG (connecting stream) ")
+        self._dash_cockpit_stream_pending = True
 
-        try:
-            self._dash_cockpit_stream = subprocess.Popen(
-                _build_vps_ssh_command(
-                    _build_vps_log_tail_command(_vps_project())
-                ),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-                creationflags=_NO_WINDOW,
-            )
-        except (FileNotFoundError, OSError) as e:
-            if log_text:
-                log_text.configure(state="normal")
-                log_text.insert("end", f"— stream failed: {e} —\n")
-                log_text.configure(state="disabled")
+        def _spawn_worker():
+            try:
+                proc = subprocess.Popen(
+                    _build_vps_ssh_command(
+                        _build_vps_log_tail_command(_vps_project())
+                    ),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                    creationflags=_NO_WINDOW,
+                )
+            except (FileNotFoundError, OSError) as e:
+                def _fail(err=e):
+                    self._dash_cockpit_stream_pending = False
+                    btn = self._dash_widgets.get(("cp_stream_btn",))
+                    if btn:
+                        btn.configure(text="  STREAM LOGS  ", bg=AMBER_B)
+                    head = self._dash_widgets.get(("cp_log_head",))
+                    if head:
+                        head.configure(text=" LIVE LOG (polled every 5s) ")
+                    lt = self._dash_widgets.get(("cp_log_text",))
+                    if lt:
+                        lt.configure(state="normal")
+                        lt.insert("end", f"— stream failed: {err} —\n")
+                        lt.configure(state="disabled")
+                try:
+                    self.after(0, _fail)
+                except Exception:
+                    pass
+                return
+
+            try:
+                self.after(0, lambda p=proc: self._dash_cockpit_attach_stream(p))
+            except Exception:
+                try:
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                except (OSError, ValueError):
+                    pass
+                try:
+                    proc.terminate()
+                except (OSError, ValueError):
+                    pass
+
+        threading.Thread(target=_spawn_worker, daemon=True).start()
+
+    def _dash_cockpit_attach_stream(self, proc):
+        if proc is None:
+            self._dash_cockpit_stream_pending = False
             return
-
+        if self._dash_cockpit_streaming:
+            try:
+                if proc.stdout is not None:
+                    proc.stdout.close()
+            except (OSError, ValueError):
+                pass
+            try:
+                proc.terminate()
+            except (OSError, ValueError):
+                pass
+            return
+        self._dash_cockpit_stream = proc
+        self._dash_cockpit_stream_pending = False
         self._dash_cockpit_streaming = True
         btn = self._dash_widgets.get(("cp_stream_btn",))
         if btn: btn.configure(text="  STOP STREAM  ", bg=RED)
         head = self._dash_widgets.get(("cp_log_head",))
         if head: head.configure(text=" LIVE LOG (streaming) ")
+        threading.Thread(
+            target=self._dash_cockpit_stream_reader,
+            args=(proc,),
+            daemon=True,
+        ).start()
 
-        def reader():
-            proc = self._dash_cockpit_stream
-            if proc is None or proc.stdout is None:
-                return
-            try:
-                # readline() instead of `for line in proc.stdout:` because the
-                # iterator buffers aggressively and can hang even after the
-                # process is terminated. readline returns '' on EOF.
-                while self._dash_cockpit_streaming:
+    def _dash_cockpit_stream_reader(self, proc):
+        if proc is None or proc.stdout is None:
+            return
+        try:
+            # readline() instead of `for line in proc.stdout:` because the
+            # iterator buffers aggressively and can hang even after the
+            # process is terminated. readline returns '' on EOF.
+            while self._dash_cockpit_streaming:
+                try:
+                    line = proc.stdout.readline()
+                except (ValueError, OSError):
+                    # pipe closed underneath us
+                    break
+                if not line:  # EOF
+                    break
+                if not self._dash_cockpit_streaming:
+                    break
+                def append(l=line):
+                    if not getattr(self, "_dash_alive", False):
+                        return
+                    lt = self._dash_widgets.get(("cp_log_text",))
+                    if lt is None: return
                     try:
-                        line = proc.stdout.readline()
-                    except (ValueError, OSError):
-                        # pipe closed underneath us
-                        break
-                    if not line:  # EOF
-                        break
-                    if not self._dash_cockpit_streaming:
-                        break
-                    def append(l=line):
-                        if not getattr(self, "_dash_alive", False):
-                            return
-                        lt = self._dash_widgets.get(("cp_log_text",))
-                        if lt is None: return
-                        try:
-                            if not lt.winfo_exists(): return
-                            lt.configure(state="normal")
-                            lt.insert("end", l)
-                            # Trim to last 500 lines to prevent memory growth
-                            total = int(lt.index("end-1c").split(".")[0])
-                            if total > 500:
-                                lt.delete("1.0", f"{total - 500}.0")
-                            lt.see("end")
-                            lt.configure(state="disabled")
-                        except tk.TclError:
-                            pass
-                    try: self.after(0, append)
-                    except Exception: return
-            except Exception:
-                pass
-
-        threading.Thread(target=reader, daemon=True).start()
+                        if not lt.winfo_exists(): return
+                        lt.configure(state="normal")
+                        lt.insert("end", l)
+                        # Trim to last 500 lines to prevent memory growth
+                        total = int(lt.index("end-1c").split(".")[0])
+                        if total > 500:
+                            lt.delete("1.0", f"{total - 500}.0")
+                        lt.see("end")
+                        lt.configure(state="disabled")
+                    except tk.TclError:
+                        pass
+                try: self.after(0, append)
+                except Exception: return
+        except Exception:
+            pass
 
     def _dash_cockpit_kill_stream(self):
         """Idempotent — safe to call multiple times even if no stream exists.
         Explicitly closes stdout to unblock the reader thread."""
+        self._dash_cockpit_stream_pending = False
         self._dash_cockpit_streaming = False
         proc = self._dash_cockpit_stream
         self._dash_cockpit_stream = None  # clear handle first so kill is idempotent

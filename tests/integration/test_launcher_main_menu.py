@@ -408,3 +408,65 @@ def test_alchemy_enter_redirects_to_engine_tab(app):
     app._alchemy_enter()
     app.update_idletasks()
     assert app._arb_tab == "engine"
+
+
+def test_cockpit_stream_spawn_is_off_ui_thread(app, mod, monkeypatch):
+    import tkinter as tk
+
+    host = tk.Frame(app, bg=mod.BG)
+    host.pack()
+    btn = tk.Label(host, text="  STREAM LOGS  ", bg=mod.AMBER_B)
+    head = tk.Label(host, text=" LIVE LOG (polled every 5s) ", bg=mod.AMBER)
+    log = tk.Text(host)
+    app._dash_widgets = {}
+    app._dash_widgets[("cp_stream_btn",)] = btn
+    app._dash_widgets[("cp_log_head",)] = head
+    app._dash_widgets[("cp_log_text",)] = log
+    app._dash_alive = True
+    app._dash_cockpit_streaming = False
+    app._dash_cockpit_stream_pending = False
+
+    popen_calls = []
+    started = []
+    real_thread = mod.threading.Thread
+
+    class _FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, **kwargs):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+            self._delegate = None
+            if getattr(target, "__name__", "") != "_spawn_worker":
+                self._delegate = real_thread(target=target, args=args, daemon=daemon, **kwargs)
+
+        def start(self):
+            if self._delegate is not None:
+                return self._delegate.start()
+            started.append((self.target, self.args, self.daemon))
+
+        def join(self, timeout=None):
+            if self._delegate is not None:
+                return self._delegate.join(timeout)
+            return None
+
+    def _fake_popen(*args, **kwargs):
+        popen_calls.append((args, kwargs))
+        raise AssertionError("Popen should not run inline on the UI thread")
+
+    monkeypatch.setattr(mod.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(mod.subprocess, "Popen", _fake_popen)
+
+    app._dash_cockpit_toggle_stream()
+
+    assert popen_calls == []
+    assert len(started) == 1
+    assert getattr(started[0][0], "__name__", "") == "_spawn_worker"
+    assert app._dash_cockpit_stream_pending is True
+    assert btn.cget("text").strip() == "STARTING..."
+    assert "connecting stream" in head.cget("text")
+    assert "starting live stream" in log.get("1.0", "end")
+
+    host.destroy()
+    app._dash_widgets.pop(("cp_stream_btn",), None)
+    app._dash_widgets.pop(("cp_log_head",), None)
+    app._dash_widgets.pop(("cp_log_text",), None)
