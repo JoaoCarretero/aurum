@@ -198,6 +198,96 @@ def build_app() -> FastAPI:
         tail = records[-limit:]
         return {"run_id": run_id, "count": len(tail), "trades": tail}
 
+    @app.get("/v1/runs/{run_id}/log")
+    def run_log(run_id: str, request: Request,
+                tail: int = 100, grep: str | None = None):
+        """Read-only tail de logs/shadow.log. `tail`=1..1000 linhas,
+        `grep`=substring case-insensitive opcional pra filtrar (ex:
+        'telegram', 'error', 'novel'). Retorna {"lines": [...]}."""
+        _check_auth(request)
+        if tail < 1 or tail > 1000:
+            raise HTTPException(status_code=400, detail="tail must be 1..1000")
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        log_path = run_dir / "logs" / "shadow.log"
+        if not log_path.exists():
+            return {"run_id": run_id, "lines": [], "grep": grep, "path": str(log_path)}
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"read failed: {exc}")
+        all_lines = text.splitlines()
+        if grep:
+            needle = grep.lower()
+            filtered = [ln for ln in all_lines if needle in ln.lower()]
+        else:
+            filtered = all_lines
+        sliced = filtered[-tail:]
+        return {
+            "run_id": run_id,
+            "lines": sliced,
+            "grep": grep,
+            "total_matching": len(filtered),
+            "total_lines": len(all_lines),
+        }
+
+    @app.get("/v1/runs/{run_id}/telegram-diag")
+    def telegram_diag(run_id: str, request: Request):
+        """Extrai contadores e timestamps de atividade Telegram no
+        shadow.log. Retorna sends/failures/last_send/last_failure_reason
+        — fecha a pergunta "Telegram funcionou?" sem precisar parsear
+        log cru."""
+        _check_auth(request)
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        log_path = run_dir / "logs" / "shadow.log"
+        if not log_path.exists():
+            return {"run_id": run_id, "log_missing": True}
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"read failed: {exc}")
+        sends = 0
+        failures = 0
+        last_send_ts: str | None = None
+        last_fail_ts: str | None = None
+        last_fail_reason: str | None = None
+        for ln in text.splitlines():
+            low = ln.lower()
+            if "telegram" not in low:
+                continue
+            # Timestamp do formatter é o inicio da linha ("YYYY-MM-DD HH:MM:SS").
+            ts = ln[:19] if len(ln) >= 19 and ln[4] == "-" and ln[13] == ":" else None
+            if "telegram send failed" in low or "telegram send error" in low:
+                failures += 1
+                last_fail_ts = ts or last_fail_ts
+                # Keep reason post "failed: "
+                idx = low.find("failed:")
+                if idx >= 0:
+                    last_fail_reason = ln[idx+7:].strip()[:200]
+            elif "shadow · " in low or "telegram" in low and "sent" in low:
+                # Heurística fraca — _tg_signal nao loga "sent" hoje, so
+                # conta se introduzirmos. Por ora mantem contador zero
+                # pra sends mas detalhamos se o texto vier.
+                sends += 1
+                last_send_ts = ts or last_send_ts
+        return {
+            "run_id": run_id,
+            "telegram_sends_logged": sends,
+            "telegram_failures_logged": failures,
+            "last_send_ts": last_send_ts,
+            "last_failure_ts": last_fail_ts,
+            "last_failure_reason": last_fail_reason,
+            "hint": (
+                "telegram_sends_logged=0 + zero failures = runner nao estava "
+                "logando cada send. Ative o log com um emit info em _tg_signal "
+                "pra rastrear histórico, OU use /log?grep=telegram pra ver o "
+                "cru. Se failures>0, last_failure_reason tem a causa."
+            ),
+        }
+
     @app.post("/v1/runs/{run_id}/kill")
     def run_kill(run_id: str, request: Request):
         _check_auth(request, admin=True)

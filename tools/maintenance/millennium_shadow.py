@@ -85,6 +85,17 @@ def _telegram_cfg() -> dict | None:
 def _tg_send(text: str) -> None:
     cfg = _telegram_cfg()
     if not cfg:
+        # Config ausente eh silencioso por design (não-op graceful), mas
+        # agora tambem aparece no log pra diagnostico de "por que nao
+        # notificou" — uma linha por processo, nao por send.
+        global _TG_CFG_MISSING_LOGGED
+        try:
+            _TG_CFG_MISSING_LOGGED
+        except NameError:
+            _TG_CFG_MISSING_LOGGED = False
+        if not _TG_CFG_MISSING_LOGGED:
+            log.info("telegram: cfg ausente (keys.json sem telegram.bot_token/chat_id) — pings desativados")
+            _TG_CFG_MISSING_LOGGED = True
         return
     try:
         import urllib.parse
@@ -98,6 +109,8 @@ def _tg_send(text: str) -> None:
         req = urllib.request.Request(url, data=payload, method="POST")
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             resp.read()
+        # Log cada send pra habilitar /telegram-diag a contar historico.
+        log.info("telegram sent: %s", text.splitlines()[0][:120])
     except Exception as exc:  # noqa: BLE001
         # Alerting nunca derruba o runner. Erro vai pro log local.
         log.warning("telegram send failed: %s", exc)

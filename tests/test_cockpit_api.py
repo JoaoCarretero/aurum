@@ -25,12 +25,16 @@ def client(api_app):
 
 
 def _make_run(data_root: Path, engine_subdir: str, run_id: str,
-              heartbeat: dict, manifest: dict | None = None) -> Path:
+              heartbeat: dict, manifest: dict | None = None,
+              log_text: str | None = None) -> Path:
     run_dir = data_root / engine_subdir / run_id
     (run_dir / "state").mkdir(parents=True)
     (run_dir / "state" / "heartbeat.json").write_text(json.dumps(heartbeat))
     if manifest is not None:
         (run_dir / "state" / "manifest.json").write_text(json.dumps(manifest))
+    if log_text is not None:
+        (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+        (run_dir / "logs" / "shadow.log").write_text(log_text, encoding="utf-8")
     return run_dir
 
 
@@ -302,3 +306,100 @@ def test_kill_idempotent(tmp_path, client):
     (run_dir / ".kill").write_text("")  # already present
     r = client.post("/v1/runs/r7/kill", headers={"Authorization": "Bearer ADMIN456"})
     assert r.status_code == 200
+
+
+def test_log_tail_basic(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "rlog",
+        heartbeat={
+            "run_id": "rlog", "status": "running",
+            "ticks_ok": 1, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+        log_text="\n".join([f"2026-04-18 10:{m:02d}:00  INFO  tick {m}" for m in range(20)]),
+    )
+    r = client.get("/v1/runs/rlog/log?tail=5",
+                   headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["lines"]) == 5
+    assert "tick 19" in body["lines"][-1]
+    assert body["total_lines"] == 20
+
+
+def test_log_grep_filter(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "rgrep",
+        heartbeat={
+            "run_id": "rgrep", "status": "running",
+            "ticks_ok": 1, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+        log_text=(
+            "2026-04-18 10:00:00  INFO  tick 1 ok\n"
+            "2026-04-18 10:01:00  INFO  telegram sent: SHADOW JUMP LONG BTCUSDT\n"
+            "2026-04-18 10:02:00  WARN  telegram send failed: 403 Forbidden\n"
+            "2026-04-18 10:03:00  INFO  tick 2 ok\n"
+        ),
+    )
+    r = client.get("/v1/runs/rgrep/log?grep=telegram",
+                   headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_matching"] == 2
+    assert all("telegram" in ln.lower() for ln in body["lines"])
+
+
+def test_log_missing_returns_empty(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "rnolog",
+        heartbeat={
+            "run_id": "rnolog", "status": "running",
+            "ticks_ok": 0, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    r = client.get("/v1/runs/rnolog/log",
+                   headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    assert r.json()["lines"] == []
+
+
+def test_log_tail_out_of_range_400(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "rbadtail",
+        heartbeat={
+            "run_id": "rbadtail", "status": "running",
+            "ticks_ok": 0, "ticks_fail": 0, "novel_total": 0,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+    )
+    r = client.get("/v1/runs/rbadtail/log?tail=5000",
+                   headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 400
+
+
+def test_telegram_diag_counts_sends_and_failures(tmp_path, client):
+    _make_run(
+        tmp_path, "millennium_shadow", "rdiag",
+        heartbeat={
+            "run_id": "rdiag", "status": "running",
+            "ticks_ok": 3, "ticks_fail": 0, "novel_total": 5,
+            "last_tick_at": None, "last_error": None, "tick_sec": 900,
+        },
+        log_text=(
+            "2026-04-18 10:00:00  INFO  tick 1 ok\n"
+            "2026-04-18 10:01:00  INFO  telegram sent: SHADOW JUMP LONG BTC\n"
+            "2026-04-18 10:02:00  INFO  telegram sent: SHADOW CITADEL SHORT ETH\n"
+            "2026-04-18 10:03:00  WARN  telegram send failed: 403 bot blocked\n"
+            "2026-04-18 10:04:00  INFO  tick 2 ok\n"
+        ),
+    )
+    r = client.get("/v1/runs/rdiag/telegram-diag",
+                   headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["telegram_failures_logged"] == 1
+    assert body["last_failure_reason"].startswith("403 bot blocked")
+    assert body["last_failure_ts"] == "2026-04-18 10:03:00"
+    assert body["telegram_sends_logged"] >= 2
