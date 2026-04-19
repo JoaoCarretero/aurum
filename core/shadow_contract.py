@@ -124,8 +124,10 @@ class TradeRecord(BaseModel):
 def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
     """Return run_dir paths containing a heartbeat.json, sorted by mtime DESC.
 
-    Honors existing layout: `data/{engine}_shadow/{run_id}/state/heartbeat.json`
-    AND future layout: `data/shadow/{engine}/{run_id}/state/heartbeat.json`.
+    Honors layouts:
+      - data/{engine}_shadow/{run_id}/state/heartbeat.json
+      - data/{engine}_paper/{run_id}/state/heartbeat.json
+      - data/shadow/{engine}/{run_id}/state/heartbeat.json  (future)
 
     If `engines` is given, restricts to those engine names.
     """
@@ -135,9 +137,11 @@ def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
     for engine_dir in data_root.iterdir():
         if not engine_dir.is_dir():
             continue
-        # Layout A: data/{engine}_shadow/{run_id}/
-        if engine_dir.name.endswith("_shadow"):
-            engine = engine_dir.name.removesuffix("_shadow")
+        name = engine_dir.name
+        # Layout A: data/{engine}_{shadow,paper}/{run_id}/
+        if name.endswith("_shadow") or name.endswith("_paper"):
+            suffix = "_shadow" if name.endswith("_shadow") else "_paper"
+            engine = name.removesuffix(suffix)
             if engines and engine not in engines:
                 continue
             for run_dir in engine_dir.iterdir():
@@ -145,7 +149,7 @@ def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
                 if hb.exists():
                     runs.append((hb.stat().st_mtime, run_dir))
         # Layout B: data/shadow/{engine}/{run_id}/
-        elif engine_dir.name == "shadow":
+        elif name == "shadow":
             for sub_engine in engine_dir.iterdir():
                 if not sub_engine.is_dir():
                     continue

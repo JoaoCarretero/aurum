@@ -213,3 +213,26 @@ def test_trade_record_result_literal_validates():
             symbol="BTC", strategy="X", direction="L",
             result="PARTIAL",
         )
+
+
+def test_find_runs_discovers_paper_layout(tmp_path):
+    """Paper runs live at data/<engine>_paper/<run_id>/state/heartbeat.json."""
+    paper_run = tmp_path / "millennium_paper" / "2026-04-19_1500" / "state"
+    paper_run.mkdir(parents=True)
+    (paper_run / "heartbeat.json").write_text("{}")
+    shadow_run = tmp_path / "millennium_shadow" / "2026-04-19_1200" / "state"
+    shadow_run.mkdir(parents=True)
+    (shadow_run / "heartbeat.json").write_text("{}")
+    runs = find_runs(tmp_path)
+    names = {r.name for r in runs}
+    assert "2026-04-19_1500" in names
+    assert "2026-04-19_1200" in names
+    assert len(runs) == 2
+
+
+def test_find_runs_filters_paper_by_engine(tmp_path):
+    paper = tmp_path / "millennium_paper" / "RID" / "state"
+    paper.mkdir(parents=True)
+    (paper / "heartbeat.json").write_text("{}")
+    assert len(find_runs(tmp_path, engines=["millennium"])) == 1
+    assert len(find_runs(tmp_path, engines=["citadel"])) == 0
