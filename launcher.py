@@ -196,7 +196,7 @@ MAIN_MENU = [
     ("DATA",           "data",        "Backtests · engine logs · reports"),
     ("STRATEGIES",     "strategies",  "Backtest & live engines"),
     ("ARBITRAGE",      "alchemy",     "CEX·CEX execution + DEX·DEX / CEX·DEX scanner"),
-    ("MACRO BRAIN",    "macro_brain", "Autonomous CIO · regime ? thesis ? paper positions"),
+    ("MACRO BRAIN",    "macro_brain", "Autonomous CIO · regime → thesis → paper positions"),
     ("RISK",           "risk",        "Portfolio & risk console"),
     ("COMMAND CENTER", "command",     "Site, servers, admin panel"),
     ("SETTINGS",       "settings",    "Config, keys, Telegram"),
@@ -369,7 +369,7 @@ BRIEFINGS = {
             "Basket":     "default",
             "Risk":       "regime-adaptive (BULL=0.30, CHOP=0.50) já default",
             "Sharpe val": "4.43 · 256 trades · ROI +31% · MC 99%",
-            "Status":     "? EDGE CONFIRMADO em 180d",
+            "Status":     "✓ EDGE CONFIRMADO em 180d",
         },
     },
     "JUMP": {
@@ -389,7 +389,7 @@ BRIEFINGS = {
             "Período":    "90 dias",
             "Basket":     "majors",
             "Sharpe val": "-4.22 · 17 trades",
-            "Status":     "? SEM EDGE — research lab até ML meta-layer",
+            "Status":     "✗ SEM EDGE — research lab até ML meta-layer",
         },
     },
     "BRIDGEWATER": {
@@ -410,7 +410,7 @@ BRIEFINGS = {
             "Basket":     "bluechip (default também ok)",
             "Sharpe val": "10.57 (bluechip 90d) · 7.34 (bluechip 180d)",
             "OOS WF":     "IS 4.97 / OOS 1.78 — 99 trades",
-            "Status":     "? EDGE CONFIRMADO — winner do battery",
+            "Status":     "✓ EDGE CONFIRMADO — winner do battery",
         },
     },
     "DE SHAW": {
@@ -521,7 +521,7 @@ BRIEFINGS["MEDALLION"] = {
         "MC 1000":    "100% cenários positivos · median +$5k · RoR 0%",
         "Walk-fwd":   "15/20 janelas teste positivas (75%)",
         "Audit":      "5/6 PASS · 1 SKIP (regime) · 0 FAIL · breakeven 14bp",
-        "Status":     "? EDGE VALIDADO · backtest-ready · live requer aprovação",
+        "Status":     "✓ EDGE VALIDADO · backtest-ready · live requer aprovação",
     },
 }
 
@@ -561,7 +561,7 @@ BRIEFINGS["RENAISSANCE"] = {
         "Basket":     "default",
         "Sharpe val": "6.58 · 68 trades · WR 88% · MaxDD 0.4%",
         "Audit":      "? WR reportado 85% vs auditado 61% — verificar antes do live",
-        "Status":     "? EDGE CONFIRMADO (com flag de audit)",
+        "Status":     "✓ EDGE CONFIRMADO (com flag de audit)",
     },
 }
 
@@ -598,7 +598,7 @@ BRIEFINGS["AQR"] = {
     "logic": [
         "Avaliar fitness por engine: Sortino (40%) + Profit Factor (20%) + Win Rate (20%) + Estabilidade (20%)",
         "Rankear engines e alocar capital: top performer 35%, acima da mediana 25%, abaixo 10%",
-        "Kill zone: 3 janelas negativas consecutivas ? engine pausado em 5% mínimo",
+        "Kill zone: 3 janelas negativas consecutivas → engine pausado em 5% mínimo",
         "Mutação: a cada 100 trades, perturbar parâmetros ±10% e testar melhoria",
         "Crossover: combinar DNA de dois engines de alta performance no mesmo regime",
     ],
@@ -867,7 +867,7 @@ for trade in merge_by_timestamp(citadel, renaissance):
 
     w_citadel     = base_weights[regime] · citadel_sortino_boost
     w_renaissance = base_weights[regime] · renaissance_sortino_boost
-    # kill switch: rolling sortino below -0.5 ? peso fixo em ENSEMBLE_MIN_W
+    # kill switch: rolling sortino below -0.5 → peso fixo em ENSEMBLE_MIN_W
 
     trade.size *= (w_citadel if trade.engine=="CITADEL" else w_renaissance)
     commit(trade)""",
@@ -889,11 +889,11 @@ for trade in merge_by_timestamp(citadel, renaissance):
             "w_i = base_w[regime] · max(ENSEMBLE_MIN_W, sortino_boost_i)",
             "confidence = min(1, sqrt(n_recent / CONFIDENCE_N_MIN))",
             "final_weight = confidence · w_i + (1-confidence) · base_w_i",
-            "kill switch: sortino < -0.5 ? weight = ENSEMBLE_MIN_W",
+            "kill switch: sortino < -0.5 → weight = ENSEMBLE_MIN_W",
         ],
         "invariants": [
             "sub-engines run independently; no cross-signal coupling",
-            "regime lag of REGIME_LAG trades breaks weight?trade feedback",
+            "regime lag of REGIME_LAG trades breaks weight→trade feedback",
             "no sub-engine can be fully silenced (floor at ENSEMBLE_MIN_W)",
             "all per-strategy invariants (L1-L11) inherited from CITADEL + harmonics",
         ],
@@ -917,7 +917,7 @@ model   = lgb.train(params, X_train, train["target"])
 # Inference (online)
 features = trade_context_at_open(trade)
 probs    = model.predict([features])
-weights  = softmax_normalize(probs) ? per-engine weight""",
+weights  = softmax_normalize(probs) → per-engine weight""",
         "params": [
             {"name": "retrain_every","default":500,"range":"200-2000",
              "unit": "trades","effect":"trades before model retrains"},
@@ -1043,7 +1043,7 @@ _BT_COLS: list[tuple[str, int]] = [
 # BACKTEST RUNS TABLE — per-engine view (ENGINE column dropped)
 # -----------------------------------------------------------
 # Used by the right-bottom runs list in the BACKTEST tab after
-# the engine ? run ? metrics hierarchy refactor. Same char widths
+# the engine → run → metrics hierarchy refactor. Same char widths
 # as _BT_COLS so the existing row renderer can be reused; the
 # STRATEGY column is omitted because the list is already filtered
 # to a single engine (picked in the left panel).
@@ -1066,7 +1066,7 @@ _BT_RUN_COLS: list[tuple[str, int]] = [
 # -----------------------------------------------------------
 # Static map: CLAUDE.md engine table + 2026-04-16 OOS audit
 # verdicts. Keys cover both institutional slugs and their legacy
-# lowercase aliases (e.g. "thoth" ? bridgewater) so runs written
+# lowercase aliases (e.g. "thoth" → bridgewater) so runs written
 # before the engine rename still get the right glyph.
 _ENGINE_BADGES: dict[str, str] = {
     "citadel":            "?",
@@ -1308,12 +1308,12 @@ class App(tk.Tk):
                      lambda e: btn.configure(bg=BG2, fg=WHITE))
             return btn
 
-        self.h_macro_btn    = _mk_nav_btn(" ? MACRO ",     self._macro_brain_menu)
+        self.h_macro_btn    = _mk_nav_btn(" ▸ MACRO ",     self._macro_brain_menu)
         self.h_main_btn     = _mk_nav_btn(" = MAIN ",      lambda: self._menu("main"))
-        self.h_backtest_btn = _mk_nav_btn(" ? BACKTEST ",  self._strategies_backtest)
-        self.h_engines_btn  = _mk_nav_btn(" ? ENGINES ",   self._strategies_live)
-        self.h_data_btn     = _mk_nav_btn(" ? DATA ",      self._data_center)
-        self.h_arb_btn      = _mk_nav_btn(" ? ARBITRAGE ", self._arbitrage_hub)
+        self.h_backtest_btn = _mk_nav_btn(" ◆ BACKTEST ",  self._strategies_backtest)
+        self.h_engines_btn  = _mk_nav_btn(" ▣ ENGINES ",   self._strategies_live)
+        self.h_data_btn     = _mk_nav_btn(" ▤ DATA ",      self._data_center)
+        self.h_arb_btn      = _mk_nav_btn(" ⇄ ARBITRAGE ", self._arbitrage_hub)
         # Extra left padding for the first button so it clears the AURUM brand.
         self.h_macro_btn.pack_configure(padx=(8, 0))
 
@@ -1415,14 +1415,14 @@ class App(tk.Tk):
                 port = int(sr.config.get("port", 3000) or 3000)
             except (TypeError, ValueError):
                 port = 3000
-            self.h_site.configure(text=f"? SITE :{port}", fg=GREEN)
+            self.h_site.configure(text=f"● SITE :{port}", fg=GREEN)
         else:
             self.h_site.configure(text="")
         self.after(3000, self._tick)
 
     # --- Bloomberg 3D menu — live data fetchers ----------
     # Each fetcher returns {"line1","line2","line3","line4"} of strings.
-    # Any failure ? "—". Never raises. Called from a worker thread.
+    # Any failure → "—". Never raises. Called from a worker thread.
 
     @staticmethod
     def _fallback_lines() -> dict:
@@ -2261,7 +2261,7 @@ class App(tk.Tk):
         canvas.create_line(48, 48, 872, 48, fill=AMBER_D, width=1)
         canvas.create_line(48, 596, 872, 596, fill=DIM2, width=1)
 
-        # Centered column: logo ? wordmark ? tagline. Single vertical
+        # Centered column: logo → wordmark → tagline. Single vertical
         # axis (x=460). The CD router card has fixed offsets calibrated
         # for r=52 (main-menu); at r=28 its top strip covers the logo
         # and DESK ROUTER overlaps the A U R U M inner text, so the
@@ -2518,7 +2518,7 @@ class App(tk.Tk):
                     )
                     return "break"
                 label = MAIN_GROUPS[hit][0]
-                self.h_stat.configure(text=f"? {label}", fg=AMBER_B)
+                self.h_stat.configure(text=f"→ {label}", fg=AMBER_B)
                 self._menu_tile_focus(hit)
                 self._menu_tile_expand(hit)
                 return "break"
@@ -2623,7 +2623,7 @@ class App(tk.Tk):
                                 fill=BG3, width=1, tags=f"tile{idx}")
         canvas.create_line(bx1, by1, bx2, by1, fill=color, width=1, tags=f"tile{idx}")
         canvas.create_text((bx1 + bx2) // 2, (by1 + by2) // 2,
-                           text="? BACK · ESC",
+                           text="◂ BACK · ESC",
                            font=(FONT, 6, "bold"), fill=WHITE, tags=f"tile{idx}")
         self._back_btn_rect = (bx1, by1, bx2, by2)
 
@@ -2635,7 +2635,7 @@ class App(tk.Tk):
                            fill=BORDER,
                            width=1, tags=f"tile{idx}")
         canvas.create_text(x2 - 16, foot_y + 10, anchor="e",
-                           text=f"ESC BACK · 1-{len(children)} SELECT · ? OPEN",
+                           text=f"ESC BACK · 1-{len(children)} SELECT · ⏎ OPEN",
                            font=(FONT, 7),
                            fill=DIM,
                            tags=f"tile{idx}")
@@ -2727,7 +2727,7 @@ class App(tk.Tk):
             # ENTER affordance ONLY on the focused row — kills repeated noise
             if focused:
                 canvas.create_text(row_x2 - 10, (y1 + y2) // 2, anchor="e",
-                                   text="? OPEN",
+                                   text="⏎ OPEN",
                                    font=(FONT, 7, "bold"),
                                    fill=color,
                                    tags="submenu")
@@ -2811,7 +2811,7 @@ class App(tk.Tk):
                            font=(FONT, 6, "bold"),
                            fill=(face_color if focused else DIM), tags=tag)
         canvas.create_text(x2 - 12, hint_y + 1, anchor="e",
-                           text="OPEN ?",
+                           text="OPEN ▸",
                            font=(FONT, 6, "bold"),
                            fill=(face_color if focused else DIM2), tags=tag)
 
@@ -3117,8 +3117,8 @@ class App(tk.Tk):
                          fg=AMBER_D, bg=BG, anchor="w", width=16).pack(side="left")
                 # Status row gets emoji-aware color
                 v_str = str(v)
-                _fg = (GREEN if "?" in v_str else
-                       RED   if "?" in v_str else
+                _fg = (GREEN if "✓" in v_str else
+                       RED   if "✗" in v_str else
                        AMBER if "?" in v_str else WHITE)
                 tk.Label(row, text=v_str, font=(FONT, 8),
                          fg=_fg, bg=BG, anchor="w",
@@ -3337,7 +3337,7 @@ class App(tk.Tk):
 
         # Hint + status — let the user know which strategy is being routed
         self.h_stat.configure(
-            text=f"{name} ? {mode_preset.upper()}",
+            text=f"{name} → {mode_preset.upper()}",
             fg={"paper": GREEN, "demo": AMBER, "testnet": AMBER_B, "live": RED}[mode_preset],
         )
         self._exec(name, live_script, desc, "live", [], cli_args=cli)
@@ -3346,8 +3346,8 @@ class App(tk.Tk):
     def _exec_backtest_inline(self, name, script, desc, parent_menu, cfg):
         """Fire backtest directly from engine_picker RUN chip — no intermediate
         pages. cfg = {preset, period, basket, leverage, plots}.
-        preset='calibrated' ? use ENGINE_INTERVALS/ENGINE_BASKETS defaults for
-        the engine (just pass --days). preset='custom' ? honor picker cfg."""
+        preset='calibrated' → use ENGINE_INTERVALS/ENGINE_BASKETS defaults for
+        the engine (just pass --days). preset='custom' → honor picker cfg."""
         preset = (cfg or {}).get("preset", "custom")
 
         if preset == "calibrated":
@@ -3656,7 +3656,7 @@ class App(tk.Tk):
             if _basket and not _basket.isdigit():
                 cli += ["--basket", _basket]
             elif _basket.isdigit():
-                # Resolve index ? basket name
+                # Resolve index → basket name
                 from config.params import BASKETS
                 _bnames = [k for k in BASKETS if k != "custom"]
                 _idx = int(_basket) - 1
@@ -3829,7 +3829,7 @@ class App(tk.Tk):
         self._results_parent_menu = parent_menu
         self.h_stat.configure(text="RESULTADOS", fg=GREEN)
         self.f_lbl.configure(
-            text="ESC voltar  |  1 overview  2 trades  |  ? ? navegar trade")
+            text="ESC voltar  |  1 overview  2 trades  |  ← → navegar trade")
         self._kb("<Escape>", lambda: self._menu(parent_menu))
         self._kb("<Key-1>", lambda: self._results_render_tab("overview"))
         self._kb("<Key-2>", lambda: self._results_render_tab("trades"))
@@ -4230,7 +4230,7 @@ class App(tk.Tk):
             oh.pack(side="left", padx=4)
             oh.bind("<Button-1>", lambda e: self._open_file(report_html))
 
-        ti = tk.Label(act_f, text="  TRADE INSPECTOR ?  ",
+        ti = tk.Label(act_f, text="  TRADE INSPECTOR →  ",
                       font=(FONT, 9, "bold"), fg=BG, bg=GREEN,
                       cursor="hand2", padx=10, pady=3)
         ti.pack(side="left", padx=4)
@@ -4275,7 +4275,7 @@ class App(tk.Tk):
         nav = tk.Frame(outer, bg=BG, height=28); nav.pack(fill="x")
         nav.pack_propagate(False)
 
-        prev_btn = tk.Label(nav, text="  ? prev  ", font=(FONT, 8, "bold"),
+        prev_btn = tk.Label(nav, text="  ◄ prev  ", font=(FONT, 8, "bold"),
                             fg=AMBER, bg=BG, cursor="hand2", padx=8, pady=6)
         prev_btn.pack(side="left", padx=4)
         prev_btn.bind("<Button-1>", lambda e: self._results_prev_trade())
@@ -4284,7 +4284,7 @@ class App(tk.Tk):
                                          fg=DIM, bg=BG)
         self._results_counter.pack(side="left", padx=8)
 
-        next_btn = tk.Label(nav, text="  next ?  ", font=(FONT, 8, "bold"),
+        next_btn = tk.Label(nav, text="  next ►  ", font=(FONT, 8, "bold"),
                             fg=AMBER, bg=BG, cursor="hand2", padx=8, pady=6)
         next_btn.pack(side="left", padx=4)
         next_btn.bind("<Button-1>", lambda e: self._results_next_trade())
@@ -5530,11 +5530,11 @@ class App(tk.Tk):
     # ---------------------------------------------------------------
     # ARBITRAGE HUB — MP3-style router
     # Five legs of funding/basis arbitrage, one minimalist menu:
-    #   C  CEX ? CEX  ? JANE STREET cockpit (execution)
-    #   D  DEX ? DEX  ? funding scanner (observation)
-    #   X  CEX ? DEX  ? funding scanner (observation)
-    #   B  BASIS TRADE ? spot-perp basis screen
-    #   S  SPOT ? SPOT ? cross-venue spot spread screen
+    #   C  CEX ↔ CEX  → JANE STREET cockpit (execution)
+    #   D  DEX ↔ DEX  → funding scanner (observation)
+    #   X  CEX ↔ DEX  → funding scanner (observation)
+    #   B  BASIS TRADE → spot-perp basis screen
+    #   S  SPOT ↔ SPOT → cross-venue spot spread screen
     # ---------------------------------------------------------------
     _ARB_HUB_ITEMS = [
         ("C", "CEX  \u2194  CEX",
@@ -5604,7 +5604,7 @@ class App(tk.Tk):
         status.pack_propagate(False)
 
         dot_color = GREEN if getattr(self, "_arb_cache", None) else DIM
-        self._arb_live_dot = tk.Label(status, text="?",
+        self._arb_live_dot = tk.Label(status, text="●",
                                        font=(FONT, 9, "bold"),
                                        fg=dot_color, bg=BG)
         self._arb_live_dot.pack(side="left", padx=(0, 4))
@@ -6161,7 +6161,7 @@ class App(tk.Tk):
         """
         from core.arb.arb_scoring import ScoreResult
         apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
-        # APR ? score mapping: 0% = 0, 50%+ = 100
+        # APR → score mapping: 0% = 0, 50%+ = 100
         score = min(100.0, apr * 2.0)
         if score >= 70:
             grade = "GO"
@@ -6237,7 +6237,7 @@ class App(tk.Tk):
     ]
 
     def _arb_render_cex_cex(self, parent):
-        """CEX?CEX tab: paired funding arb opportunities + JANE STREET
+        """CEX↔CEX tab: paired funding arb opportunities + JANE STREET
         live positions (if the engine is running and writing snapshots)."""
         tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
                  font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(
@@ -6532,9 +6532,9 @@ class App(tk.Tk):
         stats     : dict from FundingScanner.stats() — dex_online / cex_online
         top       : top FundingOpp across all venues (or None)
         opps      : full list of FundingOpp from scanner.scan()
-        arb_cc    : list of CEX?CEX arb pairs (dict) — paired funding diff
-        arb_dd    : list of DEX?DEX arb pairs
-        arb_cd    : list of CEX?DEX arb pairs
+        arb_cc    : list of CEX↔CEX arb pairs (dict) — paired funding diff
+        arb_dd    : list of DEX↔DEX arb pairs
+        arb_cd    : list of CEX↔DEX arb pairs
         basis     : list of basis (spot-perp) pairs from scanner.basis_pairs
         spot      : list of spot spread pairs from scanner.spot_arb_pairs
 
@@ -6591,7 +6591,7 @@ class App(tk.Tk):
         """Render the 9-column pair table with scoring filter applied.
 
         selected_attr: name of the instance attribute that holds the filtered
-        pair list, so click handlers can map row index ? pair dict.
+        pair list, so click handlers can map row index → pair dict.
         """
         if repaint is None:
             return
@@ -6694,7 +6694,7 @@ class App(tk.Tk):
     # migrate to _arbitrage_hub(tab=…).
     # ---------------------------------------------------------------
     def _arb_basis_screen(self):
-        """Redirect: old basis screen ? BASIS tab of the unified desk."""
+        """Redirect: old basis screen → BASIS tab of the unified desk."""
         self._arbitrage_hub(tab="basis")
 
     def _arb_basis_screen_legacy(self):
@@ -6777,10 +6777,10 @@ class App(tk.Tk):
                          width=w, anchor=anchor).pack(side="left")
 
     # ---------------------------------------------------------------
-    # SPOT ? SPOT SCREEN — cross-venue spot price divergence
+    # SPOT ↔ SPOT SCREEN — cross-venue spot price divergence
     # ---------------------------------------------------------------
     def _arb_spot_screen(self):
-        """Redirect: old spot screen ? SPOT tab of the unified desk."""
+        """Redirect: old spot screen → SPOT tab of the unified desk."""
         self._arbitrage_hub(tab="spot")
 
     def _arb_spot_screen_legacy(self):
@@ -6861,7 +6861,7 @@ class App(tk.Tk):
     # FUNDING SCANNER SCREEN — shared between DEX-DEX and CEX-DEX modes
     # ---------------------------------------------------------------
     def _funding_scanner_screen(self, mode: str = "dex-dex"):
-        """Redirect: old funding scanner ? DEX-DEX or CEX-DEX tab."""
+        """Redirect: old funding scanner → DEX-DEX or CEX-DEX tab."""
         tab = "cex-dex" if mode == "cex-dex" else "dex-dex"
         self._arbitrage_hub(tab=tab)
 
@@ -7379,12 +7379,12 @@ class App(tk.Tk):
 
         The hub has three cards. Each card opens a focused screen:
 
-          BACKTESTS  ?  crypto-futures dashboard routed to its Backtest tab
+          BACKTESTS  →  crypto-futures dashboard routed to its Backtest tab
                         (reuses _dash_backtest_render + detail panel with
                         OPEN HTML / DELETE buttons).
-          ENGINE LOGS ? _data_engines (new screen with proc list +
+          ENGINE LOGS → _data_engines (new screen with proc list +
                         live log tail streaming).
-          REPORTS    ?  legacy _data raw JSON/log file browser.
+          REPORTS    →  legacy _data raw JSON/log file browser.
         """
         self._clr(); self._clear_kb()
         self.h_path.configure(text="> DATA")
@@ -7496,7 +7496,7 @@ class App(tk.Tk):
         # -- LEFT: cache list --
         left_panel = self._ui_panel_frame(
             left_wrap, "LOCAL CACHE",
-            "baskets e arquivos · click ? pre-popula form · DEL apaga",
+            "baskets e arquivos · click → pre-popula form · DEL apaga",
         )
 
         # -- BASKETS COVERAGE (section 1) --
@@ -7570,7 +7570,7 @@ class App(tk.Tk):
 
         # -- RIGHT: download form --
         right_panel = self._ui_panel_frame(
-            right_wrap, "DOWNLOAD", "binance · prefetch ? cache local",
+            right_wrap, "DOWNLOAD", "binance · prefetch → cache local",
         )
         form = tk.Frame(right_panel, bg=BG)
         form.pack(fill="x", padx=10, pady=(0, 8))
@@ -8378,7 +8378,7 @@ class App(tk.Tk):
             finally:
                 m.grab_release()
 
-        spawn_btn = tk.Label(actions_l, text="  SPAWN ?  ",
+        spawn_btn = tk.Label(actions_l, text="  SPAWN ▸  ",
                              font=(FONT, 7, "bold"),
                              fg=GREEN, bg=BG3, cursor="hand2",
                              padx=6, pady=3)
@@ -8634,7 +8634,7 @@ class App(tk.Tk):
         title, subtitle, title_hue = _titles.get(filter_group, _titles[None])
         self.h_path.configure(text=f"> {title}")
         self.h_stat.configure(text=market_label, fg=AMBER_D)
-        self.f_lbl.configure(text="ESC main  |  ?? select  |  ENTER run")
+        self.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run")
         self._kb("<Escape>", lambda: self._menu("main"))
         self._kb("<Key-0>", lambda: self._menu("main"))
         self._bind_global_nav()
@@ -8859,7 +8859,7 @@ class App(tk.Tk):
                             highlightbackground=GREEN, highlightthickness=1,
                             cursor="hand2")
             pill.pack(side="left", padx=2, pady=4)
-            tk.Label(pill, text="?", font=(FONT, 9, "bold"),
+            tk.Label(pill, text="●", font=(FONT, 9, "bold"),
                      fg=GREEN, bg=BG3, padx=4).pack(side="left")
             tk.Label(pill, text=name, font=(FONT, 8, "bold"),
                      fg=WHITE, bg=BG3).pack(side="left", padx=(0, 4))
@@ -8891,7 +8891,7 @@ class App(tk.Tk):
             db = _P("data/aurum.db")
             if not db.exists():
                 return
-            # Map slug ? engine key in the runs table
+            # Map slug → engine key in the runs table
             slug_to_engine = {
                 "citadel":     "citadel",
                 "renaissance": "renaissance",
@@ -8960,7 +8960,7 @@ class App(tk.Tk):
         self.h_path.configure(text="> ENGINES")
         market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
         self.h_stat.configure(text=market_label, fg=AMBER_D)
-        self.f_lbl.configure(text="ESC main  |  ?? select  |  ENTER run  |  M cycle mode")
+        self.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run  |  M cycle mode")
         self._bind_global_nav()
         from launcher_support import engines_live_view
         prior = getattr(self, "_engines_live_handle", None)
@@ -9037,8 +9037,8 @@ class App(tk.Tk):
         refresh; the auto-render approach was removed after it caused
         teleport-back bugs.
 
-        ESC ? main menu (trade engines).
-        ENTER/space also ? main menu (from splash click).
+        ESC → main menu (trade engines).
+        ENTER/space also → main menu (from splash click).
         """
         self._clr(); self._clear_kb()
         self.h_path.configure(text="")  # Cockpit is intro — no nav breadcrumb
@@ -9050,14 +9050,14 @@ class App(tk.Tk):
         self._kb("<Key-0>",    lambda: self._menu("main"))
         self._kb("<BackSpace>", lambda: self._menu("main"))
         self._bind_global_nav()
-        # Override global R (risk) ? refresh cockpit (after global nav binds)
+        # Override global R (risk) → refresh cockpit (after global nav binds)
         self._kb("<Key-r>",    lambda: self._macro_brain_menu())
         try:
             from macro_brain.dashboard_view import render as _macro_render
             _macro_render(self.main, app=self)
         except Exception as e:
             tk.Label(self.main,
-                     text=f"Macro Brain failed to render:\n{e}\n\nPress ESC ? main menu",
+                     text=f"Macro Brain failed to render:\n{e}\n\nPress ESC → main menu",
                      font=(FONT, 10), fg=RED, bg=BG).pack(pady=40)
             return
 
@@ -9254,7 +9254,7 @@ class App(tk.Tk):
             tk.Label(sf, text="  No reports found.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w", pady=8)
             return
 
-        # Section ? color for the badge
+        # Section → color for the badge
         sec_color = {
             "RUNS":      AMBER,
             "DARWIN":    GREEN,
@@ -9641,7 +9641,7 @@ class App(tk.Tk):
             row = tk.Frame(parent, bg=PANEL, cursor="hand2")
             row.pack(fill="x", padx=10, pady=1)
 
-            status_l = tk.Label(row, text="?" if is_conn else "?",
+            status_l = tk.Label(row, text="●" if is_conn else "○",
                                 font=(FONT, 9, "bold"),
                                 fg=GREEN if is_conn else DIM2, bg=PANEL, width=2)
             status_l.pack(side="left")
@@ -9678,7 +9678,7 @@ class App(tk.Tk):
         for acc in ("paper", "testnet", "demo", "live"):
             status = pm.status(acc)
             has_keys = status != "no_keys"
-            icon = "?" if (has_keys or acc == "paper") else "?"
+            icon = "●" if (has_keys or acc == "paper") else "○"
             icon_col = acc_colors[acc] if (has_keys or acc == "paper") else DIM2
 
             row = tk.Frame(parent, bg=PANEL, cursor="hand2")
@@ -9751,11 +9751,11 @@ class App(tk.Tk):
                     name_l   = _alive_widget(("ex_name", "binance_futures"))
                     try:
                         if lat is not None:
-                            if status_l: status_l.configure(text="?", fg=GREEN)
+                            if status_l: status_l.configure(text="●", fg=GREEN)
                             if lat_l:    lat_l.configure(text=f"{int(lat)}ms", fg=DIM)
                             if name_l:   name_l.configure(fg=WHITE)
                         else:
-                            if status_l: status_l.configure(text="?", fg=RED)
+                            if status_l: status_l.configure(text="○", fg=RED)
                             if lat_l:    lat_l.configure(text="—", fg=DIM2)
                     except tk.TclError:
                         # Widget was destroyed between winfo_exists and configure
@@ -9819,10 +9819,10 @@ class App(tk.Tk):
         # === TOP MOVERS ===
         self._dash_section_header(inner, "TOP MOVERS (24h)")
         movers = tk.Frame(inner, bg=BG); movers.pack(fill="x", pady=(2, 8))
-        up_l = tk.Label(movers, text="? —", font=(FONT, 8),
+        up_l = tk.Label(movers, text="↑ —", font=(FONT, 8),
                         fg=GREEN, bg=BG, anchor="w")
         up_l.pack(fill="x")
-        dn_l = tk.Label(movers, text="? —", font=(FONT, 8),
+        dn_l = tk.Label(movers, text="↓ —", font=(FONT, 8),
                         fg=RED, bg=BG, anchor="w")
         dn_l.pack(fill="x")
         self._dash_widgets[("movers_up",)] = up_l
@@ -9870,7 +9870,7 @@ class App(tk.Tk):
         ]
         for item in items:
             row = tk.Frame(cs, bg=BG, cursor="hand2"); row.pack(fill="x")
-            l = tk.Label(row, text=f"  ? {item}", font=(FONT, 8),
+            l = tk.Label(row, text=f"  □ {item}", font=(FONT, 8),
                          fg=DIM, bg=BG, anchor="w")
             l.pack(fill="x")
             def _coming(_e=None, label=l):
@@ -9935,11 +9935,11 @@ class App(tk.Tk):
         bf_name   = self._dash_widgets.get(("ex_name", "binance_futures"))
         if bf_status and bf_lat:
             if self._dash_latency is not None:
-                bf_status.configure(text="?", fg=GREEN)
+                bf_status.configure(text="●", fg=GREEN)
                 bf_lat.configure(text=f"{int(self._dash_latency)}ms", fg=DIM)
                 if bf_name: bf_name.configure(fg=WHITE)
             else:
-                bf_status.configure(text="?", fg=RED)
+                bf_status.configure(text="○", fg=RED)
                 bf_lat.configure(text="—", fg=DIM2)
 
         # Balance/wallets widgets were removed from the sidebar — nothing to update.
@@ -9984,8 +9984,8 @@ class App(tk.Tk):
 
         up_l = self._dash_widgets.get(("movers_up",))
         dn_l = self._dash_widgets.get(("movers_dn",))
-        if up_l: up_l.configure(text=_fmt_movers(up3, "?"))
-        if dn_l: dn_l.configure(text=_fmt_movers(dn3, "?"))
+        if up_l: up_l.configure(text=_fmt_movers(up3, "↑"))
+        if dn_l: dn_l.configure(text=_fmt_movers(dn3, "↓"))
 
         # -- sentimento --
         fng_l = self._dash_widgets.get(("fng",))
@@ -10199,7 +10199,7 @@ class App(tk.Tk):
             status = pm.status(acc_id)
             row = tk.Frame(col, bg=PANEL, cursor="hand2")
             row.pack(fill="x", padx=8, pady=(6, 0))
-            icon = "?" if status in ("live", "paper") else "?"
+            icon = "●" if status in ("live", "paper") else "○"
             icon_color = color if status in ("live", "paper") else DIM
 
             top_l = tk.Label(row, text=f"{icon} {label}", font=(FONT, 9, "bold"),
@@ -10317,7 +10317,7 @@ class App(tk.Tk):
             box.pack(pady=24, padx=20, ipadx=24, ipady=20)
             tk.Label(box, text=mode.upper(), font=(FONT, 14, "bold"),
                      fg=AMBER, bg=PANEL).pack(pady=(0, 10))
-            tk.Label(box, text="? Sem API keys configuradas",
+            tk.Label(box, text="○ Sem API keys configuradas",
                      font=(FONT, 9), fg=DIM, bg=PANEL).pack(pady=2)
             tk.Label(box, text="Configura em:", font=(FONT, 8),
                      fg=DIM, bg=PANEL).pack(pady=(8, 2))
@@ -10554,7 +10554,7 @@ class App(tk.Tk):
             any_running = True
 
             row = tk.Frame(eb, bg=PANEL); row.pack(fill="x", padx=8, pady=2)
-            tk.Label(row, text="?", font=(FONT, 9, "bold"),
+            tk.Label(row, text="●", font=(FONT, 9, "bold"),
                      fg=GREEN, bg=PANEL, width=2).pack(side="left")
             tk.Label(row, text=eng.upper(), font=(FONT, 9, "bold"),
                      fg=AMBER, bg=PANEL, width=12,
@@ -10587,7 +10587,7 @@ class App(tk.Tk):
             stop_l.bind("<Leave>", lambda e, b=stop_l: b.configure(bg=RED))
 
         if not any_running:
-            tk.Label(eb, text="  ? no engines running  ·  click START NEW to launch",
+            tk.Label(eb, text="  ○ no engines running  ·  click START NEW to launch",
                      font=(FONT, 8), fg=DIM, bg=PANEL,
                      anchor="w").pack(fill="x", padx=8, pady=4)
 
@@ -10717,13 +10717,13 @@ class App(tk.Tk):
 
         # Footer (page nav)
         nav = tk.Frame(wrap, bg=BG); nav.pack(fill="x", pady=(6, 0))
-        prev_btn = tk.Label(nav, text=" ? prev ", font=(FONT, 8, "bold"),
+        prev_btn = tk.Label(nav, text=" ◄ prev ", font=(FONT, 8, "bold"),
                             fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
         prev_btn.pack(side="left", padx=2)
         prev_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(-1))
         page_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
         page_lbl.pack(side="left", padx=8)
-        next_btn = tk.Label(nav, text=" next ? ", font=(FONT, 8, "bold"),
+        next_btn = tk.Label(nav, text=" next ► ", font=(FONT, 8, "bold"),
                             fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
         next_btn.pack(side="left", padx=2)
         next_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(+1))
@@ -11017,7 +11017,7 @@ class App(tk.Tk):
             ]
             for name, ok, detail in rows:
                 r = tk.Frame(conn, bg=PANEL); r.pack(fill="x", pady=1)
-                tk.Label(r, text="?" if ok else "?",
+                tk.Label(r, text="●" if ok else "○",
                          font=(FONT, 10, "bold"),
                          fg=GREEN if ok else RED, bg=PANEL,
                          width=3).pack(side="left")
@@ -11061,7 +11061,7 @@ class App(tk.Tk):
                     action = "OPEN" if is_on else "CONFIG"
 
                 r = tk.Frame(accs, bg=PANEL); r.pack(fill="x", pady=2)
-                tk.Label(r, text="?" if is_on else "?",
+                tk.Label(r, text="●" if is_on else "○",
                          font=(FONT, 10, "bold"),
                          fg=color if is_on else DIM2, bg=PANEL,
                          width=3).pack(side="left")
@@ -11113,7 +11113,7 @@ class App(tk.Tk):
                      anchor="w").pack(side="left")
 
             if not alive:
-                tk.Label(eng, text="? no engines running",
+                tk.Label(eng, text="○ no engines running",
                          font=(FONT, 8), fg=DIM, bg=PANEL,
                          anchor="w").pack(fill="x", pady=2)
                 tk.Label(eng, text="go to PORTFOLIO (3) or COCKPIT (6) to start",
@@ -11125,7 +11125,7 @@ class App(tk.Tk):
                     pid  = p.get("pid", "?")
                     started = str(p.get("started", ""))[:19].replace("T", " ")
                     r = tk.Frame(eng, bg=PANEL); r.pack(fill="x", pady=1)
-                    tk.Label(r, text="?", font=(FONT, 10, "bold"),
+                    tk.Label(r, text="●", font=(FONT, 10, "bold"),
                              fg=GREEN, bg=PANEL, width=3).pack(side="left")
                     tk.Label(r, text=eng_name, font=(FONT, 8, "bold"),
                              fg=AMBER, bg=PANEL, width=14,
@@ -11238,7 +11238,7 @@ class App(tk.Tk):
 
         # Initial placeholder
         tk.Label(detail_body,
-                 text="\n? click a run to load its metrics",
+                 text="\n← click a run to load its metrics",
                  font=(FONT, 8), fg=DIM, bg=PANEL,
                  justify="left").pack(anchor="w")
 
@@ -11255,7 +11255,7 @@ class App(tk.Tk):
         - ISO string: '2026-04-10T11:50:23.123'
         - Unix seconds: 1712745023 (int or float)
         - Unix milliseconds: 1712745023000 (int or float)
-        - None / empty / unparseable ? '—'"""
+        - None / empty / unparseable → '—'"""
         if ts_raw is None or ts_raw == "":
             return "—"
         # Numeric (unix timestamp)
@@ -11399,7 +11399,7 @@ class App(tk.Tk):
         idx_path = ROOT / "data" / "index.json"
         runs_by_id: dict[str, dict] = {}
 
-        # engine slug ? actual data dir (for post-rename paths)
+        # engine slug → actual data dir (for post-rename paths)
         _SLUG_TO_DIR = {
             "citadel":     ROOT / "data" / "runs",
             "bridgewater": ROOT / "data" / "bridgewater",
@@ -11570,7 +11570,7 @@ class App(tk.Tk):
 
         def _fmt_n(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "—"
         def _fmt_m(v): return f"${v:+,.0f}" if v is not None else "—"
-        # Code-name ? institutional-name (battery/marketing taxonomy).
+        # Code-name → institutional-name (battery/marketing taxonomy).
         # Maps both legacy lowercase file names (thoth, mercurio, newton)
         # and uppercase variants. Falls back to upper() for unknowns.
         _ENGINE_NAMES = {
@@ -11649,7 +11649,7 @@ class App(tk.Tk):
             else:
                 short_id = short_id[:13]
 
-            # Widths pulled from _BT_COLS to guarantee header ? row parity.
+            # Widths pulled from _BT_COLS to guarantee header ↔ row parity.
             (_dw, _ew, _tfw, _dyw, _bkw, _rw, _tw, _ww, _pw, _shw, _ddw) = [w for _, w in _BT_COLS]
             # Pre-L6 runs render the RUN cell in RED to match the "!"
             # prefix; the rest of the row keeps its normal coloring so
@@ -11783,7 +11783,7 @@ class App(tk.Tk):
         tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(8, 4))
 
         if not summary and not idx_entry:
-            tk.Label(body, text="\n? summary.json missing",
+            tk.Label(body, text="\n✗ summary.json missing",
                      font=(FONT, 8), fg=RED, bg=PANEL).pack(anchor="w")
             return
 
