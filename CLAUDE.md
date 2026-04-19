@@ -303,6 +303,52 @@ Incidente 2026-04-15: Codex tentou trocar RSI (EWM→rolling+tanh) e
 swing_structure (backward→centered pivots) pra fazer asserts de
 contract tests passarem. Claude detectou e reverteu. Pra nunca mais.
 
+---
+
+### 🔐 CONFIG/KEYS.JSON — INTOCÁVEL (qualquer agente)
+
+**NUNCA sobrescreva `config/keys.json`. NUNCA.** Este arquivo carrega
+todos os segredos operacionais — Binance demo/testnet/live, Telegram,
+cockpit API tokens, VPS SSH config. Se for resetado pra template, o
+cockpit para, o VPS cai, Telegram silencia, live trading quebra.
+
+**Regras operacionais:**
+1. **NUNCA** escreva/edite `config/keys.json` diretamente, nem por `Write`,
+   nem por `Edit`, nem por script (incluindo setup scripts que "restauram
+   o template"). Se precisa rodar setup, faça em `config/keys.json.tmpl`
+   ou similar e deixe pro usuário copiar manualmente.
+2. **NUNCA** commite `config/keys.json` (gitignored + hook pre-commit).
+3. Se abrir e ver placeholders `COLE_AQUI`, **pare e alerte o Joao
+   imediatamente** — é um incidente de wipe de secrets, não seu trabalho.
+4. Antes de QUALQUER operação que toque config/, rode:
+   `python tools/maintenance/verify_keys_intact.py`
+   Se retornar código 1, aborta tudo e notifica o Joao.
+5. Para ler valores, use `core.risk.key_store.load_runtime_keys` — nunca
+   `json.load(open("config/keys.json"))` em código novo (plaintext path
+   existe só pra compat).
+6. Backup local automático: `python tools/maintenance/backup_keys.py`
+   deixa snapshots em `~/.aurum-backups/keys/` (fora do OneDrive, fora
+   do repo, retém os 20 mais recentes). Rode após qualquer mudança
+   autorizada de keys.json pelo próprio Joao.
+
+**Recuperação se o wipe acontecer:**
+- OneDrive version history (File Explorer → right-click keys.json →
+  Version history → pick pre-wipe)
+- `~/.aurum-backups/keys/keys.json.<stamp>.bak` (backups locais)
+- VPS `/srv/aurum.finance/config/keys.json` tem telegram + connections
+- VPS `/etc/aurum/cockpit_api.env` tem os tokens read/admin
+- Password manager (Binance API keys, macro_brain FRED/NewsAPI)
+
+**Incidente 2026-04-19 (fundador deste protocolo):** durante sessão de
+work, `config/keys.json` foi resetado pra placeholders `COLE_AQUI_...`
+em todas as seções (Binance, Telegram, cockpit, VPS SSH). Culprit: um
+agente (Codex ou script de setup) executou algo tipo "criar keys.json
+do template" sem checar se já existia um populado. Resultado: cockpit
+sem dados, VPS unreachable, launcher todo bugado. Recuperação parcial
+via VPS (cockpit tokens + telegram) + conhecimento prévio (vps_ssh host
++ key_path). Binance e macro_brain ainda precisavam ser refeitos a mão.
+**Pra nunca mais.**
+
 ### NUNCA
 
 1. Reestruturar sem pedido explícito. O sistema funciona. Aprender primeiro.
@@ -313,6 +359,7 @@ contract tests passarem. Claude detectou e reverteu. Pra nunca mais.
 6. Ignorar o modelo de custos C1+C2. Backtest sem custos é mentira.
 7. **Tocar em código de live trading sem ler antes** (aprender > mexer).
 8. **Modificar código real pra fazer teste passar** (ver regra CORE acima).
+9. **Sobrescrever `config/keys.json`** — nunca, por razão nenhuma (ver regra INTOCÁVEL acima).
 
 ### SEMPRE
 
@@ -323,6 +370,7 @@ contract tests passarem. Claude detectou e reverteu. Pra nunca mais.
 5. DOCUMENTAR em português. Engines em inglês.
 6. MEDIR antes e depois em mudanças de sinais / indicadores / custos.
 7. **Gerar session log ao final** (ver regra permanente acima).
+8. **Rodar `python tools/maintenance/verify_keys_intact.py`** antes de mexer em qualquer coisa de config/. Se falhar (código 1), parar e alertar (ver regra INTOCÁVEL).
 
 ### Convenções
 
