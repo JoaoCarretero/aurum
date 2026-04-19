@@ -68,9 +68,13 @@ def test_get_cockpit_client_builds_when_block_present(tmp_path, monkeypatch):
 
 
 def test_find_latest_shadow_run_local_fallback_when_client_none(tmp_path, monkeypatch):
-    """Sem client → le disco local como antes."""
+    """Sem client → le disco local como antes.
+    Precisa resetar tunnel_registry tb porque um shadow_poller vazado de
+    teste anterior (com cache de run real) faria _find_latest_shadow_run
+    retornar o remote em vez do local-disk fallback."""
     import launcher_support.engines_live_view as evv
-    # Set up local data/millennium_shadow layout
+    from launcher_support import tunnel_registry
+    tunnel_registry.reset_for_tests()
     run = tmp_path / "data" / "millennium_shadow" / "2026-04-18_0229" / "state"
     run.mkdir(parents=True)
     (run / "heartbeat.json").write_text(json.dumps({
@@ -80,13 +84,16 @@ def test_find_latest_shadow_run_local_fallback_when_client_none(tmp_path, monkey
         "last_error": None, "tick_sec": 900,
     }))
     monkeypatch.chdir(tmp_path)
-    evv._COCKPIT_CLIENT_SINGLETON = False  # force skip remote
-    result = evv._find_latest_shadow_run()
-    assert result is not None
-    run_dir, hb = result
-    assert hb["run_id"] == "2026-04-18_0229"
-    assert not str(run_dir).startswith("remote://")
-    evv._COCKPIT_CLIENT_SINGLETON = None  # cleanup
+    evv._COCKPIT_CLIENT_SINGLETON = False
+    try:
+        result = evv._find_latest_shadow_run()
+        assert result is not None
+        run_dir, hb = result
+        assert hb["run_id"] == "2026-04-18_0229"
+        assert not str(run_dir).startswith("remote://")
+    finally:
+        evv._COCKPIT_CLIENT_SINGLETON = None
+        tunnel_registry.reset_for_tests()
 
 
 def test_tunnel_status_label_no_manager():

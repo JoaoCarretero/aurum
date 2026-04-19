@@ -251,9 +251,12 @@ def _extract_summary(data: dict[str, Any]) -> dict[str, Any]:
     win_rate = summary.get("win_rate", 0.0)
     if isinstance(win_rate, (int, float)) and win_rate <= 1.0:
         win_rate = float(win_rate) * 100.0
-    max_dd = summary.get("max_dd_pct", summary.get("max_drawdown", summary.get("max_dd", 0.0)))
-    if isinstance(max_dd, (int, float)) and max_dd <= 1.0:
-        max_dd = float(max_dd) * 100.0
+    if "max_dd_pct" in summary:
+        max_dd = summary.get("max_dd_pct", 0.0)
+    else:
+        max_dd = summary.get("max_drawdown", summary.get("max_dd", 0.0))
+        if isinstance(max_dd, (int, float)) and max_dd <= 1.0:
+            max_dd = float(max_dd) * 100.0
     pnl = summary.get("total_pnl", summary.get("pnl", 0.0))
     final_equity = summary.get("final_equity")
     if final_equity is None and "account_size" in data and isinstance(pnl, (int, float)):
@@ -274,12 +277,6 @@ def _extract_summary(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_run_artifact(run_dir: Path, spec: AuditSpec) -> dict[str, Any]:
-    summary_path = run_dir / "summary.json"
-    if summary_path.exists():
-        parsed = _extract_summary(_load_json(summary_path))
-        parsed["artifact"] = str(summary_path.relative_to(ROOT))
-        return parsed
-
     if spec.report_glob:
         reports = sorted(run_dir.glob(spec.report_glob))
         if reports:
@@ -304,6 +301,12 @@ def _parse_run_artifact(run_dir: Path, spec: AuditSpec) -> dict[str, Any]:
                 parsed["max_dd_pct"] = float(data.get("max_dd_pct", _max_dd_pct(eq)))
             parsed["artifact"] = str(report_path.relative_to(ROOT))
             return parsed
+
+    summary_path = run_dir / "summary.json"
+    if summary_path.exists():
+        parsed = _extract_summary(_load_json(summary_path))
+        parsed["artifact"] = str(summary_path.relative_to(ROOT))
+        return parsed
 
     json_candidates = sorted(
         [p for p in run_dir.rglob("*.json") if p.is_file()],
@@ -341,11 +344,34 @@ def _failure_summary(proc: subprocess.CompletedProcess[str]) -> str | None:
         ("could not fetch data", "Could not fetch market data in the current environment."),
         ("no trades found", "Engine requires prior backtests / trade history before running."),
         ("no valid cointegrated pairs", "No valid cointegrated pairs found for the current window."),
+        ("apenas 0 pares cointegrados", "No valid cointegrated pairs found for the current window."),
     ]
     for needle, summary in checks:
         if needle in hay:
             return summary
     return None
+
+
+def _parse_aqr_report() -> dict[str, Any] | None:
+    aqr_dir = ROOT / "data" / "aqr"
+    if not aqr_dir.exists():
+        return None
+    reports = sorted(aqr_dir.glob("darwin_report_*.json"), key=lambda p: p.stat().st_mtime)
+    if not reports:
+        return None
+    report_path = reports[-1]
+    data = _load_json(report_path)
+    final_allocations = data.get("final_allocations", {}) or {}
+    return {
+        "artifact": str(report_path.relative_to(ROOT)),
+        "aqr_generations": int(data.get("generations", 0) or 0),
+        "aqr_allocations": final_allocations,
+        "aqr_unknown_only": set(final_allocations.keys()) == {"unknown"} if final_allocations else False,
+        "aqr_max_dd_pct": float(data.get("mdd_pct", 0.0) or 0.0),
+        "aqr_sharpe": ((data.get("ratios") or {}).get("sharpe")),
+        "aqr_sortino": ((data.get("ratios") or {}).get("sortino")),
+        "aqr_return_pct": ((data.get("ratios") or {}).get("ret")),
+    }
 
 
 def run_spec(spec: AuditSpec, days: int, basket: str) -> dict[str, Any]:
@@ -382,6 +408,21 @@ def run_spec(spec: AuditSpec, days: int, basket: str) -> dict[str, Any]:
 
     if spec.mode == "advisory":
         result.update(_parse_advisory(spec, proc, before))
+        return result
+
+    if spec.slug == "aqr":
+        parsed = _parse_aqr_report()
+        if parsed is None:
+            result["status"] = "failed"
+            result["failure_summary"] = "AQR completed but no darwin_report_*.json was found under data/aqr."
+            return result
+        result.update(parsed)
+        result["status"] = "ok"
+        if parsed.get("aqr_unknown_only"):
+            result["notes"] = (
+                (result.get("notes") + " " if result.get("notes") else "")
+                + "Current trade import collapses allocations to 'unknown'; metrics are not operationally trustworthy."
+            ).strip()
         return result
 
     if spec.data_root:
@@ -452,6 +493,17 @@ def build_report(results: list[dict[str, Any]], days: int, basket: str) -> str:
                     f"- Profitable count: `{row.get('profitable_count', 0)}`",
                     f"- Avg APR: `{_fmt_pct(row.get('avg_apr'), 2)}`",
                     f"- Est. monthly income ($1000): `${_fmt_float(row.get('estimated_monthly_income'))}`",
+                ]
+            )
+        elif row["slug"] == "aqr" and row["status"] == "ok":
+            lines.extend(
+                [
+                    f"- Generations: `{row.get('aqr_generations', 0)}`",
+                    f"- Return: `{_fmt_pct(row.get('aqr_return_pct'))}`",
+                    f"- Sharpe: `{_fmt_float(row.get('aqr_sharpe'), 3)}`",
+                    f"- Sortino: `{_fmt_float(row.get('aqr_sortino'), 3)}`",
+                    f"- MaxDD: `{_fmt_pct(row.get('aqr_max_dd_pct'))}`",
+                    f"- Final allocations: `{row.get('aqr_allocations')}`",
                 ]
             )
         elif row["status"] == "ok" and row.get("artifact") not in (None, "cli_help_only"):
