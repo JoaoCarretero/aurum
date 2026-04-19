@@ -288,6 +288,51 @@ def build_app() -> FastAPI:
             ),
         }
 
+    @app.get("/v1/runs/{run_id}/positions")
+    def run_positions(run_id: str, request: Request):
+        """Paper runner: retorna state/positions.json (snapshot atomic).
+        Shadow runs nao tem positions — retorna vazio se arquivo ausente."""
+        _check_auth(request)
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        path = run_dir / "state" / "positions.json"
+        if not path.exists():
+            return {"as_of": None, "count": 0, "positions": []}
+        import json as _json
+        try:
+            return _json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"positions.json malformed: {exc}")
+
+    @app.get("/v1/runs/{run_id}/equity")
+    def run_equity(run_id: str, request: Request, tail: int = 200):
+        """Paper runner: tail dos ultimos N pontos de equity.jsonl.
+        `tail` 1..10000. Vazio se arquivo ausente (shadow ou paper fresh)."""
+        _check_auth(request)
+        if tail < 1 or tail > 10_000:
+            raise HTTPException(status_code=400, detail="tail must be 1..10000")
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        path = run_dir / "reports" / "equity.jsonl"
+        if not path.exists():
+            return {"run_id": run_id, "count": 0, "points": []}
+        import json as _json
+        lines = path.read_text(encoding="utf-8").splitlines()
+        tail_lines = lines[-tail:]
+        points = []
+        for ln in tail_lines:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                points.append(_json.loads(ln))
+            except ValueError:
+                continue
+        return {"run_id": run_id, "count": len(points), "points": points}
+
     @app.post("/v1/runs/{run_id}/kill")
     def run_kill(run_id: str, request: Request):
         _check_auth(request, admin=True)
@@ -304,7 +349,7 @@ def build_app() -> FastAPI:
         SSH. `service` default millennium_shadow; whitelist abaixo
         previne chamada arbitraria."""
         _check_auth(request, admin=True)
-        ALLOWED = {"millennium_shadow"}
+        ALLOWED = {"millennium_shadow", "millennium_paper"}
         if service not in ALLOWED:
             raise HTTPException(status_code=400,
                                 detail=f"service must be one of {sorted(ALLOWED)}")
