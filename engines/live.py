@@ -55,13 +55,13 @@ from core import (
     prepare_htf, merge_all_htf_to_ltf, fetch_all, validate,
     score_omega, score_chop,
 )
-from core.audit_trail import AuditTrail, OrderEvent
-from core.risk_gates import (
+from core.risk.audit_trail import AuditTrail, OrderEvent
+from core.risk.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates, load_gate_config,
     gate_single_position,
 )
-from core.fixture_capture import write_capture
-from core.fs import atomic_write
+from core.ops.fixture_capture import write_capture
+from core.ops.fs import atomic_write
 from bot.telegram import TelegramNotifier
 
 # Fase 4 — engine version stamped on every audit row. Bump when the
@@ -196,10 +196,10 @@ def _load_keys(mode: str) -> tuple[str, str, str]:
     Preference order, first hit wins:
 
       1. **Encrypted store** — if ``config/keys.json.enc`` exists, use
-         core.key_store.KeyStore(encrypted=True) and unlock with the
-         master password from the env var ``AURUM_KEY_PASSWORD``. If
-         the env var is absent, this path is skipped (no interactive
-         prompt from a background engine process).
+         core.risk.key_store.KeyStore(encrypted=True) and unlock with
+         the master password from the env var ``AURUM_KEY_PASSWORD``.
+         If the env var is absent, this path is skipped (no
+         interactive prompt from a background engine process).
 
       2. **Plaintext store** — the pre-Fase-4 behavior, reading
          ``config/keys.json`` directly. Still the default — nothing
@@ -221,7 +221,7 @@ def _load_keys(mode: str) -> tuple[str, str, str]:
         pw = os.environ.get("AURUM_KEY_PASSWORD")
         if pw:
             try:
-                from core.key_store import KeyStore, KeyStoreCorruptError
+                from core.risk.key_store import KeyStore, KeyStoreCorruptError
                 ks = KeyStore(
                     encrypted=True,
                     plaintext_path=plaintext_path,
