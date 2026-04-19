@@ -54,7 +54,7 @@ from config.params import (
     _TF_MINUTES,
 )
 from core.data import fetch_all, validate
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from analysis.stats import calc_ratios, equity_stats
 
 log = logging.getLogger("PHI")

@@ -20,8 +20,8 @@ if sys.stdout.encoding != "utf-8":
 
 from config import params as _p
 from core.data import fetch_all, validate
-from core.htf_filter import htf_agrees, prepare_htf_context
-from core.portfolio import build_corr_matrix, detect_macro
+from core.data.htf_filter import htf_agrees, prepare_htf_context
+from core.risk.portfolio import build_corr_matrix, detect_macro
 from tools.param_search import _metrics, _patch_param
 
 log = logging.getLogger("JUMP_FOCUS")

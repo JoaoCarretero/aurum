@@ -164,7 +164,7 @@ def _build_body(container, trade: dict) -> None:
     de `container`. Mesma formatação usada pelo popup antigo e pelo
     inline renderer — compartilha section_* helpers."""
     import tkinter as tk
-    from core.ui_palette import (
+    from core.ui.ui_palette import (
         AMBER, BORDER, DIM, DIM2, FONT, GREEN, PANEL, RED, WHITE,
     )
 
@@ -224,7 +224,7 @@ def render_inline(parent, trade: dict, on_close) -> "tk.Frame":  # noqa: F821
     pede pra fechar o detail — host decide o que fazer (limpar state e
     rerender)."""
     import tkinter as tk
-    from core.ui_palette import (
+    from core.ui.ui_palette import (
         AMBER, AMBER_B, BG, BG2, BORDER, DIM2, FONT, PANEL, WHITE,
     )
 
@@ -272,7 +272,7 @@ def show(parent, trade: dict) -> None:
     """(legacy) Abre Toplevel modal com detail completo do trade. Mantido
     pra compat; preferir `render_inline` pro cockpit shadow."""
     import tkinter as tk
-    from core.ui_palette import AMBER, BG, DIM2, FONT, PANEL, WHITE
+    from core.ui.ui_palette import AMBER, BG, DIM2, FONT, PANEL, WHITE
 
     symbol = trade.get("symbol", "?")
     direction = trade.get("direction", "?")

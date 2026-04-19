@@ -51,12 +51,12 @@ from config.janestreet_defaults import (
     SCAN_S, EXIT_H, MAX_DD_PCT, KILL_LOSSES,
 )
 from bot.telegram import TelegramNotifier
-from core.audit_trail import AuditTrail, OrderEvent
-from core.fs import atomic_write
-from core.risk_gates import (
+from core.risk.audit_trail import AuditTrail, OrderEvent
+from core.ops.fs import atomic_write
+from core.risk.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates,
 )
-from core.run_manager import append_to_index, snapshot_config
+from core.ops.run_manager import append_to_index, snapshot_config
 
 # Engine-local (nao runtime-tunaveis): ficam aqui
 ACCT=5000.0;CROSS_MAX=3;MAX_EXPO=3000.0
@@ -95,7 +95,7 @@ def _keys(v):
         pw = os.environ.get("AURUM_KEY_PASSWORD")
         if pw:
             try:
-                from core.key_store import KeyStore, KeyStoreCorruptError
+                from core.risk.key_store import KeyStore, KeyStoreCorruptError
                 ks = KeyStore(
                     encrypted=True,
                     plaintext_path=plaintext_path,

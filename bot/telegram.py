@@ -30,9 +30,9 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
-from core.failure_policy import BEST_EFFORT, DEGRADE_AND_LOG
-from core.health import runtime_health
-from core.transport import RequestSpec, TransportClient
+from core.risk.failure_policy import BEST_EFFORT, DEGRADE_AND_LOG
+from core.ops.health import runtime_health
+from core.data.transport import RequestSpec, TransportClient
 
 if TYPE_CHECKING:
     from engines.live import LiveEngine

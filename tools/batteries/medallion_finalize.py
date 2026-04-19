@@ -48,8 +48,8 @@ from analysis.montecarlo import monte_carlo
 from analysis.overfit_audit import run_audit
 from analysis.walkforward import walk_forward
 from config.params import ACCOUNT_SIZE
-from core.persistence import atomic_write_json
-from core.run_manager import snapshot_config
+from core.ops.persistence import atomic_write_json
+from core.ops.run_manager import snapshot_config
 
 
 MEDALLION_ROOT = ROOT / "data" / "medallion"

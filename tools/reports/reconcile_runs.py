@@ -34,7 +34,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from core.persistence import atomic_write_json
+from core.ops.persistence import atomic_write_json
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 RUNS_DIR = ROOT / "data" / "runs"

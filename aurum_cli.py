@@ -349,7 +349,7 @@ def _banner():
 
 def _running_bar():
     try:
-        from core.proc import list_procs
+        from core.ops.proc import list_procs
         running = [p for p in list_procs() if p.get("alive")]
     except Exception:
         running = []
@@ -410,7 +410,7 @@ def _sel(title, items, hotkeys=None, sub="", hdr=""):
 # ══════════════════════════════════════════════════════════════
 
 def _launch(ek, sc, stdin, sname="", mname="", foreground=True):
-    from core.proc import spawn, _is_alive, get_log_path
+    from core.ops.proc import spawn, _is_alive, get_log_path
     # Hawkes engines parse argv via argparse instead of reading interactive
     # prompts from stdin, so route their payload through cli_args.
     if ek in ("kepos", "graham", "medallion"):
@@ -523,7 +523,7 @@ def screen_main():
 def _quit():
     cls(); _banner()
     try:
-        from core.proc import list_procs, stop_proc
+        from core.ops.proc import list_procs, stop_proc
         running = [p for p in list_procs() if p.get("alive")]
         if running:
             print(f"\n  {Y}▲{Z} {B}{len(running)}{Z} engine(s) a correr:\n")
@@ -667,7 +667,7 @@ def _screen_config(strategy, method):
 # ══════════════════════════════════════════════════════════════
 
 def screen_procs():
-    from core.proc import list_procs, stop_proc, delete_proc
+    from core.ops.proc import list_procs, stop_proc, delete_proc
 
     while True:
         procs = list_procs()
@@ -697,7 +697,7 @@ def screen_procs():
 
 
 def _screen_tail(pid):
-    from core.proc import _is_alive, get_log_path, _load_state
+    from core.ops.proc import _is_alive, get_log_path, _load_state
     log_file = get_log_path(pid)
     if not log_file: return
     info = _load_state()["procs"].get(str(pid), {})
@@ -736,7 +736,7 @@ def _screen_tail(pid):
 # ══════════════════════════════════════════════════════════════
 
 def screen_data():
-    from core.db import list_runs, delete_run
+    from core.ops.db import list_runs, delete_run
 
     while True:
         runs = list_runs(limit=30)
@@ -789,7 +789,7 @@ def _charts(run):
     return r
 
 def screen_run_detail(run):
-    from core.db import get_trades
+    from core.ops.db import get_trades
     trades = get_trades(run["run_id"])
     closed = [t for t in trades if t["result"] in ("WIN","LOSS")]
     ch = _charts(run)
@@ -895,8 +895,8 @@ def _open_folder(run):
 # ══════════════════════════════════════════════════════════════
 
 def screen_status(wait=True):
-    from core.db import stats_summary
-    from core.proc import list_procs
+    from core.ops.db import stats_summary
+    from core.ops.proc import list_procs
 
     _head("STATUS")
     procs = list_procs()
@@ -986,12 +986,12 @@ def main():
     elif a.cmd == "ps":   screen_procs()
     elif a.cmd == "tail":  _screen_tail(a.pid)
     elif a.cmd == "stop":
-        from core.proc import stop_proc
+        from core.ops.proc import stop_proc
         print(f"  {'✓' if stop_proc(a.pid) else 'nao encontrado'}")
     elif a.cmd in ("data","logs"): screen_data()
     elif a.cmd == "status": screen_status(wait=False)
     elif a.cmd == "export":
-        from core.analysis_export import export_analysis
+        from core.analysis.analysis_export import export_analysis
         from datetime import datetime as _dt
         if a.output:
             out = Path(a.output)

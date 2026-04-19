@@ -20,7 +20,7 @@ if sys.stdout.encoding != "utf-8":
 
 from config import params as _p
 from core.data import fetch_all, validate
-from core.portfolio import build_corr_matrix, detect_macro
+from core.risk.portfolio import build_corr_matrix, detect_macro
 
 log = logging.getLogger("REN_FOCUS")
 log.setLevel(logging.INFO)

@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 from fastapi import HTTPException
 from fastapi.params import Depends
+from fastapi.testclient import TestClient
 
 from api import models
 from api.auth import require_admin
@@ -29,6 +30,7 @@ from api.routes import (
     RefreshRequest,
 )
 from api.auth import create_token, decode_token
+from api.server import create_app
 
 
 @pytest.fixture
@@ -214,3 +216,21 @@ def test_global_operational_routes_require_admin(fn, param_name):
     dep = inspect.signature(fn).parameters[param_name].default
     assert isinstance(dep, Depends)
     assert dep.dependency is require_admin
+
+
+def test_create_app_hides_docs_by_default(monkeypatch):
+    monkeypatch.setattr("api.server.init_db", lambda: None)
+    client = TestClient(create_app(expose_docs=False))
+
+    response = client.get("/docs")
+
+    assert response.status_code == 404
+
+
+def test_create_app_can_opt_in_docs_for_tests(monkeypatch):
+    monkeypatch.setattr("api.server.init_db", lambda: None)
+    client = TestClient(create_app(expose_docs=True))
+
+    response = client.get("/docs")
+
+    assert response.status_code == 200

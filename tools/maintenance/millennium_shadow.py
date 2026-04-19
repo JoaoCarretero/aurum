@@ -32,7 +32,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.fs import atomic_write  # noqa: E402
+from core.ops.fs import atomic_write  # noqa: E402
+from core.risk.key_store import KeyStoreError, load_runtime_keys  # noqa: E402
 
 RUN_TS = datetime.now(timezone.utc)
 RUN_ID = RUN_TS.strftime("%Y-%m-%d_%H%M")
@@ -63,12 +64,8 @@ def _telegram_cfg() -> dict | None:
     global _TELEGRAM_CFG
     if _TELEGRAM_CFG is not None:
         return _TELEGRAM_CFG
-    keys_path = ROOT / "config" / "keys.json"
-    if not keys_path.exists():
-        _TELEGRAM_CFG = {}
-        return None
     try:
-        data = json.loads(keys_path.read_text(encoding="utf-8"))
+        data = load_runtime_keys()
         tg = data.get("telegram") or {}
         if tg.get("bot_token") and tg.get("chat_id"):
             _TELEGRAM_CFG = {
@@ -76,7 +73,7 @@ def _telegram_cfg() -> dict | None:
                 "chat_id": str(tg["chat_id"]),
             }
             return _TELEGRAM_CFG
-    except (json.JSONDecodeError, OSError):
+    except KeyStoreError:
         pass
     _TELEGRAM_CFG = {}
     return None

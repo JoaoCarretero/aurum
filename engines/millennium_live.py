@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from engines.millennium import OPERATIONAL_ENGINES
 
 

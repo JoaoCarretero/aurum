@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from core.fs import robust_rmtree  # noqa: E402
+from core.ops.fs import robust_rmtree  # noqa: E402
 
 DIR_PATTERNS = (
     "__pycache__",

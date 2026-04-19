@@ -21,7 +21,7 @@ INTERVAL = ENGINE_INTERVALS.get("CITADEL", INTERVAL)
 
 # ── Core modules ──────────────────────────────────────────────
 from core.data import fetch, fetch_all, validate
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from core.indicators import indicators, swing_structure, omega
 from core.chronos import enrich_with_regime
 from analysis.stats import regime_analysis as _hmm_regime_analysis
@@ -38,11 +38,11 @@ from core.signals import (
     calc_levels, calc_levels_chop,
     label_trade, label_trade_chop,
 )
-from core.portfolio import (
+from core.risk.portfolio import (
     detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
     position_size,
 )
-from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
+from core.data.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
 
 # ── Analysis modules ──────────────────────────────────────────
 from analysis.stats import equity_stats, calc_ratios, conditional_backtest
@@ -69,7 +69,7 @@ def setup_run(engine_name: str = "citadel") -> tuple[str, _Path]:
     """Initialise RUN_DIR, logging, and file handlers. Call once at startup."""
     global RUN_DATE, RUN_TIME, RUN_ID, RUN_DIR
 
-    from core.run_manager import create_run_dir
+    from core.ops.run_manager import create_run_dir
 
     RUN_ID, RUN_DIR = create_run_dir(engine_name)
     # UTC so RUN_IDs generated on the Windows dev box and on the Linux VPS
@@ -1006,7 +1006,7 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════
     #  PERSISTÊNCIA — tudo numa pasta por run
     # ══════════════════════════════════════════════════════════════
-    from core.run_manager import (
+    from core.ops.run_manager import (
         snapshot_config, save_run_artifacts, append_to_index, TeeLogger,
     )
 
@@ -1059,7 +1059,7 @@ if __name__ == "__main__":
 
     # ── Auto-persist to DB (backwards compat) ──
     try:
-        from core.db import save_run as _db_save
+        from core.ops.db import save_run as _db_save
         export_json(all_trades, eq, mc, cond, ratios)
         _json = str(RUN_DIR / f"citadel_{INTERVAL}_v36.json")
         if _Path(_json).exists():

@@ -6,6 +6,8 @@ Nothing here touches engine behavior.
 import os
 from pathlib import Path
 
+from core.risk.key_store import KeyStoreError, load_runtime_keys
+
 # ── ACCOUNT ──────────────────────────────────────────────────
 # Conta separada das trade engines. P&L independente.
 MACRO_ACCOUNT_SIZE = 10_000.0
@@ -60,15 +62,14 @@ def _load_macro_key(env_name: str, json_key: str) -> str:
     v = os.environ.get(env_name, "").strip()
     if v:
         return v
-    import json
-    keys_path = Path(__file__).resolve().parent / "keys.json"
-    if keys_path.exists():
-        try:
-            data = json.loads(keys_path.read_text(encoding="utf-8"))
-            return (data.get("macro_brain") or {}).get(json_key, "") or ""
-        except (OSError, json.JSONDecodeError):
-            return ""
-    return ""
+    try:
+        data = load_runtime_keys(
+            plaintext_path=Path(__file__).resolve().parent / "keys.json",
+            encrypted_path=Path(__file__).resolve().parent / "keys.json.enc",
+        )
+    except KeyStoreError:
+        return ""
+    return (data.get("macro_brain") or {}).get(json_key, "") or ""
 
 
 FRED_API_KEY = _load_macro_key("FRED_API_KEY", "fred_api_key")

@@ -60,7 +60,7 @@ from config.params import (
     _TF_MINUTES,
 )
 from core.data import fetch_all, validate
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from core.hawkes import label_eta, rolling_branching_ratio
 from core.indicators import indicators
 
@@ -667,7 +667,7 @@ def save_run(run_dir: Path, trades: list[dict], summary: dict,
 
     # Try run_manager integration (optional — we don't require it)
     try:
-        from core.run_manager import append_to_index, snapshot_config
+        from core.ops.run_manager import append_to_index, snapshot_config
         config_snapshot = snapshot_config()
         config_snapshot["KEPOS_PARAMS"] = asdict(params)
         append_to_index(run_dir, {

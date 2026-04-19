@@ -59,7 +59,7 @@ from core import (
     detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
     position_size,
 )
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
@@ -1153,7 +1153,7 @@ def export_json(all_trades, eq, mc, ratios, pairs):
 
     # register in DB
     try:
-        from core.db import register_run
+        from core.ops.db import register_run
         register_run(
             run_id=RUN_ID,
             engine="deshaw",
@@ -1397,7 +1397,7 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════
     #  PERSISTÊNCIA — alinhado com CITADEL
     # ══════════════════════════════════════════════════════════════
-    from core.run_manager import snapshot_config, save_run_artifacts, append_to_index
+    from core.ops.run_manager import snapshot_config, save_run_artifacts, append_to_index
 
     roi = ratios["ret"]
     _config = _apply_runtime_snapshot_overrides(snapshot_config(), BASKET_NAME)

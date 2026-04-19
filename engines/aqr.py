@@ -11,8 +11,8 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
-from core.evolution import DarwinAllocator, calc_fitness
-from core.fs import atomic_write
+from core.analysis.evolution import DarwinAllocator, calc_fitness
+from core.ops.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
 
 SEP = "=" * 60

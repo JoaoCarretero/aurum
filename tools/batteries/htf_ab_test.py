@@ -18,8 +18,8 @@ if sys.stdout.encoding != "utf-8":
 
 from config import params as _p
 from core.data import fetch_all, validate
-from core.portfolio import detect_macro, build_corr_matrix
-from core.htf_filter import prepare_htf_context, htf_agrees
+from core.risk.portfolio import detect_macro, build_corr_matrix
+from core.data.htf_filter import prepare_htf_context, htf_agrees
 
 log = logging.getLogger("HTF_AB_TEST")
 log.setLevel(logging.INFO)

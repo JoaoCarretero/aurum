@@ -21,7 +21,8 @@ import tkinter as tk
 from pathlib import Path
 from typing import Literal
 
-from core.ui_palette import (
+from core.risk.key_store import KeyStoreError, load_runtime_keys
+from core.ui.ui_palette import (
     BG, BG2, BG3, PANEL,
     BORDER, BORDER_H,
     AMBER, AMBER_B, AMBER_D, AMBER_H,
@@ -184,7 +185,7 @@ def save_mode(mode: Mode, *, state_path: Path | None = None) -> None:
 
     Uses atomic_write_json so a crashed write leaves the prior file intact.
     """
-    from core.persistence import atomic_write_json
+    from core.ops.persistence import atomic_write_json
     path = state_path or _DEFAULT_STATE_PATH
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -279,7 +280,7 @@ def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict
     if not force and cached_rows is not None and (now - cached_ts) <= ttl_s:
         return list(cached_rows)  # type: ignore[arg-type]
     try:
-        from core.proc import list_procs
+        from core.ops.proc import list_procs
         rows = list_procs()
     except Exception:
         rows = []
@@ -1150,7 +1151,7 @@ _COCKPIT_CLIENT_SINGLETON: object | None = None
 def _get_cockpit_client():
     """Lazy singleton. Returns None se config ausente ou invalida.
 
-    Config vem de config/keys.json bloco 'cockpit_api'. Uma vez resolvido
+    Config vem do runtime key store bloco 'cockpit_api'. Uma vez resolvido
     (positivo ou negativo), cacheia o resultado pra nao retry em cada
     refresh do painel. Launcher vivo dura horas — tentar reabrir o
     arquivo a cada 5s nao ajuda.
@@ -1158,12 +1159,8 @@ def _get_cockpit_client():
     global _COCKPIT_CLIENT_SINGLETON
     if _COCKPIT_CLIENT_SINGLETON is not None:
         return _COCKPIT_CLIENT_SINGLETON or None
-    keys_path = Path("config/keys.json")
-    if not keys_path.exists():
-        _COCKPIT_CLIENT_SINGLETON = False
-        return None
     try:
-        data = json.loads(keys_path.read_text(encoding="utf-8"))
+        data = load_runtime_keys()
         block = data.get("cockpit_api")
         if not block or not block.get("base_url") or not block.get("read_token"):
             _COCKPIT_CLIENT_SINGLETON = False
@@ -1178,7 +1175,7 @@ def _get_cockpit_client():
         _COCKPIT_CLIENT_SINGLETON = CockpitClient(
             cfg, cache_dir=Path("data/.cockpit_cache"))
         return _COCKPIT_CLIENT_SINGLETON
-    except Exception:
+    except (KeyStoreError, ValueError, TypeError):
         _COCKPIT_CLIENT_SINGLETON = False
         return None
 
@@ -2205,7 +2202,7 @@ def _bind_hold_to_confirm(widget, *, on_confirm, duration_ms):
 
 def _stop_engine(launcher, state, proc):
     try:
-        from core.proc import stop_proc
+        from core.ops.proc import stop_proc
         stop_proc(int(proc["pid"]), expected=proc)
     except Exception:
         return

@@ -210,7 +210,7 @@ STRESS_MISS_RATE = 0.15  # % trades que não executam (latência)
 
 # ── RENAISSANCE (extracted to core/harmonics.py) ──────────────────
 from core.harmonics import scan_hermes
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 
 SEP = "─"*80
 
@@ -1545,7 +1545,7 @@ def export_ms_json(all_trades, eq, mc, ratios, mdd_pct=None):
     # Persist into canonical run index so MILLENNIUM shows up alongside
     # directional engines in data/index.json.
     try:
-        from core.run_manager import append_to_index
+        from core.ops.run_manager import append_to_index
         index_summary = {
             "engine":       "MILLENNIUM",
             "run_id":       RUN_ID,
@@ -1574,7 +1574,7 @@ def export_ms_json(all_trades, eq, mc, ratios, mdd_pct=None):
         print(f"  index: {_e}")
     # Auto-persist to DB
     try:
-        from core.db import save_run
+        from core.ops.db import save_run
         save_run("multi", fname)
         print(f"  DB: run persistido")
     except Exception as _e:

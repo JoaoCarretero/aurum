@@ -74,7 +74,7 @@ from config.params import (
     _TF_MINUTES,
 )
 from core.data import fetch_all, validate
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from core.indicators import indicators
 
 log = logging.getLogger("MEDALLION")
@@ -800,7 +800,7 @@ def save_run(run_dir: Path, trades: list[dict], summary: dict,
                  json.dumps(payload, indent=2, default=str))
 
     try:
-        from core.run_manager import append_to_index, snapshot_config
+        from core.ops.run_manager import append_to_index, snapshot_config
         config_snapshot = snapshot_config()
         config_snapshot["MEDALLION_PARAMS"] = asdict(params)
         append_to_index(run_dir, {

@@ -178,7 +178,7 @@ def result_color_name(result) -> str:
 import tkinter as tk
 from typing import Callable
 
-from core.ui_palette import (
+from core.ui.ui_palette import (
     AMBER, AMBER_B, BG, BG2, BORDER, DIM, DIM2, FONT, GREEN,
     PANEL, RED, WHITE,
 )

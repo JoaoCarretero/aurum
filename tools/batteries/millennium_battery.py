@@ -81,7 +81,7 @@ def _register_window_run(
     summary: dict,
     config: dict,
 ) -> None:
-    from core.run_manager import append_to_index
+    from core.ops.run_manager import append_to_index
 
     battery_id = battery_root.name.replace("battery_", "", 1)
     run_id = f"millennium_battery_{battery_id}_w{days}d"

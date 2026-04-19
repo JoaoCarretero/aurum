@@ -157,16 +157,12 @@ class BinanceFuturesAPI:
 
 
 def make_client(mode: str, keys_file: str = "config/keys.json") -> Optional[BinanceFuturesAPI]:
-    """Convenience: build a client from config/keys.json for a given mode.
-    Returns None if the mode block is missing or empty."""
-    import json
-    from pathlib import Path
-    p = Path(keys_file)
-    if not p.exists():
-        return None
+    """Build a client from the runtime key store for a given mode."""
+    from core.key_store import KeyStoreError, load_runtime_keys
+
     try:
-        cfg = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+        cfg = load_runtime_keys(plaintext_path=keys_file)
+    except KeyStoreError:
         return None
     block = cfg.get(mode) or {}
     api_key = block.get("api_key", "")

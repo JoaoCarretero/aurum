@@ -35,7 +35,7 @@ log = logging.getLogger("macro_brain.dashboard")
 # ── PALETTE (HL2 / CS 1.6 VGUI) ──────────────────────────────
 # Importado do SSOT core/ui_palette.py — muda lá, todo software
 # adota. Nomes mantidos pra compat com call-sites locais.
-from core.ui_palette import (
+from core.ui.ui_palette import (
     BG, BG2, BG3, PANEL,
     BORDER, BORDER_H,
     AMBER, AMBER_H,
@@ -1139,7 +1139,7 @@ def _render_network_tab(parent):
 
     _section(left, "ENGINES PORTAL · PROCESS MONITOR")
     try:
-        from core.proc import list_procs
+        from core.ops.proc import list_procs
         procs = list_procs()
     except Exception:
         procs = []

@@ -83,7 +83,7 @@ from config.params import (
     _TF_MINUTES,
 )
 from core.data import fetch_all, validate
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from core.hawkes import rolling_branching_ratio
 from core.indicators import indicators
 

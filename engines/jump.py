@@ -44,8 +44,8 @@ from core import (
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
-from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
-from core.fs import atomic_write
+from core.ops.run_manager import append_to_index, save_run_artifacts, snapshot_config
+from core.ops.fs import atomic_write
 
 log = logging.getLogger("JUMP")  # JUMP (formerly MERCURIO) — Order flow engine
 log.setLevel(logging.INFO)
@@ -468,7 +468,7 @@ def export_json(all_trades, eq, mc, ratios, summary, config, audit_results=None)
     append_to_index(RUN_DIR, summary, config, audit_results)
 
     try:
-        from core.db import register_run
+        from core.ops.db import register_run
         register_run(
             run_id=RUN_ID, engine="jump", json_path=str(out),
             roi=ratios["ret"], sharpe=ratios.get("sharpe"),

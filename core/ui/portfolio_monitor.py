@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.exchange_api import BinanceFuturesAPI, make_client
+from core.key_store import KeyStoreError, load_runtime_keys
 
 
 # Account modes that map to Binance environments.
@@ -48,11 +49,9 @@ class PortfolioMonitor:
         - Live/demo/testnet need a valid config/keys.json entry."""
         if mode == "paper":
             return True
-        if not self.keys_path.exists():
-            return False
         try:
-            cfg = json.loads(self.keys_path.read_text(encoding="utf-8"))
-        except Exception:
+            cfg = load_runtime_keys(plaintext_path=self.keys_path)
+        except KeyStoreError:
             return False
         block = cfg.get(mode) or {}
         k = block.get("api_key", "")

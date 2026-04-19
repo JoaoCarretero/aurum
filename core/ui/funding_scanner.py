@@ -51,6 +51,8 @@ from pathlib import Path
 
 import requests
 
+from core.key_store import KeyStoreError, load_runtime_keys
+
 log = logging.getLogger("FUNDING_SCANNER")
 
 # ─── Config ──────────────────────────────────────────────────────────────
@@ -1035,16 +1037,13 @@ def maybe_alert_telegram(opps: list[FundingOpp],
     Throttled to at most one alert per symbol:venue every ALERT_THROTTLE_S.
     Uses the bot configured in config/keys.json. Silent no-op otherwise."""
     try:
-        keys_path = _ROOT / "config" / "keys.json"
-        if not keys_path.exists():
-            return 0
-        cfg = json.loads(keys_path.read_text(encoding="utf-8"))
+        cfg = load_runtime_keys()
         tg = cfg.get("telegram", {}) or {}
         token = tg.get("bot_token") or ""
         chat_id = str(tg.get("chat_id") or "")
         if not (token and chat_id):
             return 0
-    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+    except (KeyStoreError, ValueError, TypeError):
         return 0
 
     alert_log = _load_alert_log()

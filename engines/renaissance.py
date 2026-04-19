@@ -24,8 +24,8 @@ from config.params import ACCOUNT_SIZE, BASKETS, ENGINE_BASKETS, ENGINE_INTERVAL
 INTERVAL = ENGINE_INTERVALS.get("RENAISSANCE", INTERVAL)
 from core import build_corr_matrix, detect_macro, fetch_all, validate
 from core.harmonics import scan_hermes
-from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
-from core.fs import atomic_write
+from core.ops.run_manager import append_to_index, save_run_artifacts, snapshot_config
+from core.ops.fs import atomic_write
 
 
 RUN_ID = datetime.now().strftime("%Y-%m-%d_%H%M%S")

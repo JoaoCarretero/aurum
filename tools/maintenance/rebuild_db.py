@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.db import DB_PATH, save_run  # noqa: E402
+from core.ops.db import DB_PATH, save_run  # noqa: E402
 
 DATA = ROOT / "data"
 INDEX = DATA / "index.json"

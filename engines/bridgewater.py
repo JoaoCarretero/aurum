@@ -40,7 +40,7 @@ from core.sentiment import (
     funding_zscore, oi_delta_signal, ls_ratio_signal, composite_sentiment,
     cached_coverage,
 )
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward
@@ -955,7 +955,7 @@ def export_json(all_trades, eq, mc, ratios):
     print(f"  json  ·  {out}")
 
     try:
-        from core.db import save_run
+        from core.ops.db import save_run
         save_run("bridgewater", str(out))
     except Exception as e:
         log.warning(f"DB register failed: {e}")
@@ -1263,7 +1263,7 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════
     #  PERSISTÊNCIA — alinhado com CITADEL
     # ══════════════════════════════════════════════════════════════
-    from core.run_manager import snapshot_config, save_run_artifacts, append_to_index
+    from core.ops.run_manager import snapshot_config, save_run_artifacts, append_to_index
 
     roi = ratios["ret"]
     _config = snapshot_config()

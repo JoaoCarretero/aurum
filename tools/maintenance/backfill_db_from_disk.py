@@ -133,7 +133,7 @@ def main() -> int:
 
     # Import lazily so --help works even if core.db can't import.
     sys.path.insert(0, str(ROOT))
-    from core.db import save_run
+    from core.ops.db import save_run
 
     ok = 0
     fail = 0

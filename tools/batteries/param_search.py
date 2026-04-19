@@ -22,7 +22,7 @@ if sys.stdout.encoding != "utf-8":
 
 from config import params as _p
 from core.data import fetch_all, validate
-from core.portfolio import detect_macro, build_corr_matrix
+from core.risk.portfolio import detect_macro, build_corr_matrix
 
 log = logging.getLogger("PARAM_SEARCH")
 log.setLevel(logging.INFO)

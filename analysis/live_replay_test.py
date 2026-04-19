@@ -29,7 +29,7 @@ import pandas as pd  # noqa: E402
 
 from config.params import SYMBOLS, MACRO_SYMBOL  # noqa: E402
 from core.data import fetch_all, validate  # noqa: E402
-from core.portfolio import detect_macro, build_corr_matrix  # noqa: E402
+from core.risk.portfolio import detect_macro, build_corr_matrix  # noqa: E402
 from engines import citadel as bt_module  # noqa: E402
 from engines.live import LiveEngine  # noqa: E402
 
