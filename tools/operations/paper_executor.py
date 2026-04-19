@@ -30,6 +30,7 @@ class Position:
     unrealized_pnl: float = 0.0
     mtm_price: float | None = None
     bars_held: int = 0
+    funding_accumulated: float = 0.0  # cumulative funding cost (positive drains LONG, credits SHORT)
 
 
 _id_counter = itertools.count(1)

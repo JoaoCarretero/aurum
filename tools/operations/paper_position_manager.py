@@ -54,13 +54,19 @@ class PositionManager:
         return 1 if direction == "LONG" else -1
 
     def _apply_funding(self, pos: Position) -> float:
-        """Apply funding for one tick pro-rata; returns funding paid (signed)."""
+        """Accumulate funding for one tick pro-rata into pos.funding_accumulated.
+
+        For LONG, funding is a cost (positive delta drains equity). For SHORT,
+        funding is a credit (negative accumulated value). Returns the signed
+        delta applied this tick for caller observability (not used for PnL —
+        the cumulative value lives on the Position and is subtracted at close).
+        """
         delta = pos.notional * self.funding_per_8h * (self.tick_sec / (8 * 3600))
         if pos.direction == "LONG":
-            pos.unrealized_pnl -= delta
+            pos.funding_accumulated += delta
             return delta
         else:
-            pos.unrealized_pnl += delta
+            pos.funding_accumulated -= delta
             return -delta
 
     def _close(self, pos: Position, exit_price: float, reason: str,
@@ -72,7 +78,9 @@ class PositionManager:
         r_multiple = 0.0
         if risk_per_unit > 0:
             r_multiple = (exit_price - pos.entry_price) * sign / risk_per_unit
-        pnl_after_fees = gross - pos.commission_paid - exit_commission
+        # Subtract funding_accumulated: for LONG it's positive (drain), for
+        # SHORT it's negative (credit increases pnl_after_fees).
+        pnl_after_fees = gross - pos.commission_paid - exit_commission - pos.funding_accumulated
         return ClosedTrade(
             id=pos.id, engine=pos.engine, symbol=pos.symbol,
             direction=pos.direction,
@@ -86,7 +94,7 @@ class PositionManager:
             bars_held=pos.bars_held,
             entry_commission=round(pos.commission_paid, 4),
             exit_commission=round(exit_commission, 4),
-            funding_paid=0.0,
+            funding_paid=round(pos.funding_accumulated, 4),
         )
 
     def check_exits(self, positions: list[Position], bars: list[dict]) -> list[ClosedTrade]:
@@ -119,13 +127,16 @@ class PositionManager:
             if closed_this is not None:
                 closed.append(closed_this)
             else:
-                # MTM with last bar close
+                # MTM with last bar close. Apply funding FIRST (mutates
+                # pos.funding_accumulated), then reflect cumulative funding
+                # in unrealized_pnl so the cockpit shows the realistic value.
                 last = bars[-1] if bars else None
                 if last is not None:
+                    self._apply_funding(pos)
                     mtm = float(last["close"])
                     sign = self._dir_sign(pos.direction)
                     pos.mtm_price = mtm
-                    pos.unrealized_pnl = (mtm - pos.entry_price) * pos.size * sign
+                    gross_mtm = (mtm - pos.entry_price) * pos.size * sign
+                    pos.unrealized_pnl = gross_mtm - pos.funding_accumulated
                     pos.bars_held += len(bars)
-                    self._apply_funding(pos)
         return closed

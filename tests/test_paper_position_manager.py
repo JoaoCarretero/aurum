@@ -86,3 +86,37 @@ def test_funding_reduces_long_pnl():
     # funding_delta = 100 * 0.001 * (900 / 28800) = 0.003125
     # LONG pays funding -> unrealized reduced
     assert pos.unrealized_pnl < (101.0 - 100.0) * 1.0
+    assert pos.funding_accumulated > 0
+
+
+def test_funding_accumulates_across_multiple_ticks():
+    """Multi-tick funding must accumulate and hit pnl_after_fees on close."""
+    pm = PositionManager(commission=0.0004, funding_per_8h=0.001, tick_sec=900)
+    pos = _pos(direction="LONG", entry=100.0, stop=98.0, target=110.0, size=10.0)
+    # Tick 1: MTM at 100.5 (no exit)
+    pm.check_exits([pos], [_bar(high=100.8, low=99.5, close=100.5)])
+    funding_after_1 = pos.funding_accumulated
+    # Tick 2: MTM at 101.0 (no exit) — funding should double
+    pm.check_exits([pos], [_bar(high=101.2, low=100.2, close=101.0)])
+    funding_after_2 = pos.funding_accumulated
+    assert funding_after_2 == pytest.approx(funding_after_1 * 2, rel=0.01)
+    # Tick 3: target hit at 110 — close must subtract accumulated funding
+    closed = pm.check_exits([pos], [_bar(high=111.0, low=101.0, close=110.5)])
+    assert len(closed) == 1
+    c = closed[0]
+    assert c.exit_reason == "target"
+    # pnl_after_fees should be less than gross - commissions by accumulated funding
+    expected_without_funding = c.pnl - c.entry_commission - c.exit_commission
+    assert c.pnl_after_fees == pytest.approx(
+        expected_without_funding - c.funding_paid, rel=0.001)
+    assert c.funding_paid > 0  # LONG paid funding
+
+
+def test_funding_short_receives_credit():
+    """SHORT position accumulates negative funding (credit)."""
+    pm = PositionManager(commission=0.0004, funding_per_8h=0.001, tick_sec=900)
+    pos = _pos(direction="SHORT", entry=100.0, stop=102.0, target=96.0, size=10.0)
+    pm.check_exits([pos], [_bar(high=100.5, low=99.5, close=100.0)])
+    pm.check_exits([pos], [_bar(high=100.2, low=99.3, close=99.8)])
+    # SHORT: funding_accumulated is negative
+    assert pos.funding_accumulated < 0
