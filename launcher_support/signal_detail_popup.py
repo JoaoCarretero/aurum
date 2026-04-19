@@ -100,12 +100,28 @@ def section_outcome(trade: dict) -> list[tuple[str, str, str]]:
 
 
 def section_entry(trade: dict) -> list[tuple[str, str, str]]:
+    # notional = size (qty tokens) * entry (preço). risk = stop_dist * size.
+    size = trade.get("size")
+    entry = trade.get("entry")
+    stop = trade.get("stop")
+    try:
+        notional = float(size) * float(entry)
+        notional_str = f"${notional:,.0f}"
+    except (TypeError, ValueError):
+        notional_str = "—"
+    try:
+        risk = abs(float(entry) - float(stop)) * float(size)
+        risk_str = f"${risk:,.2f}"
+    except (TypeError, ValueError):
+        risk_str = "—"
     return [
         ("entry", _fmt_num(trade.get("entry"), "price"), "WHITE"),
         ("stop", _fmt_num(trade.get("stop"), "price"), "WHITE"),
         ("target", _fmt_num(trade.get("target"), "price"), "WHITE"),
         ("rr", _fmt_num(trade.get("rr")), "WHITE"),
-        ("size", _fmt_num(trade.get("size"), "usd"), "WHITE"),
+        ("size (qty)", _fmt_num(trade.get("size")), "DIM"),
+        ("notional", notional_str, "WHITE"),
+        ("risk @ stop", risk_str, "AMBER"),
         ("score", _fmt_num(trade.get("score")), "WHITE"),
     ]
 
@@ -143,22 +159,120 @@ def section_structure(trade: dict) -> list[tuple[str, str, str]]:
     ]
 
 
-def show(parent, trade: dict) -> None:
-    """Abre Toplevel modal com detail completo do trade.
-
-    Seções: OUTCOME, ENTRY, REGIME, OMEGA 5D, STRUCTURE. Fecha com
-    ESC, click fora, ou botão X. Trade dict deve vir cru (de
-    _render_detail_shadow) — campos ausentes renderizam '—'.
-    """
+def _build_body(container, trade: dict) -> None:
+    """Pinta as 5 seções (OUTCOME/ENTRY/REGIME/OMEGA/STRUCTURE) dentro
+    de `container`. Mesma formatação usada pelo popup antigo e pelo
+    inline renderer — compartilha section_* helpers."""
     import tkinter as tk
     from core.ui_palette import (
-        AMBER, BG, BORDER, DIM, DIM2, FONT, GREEN, PANEL, RED, WHITE,
+        AMBER, BORDER, DIM, DIM2, FONT, GREEN, PANEL, RED, WHITE,
     )
 
     COLORS = {
         "GREEN": GREEN, "RED": RED, "DIM": DIM, "DIM2": DIM2,
         "WHITE": WHITE, "AMBER": AMBER,
     }
+
+    def _section(title: str, rows: list[tuple[str, str, str]]) -> None:
+        tk.Label(container, text=title, fg=AMBER, bg=PANEL,
+                 font=(FONT, 7, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        tk.Frame(container, bg=BORDER, height=1).pack(
+            fill="x", padx=12, pady=(0, 4))
+        inner = tk.Frame(container, bg=PANEL)
+        inner.pack(fill="x", padx=12, pady=(0, 2))
+        for label, value, color_name in rows:
+            row = tk.Frame(inner, bg=PANEL)
+            row.pack(fill="x", pady=(0, 1))
+            tk.Label(row, text=f"{label}:", fg=DIM2, bg=PANEL,
+                     font=(FONT, 7), width=14, anchor="w").pack(side="left")
+            tk.Label(row, text=str(value),
+                     fg=COLORS.get(color_name, WHITE), bg=PANEL,
+                     font=(FONT, 7, "bold"), anchor="w").pack(side="left")
+
+    def _omega_section() -> None:
+        tk.Label(container, text="OMEGA 5D", fg=AMBER, bg=PANEL,
+                 font=(FONT, 7, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        tk.Frame(container, bg=BORDER, height=1).pack(
+            fill="x", padx=12, pady=(0, 4))
+        inner = tk.Frame(container, bg=PANEL)
+        inner.pack(fill="x", padx=12, pady=(0, 2))
+        for dim_name, value_str, bar in section_omega(trade):
+            row = tk.Frame(inner, bg=PANEL)
+            row.pack(fill="x", pady=(0, 1))
+            tk.Label(row, text=f"{dim_name}:", fg=DIM2, bg=PANEL,
+                     font=(FONT, 7), width=12, anchor="w").pack(side="left")
+            tk.Label(row, text=value_str, fg=WHITE, bg=PANEL,
+                     font=(FONT, 7, "bold"), width=6,
+                     anchor="w").pack(side="left")
+            tk.Label(row, text=bar, fg=AMBER, bg=PANEL,
+                     font=(FONT, 7)).pack(side="left", padx=(4, 0))
+
+    _section("OUTCOME", section_outcome(trade))
+    _section("ENTRY", section_entry(trade))
+    _section("REGIME", section_regime(trade))
+    _omega_section()
+    _section("STRUCTURE", section_structure(trade))
+
+
+def render_inline(parent, trade: dict, on_close) -> "tk.Frame":  # noqa: F821
+    """Render trade detail INLINE dentro do detail pane do cockpit —
+    sem popup separado. Retorna o Frame host.
+
+    Contém header compacto (sym · dir · time · X fechar · OPEN CHART se
+    USDT), as 5 seções (OUTCOME/ENTRY/REGIME/OMEGA/STRUCTURE), e um botão
+    CLOSE DETAIL no final. `on_close` eh chamado sem args quando o user
+    pede pra fechar o detail — host decide o que fazer (limpar state e
+    rerender)."""
+    import tkinter as tk
+    from core.ui_palette import (
+        AMBER, AMBER_B, BG, BG2, BORDER, DIM2, FONT, PANEL, WHITE,
+    )
+
+    symbol = trade.get("symbol", "?")
+    direction = str(trade.get("direction", "?"))
+    time_str = str(trade.get("timestamp", "?")).replace("T", " ")[:16]
+
+    # Card envolvente pra dar separação visual entre a signals table e
+    # o drill-down — operador vê "isso é um zoom, não uma linha nova".
+    frame = tk.Frame(parent, bg=PANEL,
+                     highlightbackground=AMBER_B, highlightthickness=1)
+    frame.pack(fill="x", padx=12, pady=(4, 8))
+
+    # Header com title + X close à direita + OPEN CHART quando aplica
+    hdr = tk.Frame(frame, bg=BG2)
+    hdr.pack(fill="x")
+    tk.Label(hdr, text="  TRADE DETAIL", fg=AMBER, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left", padx=(8, 0), pady=4)
+    tk.Label(hdr, text=f"  {symbol}  ·  {direction}  ·  {time_str}",
+             fg=WHITE, bg=BG2, font=(FONT, 7, "bold")).pack(
+                 side="left", pady=4)
+
+    close_btn = tk.Label(hdr, text="  ✕  ", fg=BG, bg=DIM2,
+                         font=(FONT, 7, "bold"), cursor="hand2",
+                         padx=6, pady=2)
+    close_btn.pack(side="right", padx=(0, 6), pady=3)
+    close_btn.bind("<Button-1>", lambda _e: on_close())
+
+    chart_url = _tradingview_url(symbol)
+    if chart_url:
+        def _open_chart(_e=None) -> None:
+            import webbrowser
+            webbrowser.open(chart_url)
+        chart_btn = tk.Label(hdr, text="  OPEN CHART  ", fg=BG, bg=AMBER,
+                             font=(FONT, 7, "bold"), cursor="hand2",
+                             padx=6, pady=2)
+        chart_btn.pack(side="right", padx=(0, 4), pady=3)
+        chart_btn.bind("<Button-1>", _open_chart)
+
+    _build_body(frame, trade)
+    return frame
+
+
+def show(parent, trade: dict) -> None:
+    """(legacy) Abre Toplevel modal com detail completo do trade. Mantido
+    pra compat; preferir `render_inline` pro cockpit shadow."""
+    import tkinter as tk
+    from core.ui_palette import AMBER, BG, DIM2, FONT, PANEL, WHITE
 
     symbol = trade.get("symbol", "?")
     direction = trade.get("direction", "?")
@@ -169,52 +283,14 @@ def show(parent, trade: dict) -> None:
     top.configure(bg=PANEL)
     top.geometry("520x640")
 
-    # HEADER
     hdr = tk.Frame(top, bg=PANEL)
     hdr.pack(fill="x", padx=16, pady=(14, 6))
     tk.Label(hdr,
              text=f"{symbol}  ·  {direction}  ·  {time_str}",
              fg=WHITE, bg=PANEL, font=(FONT, 11, "bold")).pack(anchor="w")
 
-    def _render_section(title: str, rows: list[tuple[str, str, str]]) -> None:
-        tk.Label(top, text=title, fg=AMBER, bg=PANEL,
-                 font=(FONT, 7, "bold")).pack(anchor="w", padx=16, pady=(10, 2))
-        tk.Frame(top, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(0, 4))
-        container = tk.Frame(top, bg=PANEL)
-        container.pack(fill="x", padx=16, pady=(0, 4))
-        for label, value, color_name in rows:
-            row = tk.Frame(container, bg=PANEL)
-            row.pack(fill="x", pady=(0, 1))
-            tk.Label(row, text=f"{label}:", fg=DIM2, bg=PANEL,
-                     font=(FONT, 7), width=14, anchor="w").pack(side="left")
-            tk.Label(row, text=str(value),
-                     fg=COLORS.get(color_name, WHITE), bg=PANEL,
-                     font=(FONT, 7, "bold"), anchor="w").pack(side="left")
+    _build_body(top, trade)
 
-    def _render_omega_section() -> None:
-        tk.Label(top, text="OMEGA 5D", fg=AMBER, bg=PANEL,
-                 font=(FONT, 7, "bold")).pack(anchor="w", padx=16, pady=(10, 2))
-        tk.Frame(top, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(0, 4))
-        container = tk.Frame(top, bg=PANEL)
-        container.pack(fill="x", padx=16, pady=(0, 4))
-        for dim_name, value_str, bar in section_omega(trade):
-            row = tk.Frame(container, bg=PANEL)
-            row.pack(fill="x", pady=(0, 1))
-            tk.Label(row, text=f"{dim_name}:", fg=DIM2, bg=PANEL,
-                     font=(FONT, 7), width=12, anchor="w").pack(side="left")
-            tk.Label(row, text=value_str, fg=WHITE, bg=PANEL,
-                     font=(FONT, 7, "bold"), width=6,
-                     anchor="w").pack(side="left")
-            tk.Label(row, text=bar, fg=AMBER, bg=PANEL,
-                     font=(FONT, 7)).pack(side="left", padx=(4, 0))
-
-    _render_section("OUTCOME", section_outcome(trade))
-    _render_section("ENTRY", section_entry(trade))
-    _render_section("REGIME", section_regime(trade))
-    _render_omega_section()
-    _render_section("STRUCTURE", section_structure(trade))
-
-    # ACTIONS + ESC
     close_row = tk.Frame(top, bg=PANEL)
     close_row.pack(fill="x", padx=16, pady=(16, 12))
     close_btn = tk.Label(close_row, text="  ESC close  ", fg=BG, bg=DIM2,

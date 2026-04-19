@@ -65,7 +65,9 @@ def test_format_signal_row_complete():
     assert cells["entry"] == "65432"
     assert cells["stop"] == "65120"
     assert cells["rr"] == "3.0"
-    assert cells["size"] == "$285"
+    # notional = size (285.4 tokens) * entry (65432.5) = ~$18.67M → "$18672.3k"
+    assert cells["notional"].startswith("$")
+    assert "k" in cells["notional"]
     assert cells["res"] == "WIN"
 
 
@@ -79,7 +81,7 @@ def test_format_signal_row_none_fields_render_dash():
     assert cells["entry"] == "—"
     assert cells["stop"] == "—"
     assert cells["rr"] == "—"
-    assert cells["size"] == "—"
+    assert cells["notional"] == "—"
     assert cells["res"] == "—"
 
 

@@ -35,7 +35,8 @@ from launcher_support.engines_sidebar import (
     render_sidebar,
     render_detail,
 )
-from launcher_support.signal_detail_popup import show as show_signal_detail
+# signal_detail_popup.render_inline eh chamado via engines_sidebar.render_detail
+# (inline, sem Toplevel). show() legacy continua disponivel no modulo.
 
 Bucket = Literal["LIVE", "READY", "RESEARCH"]
 Mode = Literal["paper", "demo", "testnet", "live", "shadow"]
@@ -319,10 +320,10 @@ def render(launcher, parent, *, on_escape) -> dict:
     body = tk.Frame(root, bg=BG)
     body.pack(fill="both", expand=True, padx=14, pady=(8, 0))
 
-    # Split 28/72 master/detail — master compacto a esquerda, detail
-    # ganha espaco pra renderizar metric cards vivos.
-    body.grid_columnconfigure(0, weight=28, uniform="body")
-    body.grid_columnconfigure(1, weight=72, uniform="body")
+    # Split 18/82 master/detail — bucket-list compacto, detail pane
+    # ganha a maior parte do terminal pra renderizar cards + drill-down.
+    body.grid_columnconfigure(0, weight=18, uniform="body")
+    body.grid_columnconfigure(1, weight=82, uniform="body")
     body.grid_rowconfigure(0, weight=1)
 
     state["master_host"] = tk.Frame(body, bg=BG)
@@ -1540,8 +1541,28 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     status = str(hb.get("status") or "unknown").upper()
     status_color = GREEN if status == "RUNNING" else DIM2
 
+    # Drill-down inline: click em row seta selected_trade e rerender;
+    # click em ✕ limpa e volta pra tabela. Tudo dentro do proprio
+    # detail pane — sem Toplevel modal.
     def _on_row_click(trade: dict):
-        show_signal_detail(launcher, trade)
+        state["shadow_selected_trade"] = trade
+        _render_detail(state, launcher)
+
+    def _on_close_detail():
+        state.pop("shadow_selected_trade", None)
+        _render_detail(state, launcher)
+
+    selected = state.get("shadow_selected_trade")
+    # Se o trade selecionado nao esta mais na lista de trades (ex. sumiu
+    # do cache apos poll novo), limpa selection pra evitar stale state.
+    if selected is not None and trades:
+        sel_key = (selected.get("strategy"), selected.get("symbol"),
+                   selected.get("timestamp"))
+        known_keys = {(t.get("strategy"), t.get("symbol"), t.get("timestamp"))
+                      for t in trades}
+        if sel_key not in known_keys:
+            state.pop("shadow_selected_trade", None)
+            selected = None
 
     detail_frame = render_detail(
         parent=parent,
@@ -1553,6 +1574,8 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
         on_row_click=_on_row_click,
         status_badge_text=f"TUNNEL {tun_text}  ·  {status}",
         status_badge_color=status_color,
+        selected_trade=selected,
+        on_close_detail=_on_close_detail,
     )
 
     # Actions row — mantem logica de kill do fallback existente
@@ -1567,6 +1590,9 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
                       lambda _e, _d=run_dir, _s=state:
                           _drop_shadow_kill(_d, launcher, _s))
 
+    # Cada render completa (scheduled OU click-triggered) atualiza o sig
+    # pra que o proximo ciclo de refresh compare corretamente.
+    state["shadow_last_render_sig"] = _shadow_content_sig(state)
     _schedule_shadow_refresh(launcher, state)
 
 
@@ -1588,12 +1614,60 @@ def _schedule_shadow_refresh(launcher, state) -> None:
         pass
 
 
+def _shadow_content_sig(state) -> tuple:
+    """Assinatura barata do conteudo que o shadow detail renderiza —
+    usada pra pular re-render quando nada mudou, cortando o destroy+
+    rebuild de ~150ms/ciclo que causava flicker visível."""
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        return (None,)
+    if poller is None:
+        return (None,)
+    try:
+        cached = poller.get_cached()
+        trades = poller.get_trades_cached()
+    except Exception:
+        return (None,)
+    hb = None
+    if cached is not None:
+        _, hb = cached
+    hb_sig = None
+    if hb is not None:
+        hb_sig = (
+            hb.get("status"),
+            hb.get("ticks_ok"),
+            hb.get("ticks_fail"),
+            hb.get("novel_total"),
+            hb.get("last_tick_at"),
+            hb.get("stopped_at"),
+            hb.get("last_error"),
+        )
+    trades_sig = None
+    if trades:
+        last = trades[-1]
+        trades_sig = (
+            len(trades),
+            last.get("shadow_observed_at") or last.get("timestamp"),
+            last.get("symbol"),
+            last.get("strategy"),
+        )
+    selected = state.get("shadow_selected_trade")
+    selected_sig = None
+    if selected is not None:
+        selected_sig = (selected.get("strategy"), selected.get("symbol"),
+                        selected.get("timestamp"))
+    return (state.get("selected_slug"), hb_sig, trades_sig, selected_sig)
+
+
 def _refresh_shadow_detail(launcher, state) -> None:
     """Rebuild the detail pane from the latest poller cache.
 
     Sai cedo se o user navegou pra outro modo — evita rodar de novo
-    quando o detail pane ja nao e shadow. Caso contrario reusa
-    _render_detail que ja faz o roteamento de modo corretamente.
+    quando o detail pane ja nao e shadow. Skip re-render quando
+    content signature bate com a ultima — economia grande (e fim do
+    flicker) quando nao ha tick novo.
     """
     if state.get("mode") != "shadow":
         return
@@ -1604,6 +1678,13 @@ def _refresh_shadow_detail(launcher, state) -> None:
             return
     except Exception:
         return
+    sig = _shadow_content_sig(state)
+    last_sig = state.get("shadow_last_render_sig")
+    if sig == last_sig and last_sig is not None:
+        # Nada mudou — so reagenda o proximo ciclo.
+        _schedule_shadow_refresh(launcher, state)
+        return
+    state["shadow_last_render_sig"] = sig
     _render_detail(state, launcher)
 
 

@@ -70,7 +70,8 @@ def test_section_entry_all_fields():
              "rr": 3.0, "size": 285.4, "score": 0.5363}
     rows = section_entry(trade)
     labels = {r[0] for r in rows}
-    assert {"entry", "stop", "target", "rr", "size", "score"} <= labels
+    assert {"entry", "stop", "target", "rr", "size (qty)", "notional",
+            "risk @ stop", "score"} <= labels
 
 
 def test_section_regime():

@@ -121,13 +121,20 @@ def _fmt_rr(v) -> str:
         return "—"
 
 
-def _fmt_size(v) -> str:
-    if v is None:
+def _fmt_notional(size, entry) -> str:
+    """Size (qty de tokens) * entry (preço) = $ notional. Mostra $XXX ou
+    $X.Xk pra compactar. Faltando qualquer ponta → '—'."""
+    if size is None or entry is None:
         return "—"
     try:
-        return f"${float(v):.0f}"
+        n = float(size) * float(entry)
     except (TypeError, ValueError):
         return "—"
+    if abs(n) >= 10000:
+        return f"${n/1000:.1f}k"
+    if abs(n) >= 1000:
+        return f"${n:,.0f}"
+    return f"${n:.0f}"
 
 
 def _fmt_result(v) -> str:
@@ -139,8 +146,9 @@ def _fmt_result(v) -> str:
 def format_signal_row(trade: dict) -> dict[str, str]:
     """Dict → dict de strings formatados pra tabela LAST SIGNALS.
 
-    Chaves: time, sym, dir, entry, stop, rr, size, res.
-    Campos ausentes renderizam '—'.
+    Chaves: time, sym, dir, entry, stop, rr, notional, res.
+    `notional` = size (qty de tokens) * entry (preço) em $ — a leitura
+    que importa pra um operador. Campos ausentes renderizam '—'.
     """
     return {
         "time": _format_time(trade.get("timestamp", "")),
@@ -149,7 +157,7 @@ def format_signal_row(trade: dict) -> dict[str, str]:
         "entry": _fmt_price(trade.get("entry")),
         "stop": _fmt_price(trade.get("stop")),
         "rr": _fmt_rr(trade.get("rr")),
-        "size": _fmt_size(trade.get("size")),
+        "notional": _fmt_notional(trade.get("size"), trade.get("entry")),
         "res": _fmt_result(trade.get("result")),
     }
 
@@ -193,7 +201,7 @@ def render_sidebar(
     Engine active: linha clicavel com ticks/signals. Inactive: DIM2
     com '—'. Selected: highlight AMBER_B bg.
     """
-    frame = tk.Frame(parent, bg=PANEL, width=180)
+    frame = tk.Frame(parent, bg=PANEL, width=140)
     frame.pack(side="left", fill="y")
     frame.pack_propagate(False)
 
@@ -253,8 +261,14 @@ def render_detail(
     on_row_click: Callable[[dict], None],
     status_badge_text: str = "",
     status_badge_color: str = DIM2,
+    selected_trade: dict | None = None,
+    on_close_detail: Callable[[], None] | None = None,
 ) -> tk.Frame:
     """Detail pane flex — HEALTH / RUN INFO / LAST SIGNALS / ACTIONS.
+
+    Quando `selected_trade` eh passado, a seção LAST SIGNALS é
+    substituída pelo drill-down inline (render_inline do popup) —
+    mantém tudo no próprio terminal, sem Toplevel.
 
     Usa dados crus (heartbeat dict, trade dict) — sem dependencia de
     pydantic (client side tolera shapes extendidos).
@@ -304,6 +318,11 @@ def render_detail(
                  AMBER_B if novel_n > 0 else DIM2)
     _metric_card(health, "UPTIME",
                  _uptime_from_heartbeat(heartbeat), WHITE)
+    # LAST SIG — idade (h) do trade mais recente observado. Se esse valor
+    # > 1h, Telegram nao fogo porque nao houve sinal novo — diagnóstico
+    # rápido pro "por que nao recebi notificação?".
+    last_age_text, last_age_color = _last_sig_age(trades)
+    _metric_card(health, "LAST SIG", last_age_text, last_age_color)
 
     # RUN INFO
     _section_header(frame, "RUN INFO")
@@ -316,12 +335,18 @@ def render_detail(
     _pair_row(info, "run_id", str(run_id), "commit", str(commit))
     _pair_row(info, "started", str(started)[:19], "branch", str(branch))
 
-    # LAST SIGNALS
-    _section_header(frame, f"LAST SIGNALS  ·  click row for detail")
-    signals = tk.Frame(frame, bg=PANEL)
-    signals.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-    _render_signals_table_rich(signals, trades[-10:][::-1] if trades else [],
-                               on_row_click=on_row_click)
+    # LAST SIGNALS (ou drill-down inline se selected_trade)
+    if selected_trade is not None:
+        from launcher_support.signal_detail_popup import render_inline
+        _section_header(frame, "TRADE DETAIL  ·  click ✕ to close")
+        close_cb = on_close_detail or (lambda: None)
+        render_inline(frame, selected_trade, close_cb)
+    else:
+        _section_header(frame, "LAST SIGNALS  ·  click row for detail")
+        signals = tk.Frame(frame, bg=PANEL)
+        signals.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        _render_signals_table_rich(signals, trades[-10:][::-1] if trades else [],
+                                   on_row_click=on_row_click)
 
     return frame
 
@@ -355,6 +380,40 @@ def _pair_row(parent, k1, v1, k2, v2) -> None:
              font=(FONT, 7)).pack(side="left", padx=(12, 4))
     tk.Label(row, text=str(v2), fg=WHITE, bg=PANEL,
              font=(FONT, 7, "bold"), anchor="w").pack(side="left")
+
+
+def _last_sig_age(trades: list[dict]) -> tuple[str, str]:
+    """Idade (em h/min) do trade mais recente. Retorna (texto, cor).
+
+    `trades` vem do poller — pode estar em qualquer ordem; assumimos o
+    ultimo = mais recente (backtest walk-forward + shadow runner appends).
+    Lê `shadow_observed_at` ISO; fallback pra `timestamp` do trade.
+    Verde < 1h, amber < 6h, dim >= 6h. Sem trades → '—'/DIM.
+    """
+    from datetime import datetime, timezone
+    if not trades:
+        return "—", DIM2
+    last = trades[-1]
+    raw = last.get("shadow_observed_at") or last.get("timestamp")
+    if not raw:
+        return "—", DIM2
+    try:
+        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return "—", DIM2
+    now = datetime.now(t.tzinfo or timezone.utc)
+    delta = (now - t).total_seconds()
+    if delta < 0:
+        return "now", GREEN
+    if delta < 60:
+        return f"{int(delta)}s", GREEN
+    if delta < 3600:
+        return f"{int(delta/60)}m", GREEN
+    hours = delta / 3600.0
+    color = GREEN if hours < 1 else (AMBER_B if hours < 6 else DIM2)
+    if hours < 24:
+        return f"{hours:.1f}h", color
+    return f"{int(hours/24)}d", DIM2
 
 
 def _uptime_from_heartbeat(hb: dict) -> str:
@@ -393,7 +452,7 @@ def _render_signals_table_rich(parent, trades: list[dict], on_row_click):
 
     cols = [("TIME", 6), ("SYM", 5), ("DIR", 4),
             ("ENTRY", 9), ("STOP", 9), ("RR", 4),
-            ("SIZE", 7), ("RES", 5)]
+            ("NOTIONAL", 8), ("RES", 5)]
     hdr = tk.Frame(parent, bg=BG2)
     hdr.pack(fill="x", pady=(2, 0))
     # Barra vazia pra alinhar com o accent bar das rows abaixo
@@ -423,7 +482,7 @@ def _render_signals_table_rich(parent, trades: list[dict], on_row_click):
         _cell(row, cells["entry"], WHITE, 9)
         _cell(row, cells["stop"], DIM, 9)
         _cell(row, cells["rr"], WHITE, 4)
-        _cell(row, cells["size"], WHITE, 7)
+        _cell(row, cells["notional"], WHITE, 8)
         _cell(row, cells["res"], res_color, 5, bold=True)
 
         def _click(_e, _t=trade):
