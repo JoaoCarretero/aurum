@@ -403,3 +403,62 @@ def test_telegram_diag_counts_sends_and_failures(tmp_path, client):
     assert body["last_failure_reason"].startswith("403 bot blocked")
     assert body["last_failure_ts"] == "2026-04-18 10:03:00"
     assert body["telegram_sends_logged"] >= 2
+
+
+def test_shadow_start_requires_admin(client):
+    r = client.post("/v1/shadow/start", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 403
+
+
+def test_shadow_start_rejects_unknown_service(client):
+    r = client.post(
+        "/v1/shadow/start?service=evil_rm_rf",
+        headers={"Authorization": "Bearer ADMIN456"},
+    )
+    assert r.status_code == 400
+
+
+def test_shadow_start_calls_systemctl(monkeypatch, client):
+    import subprocess
+    calls = []
+
+    class _Fake:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(args, **kwargs):
+        calls.append(args)
+        return _Fake(returncode=0, stdout="started", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    r = client.post(
+        "/v1/shadow/start",
+        headers={"Authorization": "Bearer ADMIN456"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "started"
+    assert body["service"] == "millennium_shadow.service"
+    assert calls == [["systemctl", "start", "millennium_shadow.service"]]
+
+
+def test_shadow_start_reports_systemctl_failure(monkeypatch, client):
+    import subprocess
+
+    class _Fake:
+        returncode = 3
+        stdout = ""
+        stderr = "Unit millennium_shadow.service not found."
+
+    def _fake_run(args, **kwargs):
+        return _Fake()
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    r = client.post(
+        "/v1/shadow/start",
+        headers={"Authorization": "Bearer ADMIN456"},
+    )
+    assert r.status_code == 500
+    assert "Unit" in r.json()["error"]

@@ -318,10 +318,10 @@ def render_detail(
                  AMBER_B if novel_n > 0 else DIM2)
     _metric_card(health, "UPTIME",
                  _uptime_from_heartbeat(heartbeat), WHITE)
-    # LAST SIG — idade (h) do trade mais recente observado. Se esse valor
-    # > 1h, Telegram nao fogo porque nao houve sinal novo — diagnóstico
-    # rápido pro "por que nao recebi notificação?".
-    last_age_text, last_age_color = _last_sig_age(trades)
+    # LAST SIG — idade do ultimo sinal detectado AO VIVO pelo shadow
+    # (nao do universo backtest). Prefere heartbeat.last_novel_at (setado
+    # so apos first_tick prime); fallback pros trades filtrando primed.
+    last_age_text, last_age_color = _last_sig_age(trades, heartbeat)
     _metric_card(health, "LAST SIG", last_age_text, last_age_color)
 
     # RUN INFO
@@ -382,23 +382,41 @@ def _pair_row(parent, k1, v1, k2, v2) -> None:
              font=(FONT, 7, "bold"), anchor="w").pack(side="left")
 
 
-def _last_sig_age(trades: list[dict]) -> tuple[str, str]:
-    """Idade (em h/min) do trade mais recente. Retorna (texto, cor).
+def _last_sig_age(trades: list[dict],
+                  heartbeat: dict | None = None) -> tuple[str, str]:
+    """Idade do ultimo sinal detectado AO VIVO pelo shadow. Retorna
+    (texto, cor).
 
-    `trades` vem do poller — pode estar em qualquer ordem; assumimos o
-    ultimo = mais recente (backtest walk-forward + shadow runner appends).
-    Lê `shadow_observed_at` ISO; fallback pra `timestamp` do trade.
-    Verde < 1h, amber < 6h, dim >= 6h. Sem trades → '—'/DIM.
+    Fonte primaria: `heartbeat.last_novel_at` (setado pelo runner APENAS
+    quando notify=True, i.e. apos first_tick prime). Se ausente (runner
+    antigo pre-primed-flag), filtra `trades` excluindo `primed=True` e
+    pega o ultimo. Com tudo vazio → '—' + 'primed only' como cor DIM2.
+
+    Verde < 1h, amber < 6h, dim >= 6h.
     """
     from datetime import datetime, timezone
-    if not trades:
-        return "—", DIM2
-    last = trades[-1]
-    raw = last.get("shadow_observed_at") or last.get("timestamp")
-    if not raw:
+
+    raw: str | None = None
+    if heartbeat is not None:
+        hv = heartbeat.get("last_novel_at")
+        if hv:
+            raw = str(hv)
+
+    if raw is None and trades:
+        # Fallback: filtra primed records (se o runner marcou a flag) e
+        # pega o ultimo nao-primed. Runner antigo nao marcava → todos
+        # records contam (retorna timestamp cru do universo).
+        non_primed = [t for t in trades if not t.get("primed", False)]
+        pool = non_primed if non_primed else trades
+        last = pool[-1]
+        hv = last.get("shadow_observed_at") or last.get("timestamp")
+        if hv:
+            raw = str(hv)
+
+    if raw is None:
         return "—", DIM2
     try:
-        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        t = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return "—", DIM2
     now = datetime.now(t.tzinfo or timezone.utc)

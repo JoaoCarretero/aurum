@@ -297,6 +297,33 @@ def build_app() -> FastAPI:
         (run_dir / ".kill").touch()
         return {"status": "kill_flag_dropped", "run_id": run_id}
 
+    @app.post("/v1/shadow/start")
+    def shadow_start(request: Request, service: str = "millennium_shadow"):
+        """Admin-scoped: dispara `systemctl start <service>.service`.
+        Permite o operador relancar o shadow runner pelo cockpit sem
+        SSH. `service` default millennium_shadow; whitelist abaixo
+        previne chamada arbitraria."""
+        _check_auth(request, admin=True)
+        ALLOWED = {"millennium_shadow"}
+        if service not in ALLOWED:
+            raise HTTPException(status_code=400,
+                                detail=f"service must be one of {sorted(ALLOWED)}")
+        import subprocess
+        try:
+            proc = subprocess.run(
+                ["systemctl", "start", f"{service}.service"],
+                capture_output=True, text=True, timeout=20,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="systemctl not available")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="systemctl start timed out")
+        if proc.returncode != 0:
+            raise HTTPException(status_code=500,
+                                detail=f"systemctl exit {proc.returncode}: {proc.stderr.strip()[:300]}")
+        return {"status": "started", "service": f"{service}.service",
+                "stdout": proc.stdout.strip()[:400]}
+
     return app
 
 

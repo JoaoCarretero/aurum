@@ -209,6 +209,158 @@ def _append_per_engine(trade: dict) -> None:
         fh.flush()
 
 
+def _compute_trade_metrics(records: list[dict]) -> dict:
+    """Compute backtest-style metrics from a list of trade records.
+
+    Filtra primed out (populacao inicial do dedup set eh historico, nao
+    deteccao AO VIVO). Retorna dict com n_trades, wins, losses, WR, PF,
+    net_pnl, sharpe, sortino, maxdd, roi_pct. Tudo 0/null se records
+    vazio pos-filtro.
+    """
+    live = [r for r in records if not r.get("primed", False)]
+    n = len(live)
+    base = {
+        "n_trades": n,
+        "n_primed": len(records) - n,
+        "wins": 0, "losses": 0, "win_rate": 0.0, "profit_factor": 0.0,
+        "net_pnl": 0.0, "mean_pnl": 0.0, "median_pnl": 0.0,
+        "sharpe": 0.0, "sortino": 0.0, "maxdd": 0.0, "roi_pct": 0.0,
+    }
+    if n == 0:
+        return base
+
+    pnls = [float(r.get("pnl") or 0.0) for r in live]
+    wins = sum(1 for p in pnls if p > 0)
+    losses = sum(1 for p in pnls if p < 0)
+    gross_win = sum(p for p in pnls if p > 0)
+    gross_loss = -sum(p for p in pnls if p < 0)
+    net_pnl = sum(pnls)
+    mean = net_pnl / n
+    # Median (evita importar numpy; lista pequena)
+    sorted_pnls = sorted(pnls)
+    mid = n // 2
+    median = sorted_pnls[mid] if n % 2 else (sorted_pnls[mid-1] + sorted_pnls[mid]) / 2.0
+
+    # Sharpe e Sortino per-trade (stdev de pnls, sem anualizar — comparavel
+    # entre runs de mesma duracao). Annualize via multiplier fora daqui.
+    import math
+    if n >= 2:
+        var = sum((p - mean) ** 2 for p in pnls) / (n - 1)
+        sd = math.sqrt(var) if var > 0 else 0.0
+        sharpe = mean / sd if sd > 0 else 0.0
+        downside = [p - mean for p in pnls if p < mean]
+        dvar = sum(d * d for d in downside) / (n - 1) if downside else 0.0
+        dsd = math.sqrt(dvar) if dvar > 0 else 0.0
+        sortino = mean / dsd if dsd > 0 else 0.0
+    else:
+        sharpe = 0.0
+        sortino = 0.0
+
+    # MaxDD da curva de equity acumulada
+    peak = 0.0
+    running = 0.0
+    maxdd = 0.0
+    for p in pnls:
+        running += p
+        if running > peak:
+            peak = running
+        dd = peak - running
+        if dd > maxdd:
+            maxdd = dd
+
+    try:
+        from config.params import ACCOUNT_SIZE
+        acc = float(ACCOUNT_SIZE)
+    except Exception:
+        acc = 10_000.0
+    roi = (net_pnl / acc * 100.0) if acc > 0 else 0.0
+
+    base.update({
+        "wins": wins,
+        "losses": losses,
+        "win_rate": wins / n if n else 0.0,
+        "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win > 0 else 0.0,
+        "net_pnl": round(net_pnl, 2),
+        "mean_pnl": round(mean, 2),
+        "median_pnl": round(median, 2),
+        "sharpe": round(sharpe, 3),
+        "sortino": round(sortino, 3),
+        "maxdd": round(maxdd, 2),
+        "roi_pct": round(roi, 3),
+    })
+    # Breakdown por engine (strategy)
+    by_eng: dict[str, list[float]] = {}
+    for r in live:
+        slug = str(r.get("strategy") or "unknown").upper()
+        by_eng.setdefault(slug, []).append(float(r.get("pnl") or 0.0))
+    per_engine = {}
+    for slug, pp in by_eng.items():
+        w = sum(1 for x in pp if x > 0)
+        l = sum(1 for x in pp if x < 0)
+        per_engine[slug] = {
+            "n_trades": len(pp),
+            "wins": w, "losses": l,
+            "win_rate": w / len(pp) if pp else 0.0,
+            "net_pnl": round(sum(pp), 2),
+        }
+    base["per_engine"] = per_engine
+    return base
+
+
+def _write_run_summary(ticks_ok: int, ticks_fail: int, novel_total: int,
+                      novel_since_prime: int, stopped_reason: str,
+                      stopped_at: str) -> None:
+    """Compute + atomic-write reports/summary.json do run agregado.
+
+    Le todos os trades em shadow_trades.jsonl (escrito tick-a-tick),
+    filtra primed via metrics helper, calcula Sharpe/Sortino/WR/PF/
+    MaxDD/ROI como backtest tradicional. Erro em metricas nao derruba
+    o shutdown — summary minimo eh escrito mesmo assim.
+    """
+    reports_dir = RUN_DIR / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = reports_dir / "summary.json"
+    records: list[dict] = []
+    if TRADES_PATH.exists():
+        try:
+            with open(TRADES_PATH, encoding="utf-8") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        records.append(json.loads(ln))
+                    except ValueError:
+                        continue
+        except OSError as exc:
+            log.warning("summary: falha lendo trades.jsonl: %s", exc)
+    try:
+        metrics = _compute_trade_metrics(records)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("summary: falha computando metricas: %s", exc)
+        metrics = {"error": f"{type(exc).__name__}: {exc}"}
+    payload = {
+        "run_id": RUN_ID,
+        "engine": "millennium",
+        "mode": "shadow",
+        "started_at": RUN_TS.isoformat(),
+        "stopped_at": stopped_at,
+        "stopped_reason": stopped_reason,
+        "ticks_ok": ticks_ok,
+        "ticks_fail": ticks_fail,
+        "novel_total": novel_total,
+        "novel_since_prime": novel_since_prime,
+        "metrics": metrics,
+    }
+    try:
+        atomic_write(summary_path, json.dumps(payload, indent=2))
+        log.info("summary: wrote %s (%d trades, pnl=%.2f, sharpe=%.2f)",
+                 summary_path, metrics.get("n_trades", 0),
+                 metrics.get("net_pnl", 0.0), metrics.get("sharpe", 0.0))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("summary: falha escrevendo %s: %s", summary_path, exc)
+
+
 def _write_per_engine_summaries(ticks_ok: int, ticks_fail: int,
                                 stopped_reason: str) -> None:
     stopped_at = datetime.now(timezone.utc).isoformat()
@@ -282,13 +434,16 @@ def _tg_signal(trade: dict) -> None:
     _tg_send("\n".join(lines))
 
 
-def _run_tick(seen_keys: set, notify: bool = True) -> tuple[int, int, int]:
-    """Run one shadow tick. Returns (novel_count, total_scanned, engines_ok).
+def _run_tick(seen_keys: set, notify: bool = True) -> tuple[int, int, int, str | None]:
+    """Run one shadow tick. Returns (novel_count, total_scanned, engines_ok,
+    last_novel_observed_at).
 
     Fetches fresh OHLCV, runs operational scans inside a stdout-silenced block
     (the engine prints verbosely), appends any novel trades to the JSONL, and
     updates `seen_keys` in place. When `notify=False` (first tick priming the
-    dedup set), skips Telegram pings — o historico nao e sinal vivo.
+    dedup set), skips Telegram pings and marks records with `primed=True` so
+    the cockpit nao confunde "sinal detectado pelo shadow" com "trade no
+    universo backtest 180d".
     """
     # Import inside the tick so config reloads pick up changes between ticks
     # if someone edits params.py while the loop runs.
@@ -306,22 +461,28 @@ def _run_tick(seen_keys: set, notify: bool = True) -> tuple[int, int, int]:
 
     engines_ok = sum(1 for trades in engine_trades.values() if trades)
     novel = 0
+    last_novel_at: str | None = None
+    # Primed records = populacao inicial do dedup set (notify=False). Novel
+    # records = detectados AO VIVO (notify=True) — esses contam pra LAST SIG
+    # e disparam Telegram.
+    primed_flag = not notify
     for t in all_trades:
         key = _trade_key(t)
         if key in seen_keys:
             continue
         seen_keys.add(key)
-        # Tag the record with shadow provenance so post-hoc tools know this
-        # came from the rolling scanner, not a completed backtest.
         record = dict(t)
         record["shadow_run_id"] = RUN_ID
-        record["shadow_observed_at"] = datetime.now(timezone.utc).isoformat()
+        observed_at = datetime.now(timezone.utc).isoformat()
+        record["shadow_observed_at"] = observed_at
+        record["primed"] = primed_flag
         _append_trade(record)
         _append_per_engine(record)
         novel += 1
         if notify:
+            last_novel_at = observed_at
             _tg_signal(record)
-    return novel, len(all_trades), engines_ok
+    return novel, len(all_trades), engines_ok, last_novel_at
 
 
 def run_shadow(tick_sec: int, run_hours: float) -> int:
@@ -331,6 +492,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     ticks_ok = 0
     ticks_fail = 0
     novel_total = 0
+    novel_since_prime = 0           # sinais detectados AO VIVO (pos-prime)
+    last_novel_at: str | None = None  # timestamp do ultimo novel observado
     first_tick = True
     stop_requested = {"flag": False, "reason": ""}
 
@@ -361,6 +524,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         "ticks_ok": 0,
         "ticks_fail": 0,
         "novel_total": 0,
+        "novel_since_prime": 0,
+        "last_novel_at": None,
         "last_tick_at": None,
         "last_error": None,
     })
@@ -380,13 +545,20 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
             break
 
         try:
-            novel, scanned, engines_ok = _run_tick(seen_keys, notify=not first_tick)
+            novel, scanned, engines_ok, tick_last_novel = _run_tick(
+                seen_keys, notify=not first_tick)
+            was_first = first_tick
             first_tick = False
             ticks_ok += 1
             novel_total += novel
+            if not was_first:
+                novel_since_prime += novel
+            if tick_last_novel is not None:
+                last_novel_at = tick_last_novel
             log.info(
-                "TICK ok=%d novel=%d scanned=%d engines_ok=%d seen=%d",
+                "TICK ok=%d novel=%d scanned=%d engines_ok=%d seen=%d primed=%s",
                 ticks_ok, novel, scanned, engines_ok, len(seen_keys),
+                "yes" if was_first else "no",
             )
             _write_heartbeat({
                 "run_id": RUN_ID,
@@ -397,6 +569,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 "ticks_ok": ticks_ok,
                 "ticks_fail": ticks_fail,
                 "novel_total": novel_total,
+                "novel_since_prime": novel_since_prime,
+                "last_novel_at": last_novel_at,
                 "last_tick_at": datetime.now(timezone.utc).isoformat(),
                 "last_error": None,
             })
@@ -420,6 +594,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 "ticks_ok": ticks_ok,
                 "ticks_fail": ticks_fail,
                 "novel_total": novel_total,
+                "novel_since_prime": novel_since_prime,
+                "last_novel_at": last_novel_at,
                 "last_tick_at": datetime.now(timezone.utc).isoformat(),
                 "last_error": err,
             })
@@ -435,18 +611,32 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
             time.sleep(chunk)
             sliced += chunk
 
+    stopped_at_str = datetime.now(timezone.utc).isoformat()
     _write_heartbeat({
         "run_id": RUN_ID,
         "status": "stopped",
         "stopped_reason": stop_requested["reason"] or "deadline",
         "started_at": RUN_TS.isoformat(),
-        "stopped_at": datetime.now(timezone.utc).isoformat(),
+        "stopped_at": stopped_at_str,
         "tick_sec": tick_sec,
         "run_hours": run_hours,
         "ticks_ok": ticks_ok,
         "ticks_fail": ticks_fail,
         "novel_total": novel_total,
+        "novel_since_prime": novel_since_prime,
+        "last_novel_at": last_novel_at,
     })
+    # Backtest-style metrics: ler todos os records do JSONL, filtrar primed
+    # (universo historico), computar Sharpe/Sortino/WR/PF/MaxDD/ROI sobre
+    # os novel_since_prime e escrever em reports/summary.json.
+    _write_run_summary(
+        ticks_ok=ticks_ok,
+        ticks_fail=ticks_fail,
+        novel_total=novel_total,
+        novel_since_prime=novel_since_prime,
+        stopped_reason=stop_requested["reason"] or "deadline",
+        stopped_at=stopped_at_str,
+    )
     _write_per_engine_summaries(
         ticks_ok=ticks_ok,
         ticks_fail=ticks_fail,

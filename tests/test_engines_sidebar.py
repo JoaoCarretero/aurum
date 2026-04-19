@@ -146,3 +146,41 @@ def test_build_engine_rows_active_engine_without_counts():
     assert rows[0].active is True
     assert rows[0].ticks is None
     assert rows[0].signals is None
+
+
+def test_last_sig_age_prefers_heartbeat_last_novel():
+    """LAST SIG deve usar heartbeat.last_novel_at (detectado AO VIVO)
+    em vez do ultimo trade (que pode ser primed do universo)."""
+    from datetime import datetime, timezone, timedelta
+    from launcher_support.engines_sidebar import _last_sig_age
+    # heartbeat diz: 2 min atras
+    novel_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    hb = {"last_novel_at": novel_at}
+    trades = [{
+        "primed": True,
+        "shadow_observed_at": "2020-01-01T00:00:00+00:00",  # velho
+    }]
+    text, color = _last_sig_age(trades, hb)
+    assert text.endswith("m"), f"expected ending 'm', got {text}"
+    assert color  # nao vazio
+
+
+def test_last_sig_age_filters_primed_when_hb_missing():
+    """Se heartbeat nao tem last_novel_at (runner antigo), filtra
+    primed records e usa ultimo nao-primed."""
+    from datetime import datetime, timezone, timedelta
+    from launcher_support.engines_sidebar import _last_sig_age
+    non_primed_ts = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    trades = [
+        {"primed": True, "shadow_observed_at": "2020-01-01T00:00:00+00:00"},
+        {"primed": False, "shadow_observed_at": non_primed_ts},
+    ]
+    text, color = _last_sig_age(trades, heartbeat=None)
+    # 30min deve aparecer como "30m" e cor GREEN (<1h)
+    assert "30m" in text or "29m" in text
+
+
+def test_last_sig_age_empty_returns_dash():
+    from launcher_support.engines_sidebar import _last_sig_age
+    text, color = _last_sig_age([], None)
+    assert text == "—"

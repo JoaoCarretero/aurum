@@ -1801,15 +1801,65 @@ def _render_shadow_empty_state(parent, launcher, state):
     tk.Label(box,
              text=("Shadow roda estrategias no VPS em modo observacional:\n"
                    "simula trades sem executar, mede edge real em OHLCV vivo.\n\n"
-                   "Nenhum shadow runner detectado. Pra iniciar um:\n"
-                   "  1. SSH no VPS\n"
-                   "  2. sudo systemctl start millennium_shadow.service\n"
-                   "  3. Volta aqui — aparece automatico em 5s"),
+                   "Nao ha runner ativo. Use o botao abaixo pra iniciar o\n"
+                   "millennium_shadow.service via cockpit API (admin-scoped)."),
              fg=DIM, bg=BG, font=(FONT, 7), justify="left",
-             anchor="w").pack(anchor="w")
-    # Re-tenta em 5s — quando o runner subir o master_list ja vai filtrar
-    # pra incluir o slug e proximo render cai no caminho com cache.
+             anchor="w").pack(anchor="w", pady=(0, 12))
+    # START SHADOW button — chama POST /v1/shadow/start no VPS.
+    start_btn = tk.Label(box, text="  START SHADOW  ", fg=BG, bg=GREEN,
+                         font=(FONT, 8, "bold"), cursor="hand2",
+                         padx=12, pady=6)
+    start_btn.pack(anchor="w")
+    start_btn.bind("<Button-1>",
+                   lambda _e: _start_shadow_via_cockpit(launcher, state))
     _schedule_shadow_refresh(launcher, state)
+
+
+def _start_shadow_via_cockpit(launcher, state) -> None:
+    """POST /v1/shadow/start (admin token) + feedback inline no cockpit."""
+    client = _get_cockpit_client()
+    if client is None:
+        _toast(launcher,
+               "cockpit_api nao configurado em config/keys.json — nao da pra start remoto",
+               error=True)
+        return
+    if not client.cfg.admin_token:
+        _toast(launcher,
+               "admin_token ausente em cockpit_api config — apenas read disponivel",
+               error=True)
+        return
+    try:
+        # CockpitClient._post handle circuit breaker + HTTP; retorna dict.
+        result = client._post("/v1/shadow/start", admin=True)
+    except Exception as exc:  # noqa: BLE001
+        _toast(launcher, f"start failed: {exc}", error=True)
+        return
+    status = result.get("status") if isinstance(result, dict) else None
+    if status == "started":
+        _toast(launcher, "shadow started — aparece em 5-15s")
+        _schedule_shadow_refresh(launcher, state)
+    else:
+        _toast(launcher, f"start retornou: {result}", error=True)
+
+
+def _toast(launcher, msg: str, error: bool = False) -> None:
+    """Feedback transient: label flutuante que some em 4s. Evita popup modal."""
+    try:
+        color = RED if error else GREEN
+        top = tk.Toplevel(launcher)
+        top.overrideredirect(True)
+        top.configure(bg=PANEL)
+        top.attributes("-topmost", True)
+        tk.Label(top, text=f"  {msg}  ", fg=BG, bg=color,
+                 font=(FONT, 8, "bold"), padx=12, pady=6).pack()
+        # Posiciona perto do centro-topo da janela principal
+        launcher.update_idletasks()
+        x = launcher.winfo_rootx() + launcher.winfo_width() // 2 - 150
+        y = launcher.winfo_rooty() + 80
+        top.geometry(f"+{x}+{y}")
+        top.after(4000, top.destroy)
+    except Exception:
+        pass
 
 
 def _render_detail_ready(parent, slug, meta, state, launcher):
