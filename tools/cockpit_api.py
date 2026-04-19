@@ -390,6 +390,48 @@ def build_app() -> FastAPI:
         return {"status": "started", "service": f"{service}.service",
                 "stdout": proc.stdout.strip()[:400]}
 
+    @app.post("/v1/systemctl/{action}")
+    def systemctl_action(action: str, request: Request,
+                         service: str = "millennium_shadow"):
+        """Admin-scoped: dispara systemctl <action> <service>.service.
+        Whitelist rígida pra action e service — sem shell injection. Permite
+        ao operador parar/restartar/ver status de services VPS pelo cockpit
+        sem SSH. Complementa /v1/shadow/start (que só startava)."""
+        _check_auth(request, admin=True)
+        ALLOWED_ACTIONS = {"start", "stop", "restart", "status", "is-active"}
+        ALLOWED_SERVICES = {"millennium_shadow", "millennium_paper"}
+        if action not in ALLOWED_ACTIONS:
+            raise HTTPException(status_code=400,
+                                detail=f"action must be one of {sorted(ALLOWED_ACTIONS)}")
+        if service not in ALLOWED_SERVICES:
+            raise HTTPException(status_code=400,
+                                detail=f"service must be one of {sorted(ALLOWED_SERVICES)}")
+        import subprocess
+        try:
+            proc = subprocess.run(
+                ["systemctl", action, f"{service}.service"],
+                capture_output=True, text=True, timeout=20,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="systemctl not available")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504,
+                                detail=f"systemctl {action} timed out")
+        # status/is-active retornam codigos non-zero em estados "inactive" —
+        # nao sao erros, apenas reportam o estado. Passar stdout tal qual.
+        is_query = action in ("status", "is-active")
+        if proc.returncode != 0 and not is_query:
+            raise HTTPException(
+                status_code=500,
+                detail=f"systemctl {action} exit {proc.returncode}: {proc.stderr.strip()[:300]}")
+        return {
+            "action": action,
+            "service": f"{service}.service",
+            "returncode": proc.returncode,
+            "stdout": proc.stdout.strip()[:800],
+            "stderr": proc.stderr.strip()[:400] if proc.returncode != 0 else "",
+        }
+
     return app
 
 

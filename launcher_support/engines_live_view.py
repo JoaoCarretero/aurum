@@ -876,6 +876,8 @@ def _render_detail(state, launcher):
 
     # SHADOW mode: path dedicado (telemetria do VPS cockpit API).
     if mode == "shadow":
+        # VPS engines control panel no topo — start/stop/restart unified
+        _render_vps_control_bar(detail_inner, launcher, state)
         if not slug:
             _render_shadow_empty_state(detail_inner, launcher, state)
             return
@@ -889,6 +891,7 @@ def _render_detail(state, launcher):
 
     # PAPER mode: pod sim tracking equity + positions via cockpit API.
     if mode == "paper":
+        _render_vps_control_bar(detail_inner, launcher, state)
         if not slug:
             _render_paper_empty_state(detail_inner, launcher, state)
             return
@@ -1328,6 +1331,14 @@ def _drop_shadow_kill(run_dir: Path, launcher, state) -> None:
                 text=f"SHADOW KILL dispatched ({run_id})", fg=AMBER)
         except Exception:
             pass
+        # Trigger cache invalidation + re-render em 3s (da tempo pro runner
+        # processar o .kill e systemd marcar stopped). Evita UI mostrar dados
+        # stale de "running 625 signals" apos user ja ter parado.
+        try:
+            launcher.after(3000,
+                           lambda: _force_refresh_shadow(launcher, state))
+        except Exception:
+            pass
         refresh = state.get("refresh")
         if callable(refresh):
             try:
@@ -1600,25 +1611,41 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
         on_close_detail=_on_close_detail,
     )
 
-    # Actions row — RUNNING shows STOP, else shows START
+    # Actions row — SEMPRE mostra STOP + START + REFRESH. User quer controle
+    # total via terminal: parar, startar nova run, forçar refresh do cache.
     actions = tk.Frame(detail_frame, bg=PANEL)
-    actions.pack(fill="x", padx=12, pady=(4, 10))
+    actions.pack(fill="x", padx=8, pady=(4, 10))
     if status == "RUNNING" and run_dir is not None:
         kill_btn = tk.Label(actions, text=" STOP SHADOW ",
                             fg=BG, bg=RED, font=(FONT, 7, "bold"),
-                            cursor="hand2", padx=10, pady=4)
+                            cursor="hand2", padx=8, pady=3)
         kill_btn.pack(side="left")
         kill_btn.bind("<Button-1>",
                       lambda _e, _d=run_dir, _s=state:
                           _drop_shadow_kill(_d, launcher, _s))
+        # Restart: stop current + start new (no delay, systemd vai overlap
+        # mas cockpit API whitelist vai recusar start if already running)
+        restart_btn = tk.Label(actions, text=" RESTART ",
+                               fg=BG, bg=AMBER, font=(FONT, 7, "bold"),
+                               cursor="hand2", padx=8, pady=3)
+        restart_btn.pack(side="left", padx=(6, 0))
+        restart_btn.bind("<Button-1>",
+                         lambda _e: _restart_shadow_via_cockpit(
+                             launcher, state, run_dir))
     else:
-        # Stopped or unknown: offer START on VPS
         start_btn = tk.Label(actions, text=" START SHADOW ON VPS ",
                              fg=BG, bg=GREEN, font=(FONT, 7, "bold"),
-                             cursor="hand2", padx=10, pady=4)
+                             cursor="hand2", padx=8, pady=3)
         start_btn.pack(side="left")
         start_btn.bind("<Button-1>",
                        lambda _e: _start_shadow_via_cockpit(launcher, state))
+    # REFRESH: force re-fetch do cockpit (limpa cache local stale)
+    refresh_btn = tk.Label(actions, text=" REFRESH ",
+                           fg=WHITE, bg=BG3, font=(FONT, 7, "bold"),
+                           cursor="hand2", padx=8, pady=3)
+    refresh_btn.pack(side="left", padx=(6, 0))
+    refresh_btn.bind("<Button-1>",
+                     lambda _e: _force_refresh_shadow(launcher, state))
 
     # Cada render completa (scheduled OU click-triggered) atualiza o sig
     # pra que o proximo ciclo de refresh compare corretamente.
@@ -2115,6 +2142,182 @@ def _refresh_paper_detail(launcher, state) -> None:
     except Exception:
         return
     _render_detail(state, launcher)
+
+
+def _render_vps_control_bar(parent, launcher, state) -> None:
+    """Compact bar showing VPS services + start/stop/restart buttons.
+    Visible at top of shadow/paper modes. Queries /v1/systemctl/is-active
+    for each service OR reads /v1/runs to infer state cheaply."""
+    bar = tk.Frame(parent, bg=BG2, highlightbackground=BORDER,
+                   highlightthickness=1)
+    bar.pack(fill="x", padx=0, pady=(0, 6))
+
+    # Header
+    hdr = tk.Frame(bar, bg=BG2)
+    hdr.pack(fill="x", padx=8, pady=(4, 2))
+    tk.Label(hdr, text="VPS ENGINES", fg=AMBER, bg=BG2,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tun_text, tun_fg = _get_tunnel_status_label()
+    tk.Label(hdr, text=f"  TUNNEL {tun_text}", fg=tun_fg, bg=BG2,
+             font=(FONT, 6, "bold")).pack(side="left")
+
+    # Infer service state from /v1/runs (cheaper than systemctl is-active)
+    services_state = {"millennium_shadow": "unknown",
+                      "millennium_paper": "unknown"}
+    client = _get_cockpit_client()
+    if client is not None:
+        try:
+            runs = client._get("/v1/runs")
+            if isinstance(runs, list):
+                for r in runs:
+                    mode = r.get("mode")
+                    status = r.get("status")
+                    svc = f"millennium_{mode}" if mode in ("shadow", "paper") else None
+                    if svc and status == "running":
+                        services_state[svc] = "running"
+                # If no running found, mark as stopped
+                for svc in list(services_state):
+                    if services_state[svc] == "unknown":
+                        services_state[svc] = "stopped"
+        except Exception:
+            pass
+
+    # One row per service
+    for svc, svc_state in services_state.items():
+        nice_name = svc.replace("millennium_", "MILLENNIUM ").upper()
+        row = tk.Frame(bar, bg=BG2)
+        row.pack(fill="x", padx=8, pady=1)
+        # Status dot
+        dot_color = GREEN if svc_state == "running" else (
+            DIM2 if svc_state == "stopped" else AMBER)
+        tk.Label(row, text="●", fg=dot_color, bg=BG2,
+                 font=(FONT, 8)).pack(side="left", padx=(0, 4))
+        # Name
+        tk.Label(row, text=nice_name, fg=WHITE, bg=BG2,
+                 font=(FONT, 7, "bold"), width=18,
+                 anchor="w").pack(side="left")
+        # State
+        state_text = svc_state.upper()
+        state_color = GREEN if svc_state == "running" else (
+            DIM if svc_state == "stopped" else AMBER)
+        tk.Label(row, text=state_text, fg=state_color, bg=BG2,
+                 font=(FONT, 7, "bold"), width=9,
+                 anchor="w").pack(side="left")
+        # Action buttons (compact)
+        is_running = svc_state == "running"
+
+        def _make_action(_svc, _action):
+            return lambda _e: _systemctl_via_cockpit(
+                launcher, state, _svc, _action)
+
+        if is_running:
+            for label, color, action in [
+                ("STOP", RED, "stop"),
+                ("RESTART", AMBER, "restart"),
+            ]:
+                b = tk.Label(row, text=f" {label} ", fg=BG, bg=color,
+                             font=(FONT, 6, "bold"), cursor="hand2",
+                             padx=4, pady=1)
+                b.pack(side="left", padx=(4, 0))
+                b.bind("<Button-1>", _make_action(svc, action))
+        else:
+            b = tk.Label(row, text=" START ", fg=BG, bg=GREEN,
+                         font=(FONT, 6, "bold"), cursor="hand2",
+                         padx=4, pady=1)
+            b.pack(side="left", padx=(4, 0))
+            b.bind("<Button-1>", _make_action(svc, "start"))
+
+
+def _systemctl_via_cockpit(launcher, state, service: str, action: str) -> None:
+    """Dispara systemctl <action> <service> via /v1/systemctl/<action>.
+    Whitelist do backend rejeita anything fora de ALLOWED_ACTIONS/SERVICES."""
+    client = _get_cockpit_client()
+    if client is None or not getattr(client.cfg, "admin_token", None):
+        _toast(launcher, "admin_token ausente em keys.json", error=True)
+        return
+    try:
+        result = client._post(
+            f"/v1/systemctl/{action}?service={service}", admin=True)
+    except Exception as exc:
+        _toast(launcher, f"{service} {action} falhou: {exc}", error=True)
+        return
+    rc = result.get("returncode", -1) if isinstance(result, dict) else -1
+    if rc == 0:
+        _toast(launcher, f"{service} {action} OK — aparece em 5-15s")
+    else:
+        stderr = result.get("stderr", "") if isinstance(result, dict) else ""
+        _toast(launcher, f"{service} {action} rc={rc}: {stderr[:80]}",
+               error=True)
+    # Clear cache so next render shows fresh state
+    try:
+        launcher.after(2500,
+                       lambda: _force_refresh_shadow(launcher, state))
+    except Exception:
+        pass
+
+
+def _restart_shadow_via_cockpit(launcher, state, run_dir) -> None:
+    """Stop current shadow run + start new one. Espera ~5s entre as duas
+    acoes pra systemd processar o stop antes do start."""
+    client = _get_cockpit_client()
+    if client is None or not getattr(client.cfg, "admin_token", None):
+        _toast(launcher, "admin_token ausente — RESTART indisponivel",
+               error=True)
+        return
+    # Drop kill flag first
+    if _is_remote_run(run_dir):
+        run_id = _remote_run_id(run_dir)
+        try:
+            client.drop_kill(run_id)
+        except Exception as exc:
+            _toast(launcher, f"RESTART stop failed: {exc}", error=True)
+            return
+        _toast(launcher, f"RESTART: stopping {run_id}, new run em ~10s...")
+        # Schedule the start after 10s (tick grace)
+        try:
+            launcher.after(10_000, lambda: _start_shadow_via_cockpit(
+                launcher, state))
+        except Exception:
+            _start_shadow_via_cockpit(launcher, state)
+    else:
+        _toast(launcher, "RESTART local run: use STOP + manual start",
+               error=True)
+
+
+def _force_refresh_shadow(launcher, state) -> None:
+    """Clear stale poller cache + trigger immediate re-fetch from VPS.
+    Use quando heartbeat parece stale (UI mostra dados antigos apesar
+    do VPS ter mudado)."""
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        poller = None
+    if poller is not None:
+        # Tenta metodos conhecidos pra invalidar cache. Poller pode ter
+        # set_cache/invalidate/clear_cache segundo implementacao.
+        for method_name in ("invalidate_cache", "clear_cache", "force_refresh"):
+            fn = getattr(poller, method_name, None)
+            if callable(fn):
+                try:
+                    fn()
+                    break
+                except Exception:
+                    pass
+    # Also clear local cache files
+    try:
+        from pathlib import Path as _Path
+        cache_dir = _Path("data/.cockpit_cache")
+        for f in cache_dir.glob("heartbeat_*.json"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
+    _toast(launcher, "cache limpo — re-fetching...")
+    # Trigger render immediately
+    _refresh_shadow_detail(launcher, state)
 
 
 def _start_shadow_via_cockpit(launcher, state) -> None:

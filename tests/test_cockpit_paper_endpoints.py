@@ -173,3 +173,23 @@ def test_shadow_start_rejects_unknown_service(client, tmp_path):
     r = client.post("/v1/shadow/start?service=evil",
                     headers={"Authorization": "Bearer ADMIN456"})
     assert r.status_code == 400
+
+
+def test_systemctl_action_rejects_unknown_action(client):
+    r = client.post("/v1/systemctl/rm_rf?service=millennium_shadow",
+                    headers={"Authorization": "Bearer ADMIN456"})
+    assert r.status_code == 400
+    assert "action must be one of" in r.json()["error"]
+
+
+def test_systemctl_action_rejects_unknown_service(client):
+    r = client.post("/v1/systemctl/start?service=sshd",
+                    headers={"Authorization": "Bearer ADMIN456"})
+    assert r.status_code == 400
+    assert "service must be one of" in r.json()["error"]
+
+
+def test_systemctl_action_requires_admin(client):
+    r = client.post("/v1/systemctl/stop?service=millennium_shadow",
+                    headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 403
