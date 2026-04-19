@@ -1,0 +1,35 @@
+[Unit]
+Description=AURUM · MILLENNIUM paper runner (pod sim, tracks equity + positions)
+Documentation=https://github.com/joao/aurum.finance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change these two for your VPS layout:
+User=aurum
+WorkingDirectory=/srv/aurum.finance
+
+EnvironmentFile=-/etc/aurum/paper.env
+Environment=PYTHONUNBUFFERED=1
+# Defaults if /etc/aurum/paper.env absent: 10k account, 15min tick, no deadline.
+ExecStart=/usr/bin/python3 tools/operations/millennium_paper.py --account-size ${AURUM_PAPER_ACCOUNT_SIZE} --tick-sec 900 --run-hours 0
+
+MemoryMax=1G
+CPUQuota=150%
+
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=120
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/aurum.finance/data
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aurum-paper
+
+[Install]
+WantedBy=multi-user.target
