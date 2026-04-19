@@ -8445,11 +8445,28 @@ class App(tk.Tk):
                      anchor="w").pack(fill="x")
             procs = []
 
-        # Fallback: if no live/tracked procs, surface recent run_dirs on disk
-        # so user sees historical runs (backtests, batteries, shadow/paper).
-        # Sourcing from data/<engine>/<run_id>/ with heartbeat.json or
-        # reports/summary.json — last 48h window.
-        if not procs:
+        # VPS runs via cockpit API — shadow/paper que vivem no servidor.
+        # Aparecem AO LADO dos local procs, com marker 'VPS' no pid.
+        vps_rows = self._eng_scan_vps_runs(limit=10)
+
+        if procs:
+            # Live local procs first
+            for p in procs:
+                self._eng_render_row(p)
+
+        if vps_rows:
+            if procs:
+                tk.Frame(self._eng_list_wrap, bg=DIM2,
+                         height=1).pack(fill="x", pady=(6, 4), padx=8)
+            tk.Label(self._eng_list_wrap,
+                     text="  — VPS runs (via cockpit API) —",
+                     font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
+                     anchor="w").pack(fill="x", pady=(2, 2))
+            for v in vps_rows:
+                self._eng_render_row(v)
+
+        # Fallback local: if nothing live/VPS, surface historical disk runs
+        if not procs and not vps_rows:
             historical = self._eng_scan_historical_runs(limit=15, hours=48)
             if historical:
                 tk.Label(self._eng_list_wrap,
@@ -8460,12 +8477,9 @@ class App(tk.Tk):
                     self._eng_render_row(h)
             else:
                 tk.Label(self._eng_list_wrap,
-                         text="  — no tracked engines and no recent runs on disk —",
+                         text="  — no tracked engines and no recent runs —",
                          font=(FONT, 7), fg=DIM, bg=BG,
                          anchor="w").pack(fill="x", pady=8)
-        else:
-            for p in procs:
-                self._eng_render_row(p)
 
         # Reschedule
         try:
@@ -8477,6 +8491,49 @@ class App(tk.Tk):
             self._eng_after_id = self.after(2000, self._eng_refresh)
         except Exception:
             pass
+
+    def _eng_scan_vps_runs(self, limit: int = 10) -> list[dict]:
+        """Query cockpit API /v1/runs and produce pseudo-proc rows for VPS
+        shadow/paper runs. Makes VPS runs visible in ENGINE LOGS screen same
+        way local spawns are — so user can audit 'what's running/ran' without
+        leaving the launcher.
+
+        Silent fail on any error (tunnel down, cockpit unreachable): returns
+        empty. Caller falls back to local-only scan.
+        """
+        try:
+            from launcher_support.engines_live_view import _get_cockpit_client
+            client = _get_cockpit_client()
+        except Exception:
+            return []
+        if client is None:
+            return []
+        try:
+            runs = client._get("/v1/runs")
+        except Exception:
+            return []
+        if not isinstance(runs, list):
+            return []
+        rows: list[dict] = []
+        for r in runs[:limit]:
+            engine_name = str(r.get("engine") or "?").upper()
+            mode = str(r.get("mode") or "?")
+            label = f"{engine_name} ({mode})"
+            status = str(r.get("status") or "unknown").lower()
+            alive = status == "running"
+            started = r.get("started_at") or r.get("last_tick_at") or ""
+            started_str = str(started)[:16].replace("T", " ") if started else ""
+            rows.append({
+                "engine": label,
+                "pid": "VPS" if alive else "-",
+                "started": started_str,
+                "alive": alive,
+                "log": f"remote:{r.get('run_id')}",
+                "run_dir": f"remote://{r.get('run_id')}",
+                "_remote": True,
+                "_run_id": r.get("run_id"),
+            })
+        return rows
 
     def _eng_scan_historical_runs(self, *, limit: int = 15,
                                    hours: int = 48) -> list[dict]:
