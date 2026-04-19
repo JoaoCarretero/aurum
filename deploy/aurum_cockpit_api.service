@@ -1,5 +1,5 @@
 [Unit]
-Description=AURUM · Cockpit API (read-only telemetry for shadow/paper/live runners)
+Description=AURUM Cockpit API (read-only telemetry for shadow/paper/live runners)
 Documentation=file:///srv/aurum.finance/docs/superpowers/specs/2026-04-18-cockpit-api-fase1a-design.md
 After=network-online.target
 Wants=network-online.target
@@ -8,8 +8,10 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=root
+User=aurum
+Group=aurum
 WorkingDirectory=/srv/aurum.finance
+UMask=0077
 
 Environment=PYTHONUNBUFFERED=1
 Environment=AURUM_COCKPIT_DATA_ROOT=/srv/aurum.finance/data
@@ -27,13 +29,27 @@ MemoryMax=512M
 CPUQuota=100%
 
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
 ProtectSystem=strict
 ReadOnlyPaths=/srv/aurum.finance
 ReadWritePaths=/srv/aurum.finance/data
-PrivateTmp=yes
-ProtectHome=yes
-PrivateDevices=yes
 RestrictAddressFamilies=AF_INET AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
 
 StandardOutput=journal
 StandardError=journal

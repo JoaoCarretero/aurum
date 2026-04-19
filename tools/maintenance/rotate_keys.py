@@ -34,7 +34,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 
 
 _VALID_MODES = ("demo", "testnet", "live")

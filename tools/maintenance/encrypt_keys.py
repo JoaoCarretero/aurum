@@ -47,7 +47,7 @@ def main() -> int:
         return 1
 
     try:
-        from core.key_store import KeyStore, KeyStoreUnavailableError
+        from core.risk.key_store import KeyStore, KeyStoreUnavailableError
     except ImportError as e:
         print(f"  ! cannot import KeyStore: {e}")
         return 3

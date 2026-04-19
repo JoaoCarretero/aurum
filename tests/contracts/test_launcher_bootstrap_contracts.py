@@ -1,6 +1,28 @@
+import json
+
 import pytest
 
 from launcher_support import bootstrap
+
+
+def _make_vps_fixture(tmp_path, *, host, port="2222", user=None, remote_dir="/srv/aurum"):
+    """Cria keyfile real + vps.json em tmp_path. Retorna (vps_json_path, key_path_str).
+
+    Necessario porque `_validate_key_path` exige que o arquivo exista no disco.
+    """
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("dummy-key", encoding="utf-8")
+    payload = {
+        "host": host,
+        "port": port,
+        "key_path": str(key_file),
+        "remote_dir": remote_dir,
+    }
+    if user is not None:
+        payload["user"] = user
+    vps_path = tmp_path / "vps.json"
+    vps_path.write_text(json.dumps(payload), encoding="utf-8")
+    return vps_path, str(key_file)
 
 
 def test_load_vps_config_uses_defaults_when_missing(tmp_path, monkeypatch):
@@ -13,27 +35,19 @@ def test_load_vps_config_uses_defaults_when_missing(tmp_path, monkeypatch):
 
 
 def test_load_vps_config_reads_frontend_backend_shared_file(tmp_path, monkeypatch):
-    path = tmp_path / "vps.json"
-    path.write_text(
-        '{"host":"10.0.0.9","port":"2222","user":"aurum","key_path":"C:/keys/id_ed25519","remote_dir":"/srv/aurum"}',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", path)
+    vps_path, key_path_str = _make_vps_fixture(tmp_path, host="10.0.0.9", user="aurum")
+    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", vps_path)
     monkeypatch.setattr(bootstrap, "_VPS_CFG_CACHE", {"mtime": None, "value": None})
     cfg = bootstrap.load_vps_config()
     assert cfg["host_display"] == "aurum@10.0.0.9"
     assert cfg["port"] == "2222"
-    assert cfg["key_path"] == "C:/keys/id_ed25519"
+    assert cfg["key_path"] == key_path_str
     assert cfg["remote_dir"] == "/srv/aurum"
 
 
 def test_load_vps_config_normalizes_legacy_user_at_host(tmp_path, monkeypatch):
-    path = tmp_path / "vps.json"
-    path.write_text(
-        '{"host":"root@10.0.0.9","port":"2222","key_path":"C:/keys/id_ed25519","remote_dir":"/srv/aurum"}',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", path)
+    vps_path, _ = _make_vps_fixture(tmp_path, host="root@10.0.0.9")
+    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", vps_path)
     monkeypatch.setattr(bootstrap, "_VPS_CFG_CACHE", {"mtime": None, "value": None})
     cfg = bootstrap.load_vps_config()
     assert cfg["host"] == "10.0.0.9"
@@ -42,29 +56,22 @@ def test_load_vps_config_normalizes_legacy_user_at_host(tmp_path, monkeypatch):
 
 
 def test_build_vps_ssh_command_honors_port_and_key(tmp_path, monkeypatch):
-    path = tmp_path / "vps.json"
-    path.write_text(
-        '{"host":"10.0.0.9","port":"2222","user":"aurum","key_path":"C:/keys/id_ed25519","remote_dir":"/srv/aurum"}',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", path)
+    vps_path, key_path_str = _make_vps_fixture(tmp_path, host="10.0.0.9", user="aurum")
+    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", vps_path)
     monkeypatch.setattr(bootstrap, "_VPS_CFG_CACHE", {"mtime": None, "value": None})
     cmd = bootstrap.build_vps_ssh_command("echo ok")
-    assert cmd[-2:] == ["aurum@10.0.0.9", "echo ok"]
+    # Hardening: host_display seguido de `bash -lc <cmd>` wrapping.
+    assert cmd[-4:] == ["aurum@10.0.0.9", "bash", "-lc", "echo ok"]
     assert "-p" in cmd and "2222" in cmd
-    assert "-i" in cmd and "C:/keys/id_ed25519" in cmd
+    assert "-i" in cmd and key_path_str in cmd
 
 
 def test_build_vps_ssh_command_accepts_legacy_user_at_host(tmp_path, monkeypatch):
-    path = tmp_path / "vps.json"
-    path.write_text(
-        '{"host":"root@10.0.0.9","port":"2222","key_path":"C:/keys/id_ed25519","remote_dir":"/srv/aurum"}',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", path)
+    vps_path, _ = _make_vps_fixture(tmp_path, host="root@10.0.0.9")
+    monkeypatch.setattr(bootstrap, "VPS_CONFIG_PATH", vps_path)
     monkeypatch.setattr(bootstrap, "_VPS_CFG_CACHE", {"mtime": None, "value": None})
     cmd = bootstrap.build_vps_ssh_command("echo ok")
-    assert cmd[-2:] == ["root@10.0.0.9", "echo ok"]
+    assert cmd[-4:] == ["root@10.0.0.9", "bash", "-lc", "echo ok"]
 
 
 def test_build_vps_ssh_command_requires_explicit_host(tmp_path, monkeypatch):

@@ -12,14 +12,31 @@ from passlib.context import CryptContext
 
 from config.paths import AURUM_JWT_SECRET_PATH
 from api.models import get_conn
-from core.persistence import atomic_write_text
+from core.ops.persistence import atomic_write_text
 
 _INSECURE_DEFAULT_SECRET = "aurum-dev-secret-change-in-production"
+_MIN_SECRET_LENGTH = 32
+
+
+def _is_secure_secret(candidate: str) -> bool:
+    secret = candidate.strip()
+    return bool(secret) and secret != _INSECURE_DEFAULT_SECRET and len(secret) >= _MIN_SECRET_LENGTH
+
+
+def _persist_new_secret() -> tuple[str, str]:
+    generated = secrets.token_urlsafe(48)
+    try:
+        atomic_write_text(AURUM_JWT_SECRET_PATH, generated + "\n")
+    except OSError as exc:
+        raise RuntimeError(
+            f"Unable to persist JWT secret to {AURUM_JWT_SECRET_PATH}; refusing insecure startup"
+        ) from exc
+    return generated, "file-generated"
 
 
 def _load_or_create_secret() -> tuple[str, str]:
     env_secret = (os.environ.get("AURUM_JWT_SECRET") or "").strip()
-    if env_secret and env_secret != _INSECURE_DEFAULT_SECRET:
+    if _is_secure_secret(env_secret):
         return env_secret, "env"
 
     try:
@@ -27,15 +44,10 @@ def _load_or_create_secret() -> tuple[str, str]:
     except OSError:
         persisted = ""
 
-    if persisted and persisted != _INSECURE_DEFAULT_SECRET:
+    if _is_secure_secret(persisted):
         return persisted, "file"
 
-    generated = secrets.token_urlsafe(48)
-    try:
-        atomic_write_text(AURUM_JWT_SECRET_PATH, generated + "\n")
-        return generated, "file"
-    except OSError:
-        return generated, "ephemeral"
+    return _persist_new_secret()
 
 
 SECRET_KEY, SECRET_KEY_SOURCE = _load_or_create_secret()
@@ -128,13 +140,11 @@ def authenticate_websocket(
     *,
     require_admin_role: bool = False,
 ) -> dict:
-    """Authenticate a websocket via bearer header or `?token=` query string."""
+    """Authenticate a websocket via Authorization bearer header only."""
     auth_header = websocket.headers.get("authorization", "")
     token = ""
     if auth_header.lower().startswith("bearer "):
         token = auth_header.split(" ", 1)[1].strip()
-    if not token:
-        token = (websocket.query_params.get("token") or "").strip()
     if not token:
         raise _unauthorized("Missing bearer token")
     if require_admin_role:
