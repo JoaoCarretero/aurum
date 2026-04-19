@@ -335,7 +335,8 @@ def render_detail(
     last_age_text, last_age_color = _last_sig_age(trades, heartbeat)
     _metric_card(health, "LAST SIG", last_age_text, last_age_color)
 
-    # Paper-mode HEALTH extensions (EQUITY, DD, NET)
+    # Paper-mode HEALTH extensions — add EQUITY/DD/NET to SAME health row
+    # (saves ~40px vertical vs separate row; institutional cockpit look)
     if mode == "paper" and account_snapshot is not None:
         eq = float(account_snapshot.get("equity") or 0.0)
         dd_pct = float(account_snapshot.get("drawdown_pct") or 0.0)
@@ -346,125 +347,159 @@ def render_detail(
         eq_color = GREEN if eq >= initial else RED
         dd_color = DIM2 if dd_pct < 2.0 else (AMBER if dd_pct < 5.0 else RED)
         net_color = GREEN if net >= 0 else RED
-        health2 = tk.Frame(frame, bg=PANEL)
-        health2.pack(fill="x", padx=12, pady=(0, 10))
-        _metric_card(health2, "EQUITY", f"${eq:,.0f}", eq_color)
-        _metric_card(health2, "DD", f"-{dd_pct:.2f}%", dd_color)
+        _metric_card_compact(health, "EQUITY", f"${eq:,.0f}", eq_color)
+        _metric_card_compact(health, "DD", f"-{dd_pct:.1f}%", dd_color)
         sign = "+" if net >= 0 else "-"
-        _metric_card(health2, "NET", f"{sign}${abs(net):,.0f}", net_color)
+        _metric_card_compact(health, "NET", f"{sign}${abs(net):,.0f}", net_color)
 
-    # RUN INFO
-    _section_header(frame, "RUN INFO")
-    info = tk.Frame(frame, bg=PANEL)
-    info.pack(fill="x", padx=12, pady=(0, 8))
-    run_id = heartbeat.get("run_id", "—")
-    commit = (manifest or {}).get("commit", "—")
-    branch = (manifest or {}).get("branch", "—")
-    started = heartbeat.get("started_at", "—")
-    _pair_row(info, "run_id", str(run_id), "commit", str(commit))
-    _pair_row(info, "started", str(started)[:19], "branch", str(branch))
+    # RUN INFO — compact single line in paper mode
+    if mode == "paper":
+        run_id = heartbeat.get("run_id", "—")
+        ks = heartbeat.get("ks_state", "NORMAL")
+        info_line = tk.Frame(frame, bg=PANEL)
+        info_line.pack(fill="x", padx=8, pady=(2, 4))
+        tk.Label(info_line,
+                 text=f"run {run_id} · KS {ks}",
+                 fg=DIM, bg=PANEL,
+                 font=(FONT, 7)).pack(side="left")
+    else:
+        _section_header(frame, "RUN INFO")
+        info = tk.Frame(frame, bg=PANEL)
+        info.pack(fill="x", padx=12, pady=(0, 8))
+        run_id = heartbeat.get("run_id", "—")
+        commit = (manifest or {}).get("commit", "—")
+        branch = (manifest or {}).get("branch", "—")
+        started = heartbeat.get("started_at", "—")
+        _pair_row(info, "run_id", str(run_id), "commit", str(commit))
+        _pair_row(info, "started", str(started)[:19], "branch", str(branch))
 
-    # Paper-mode: OPEN POSITIONS table
+    # Paper-mode: OPEN POSITIONS (compact, inline header)
     if mode == "paper" and open_positions is not None:
-        _section_header(frame, f"OPEN POSITIONS  ·  {len(open_positions)}")
+        pos_hdr = tk.Frame(frame, bg=PANEL)
+        pos_hdr.pack(fill="x", padx=8, pady=(4, 2))
+        tk.Label(pos_hdr,
+                 text=f"POSITIONS · {len(open_positions)}",
+                 fg=AMBER, bg=PANEL,
+                 font=(FONT, 7, "bold")).pack(side="left")
         if not open_positions:
-            tk.Label(frame, text="(sem posições abertas)",
-                     fg=DIM, bg=PANEL,
-                     font=(FONT, 8, "italic")).pack(padx=12, pady=(0, 8),
-                                                    anchor="w")
+            tk.Label(pos_hdr, text="  (none)", fg=DIM2, bg=PANEL,
+                     font=(FONT, 7, "italic")).pack(side="left")
         else:
             ptbl = tk.Frame(frame, bg=PANEL)
-            ptbl.pack(fill="x", padx=12, pady=(0, 8))
-            hdr_row = tk.Frame(ptbl, bg=PANEL)
+            ptbl.pack(fill="x", padx=8, pady=(0, 6))
+            # Compact header (smaller widths, smaller font)
+            hdr_row = tk.Frame(ptbl, bg=BG2)
             hdr_row.pack(fill="x")
-            for label, w in [("SYM", 10), ("DIR", 5), ("ENTRY", 10),
-                             ("NOTIONAL", 12), ("U_PNL", 10), ("BARS", 5)]:
-                tk.Label(hdr_row, text=label, fg=DIM, bg=PANEL,
-                         font=(FONT, 7, "bold"), width=w,
-                         anchor="w").pack(side="left")
+            for label, w in [("SYM", 8), ("DIR", 4), ("ENTRY", 9),
+                             ("NOT$", 9), ("PNL", 8), ("B", 3)]:
+                tk.Label(hdr_row, text=label, fg=DIM2, bg=BG2,
+                         font=(FONT, 6, "bold"), width=w,
+                         anchor="w").pack(side="left", padx=(2, 0))
+            # Rows (tighter, smaller font)
             for p in open_positions[:8]:
                 row = tk.Frame(ptbl, bg=PANEL)
                 row.pack(fill="x")
                 u = float(p.get("unrealized_pnl") or 0.0)
                 u_color = GREEN if u >= 0 else RED
-                tk.Label(row, text=str(p.get("symbol", "?"))[:10], fg=WHITE,
-                         bg=PANEL, font=(FONT, 8), width=10,
-                         anchor="w").pack(side="left")
-                tk.Label(row, text=str(p.get("direction", "?"))[:5], fg=DIM2,
-                         bg=PANEL, font=(FONT, 8), width=5,
-                         anchor="w").pack(side="left")
+                dir_s = str(p.get("direction", "?"))[:1]  # L/S
+                dir_color = GREEN if dir_s == "L" else RED
+                tk.Label(row, text=str(p.get("symbol", "?"))[:8], fg=WHITE,
+                         bg=PANEL, font=(FONT, 7, "bold"), width=8,
+                         anchor="w").pack(side="left", padx=(2, 0))
+                tk.Label(row, text=dir_s, fg=dir_color,
+                         bg=PANEL, font=(FONT, 7, "bold"), width=4,
+                         anchor="w").pack(side="left", padx=(2, 0))
                 tk.Label(row, text=f"{float(p.get('entry_price') or 0):.4f}",
-                         fg=DIM, bg=PANEL, font=(FONT, 8), width=10,
-                         anchor="w").pack(side="left")
+                         fg=DIM, bg=PANEL, font=(FONT, 7), width=9,
+                         anchor="w").pack(side="left", padx=(2, 0))
                 tk.Label(row, text=f"${float(p.get('notional') or 0):,.0f}",
-                         fg=WHITE, bg=PANEL, font=(FONT, 8), width=12,
-                         anchor="w").pack(side="left")
-                tk.Label(row, text=f"{u:+.2f}", fg=u_color,
-                         bg=PANEL, font=(FONT, 8), width=10,
-                         anchor="w").pack(side="left")
+                         fg=WHITE, bg=PANEL, font=(FONT, 7), width=9,
+                         anchor="w").pack(side="left", padx=(2, 0))
+                tk.Label(row, text=f"{u:+.1f}", fg=u_color,
+                         bg=PANEL, font=(FONT, 7, "bold"), width=8,
+                         anchor="w").pack(side="left", padx=(2, 0))
                 tk.Label(row, text=str(p.get("bars_held", 0)),
-                         fg=DIM, bg=PANEL, font=(FONT, 8), width=5,
-                         anchor="w").pack(side="left")
+                         fg=DIM, bg=PANEL, font=(FONT, 7), width=3,
+                         anchor="w").pack(side="left", padx=(2, 0))
 
-    # Paper-mode: EQUITY CURVE sparkline
-    if mode == "paper" and equity_series:
-        from tools.operations.paper_metrics import sparkline
-        spark = sparkline(equity_series[-200:])
-        _section_header(frame, "EQUITY CURVE")
-        eq_frame = tk.Frame(frame, bg=PANEL)
-        eq_frame.pack(fill="x", padx=12, pady=(0, 8))
-        tk.Label(eq_frame, text=spark, fg=GREEN, bg=PANEL,
-                 font=(FONT, 10)).pack(side="left")
-        lo_v = min(equity_series)
-        hi_v = max(equity_series)
-        tk.Label(eq_frame,
-                 text=f"  low ${lo_v:,.0f} · hi ${hi_v:,.0f}",
-                 fg=DIM, bg=PANEL,
-                 font=(FONT, 7)).pack(side="left", padx=(8, 0))
-
-    # Paper-mode: METRICS cards
+    # Paper-mode: EQUITY + METRICS combined (1 row sparkline + 5 compact cards)
     if mode == "paper" and account_snapshot is not None:
         m = account_snapshot.get("metrics") or {}
-        _section_header(frame, "METRICS")
-        mframe = tk.Frame(frame, bg=PANEL)
-        mframe.pack(fill="x", padx=12, pady=(0, 8))
+        combined = tk.Frame(frame, bg=PANEL)
+        combined.pack(fill="x", padx=8, pady=(4, 4))
+        # Sparkline inline (only if data)
+        if equity_series:
+            from tools.operations.paper_metrics import sparkline
+            spark = sparkline(equity_series[-120:])
+            lo_v = min(equity_series)
+            hi_v = max(equity_series)
+            eq_line = tk.Frame(combined, bg=PANEL)
+            eq_line.pack(fill="x")
+            tk.Label(eq_line, text="EQ", fg=DIM2, bg=PANEL,
+                     font=(FONT, 6, "bold")).pack(side="left")
+            tk.Label(eq_line, text=f" {spark} ", fg=GREEN, bg=PANEL,
+                     font=(FONT, 9)).pack(side="left")
+            tk.Label(eq_line,
+                     text=f"lo ${lo_v:,.0f} · hi ${hi_v:,.0f}",
+                     fg=DIM, bg=PANEL,
+                     font=(FONT, 6)).pack(side="left", padx=(6, 0))
+        # Metrics row — 5 small cards
+        mrow = tk.Frame(combined, bg=PANEL)
+        mrow.pack(fill="x", pady=(3, 0))
         wr = float(m.get("win_rate") or 0) * 100
         pf = float(m.get("profit_factor") or 0)
         sharpe = float(m.get("sharpe") or 0)
         maxdd = float(m.get("maxdd") or 0)
         roi = float(m.get("roi_pct") or 0)
-        _metric_card(mframe, "WR", f"{wr:.0f}%", WHITE)
-        _metric_card(mframe, "PF", f"{pf:.2f}", WHITE)
-        _metric_card(mframe, "SHARPE", f"{sharpe:.2f}", WHITE)
-        _metric_card(mframe, "MAXDD", f"${maxdd:,.0f}", WHITE)
-        _metric_card(mframe, "ROI", f"{roi:+.2f}%",
-                     GREEN if roi >= 0 else RED)
+        _metric_card_compact(mrow, "WR", f"{wr:.0f}%", WHITE)
+        _metric_card_compact(mrow, "PF", f"{pf:.2f}", WHITE)
+        _metric_card_compact(mrow, "SHARPE", f"{sharpe:.2f}", WHITE)
+        _metric_card_compact(mrow, "MAXDD", f"${maxdd:,.0f}", WHITE)
+        _metric_card_compact(mrow, "ROI", f"{roi:+.2f}%",
+                             GREEN if roi >= 0 else RED)
 
     # LAST SIGNALS (ou drill-down inline se selected_trade)
-    if selected_trade is not None:
-        from launcher_support.signal_detail_popup import render_inline
-        _section_header(frame, "TRADE DETAIL  ·  click ✕ to close")
-        close_cb = on_close_detail or (lambda: None)
-        render_inline(frame, selected_trade, close_cb)
-    else:
-        _section_header(frame, "LAST SIGNALS  ·  click row for detail")
-        signals = tk.Frame(frame, bg=PANEL)
-        signals.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        _render_signals_table_rich(signals, trades[-10:][::-1] if trades else [],
-                                   on_row_click=on_row_click)
+    # Paper: skip LAST SIGNALS se nao tem trades — OPEN POSITIONS ja cobre.
+    show_signals = (trades or selected_trade is not None) if mode == "paper" else True
+    if show_signals:
+        if selected_trade is not None:
+            from launcher_support.signal_detail_popup import render_inline
+            _section_header(frame, "TRADE DETAIL  ·  click ✕ to close")
+            close_cb = on_close_detail or (lambda: None)
+            render_inline(frame, selected_trade, close_cb)
+        else:
+            if mode == "paper":
+                sig_hdr = tk.Frame(frame, bg=PANEL)
+                sig_hdr.pack(fill="x", padx=8, pady=(4, 2))
+                tk.Label(sig_hdr, text="LAST SIGNALS", fg=AMBER, bg=PANEL,
+                         font=(FONT, 7, "bold")).pack(side="left")
+            else:
+                _section_header(frame, "LAST SIGNALS  ·  click row for detail")
+            signals = tk.Frame(frame, bg=PANEL)
+            signals.pack(fill="both", expand=True,
+                         padx=8 if mode == "paper" else 12,
+                         pady=(0, 4 if mode == "paper" else 8))
+            limit = 6 if mode == "paper" else 10
+            _render_signals_table_rich(signals,
+                                       trades[-limit:][::-1] if trades else [],
+                                       on_row_click=on_row_click)
 
-    # Paper-mode action buttons (STOP / FORCE FLATTEN)
+    # Paper-mode action buttons (STOP / FORCE FLATTEN) — compact inline
     if mode == "paper" and (on_stop_paper is not None or on_flatten_paper is not None):
         actions = tk.Frame(frame, bg=PANEL)
-        actions.pack(fill="x", padx=12, pady=(6, 12))
+        actions.pack(fill="x", padx=8, pady=(4, 6))
         if on_stop_paper is not None:
-            tk.Button(actions, text="STOP PAPER", bg=RED, fg=WHITE,
-                      font=(FONT, 8, "bold"), borderwidth=0,
-                      command=on_stop_paper).pack(side="left")
+            stop_btn = tk.Label(actions, text=" STOP PAPER ", fg=BG, bg=RED,
+                                font=(FONT, 7, "bold"),
+                                cursor="hand2", padx=8, pady=3)
+            stop_btn.pack(side="left")
+            stop_btn.bind("<Button-1>", lambda _e: on_stop_paper())
         if on_flatten_paper is not None:
-            tk.Button(actions, text="FORCE FLATTEN", bg=AMBER, fg=PANEL,
-                      font=(FONT, 8, "bold"), borderwidth=0,
-                      command=on_flatten_paper).pack(side="left", padx=(8, 0))
+            flat_btn = tk.Label(actions, text=" FLATTEN ALL ",
+                                fg=BG, bg=AMBER, font=(FONT, 7, "bold"),
+                                cursor="hand2", padx=8, pady=3)
+            flat_btn.pack(side="left", padx=(6, 0))
+            flat_btn.bind("<Button-1>", lambda _e: on_flatten_paper())
 
     return frame
 
@@ -485,6 +520,18 @@ def _metric_card(parent, label: str, value: str, color: str) -> None:
              font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(5, 1))
     tk.Label(box, text=str(value), fg=color, bg=BG2,
              font=(FONT, 11, "bold")).pack(anchor="w", padx=8, pady=(0, 6))
+
+
+def _metric_card_compact(parent, label: str, value: str, color: str) -> None:
+    """Compact variant: smaller padding, smaller value font. Designed for
+    paper mode where screen real estate is tight and 5+ metrics share a row."""
+    box = tk.Frame(parent, bg=BG2, highlightbackground=BORDER,
+                   highlightthickness=1)
+    box.pack(side="left", fill="x", expand=True, padx=(0, 3))
+    tk.Label(box, text=label, fg=DIM2, bg=BG2,
+             font=(FONT, 6, "bold")).pack(anchor="w", padx=4, pady=(2, 0))
+    tk.Label(box, text=str(value), fg=color, bg=BG2,
+             font=(FONT, 9, "bold")).pack(anchor="w", padx=4, pady=(0, 2))
 
 
 def _pair_row(parent, k1, v1, k2, v2) -> None:

@@ -73,16 +73,17 @@ def _stage_badge(meta: dict | None) -> tuple[str, str]:
 
 
 def footer_hints(*, selected_bucket: Bucket | None, mode: str) -> tuple[str, str]:
-    hints = ["ESC main", "UP/DOWN list"]
+    hints = ["ESC main", "↑↓ list"]
     if selected_bucket == "LIVE":
-        hints += ["LEFT/RIGHT fleet", "ENTER monitor", "S stop", "L log"]
+        hints += ["←→ fleet", "ENTER monitor", "S stop", "L log"]
     elif selected_bucket == "READY":
-        hints += ["ENTER launch", "M change desk"]
+        hints += ["ENTER launch", "M cycle"]
     elif selected_bucket == "RESEARCH":
-        hints += ["B backtest", "ENTER backtest"]
+        hints += ["B backtest", "ENTER"]
     else:
         hints += ["ENTER select"]
-    hints += ["M cycle mode"]
+    # Quick-jump shortcuts: 1-5 map to _MODE_ORDER
+    hints += ["1=paper 2=demo 3=testnet 4=live 5=shadow"]
     warn = "LIVE MODE - real orders enabled" if mode == "live" else ""
     return ("  ·  ".join(hints), warn)
 
@@ -382,6 +383,13 @@ def render(launcher, parent, *, on_escape) -> dict:
 
     _kb("<KeyPress-m>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
     _kb("<KeyPress-M>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
+    # Direct mode-select by digit: 1=paper 2=demo 3=testnet 4=live 5=shadow
+    # Mirrors _MODE_ORDER so user can teleport between views via keyboard.
+    for idx, mode_name in enumerate(_MODE_ORDER, start=1):
+        if idx > 9:
+            break
+        _kb(f"<KeyPress-{idx}>",
+            lambda _e=None, _m=mode_name: set_mode(_m))
     _kb("<Up>", lambda _e=None: _move_selection(state, -1))
     _kb("<Down>", lambda _e=None: _move_selection(state, 1))
     _kb("<Left>", lambda _e=None: _move_live_selection(state, -1))
@@ -913,45 +921,44 @@ def _render_detail(state, launcher):
 
 
 def _render_detail_research(parent, slug, meta, state, launcher):
+    """Compact research panel: 1 header line + 1 status line + action row.
+    Research engines dont trade — no need for big warning boxes. Keep it tight."""
     name = meta.get("display", slug.upper())
     desc = meta.get("desc", "")
     stage_label, stage_color = _stage_badge(meta)
 
+    # Single-line header: dot · name · stage · RESEARCH badge
     head = tk.Frame(parent, bg=PANEL)
-    head.pack(fill="x", padx=12, pady=(10, 4))
+    head.pack(fill="x", padx=8, pady=(6, 2))
+    tk.Label(head, text="○", fg=DIM2, bg=PANEL,
+             font=(FONT, 10)).pack(side="left", padx=(0, 4))
     tk.Label(head, text=name, fg=AMBER, bg=PANEL,
-             font=(FONT, 11, "bold")).pack(side="left")
-    tk.Label(head, text=f" {stage_label} ",
-             fg=BG, bg=stage_color, font=(FONT, 7, "bold"),
-             padx=6, pady=2).pack(side="right", padx=(0, 6))
-    tk.Label(head, text=" [ RESEARCH ONLY ] ",
-             fg=BG, bg=HAZARD, font=(FONT, 7, "bold"),
-             padx=6, pady=2).pack(side="right")
+             font=(FONT, 10, "bold")).pack(side="left")
+    tk.Label(head, text=f"  {stage_label} ",
+             fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
+             padx=4).pack(side="left", padx=(6, 4))
+    tk.Label(head, text=" RESEARCH ",
+             fg=BG, bg=HAZARD, font=(FONT, 6, "bold"),
+             padx=4).pack(side="left")
 
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=8, pady=(4, 6))
+
+    # Single status line replacing the big warning box
     if desc:
         tk.Label(parent, text=desc, fg=DIM, bg=PANEL,
-                 font=(FONT, 8), anchor="w", justify="left",
-                 wraplength=520).pack(fill="x", padx=12, pady=(0, 8))
+                 font=(FONT, 7), anchor="w", justify="left",
+                 wraplength=520).pack(fill="x", padx=8, pady=(0, 4))
 
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
+    tk.Label(parent, text="sem entrypoint live — valide em backtest",
+             fg=HAZARD, bg=PANEL, font=(FONT, 7, "italic"),
+             anchor="w").pack(fill="x", padx=8, pady=(0, 8))
 
-    note = tk.Frame(parent, bg=PANEL)
-    note.pack(fill="x", padx=12, pady=12)
-    tk.Label(note, text="⚠", fg=HAZARD, bg=PANEL,
-             font=(FONT, 12, "bold")).pack(side="left", padx=(0, 8))
-    tk.Label(
-        note,
-        text=("Essa engine ainda não tem entrypoint live validado.\n"
-              "Rode em backtest: EXECUTE → BACKTEST → " + name),
-        fg=HAZARD, bg=PANEL, font=(FONT, 8),
-        anchor="w", justify="left",
-    ).pack(side="left", fill="x", expand=True)
-
+    # Compact action row
     actions = tk.Frame(parent, bg=PANEL)
-    actions.pack(fill="x", padx=12, pady=(8, 12))
-    _action_btn(actions, "GO TO BACKTEST", AMBER,
+    actions.pack(fill="x", padx=8, pady=(0, 8))
+    _action_btn(actions, "BACKTEST", AMBER,
                 lambda: _go_to_backtest(launcher, slug))
-    _action_btn(actions, "VIEW CODE", DIM,
+    _action_btn(actions, "CODE", DIM,
                 lambda: _view_code(launcher, meta.get("script", "")))
 
 
