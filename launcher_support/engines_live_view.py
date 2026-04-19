@@ -879,6 +879,19 @@ def _render_detail(state, launcher):
         _render_detail_shadow(card, slug, meta, state, launcher)
         return
 
+    # PAPER mode: pod sim tracking equity + positions via cockpit API.
+    if mode == "paper":
+        if not slug:
+            _render_paper_empty_state(detail_inner, launcher, state)
+            return
+        from config.engines import ENGINES
+        meta = ENGINES.get(slug, {})
+        card = tk.Frame(detail_inner, bg=PANEL,
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill="both", expand=True)
+        _render_detail_paper(card, slug, meta, state, launcher)
+        return
+
     if not slug:
         tk.Label(detail_inner, text="(no selection)", fg=DIM, bg=BG,
                  font=(FONT, 8)).pack(pady=20)
@@ -1281,9 +1294,11 @@ def _drop_shadow_kill(run_dir: Path, launcher, state) -> None:
     if _is_remote_run(run_dir):
         client = _get_cockpit_client()
         if client is None or not getattr(client.cfg, "admin_token", None):
+            _toast(launcher, "admin_token ausente em keys.json — STOP indisponivel",
+                   error=True)
             try:
                 launcher.h_stat.configure(
-                    text="SHADOW KILL: admin_token ausente em keys.json",
+                    text="SHADOW KILL: admin_token ausente",
                     fg=RED)
             except Exception:
                 pass
@@ -1292,12 +1307,15 @@ def _drop_shadow_kill(run_dir: Path, launcher, state) -> None:
         try:
             client.drop_kill(run_id)
         except Exception as exc:
+            _toast(launcher, f"STOP falhou: {type(exc).__name__}: {exc}",
+                   error=True)
             try:
                 launcher.h_stat.configure(
                     text=f"SHADOW KILL fail: {type(exc).__name__}", fg=RED)
             except Exception:
                 pass
             return
+        _toast(launcher, f"STOP dispatched → {run_id} · para em <=15s")
         try:
             launcher.h_stat.configure(
                 text=f"SHADOW KILL dispatched ({run_id})", fg=AMBER)
@@ -1530,7 +1548,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
 
     # Detail pane
     if hb is None:
-        _render_shadow_no_run(parent, launcher)
+        _render_shadow_no_run(parent, launcher, state)
         _schedule_shadow_refresh(launcher, state)
         return
 
@@ -1575,10 +1593,10 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
         on_close_detail=_on_close_detail,
     )
 
-    # Actions row — mantem logica de kill do fallback existente
+    # Actions row — RUNNING shows STOP, else shows START
+    actions = tk.Frame(detail_frame, bg=PANEL)
+    actions.pack(fill="x", padx=12, pady=(4, 10))
     if status == "RUNNING" and run_dir is not None:
-        actions = tk.Frame(detail_frame, bg=PANEL)
-        actions.pack(fill="x", padx=12, pady=(4, 10))
         kill_btn = tk.Label(actions, text=" STOP SHADOW ",
                             fg=BG, bg=RED, font=(FONT, 7, "bold"),
                             cursor="hand2", padx=10, pady=4)
@@ -1586,6 +1604,14 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
         kill_btn.bind("<Button-1>",
                       lambda _e, _d=run_dir, _s=state:
                           _drop_shadow_kill(_d, launcher, _s))
+    else:
+        # Stopped or unknown: offer START on VPS
+        start_btn = tk.Label(actions, text=" START SHADOW ON VPS ",
+                             fg=BG, bg=GREEN, font=(FONT, 7, "bold"),
+                             cursor="hand2", padx=10, pady=4)
+        start_btn.pack(side="left")
+        start_btn.bind("<Button-1>",
+                       lambda _e: _start_shadow_via_cockpit(launcher, state))
 
     # Cada render completa (scheduled OU click-triggered) atualiza o sig
     # pra que o proximo ciclo de refresh compare corretamente.
@@ -1762,24 +1788,43 @@ def _render_signals_table(parent, trades):
                  width=12, anchor="w").pack(side="left", padx=(4, 0))
 
 
-def _render_shadow_no_run(parent, launcher):
-    """Empty state: slug selecionado mas sem cache do poller."""
+def _render_shadow_no_run(parent, launcher, state=None):
+    """Empty state: slug selecionado mas sem cache do poller.
+    Inclui START SHADOW button — user pode subir o runner via cockpit API
+    sem sair da tela. Tunnel status exibido pra debug."""
     box = tk.Frame(parent, bg=PANEL)
     box.pack(fill="both", expand=True, padx=20, pady=20)
     tk.Label(box, text="NO SHADOW RUN VISIBLE", fg=DIM, bg=PANEL,
              font=(FONT, 10, "bold")).pack(anchor="w")
+
+    tun_text, tun_fg = _get_tunnel_status_label()
+    tun_row = tk.Frame(box, bg=PANEL)
+    tun_row.pack(fill="x", pady=(4, 8))
+    tk.Label(tun_row, text="TUNNEL: ", fg=DIM2, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(tun_row, text=tun_text, fg=tun_fg, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left")
+
     tk.Label(box,
-             text=("Nenhum shadow run detectado via cockpit API.\n\n"
-                   "Verifica:\n"
-                   "  · TUNNEL status (precisa estar UP)\n"
-                   "  · shadow runner no VPS ativo:\n"
-                   "    sudo systemctl status millennium_shadow.service\n"
-                   "\n"
-                   "Pra iniciar manual:\n"
-                   "    python tools/maintenance/millennium_shadow.py "
-                   "--tick-sec 900 --run-hours 24"),
+             text=("Nenhum shadow run detectado via cockpit API.\n"
+                   "Pode ser: tunnel caiu, VPS runner parou, ou primeira vez."),
              fg=DIM2, bg=PANEL, font=(FONT, 7), justify="left",
-             anchor="w").pack(anchor="w", pady=(6, 0))
+             anchor="w").pack(anchor="w", pady=(0, 10))
+
+    btn_row = tk.Frame(box, bg=PANEL)
+    btn_row.pack(anchor="w")
+    start_btn = tk.Label(btn_row, text="  START SHADOW ON VPS  ", fg=BG,
+                         bg=GREEN, font=(FONT, 8, "bold"),
+                         cursor="hand2", padx=12, pady=6)
+    start_btn.pack(side="left")
+    start_btn.bind("<Button-1>",
+                   lambda _e: _start_shadow_via_cockpit(launcher, state or {}))
+
+    tk.Label(box,
+             text=("Ou manual via SSH:\n"
+                   "  sudo systemctl start millennium_shadow.service"),
+             fg=DIM2, bg=PANEL, font=(FONT, 6), justify="left",
+             anchor="w").pack(anchor="w", pady=(12, 0))
 
 
 def _render_shadow_empty_state(parent, launcher, state):
@@ -1810,6 +1855,259 @@ def _render_shadow_empty_state(parent, launcher, state):
     start_btn.bind("<Button-1>",
                    lambda _e: _start_shadow_via_cockpit(launcher, state))
     _schedule_shadow_refresh(launcher, state)
+
+
+# ─── PAPER mode detail view ─────────────────────────────────────
+# Paper mode fetches state/account.json + state/positions.json + reports/
+# equity.jsonl via cockpit API endpoints added in feat/millennium-paper.
+# Shows full trading dashboard via render_detail paper kwargs.
+
+def _fetch_paper_run_id(launcher) -> str | None:
+    """Find the most recent paper run_id via cockpit /v1/runs.
+    Falls back to None if cockpit unreachable or no paper run exists."""
+    client = _get_cockpit_client()
+    if client is None:
+        return None
+    try:
+        runs = client.list_runs() if hasattr(client, "list_runs") else \
+            client._get("/v1/runs")
+    except Exception:
+        return None
+    if not isinstance(runs, list):
+        return None
+    paper_runs = [r for r in runs if r.get("mode") == "paper"]
+    if not paper_runs:
+        return None
+    # Most recent first (cockpit already sorts DESC)
+    return paper_runs[0].get("run_id")
+
+
+def _fetch_paper_extras(run_id: str) -> tuple[dict | None, list[dict], list[float], dict | None]:
+    """Fetch heartbeat + account + positions + equity via cockpit API.
+    Returns (heartbeat, positions, equity_series, account_snapshot)."""
+    client = _get_cockpit_client()
+    if client is None:
+        return None, [], [], None
+    hb = None
+    positions: list[dict] = []
+    series: list[float] = []
+    account: dict | None = None
+    try:
+        hb = client._get(f"/v1/runs/{run_id}/heartbeat")
+    except Exception:
+        pass
+    try:
+        pos = client._get(f"/v1/runs/{run_id}/positions")
+        if isinstance(pos, dict):
+            positions = list(pos.get("positions") or [])
+    except Exception:
+        pass
+    try:
+        eq = client._get(f"/v1/runs/{run_id}/equity?tail=200")
+        if isinstance(eq, dict):
+            series = [float(p.get("equity") or 0.0) for p in (eq.get("points") or [])]
+    except Exception:
+        pass
+    try:
+        acct = client._get(f"/v1/runs/{run_id}/account")
+        if isinstance(acct, dict) and acct.get("available"):
+            account = acct
+    except Exception:
+        pass
+    # Fallback: if /account endpoint missing (older cockpit), build minimal
+    # snapshot from heartbeat fields (equity, drawdown_pct, ks_state, account_size).
+    if account is None and hb is not None:
+        account = {
+            "equity": hb.get("equity", 0.0),
+            "drawdown_pct": hb.get("drawdown_pct", 0.0),
+            "initial_balance": hb.get("account_size", 10_000.0),
+            "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+            "ks_state": hb.get("ks_state", "NORMAL"),
+            "metrics": {},
+        }
+    return hb, positions, series, account
+
+
+def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
+    """Render PAPER mode detail pane with full trading dashboard.
+    Reuses render_detail (mode='paper') extended kwargs: account_snapshot,
+    open_positions, equity_series, on_stop_paper, on_flatten_paper.
+    """
+    name = meta.get("display", slug.upper())
+
+    # Discover latest paper run_id (cockpit /v1/runs filtered by mode)
+    run_id = _fetch_paper_run_id(launcher)
+    if run_id is None:
+        _render_paper_no_run(parent, launcher, state)
+        return
+
+    hb, positions, series, account = _fetch_paper_extras(run_id)
+    if hb is None:
+        _render_paper_no_run(parent, launcher, state)
+        return
+
+    tun_text, tun_color = _get_tunnel_status_label()
+    status = str(hb.get("status") or "unknown").upper()
+    status_color = GREEN if status == "RUNNING" else DIM2
+
+    def _on_stop():
+        _stop_paper_via_cockpit(launcher, state, run_id)
+
+    detail_frame = render_detail(
+        parent=parent,
+        engine_display=name,
+        mode="paper",
+        heartbeat=hb,
+        manifest=None,
+        trades=[],
+        on_row_click=lambda _t: None,
+        status_badge_text=f"TUNNEL {tun_text}  ·  {status}  ·  run {run_id}",
+        status_badge_color=status_color,
+        account_snapshot=account,
+        open_positions=positions,
+        equity_series=series,
+        on_stop_paper=_on_stop if status == "RUNNING" else None,
+    )
+
+    # Re-render every 5s to keep dashboard live
+    _schedule_paper_refresh(launcher, state)
+
+
+def _render_paper_empty_state(parent, launcher, state):
+    """No slug selected — paper tab landing."""
+    box = tk.Frame(parent, bg=BG)
+    box.pack(fill="both", expand=True, padx=20, pady=20)
+    tk.Label(box, text="PAPER MODE", fg=AMBER, bg=BG,
+             font=(FONT, 12, "bold")).pack(anchor="w")
+    tun_text, tun_fg = _get_tunnel_status_label()
+    row = tk.Frame(box, bg=BG)
+    row.pack(fill="x", pady=(4, 12))
+    tk.Label(row, text="TUNNEL: ", fg=DIM2, bg=BG,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(row, text=tun_text, fg=tun_fg, bg=BG,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(box,
+             text=("Paper runner executa o pod MILLENNIUM (CITADEL + JUMP\n"
+                   "+ RENAISSANCE) com posicoes simuladas, equity ao vivo,\n"
+                   "drawdown tracking, KS fast-halt. Account configuravel.\n\n"
+                   "Nenhum runner ativo. Start pelo botao abaixo ou via SSH:\n"
+                   "  sudo systemctl start millennium_paper.service"),
+             fg=DIM, bg=BG, font=(FONT, 7), justify="left",
+             anchor="w").pack(anchor="w", pady=(0, 12))
+    start_btn = tk.Label(box, text="  START PAPER ON VPS  ", fg=BG, bg=GREEN,
+                         font=(FONT, 8, "bold"), cursor="hand2",
+                         padx=12, pady=6)
+    start_btn.pack(anchor="w")
+    start_btn.bind("<Button-1>",
+                   lambda _e: _start_paper_via_cockpit(launcher, state))
+    _schedule_paper_refresh(launcher, state)
+
+
+def _render_paper_no_run(parent, launcher, state):
+    """Slug selected but no paper run found."""
+    box = tk.Frame(parent, bg=PANEL)
+    box.pack(fill="both", expand=True, padx=20, pady=20)
+    tk.Label(box, text="NO PAPER RUN VISIBLE", fg=DIM, bg=PANEL,
+             font=(FONT, 10, "bold")).pack(anchor="w")
+    tun_text, tun_fg = _get_tunnel_status_label()
+    row = tk.Frame(box, bg=PANEL)
+    row.pack(fill="x", pady=(4, 8))
+    tk.Label(row, text="TUNNEL: ", fg=DIM2, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(row, text=tun_text, fg=tun_fg, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left")
+    tk.Label(box,
+             text=("Nenhum paper run detectado via cockpit API.\n"
+                   "Pode ser: tunnel caiu, VPS runner parou, ou primeira vez."),
+             fg=DIM2, bg=PANEL, font=(FONT, 7), justify="left",
+             anchor="w").pack(anchor="w", pady=(0, 10))
+    btn_row = tk.Frame(box, bg=PANEL)
+    btn_row.pack(anchor="w")
+    start_btn = tk.Label(btn_row, text="  START PAPER ON VPS  ", fg=BG,
+                         bg=GREEN, font=(FONT, 8, "bold"),
+                         cursor="hand2", padx=12, pady=6)
+    start_btn.pack(side="left")
+    start_btn.bind("<Button-1>",
+                   lambda _e: _start_paper_via_cockpit(launcher, state))
+    tk.Label(box,
+             text=("Ou manual via SSH:\n"
+                   "  sudo systemctl start millennium_paper.service"),
+             fg=DIM2, bg=PANEL, font=(FONT, 6), justify="left",
+             anchor="w").pack(anchor="w", pady=(12, 0))
+    _schedule_paper_refresh(launcher, state)
+
+
+def _start_paper_via_cockpit(launcher, state) -> None:
+    """POST /v1/shadow/start?service=millennium_paper (admin-scoped).
+    Same whitelist endpoint used for shadow; paper just picks different service."""
+    client = _get_cockpit_client()
+    if client is None:
+        _toast(launcher,
+               "cockpit_api nao configurado em config/keys.json",
+               error=True)
+        return
+    if not client.cfg.admin_token:
+        _toast(launcher,
+               "admin_token ausente — apenas read disponivel", error=True)
+        return
+    try:
+        result = client._post("/v1/shadow/start?service=millennium_paper",
+                              admin=True)
+    except Exception as exc:
+        _toast(launcher, f"paper start failed: {exc}", error=True)
+        return
+    status = result.get("status") if isinstance(result, dict) else None
+    if status == "started":
+        _toast(launcher, "paper started — aparece em 5-15s")
+        _schedule_paper_refresh(launcher, state)
+    else:
+        _toast(launcher, f"paper start retornou: {result}", error=True)
+
+
+def _stop_paper_via_cockpit(launcher, state, run_id: str) -> None:
+    """POST /v1/runs/<run_id>/kill (admin-scoped). Drops .kill flag in run dir."""
+    client = _get_cockpit_client()
+    if client is None or not client.cfg.admin_token:
+        _toast(launcher, "admin_token ausente em keys.json", error=True)
+        return
+    try:
+        client.drop_kill(run_id)
+    except Exception as exc:
+        _toast(launcher, f"paper STOP falhou: {type(exc).__name__}",
+               error=True)
+        return
+    _toast(launcher, f"paper STOP dispatched → {run_id} · para em <=15s")
+    _schedule_paper_refresh(launcher, state)
+
+
+def _schedule_paper_refresh(launcher, state) -> None:
+    """Agenda re-render em 5s. Single-slot handle cancelado antes de agendar
+    pra evitar leak de handles. Espelha _schedule_shadow_refresh."""
+    prev_aid = state.pop("paper_refresh_aid", None)
+    if prev_aid is not None:
+        try:
+            launcher.after_cancel(prev_aid)
+        except Exception:
+            pass
+    try:
+        aid = launcher.after(5000,
+                             lambda: _refresh_paper_detail(launcher, state))
+        state["paper_refresh_aid"] = aid
+    except Exception:
+        pass
+
+
+def _refresh_paper_detail(launcher, state) -> None:
+    """Re-render paper detail if still in paper mode."""
+    if state.get("mode") != "paper":
+        return
+    try:
+        host = state.get("detail_host")
+        if host is None or not host.winfo_exists():
+            return
+    except Exception:
+        return
+    _render_detail(state, launcher)
 
 
 def _start_shadow_via_cockpit(launcher, state) -> None:

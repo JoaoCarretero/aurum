@@ -8445,11 +8445,24 @@ class App(tk.Tk):
                      anchor="w").pack(fill="x")
             procs = []
 
+        # Fallback: if no live/tracked procs, surface recent run_dirs on disk
+        # so user sees historical runs (backtests, batteries, shadow/paper).
+        # Sourcing from data/<engine>/<run_id>/ with heartbeat.json or
+        # reports/summary.json — last 48h window.
         if not procs:
-            tk.Label(self._eng_list_wrap,
-                     text="  — no tracked engines —",
-                     font=(FONT, 7), fg=DIM, bg=BG,
-                     anchor="w").pack(fill="x", pady=8)
+            historical = self._eng_scan_historical_runs(limit=15, hours=48)
+            if historical:
+                tk.Label(self._eng_list_wrap,
+                         text="  — no LIVE procs; showing recent runs on disk —",
+                         font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
+                         anchor="w").pack(fill="x", pady=(4, 2))
+                for h in historical:
+                    self._eng_render_row(h)
+            else:
+                tk.Label(self._eng_list_wrap,
+                         text="  — no tracked engines and no recent runs on disk —",
+                         font=(FONT, 7), fg=DIM, bg=BG,
+                         anchor="w").pack(fill="x", pady=8)
         else:
             for p in procs:
                 self._eng_render_row(p)
@@ -8464,6 +8477,76 @@ class App(tk.Tk):
             self._eng_after_id = self.after(2000, self._eng_refresh)
         except Exception:
             pass
+
+    def _eng_scan_historical_runs(self, *, limit: int = 15,
+                                   hours: int = 48) -> list[dict]:
+        """Scan data/<engine>/<run_id>/ for recent runs, return pseudo-proc rows.
+
+        Covers local runs (data/<engine>/), shadow (data/<engine>_shadow/),
+        and paper (data/<engine>_paper/) layouts. Each row has shape
+        compatible with _eng_render_row: engine, pid='-', started, alive=False,
+        log (best-effort path to logs/<name>.log or logs/shadow.log).
+        """
+        from pathlib import Path as _Path
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        data_root = _Path("data")
+        if not data_root.exists():
+            return []
+        cutoff = _dt.now(_tz.utc) - _td(hours=hours)
+
+        rows: list[tuple[float, dict]] = []
+        for engine_dir in data_root.iterdir():
+            if not engine_dir.is_dir():
+                continue
+            name = engine_dir.name
+            if name.startswith(".") or name in ("audit", "db_backups",
+                                                 "exports", "funding_scanner",
+                                                 "macro"):
+                continue
+            # Derive display engine slug from dir name
+            if name.endswith("_shadow"):
+                engine_slug = name.removesuffix("_shadow") + " (shadow)"
+            elif name.endswith("_paper"):
+                engine_slug = name.removesuffix("_paper") + " (paper)"
+            else:
+                engine_slug = name
+            try:
+                run_dirs = [d for d in engine_dir.iterdir() if d.is_dir()]
+            except OSError:
+                continue
+            for run_dir in run_dirs:
+                try:
+                    mtime = run_dir.stat().st_mtime
+                except OSError:
+                    continue
+                run_dt = _dt.fromtimestamp(mtime, tz=_tz.utc)
+                if run_dt < cutoff:
+                    continue
+                # Pick most plausible log file
+                candidates = [
+                    run_dir / "logs" / "shadow.log",
+                    run_dir / "logs" / "paper.log",
+                    run_dir / "logs" / "live.log",
+                    run_dir / "logs" / "engine.log",
+                ]
+                log_path = next((str(p) for p in candidates if p.exists()), "")
+                if not log_path:
+                    # Try any *.log in logs/
+                    logs_dir = run_dir / "logs"
+                    if logs_dir.exists():
+                        logs = list(logs_dir.glob("*.log"))
+                        if logs:
+                            log_path = str(logs[0])
+                rows.append((mtime, {
+                    "engine": engine_slug,
+                    "pid": "-",
+                    "started": run_dt.strftime("%m-%d %H:%M"),
+                    "alive": False,
+                    "log": log_path,
+                    "run_dir": str(run_dir),
+                }))
+        rows.sort(key=lambda t: t[0], reverse=True)
+        return [r for _, r in rows[:limit]]
 
     def _eng_render_row(self, proc: dict):
         alive = bool(proc.get("alive"))
