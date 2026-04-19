@@ -184,3 +184,110 @@ def test_last_sig_age_empty_returns_dash():
     from launcher_support.engines_sidebar import _last_sig_age
     text, color = _last_sig_age([], None)
     assert text == "—"
+
+
+def test_render_detail_paper_smoke_no_exception():
+    """Paper mode renders EQUITY/DD/NET + OPEN POSITIONS + EQUITY CURVE +
+    METRICS sections without crashing when all paper params are passed."""
+    try:
+        import tkinter as tk
+    except ImportError:
+        pytest.skip("tkinter not available")
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display available")
+    root.withdraw()
+    try:
+        from launcher_support.engines_sidebar import render_detail
+        parent = tk.Frame(root)
+        heartbeat = {
+            "run_id": "R", "status": "running", "ticks_ok": 3,
+            "ticks_fail": 0, "novel_total": 1, "last_tick_at": None,
+            "mode": "paper", "account_size": 10_000.0,
+            "equity": 10_120.0, "drawdown_pct": 0.12, "ks_state": "NORMAL",
+        }
+        frame = render_detail(
+            parent=parent, engine_display="MILLENNIUM",
+            mode="paper", heartbeat=heartbeat,
+            manifest={"commit": "c", "branch": "b"},
+            trades=[], on_row_click=lambda _t: None,
+            account_snapshot={
+                "equity": 10_120.0, "drawdown": 12.0, "drawdown_pct": 0.12,
+                "realized_pnl": 80.0, "unrealized_pnl": 40.0,
+                "initial_balance": 10_000.0,
+                "metrics": {"sharpe": 1.5, "win_rate": 0.6,
+                            "profit_factor": 2.0, "net_pnl": 120.0,
+                            "maxdd": 30.0, "roi_pct": 1.2},
+            },
+            open_positions=[{
+                "id": "pos_1", "symbol": "BTCUSDT", "engine": "CITADEL",
+                "direction": "LONG", "entry_price": 100.0,
+                "notional": 1000.0, "unrealized_pnl": 25.0,
+                "stop": 98.0, "target": 104.0,
+                "opened_at": "2026-04-19T14:00:00Z", "bars_held": 3,
+            }],
+            equity_series=[10_000.0, 10_020.0, 10_080.0, 10_120.0],
+            on_stop_paper=lambda: None,
+        )
+        assert frame is not None
+    finally:
+        root.destroy()
+
+
+def test_render_detail_paper_with_no_positions_renders_empty_state():
+    try:
+        import tkinter as tk
+    except ImportError:
+        pytest.skip("tkinter not available")
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display available")
+    root.withdraw()
+    try:
+        from launcher_support.engines_sidebar import render_detail
+        parent = tk.Frame(root)
+        heartbeat = {
+            "run_id": "R", "status": "running", "ticks_ok": 1,
+            "ticks_fail": 0, "novel_total": 0,
+        }
+        frame = render_detail(
+            parent=parent, engine_display="MILLENNIUM",
+            mode="paper", heartbeat=heartbeat, manifest=None,
+            trades=[], on_row_click=lambda _t: None,
+            account_snapshot={"equity": 10_000.0, "drawdown_pct": 0.0,
+                              "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+                              "initial_balance": 10_000.0, "metrics": {}},
+            open_positions=[],
+            equity_series=[],
+        )
+        assert frame is not None
+    finally:
+        root.destroy()
+
+
+def test_render_detail_shadow_still_works_without_paper_params():
+    """Backward compat: shadow mode renders without any paper kwargs."""
+    try:
+        import tkinter as tk
+    except ImportError:
+        pytest.skip("tkinter not available")
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display available")
+    root.withdraw()
+    try:
+        from launcher_support.engines_sidebar import render_detail
+        parent = tk.Frame(root)
+        heartbeat = {"run_id": "R", "status": "running", "ticks_ok": 5,
+                     "ticks_fail": 0, "novel_total": 2}
+        frame = render_detail(
+            parent=parent, engine_display="MILLENNIUM",
+            mode="shadow", heartbeat=heartbeat, manifest=None,
+            trades=[], on_row_click=lambda _t: None,
+        )
+        assert frame is not None
+    finally:
+        root.destroy()
