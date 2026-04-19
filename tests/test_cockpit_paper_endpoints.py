@@ -70,6 +70,42 @@ def test_positions_endpoint_returns_snapshot(client, tmp_path):
     assert body["positions"][0]["symbol"] == "BTCUSDT"
 
 
+def test_account_endpoint_returns_snapshot(client, tmp_path):
+    run_dir = tmp_path / "millennium_paper" / "RID"
+    (run_dir / "state").mkdir(parents=True)
+    (run_dir / "state" / "heartbeat.json").write_text(json.dumps({
+        "run_id": "RID", "status": "running",
+    }))
+    account_payload = {
+        "equity": 10_120.0, "drawdown_pct": 0.12,
+        "realized_pnl": 80.0, "unrealized_pnl": 40.0,
+        "ks_state": "NORMAL",
+        "metrics": {"sharpe": 1.5, "win_rate": 0.6, "profit_factor": 2.0,
+                    "maxdd": 30.0, "roi_pct": 1.2},
+    }
+    (run_dir / "state" / "account.json").write_text(json.dumps(account_payload))
+    r = client.get("/v1/runs/RID/account",
+                   headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is True
+    assert body["equity"] == 10_120.0
+    assert body["metrics"]["sharpe"] == 1.5
+
+
+def test_account_endpoint_unavailable_when_shadow_run(client, tmp_path):
+    run_dir = tmp_path / "millennium_shadow" / "SID"
+    (run_dir / "state").mkdir(parents=True)
+    (run_dir / "state" / "heartbeat.json").write_text(json.dumps({
+        "run_id": "SID", "status": "running",
+    }))
+    r = client.get("/v1/runs/SID/account",
+                   headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is False
+
+
 def test_positions_endpoint_empty_when_file_missing(client, tmp_path):
     # Create a paper run without positions.json
     run_dir = tmp_path / "millennium_paper" / "NOPOS"

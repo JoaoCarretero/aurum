@@ -306,6 +306,27 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=500,
                                 detail=f"positions.json malformed: {exc}")
 
+    @app.get("/v1/runs/{run_id}/account")
+    def run_account(run_id: str, request: Request):
+        """Paper runner: retorna state/account.json (snapshot atomic com
+        metrics aninhado — Sharpe/PF/WR/MaxDD/ROI, ks_state, peak_equity).
+        Shadow runs nao tem account.json — retorna vazio."""
+        _check_auth(request)
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        path = run_dir / "state" / "account.json"
+        if not path.exists():
+            return {"available": False}
+        import json as _json
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            data["available"] = True
+            return data
+        except ValueError as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"account.json malformed: {exc}")
+
     @app.get("/v1/runs/{run_id}/equity")
     def run_equity(run_id: str, request: Request, tail: int = 200):
         """Paper runner: tail dos ultimos N pontos de equity.jsonl.
