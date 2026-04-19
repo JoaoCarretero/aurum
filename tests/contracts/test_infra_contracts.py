@@ -261,7 +261,10 @@ class TestBootstrapInfraHardening:
         assert "$HOME/aurum finance" in log_cmd
         assert "screen -dmS" in launch_cmd
         assert "bash -lc" in launch_cmd
-        assert "diag;rm -rf /" in launch_cmd
+        # O mode malicioso passa por shlex.quote, entao aparece ENTRE ASPAS
+        # (inofensivo). A assertion valida o escape explicitamente — antes
+        # so verificava presenca da string, o que era enganoso.
+        assert "'diag;rm -rf /'" in launch_cmd
 
 
 class TestDeployArtifactsHardening:

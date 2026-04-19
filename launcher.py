@@ -1117,12 +1117,20 @@ def _boot_tunnel_manager():
     if current is not None:
         return current
     try:
-        # Encrypted-aware: tenta load_runtime_keys primeiro. Se falhar
-        # (store travado, cryptography ausente), fica em local-disk mode.
+        # Encrypted-aware: fail-closed quando enc ativo. Fallback
+        # manual pro plaintext so em ImportError (cryptography ausente).
+        # KeyStoreLockedError/Corrupt nao caem pra plaintext stale.
+        from core.risk.key_store import (
+            load_runtime_keys,
+            KeyStoreError,
+        )
         try:
-            from core.risk.key_store import load_runtime_keys
-            data = load_runtime_keys()
-        except Exception:
+            data = load_runtime_keys(
+                allow_plaintext_env="_LAUNCHER_NEVER_PLAINTEXT_"
+            )
+        except KeyStoreError:
+            return None
+        except (ImportError, ModuleNotFoundError):
             from pathlib import Path as _Path
             import json as _json
             keys_path = _Path("config/keys.json")
@@ -9429,7 +9437,13 @@ class App(tk.Tk):
             if enc_path.exists():
                 try:
                     from core.risk.key_store import load_runtime_keys, KeyStoreError
-                    return load_runtime_keys()
+                    # Forca fail-closed ignorando AURUM_ALLOW_PLAINTEXT_KEYS.
+                    # Se o operador quer editar via launcher, tem que rodar
+                    # encrypt_keys.py e passar AURUM_KEY_PASSWORD — nunca
+                    # cair em plaintext stale enquanto enc existe.
+                    return load_runtime_keys(
+                        allow_plaintext_env="_LAUNCHER_NEVER_PLAINTEXT_"
+                    )
                 except KeyStoreError:
                     runtime_health.record("launcher.keys_locked")
                     return {}
