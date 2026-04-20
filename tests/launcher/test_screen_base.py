@@ -85,3 +85,60 @@ def test_abstract_build_raises_if_not_overridden(tk_root):
 
     with pytest.raises(TypeError):
         _Incomplete(parent=tk_root)
+
+
+class _TimerScreen(Screen):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.tick_count = 0
+        self.click_count = 0
+
+    def build(self) -> None:
+        self._btn = tk.Button(self.container, text="go")
+        self._btn.pack()
+
+    def on_enter(self, **kwargs) -> None:
+        self._after(10, self._tick)
+        self._bind(self._btn, "<Button-1>", self._click)
+
+    def _tick(self) -> None:
+        self.tick_count += 1
+
+    def _click(self, _event) -> None:
+        self.click_count += 1
+
+
+def test_after_timer_cancelled_on_exit(tk_root):
+    s = _TimerScreen(parent=tk_root)
+    s.mount()
+    s.on_enter()
+    # Before on_exit, the timer is armed
+    assert len(s._tracked_after_ids) == 1
+    s.on_exit()
+    # After on_exit, timer list cleared
+    assert s._tracked_after_ids == []
+    # Sleep past the scheduled firing — tick must NOT have fired
+    tk_root.after(30, lambda: None)
+    tk_root.update()
+    tk_root.after(30, lambda: None)
+    tk_root.update()
+    assert s.tick_count == 0
+
+
+def test_binding_cleared_on_exit(tk_root):
+    s = _TimerScreen(parent=tk_root)
+    s.mount()
+    s.on_enter()
+    # Before on_exit, binding tracked
+    assert len(s._tracked_bindings) == 1
+    s.on_exit()
+    assert s._tracked_bindings == []
+
+
+def test_auto_cleanup_is_idempotent(tk_root):
+    s = _TimerScreen(parent=tk_root)
+    s.mount()
+    s.on_enter()
+    s.on_exit()
+    s.on_exit()  # second call is safe no-op
+    assert s.tick_count == 0
