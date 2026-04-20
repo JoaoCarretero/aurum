@@ -634,18 +634,61 @@ def _render_summary_row(state, *, live_count: int, ready_count: int, research_co
                  font=(FONT, 9, "bold")).pack(anchor="w", padx=8, pady=(0, 6))
 
 
+_COLLAPSIBLE_BUCKETS = {"READY LIVE", "RESEARCH", "EXPERIMENTAL"}
+
+
+def _bucket_collapse_key(title: str) -> str:
+    return f"bucket_collapsed_{title.replace(' ', '_')}"
+
+
+def _is_bucket_collapsed(state, title: str) -> bool:
+    collapsed = state.get("bucket_collapsed") or {}
+    # Default-collapse READY LIVE in paper mode — the operator's focus is
+    # the running pod, and the launch list eats half the sidebar otherwise.
+    if title not in collapsed:
+        if title == "READY LIVE" and state.get("mode") == "paper":
+            return True
+        if title in ("RESEARCH", "EXPERIMENTAL"):
+            return True
+    return bool(collapsed.get(title, False))
+
+
+def _toggle_bucket(state, title: str) -> None:
+    collapsed = state.setdefault("bucket_collapsed", {})
+    collapsed[title] = not _is_bucket_collapsed(state, title)
+    refresh = state.get("refresh")
+    if callable(refresh):
+        refresh()
+
+
 def _render_bucket(parent, title, items, state):
     if not items:
         return
     bucket = "LIVE" if title == "LIVE" else "RESEARCH" if title in ("RESEARCH", "EXPERIMENTAL") else "READY"
-    header = tk.Frame(parent, bg=BG)
+    collapsible = title in _COLLAPSIBLE_BUCKETS
+    collapsed = collapsible and _is_bucket_collapsed(state, title)
+
+    header = tk.Frame(parent, bg=BG, cursor="hand2" if collapsible else "")
     header.pack(fill="x", pady=(8, 2))
     tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
+    if collapsible:
+        chevron = "▸" if collapsed else "▾"
+        tk.Label(header, text=chevron, font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG, cursor="hand2").pack(side="left", padx=(0, 4))
     tk.Label(header, text=bucket_header_title(title), font=(FONT, 7, "bold"),
-             fg=AMBER, bg=BG).pack(side="left")
+             fg=AMBER, bg=BG, cursor="hand2" if collapsible else "").pack(side="left")
     tk.Label(header, text=f"  · {len(items)}", font=(FONT, 7),
-             fg=DIM, bg=BG).pack(side="left")
+             fg=DIM, bg=BG, cursor="hand2" if collapsible else "").pack(side="left")
+    if collapsible:
+        def _on_click(_e=None, _t=title, _s=state):
+            _toggle_bucket(_s, _t)
+        for w in header.winfo_children():
+            w.bind("<Button-1>", _on_click)
+        header.bind("<Button-1>", _on_click)
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
+
+    if collapsed:
+        return
 
     is_live_bucket = title == "LIVE"
     # RESEARCH + EXPERIMENTAL share the locked-style row renderer —
