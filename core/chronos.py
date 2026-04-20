@@ -178,11 +178,36 @@ class GaussianHMMNp:
             pass
         if X.ndim == 1:
             X = X.reshape(-1, 1)
+
+        # Cache consult — avoid re-fitting across walk-forward folds.
+        from core.hmm_cache import compute_cache_key, cache_get, cache_set
+        _params = {
+            "n_states": self.n_states,
+            "n_iter": self.n_iter,
+            "tol": self.tol,
+            "random_state": self.random_state,
+            "min_covar": self.min_covar,
+        }
+        _key = compute_cache_key(X, _params)
+        _cached = cache_get(_key)
+        if _cached is not None:
+            self.means_ = _cached["means_"].copy()
+            self.covars_ = _cached["covars_"].copy()
+            self.transmat_ = _cached["transmat_"].copy()
+            self.startprob_ = _cached["startprob_"].copy()
+            return self
+
         self._init_params(X)
         n_samples = X.shape[0]
         K = self.n_states
 
         if n_samples < 2 or K == 1:
+            cache_set(_key, {
+                "means_": self.means_.copy(),
+                "covars_": self.covars_.copy(),
+                "transmat_": self.transmat_.copy(),
+                "startprob_": self.startprob_.copy(),
+            })
             return self
 
         prev_ll = -np.inf
@@ -227,6 +252,12 @@ class GaussianHMMNp:
                 break
             prev_ll = ll
 
+        cache_set(_key, {
+            "means_": self.means_.copy(),
+            "covars_": self.covars_.copy(),
+            "transmat_": self.transmat_.copy(),
+            "startprob_": self.startprob_.copy(),
+        })
         return self
 
     # ── Inference ─────────────────────────────────────────────

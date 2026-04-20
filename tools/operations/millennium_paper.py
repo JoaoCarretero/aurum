@@ -33,6 +33,9 @@ if str(ROOT) not in sys.path:
 
 from core.fs import atomic_write  # noqa: E402
 from core.shadow_contract import compute_config_hash  # noqa: E402
+from core.data.ws_price_feed import (  # noqa: E402
+    WSPriceFeed, make_live_price_fn,
+)
 from tools.operations.paper_account import PaperAccount  # noqa: E402
 from tools.operations.paper_executor import PaperExecutor, Position  # noqa: E402
 from tools.operations.paper_position_manager import (  # noqa: E402
@@ -253,6 +256,7 @@ class RunnerState:
     last_novel_at: str | None = None
     trades_closed: int = 0
     primed: bool = False
+    ws_feed: WSPriceFeed | None = None
 
     def __post_init__(self):
         from config.params import (
@@ -493,8 +497,12 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 })
                 continue
 
+            live_fn = None
+            if state.ws_feed is not None:
+                live_fn = make_live_price_fn(state.ws_feed, max_age_sec=60.0)
             pos = state.executor.open(t, opened_at_idx=tick_idx,
-                                      opened_at_iso=now_iso)
+                                      opened_at_iso=now_iso,
+                                      live_price_fn=live_fn)
             state.open_positions.append(pos)
             state.last_bar_ts_by_symbol[pos.symbol] = now_iso
             _append_jsonl(FILLS_PATH, {
@@ -600,6 +608,25 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
     _write_manifest(account_size)
 
     state = RunnerState(account_size=account_size, tick_sec=tick_sec)
+
+    # Start the Binance futures markPrice WS feed so opens use the live
+    # market price at execution time instead of the bar-close open[idx+1]
+    # the signal was computed against. Symbols come from config.params —
+    # only the trading universe, macro is excluded.
+    try:
+        from config.params import SYMBOLS as _SYMBOLS
+    except Exception:  # noqa: BLE001
+        _SYMBOLS = []
+    if _SYMBOLS:
+        try:
+            state.ws_feed = WSPriceFeed(symbols=list(_SYMBOLS))
+            state.ws_feed.start()
+            log.info("WS price feed started for %d symbols", len(_SYMBOLS))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("WS price feed start failed: %s — using signal entry",
+                        exc)
+            state.ws_feed = None
+
     deadline = time.time() + run_hours * 3600.0 if run_hours > 0 else None
     stop = {"flag": False, "reason": ""}
 
@@ -645,6 +672,11 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
                 log.exception("tick %d failed: %s", tick_idx, exc)
             time.sleep(tick_sec)
     finally:
+        if state.ws_feed is not None:
+            try:
+                state.ws_feed.stop()
+            except Exception:  # noqa: BLE001
+                pass
         _write_run_summary(state, stop["reason"] or "clean_exit")
         _tg_send(
             f"<b>MILLENNIUM paper STOP</b>\n"

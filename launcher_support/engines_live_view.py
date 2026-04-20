@@ -1174,19 +1174,20 @@ _COCKPIT_CLIENT_SINGLETON: object | None = None
 def _get_cockpit_client():
     """Lazy singleton. Returns None se config ausente ou invalida.
 
-    Config vem do runtime key store bloco 'cockpit_api'. Uma vez resolvido
-    (positivo ou negativo), cacheia o resultado pra nao retry em cada
-    refresh do painel. Launcher vivo dura horas — tentar reabrir o
-    arquivo a cada 5s nao ajuda.
+    Config vem do runtime key store bloco 'cockpit_api'. Só cacheia
+    resultado POSITIVO — tentativas que falham voltam None mas deixam
+    o singleton em None pra retry na próxima chamada. Durante o boot
+    o keys.json pode estar sendo lido concorrentemente (backup hook,
+    worktree sync) e uma falha transitória travaria o cockpit pelo
+    resto da sessão se fosse cached.
     """
     global _COCKPIT_CLIENT_SINGLETON
     if _COCKPIT_CLIENT_SINGLETON is not None:
-        return _COCKPIT_CLIENT_SINGLETON or None
+        return _COCKPIT_CLIENT_SINGLETON
     try:
         data = load_runtime_keys()
         block = data.get("cockpit_api")
         if not block or not block.get("base_url") or not block.get("read_token"):
-            _COCKPIT_CLIENT_SINGLETON = False
             return None
         from launcher_support.cockpit_client import CockpitClient, CockpitConfig
         cfg = CockpitConfig(
@@ -1199,7 +1200,6 @@ def _get_cockpit_client():
             cfg, cache_dir=Path("data/.cockpit_cache"))
         return _COCKPIT_CLIENT_SINGLETON
     except (KeyStoreError, ValueError, TypeError):
-        _COCKPIT_CLIENT_SINGLETON = False
         return None
 
 

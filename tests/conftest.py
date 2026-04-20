@@ -54,3 +54,41 @@ def tmp_run(tmp_path_factory):
     (run / "logs").mkdir()
     (run / "reports").mkdir()
     yield run
+
+
+# ═══ Session-scoped OHLCV fixtures ═══════════════════════════════
+# Synthetic OHLCV data loaded once per session. Tests that need a
+# mutable DataFrame should call .copy() inline to avoid polluting the
+# shared instance.
+#
+# Why session scope: fixture construction cost was ~3% of suite time
+# because every indicator/signal test rebuilt the same synthetic series.
+
+import numpy as np
+import pandas as pd
+
+
+def _build_ohlcv(n_bars: int, seed: int) -> "pd.DataFrame":
+    rng = np.random.default_rng(seed)
+    close = 100 + np.cumsum(rng.normal(0, 0.5, n_bars))
+    high = close + np.abs(rng.normal(0, 0.3, n_bars))
+    low = close - np.abs(rng.normal(0, 0.3, n_bars))
+    open_ = np.concatenate(([close[0]], close[:-1]))
+    volume = rng.integers(1_000, 10_000, n_bars).astype(float)
+    idx = pd.date_range("2024-01-01", periods=n_bars, freq="15min")
+    return pd.DataFrame(
+        {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+        index=idx,
+    )
+
+
+@pytest.fixture(scope="session")
+def ohlcv_500():
+    """500-bar synthetic OHLCV DataFrame. Shared; caller must .copy() if mutating."""
+    return _build_ohlcv(500, seed=42)
+
+
+@pytest.fixture(scope="session")
+def ohlcv_2000():
+    """2000-bar synthetic OHLCV DataFrame. Shared; caller must .copy() if mutating."""
+    return _build_ohlcv(2000, seed=42)
