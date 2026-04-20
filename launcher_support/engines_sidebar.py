@@ -196,49 +196,64 @@ def render_sidebar(
     selected_slug: str | None,
     on_select: Callable[[str], None],
 ) -> tk.Frame:
-    """Sidebar lateral fixa — lista engines do registry.
+    """Institutional engine sidebar — fixed 150px rail left of detail pane.
 
-    Engine active: linha clicavel com ticks/signals. Inactive: DIM2
-    com '—'. Selected: highlight AMBER_B bg.
+    Each engine is a two-line row: marker + name on top, ticks/signals
+    meta on the bottom, hard-aligned with a left accent strip that
+    reads at a glance — green when the engine is live, amber when
+    selected, dim when idle. Picks up the HL2 palette via PANEL/BG.
     """
-    frame = tk.Frame(parent, bg=PANEL, width=140)
+    frame = tk.Frame(parent, bg=PANEL, width=150)
     frame.pack(side="left", fill="y")
     frame.pack_propagate(False)
 
-    tk.Label(frame, text="ENGINES", fg=AMBER, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(anchor="w", padx=10, pady=(10, 4))
-    tk.Frame(frame, bg=BORDER, height=1).pack(fill="x", padx=8)
+    # Section header + thin underline
+    hdr = tk.Frame(frame, bg=PANEL)
+    hdr.pack(fill="x", padx=10, pady=(10, 2))
+    tk.Label(hdr, text="ENGINES", fg=AMBER, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left")
+    active_n = sum(1 for r in engines if r.active)
+    tk.Label(hdr, text=f"  {active_n}/{len(engines)}",
+             fg=DIM2, bg=PANEL, font=(FONT, 6)).pack(side="left")
+    tk.Frame(frame, bg=BORDER, height=1).pack(fill="x", padx=8, pady=(2, 4))
 
     for row in engines:
         is_sel = row.slug == selected_slug
-        bg = AMBER_B if is_sel else PANEL
-        fg_marker = WHITE if is_sel else (WHITE if row.active else DIM2)
-        fg_text = BG if is_sel else (WHITE if row.active else DIM2)
-        marker = "▸" if is_sel else ("✓" if row.active else "○")
+        # Accent strip color: green when active, amber when selected,
+        # border-gray when idle. Visual hierarchy reads top-down.
+        accent = GREEN if row.active else BORDER
+        if is_sel:
+            accent = AMBER_B
+        bg = BG2 if is_sel else PANEL
+        name_fg = WHITE if (row.active or is_sel) else DIM2
 
         item = tk.Frame(frame, bg=bg, cursor="hand2")
-        item.pack(fill="x", padx=6, pady=1)
+        item.pack(fill="x", padx=0, pady=1)
 
-        top = tk.Frame(item, bg=bg)
-        top.pack(fill="x", padx=6, pady=(4, 0))
-        tk.Label(top, text=marker, fg=fg_marker, bg=bg,
-                 font=(FONT, 7, "bold")).pack(side="left")
-        tk.Label(top, text=f" {row.display}", fg=fg_text, bg=bg,
-                 font=(FONT, 7, "bold")).pack(side="left")
+        # Left accent strip — 3px colored bar aligns all rows
+        tk.Frame(item, bg=accent, width=3).pack(side="left", fill="y")
 
-        sub = tk.Frame(item, bg=bg)
-        sub.pack(fill="x", padx=6, pady=(0, 4))
+        body = tk.Frame(item, bg=bg)
+        body.pack(side="left", fill="x", expand=True, padx=(8, 6), pady=4)
+
+        top = tk.Frame(body, bg=bg)
+        top.pack(fill="x")
+        tk.Label(top, text=row.display, fg=name_fg, bg=bg,
+                 font=(FONT, 7, "bold"), anchor="w").pack(side="left")
+
+        sub = tk.Frame(body, bg=bg)
+        sub.pack(fill="x", pady=(1, 0))
         if row.active:
             if row.ticks is not None and row.signals is not None:
-                sub_text = f"  ✓ {row.ticks}t · {row.signals}s"
+                sub_text = f"{row.ticks}t · {row.signals}sig"
             else:
-                sub_text = "  ✓"
-            sub_color = DIM if not is_sel else BG
+                sub_text = "live"
+            sub_color = AMBER if is_sel else DIM
         else:
-            sub_text = "  —"
+            sub_text = "idle"
             sub_color = DIM2
         tk.Label(sub, text=sub_text, fg=sub_color, bg=bg,
-                 font=(FONT, 6)).pack(anchor="w")
+                 font=(FONT, 6)).pack(side="left")
 
         def _handler(_e, _slug=row.slug):
             on_select(_slug)
@@ -247,6 +262,8 @@ def render_sidebar(
             child.bind("<Button-1>", _handler)
             for grand in child.winfo_children():
                 grand.bind("<Button-1>", _handler)
+                for g2 in grand.winfo_children():
+                    g2.bind("<Button-1>", _handler)
 
     return frame
 

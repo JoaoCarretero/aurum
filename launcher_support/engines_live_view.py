@@ -1822,72 +1822,79 @@ def _render_signals_table(parent, trades):
                  width=12, anchor="w").pack(side="left", padx=(4, 0))
 
 
-def _render_shadow_no_run(parent, launcher, state=None):
-    """Empty state: slug selecionado mas sem cache do poller.
-    Inclui START SHADOW button — user pode subir o runner via cockpit API
-    sem sair da tela. Tunnel status exibido pra debug."""
-    box = tk.Frame(parent, bg=PANEL)
-    box.pack(fill="both", expand=True, padx=20, pady=20)
-    tk.Label(box, text="NO SHADOW RUN VISIBLE", fg=DIM, bg=PANEL,
-             font=(FONT, 10, "bold")).pack(anchor="w")
+def _render_hl2_empty(parent, *, title: str, blurb: str,
+                      actions: list[tuple[str, str, callable]],
+                      hint: str | None = None) -> None:
+    """Unified HL2 empty-state block — used by every engines mode when
+    there's no run / no selection. Consistent tone, consistent spacing.
 
+    `actions` is a list of (label, color, handler). Rendered as chips
+    side-by-side under the blurb. `hint` prints a smaller dim footer
+    (for SSH fallbacks).
+    """
+    bg = BG
+    box = tk.Frame(parent, bg=bg)
+    box.pack(fill="both", expand=True, padx=18, pady=16)
+
+    # Title
+    tk.Label(box, text=title.upper(), fg=AMBER, bg=bg,
+             font=(FONT, 11, "bold")).pack(anchor="w")
+    tk.Frame(box, bg=BORDER, height=1).pack(fill="x", pady=(3, 8))
+
+    # Tunnel row (always shown — users wait for this to be UP)
     tun_text, tun_fg = _get_tunnel_status_label()
-    tun_row = tk.Frame(box, bg=PANEL)
-    tun_row.pack(fill="x", pady=(4, 8))
-    tk.Label(tun_row, text="TUNNEL: ", fg=DIM2, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(tun_row, text=tun_text, fg=tun_fg, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left")
+    t_row = tk.Frame(box, bg=bg)
+    t_row.pack(fill="x", pady=(0, 8))
+    tk.Label(t_row, text="TUNNEL", fg=DIM2, bg=bg,
+             font=(FONT, 6, "bold")).pack(side="left")
+    tk.Label(t_row, text=f"  {tun_text}", fg=tun_fg, bg=bg,
+             font=(FONT, 8, "bold")).pack(side="left")
 
-    tk.Label(box,
-             text=("Nenhum shadow run detectado via cockpit API.\n"
-                   "Pode ser: tunnel caiu, VPS runner parou, ou primeira vez."),
-             fg=DIM2, bg=PANEL, font=(FONT, 7), justify="left",
-             anchor="w").pack(anchor="w", pady=(0, 10))
+    # Blurb
+    tk.Label(box, text=blurb, fg=DIM, bg=bg, font=(FONT, 7),
+             justify="left", anchor="w").pack(anchor="w", pady=(0, 10))
 
-    btn_row = tk.Frame(box, bg=PANEL)
-    btn_row.pack(anchor="w")
-    start_btn = tk.Label(btn_row, text="  START SHADOW ON VPS  ", fg=BG,
-                         bg=GREEN, font=(FONT, 8, "bold"),
-                         cursor="hand2", padx=12, pady=6)
-    start_btn.pack(side="left")
-    start_btn.bind("<Button-1>",
-                   lambda _e: _start_shadow_via_cockpit(launcher, state or {}))
+    # Actions
+    if actions:
+        a_row = tk.Frame(box, bg=bg)
+        a_row.pack(anchor="w")
+        for label, color, handler in actions:
+            chip = tk.Label(a_row, text=f"  {label}  ", fg=BG, bg=color,
+                            font=(FONT, 8, "bold"), cursor="hand2",
+                            padx=10, pady=5)
+            chip.pack(side="left", padx=(0, 6))
+            chip.bind("<Button-1>", lambda _e, h=handler: h())
 
-    tk.Label(box,
-             text=("Ou manual via SSH:\n"
-                   "  sudo systemctl start millennium_shadow.service"),
-             fg=DIM2, bg=PANEL, font=(FONT, 6), justify="left",
-             anchor="w").pack(anchor="w", pady=(12, 0))
+    if hint:
+        tk.Label(box, text=hint, fg=DIM2, bg=bg, font=(FONT, 6),
+                 justify="left", anchor="w").pack(anchor="w", pady=(12, 0))
+
+
+def _render_shadow_no_run(parent, launcher, state=None):
+    """Shadow selected but poller has no cached heartbeat."""
+    _render_hl2_empty(
+        parent,
+        title="NO SHADOW RUN VISIBLE",
+        blurb=("Nenhum shadow run detectado via cockpit API.\n"
+               "Pode ser: tunnel caiu, VPS runner parou, ou primeira vez."),
+        actions=[("▶ START SHADOW ON VPS", GREEN,
+                  lambda: _start_shadow_via_cockpit(launcher, state or {}))],
+        hint="Ou manual via SSH:\n  sudo systemctl start millennium_shadow.service",
+    )
 
 
 def _render_shadow_empty_state(parent, launcher, state):
-    """Sem slug selecionado (nenhum engine tem shadow run ativo)."""
-    box = tk.Frame(parent, bg=BG)
-    box.pack(fill="both", expand=True, padx=20, pady=20)
-    tk.Label(box, text="SHADOW MODE", fg=AMBER, bg=BG,
-             font=(FONT, 12, "bold")).pack(anchor="w")
-    tun_text, tun_fg = _get_tunnel_status_label()
-    row = tk.Frame(box, bg=BG)
-    row.pack(fill="x", pady=(4, 12))
-    tk.Label(row, text="TUNNEL: ", fg=DIM2, bg=BG,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(row, text=tun_text, fg=tun_fg, bg=BG,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(box,
-             text=("Shadow roda estrategias no VPS em modo observacional:\n"
-                   "simula trades sem executar, mede edge real em OHLCV vivo.\n\n"
-                   "Nao ha runner ativo. Use o botao abaixo pra iniciar o\n"
-                   "millennium_shadow.service via cockpit API (admin-scoped)."),
-             fg=DIM, bg=BG, font=(FONT, 7), justify="left",
-             anchor="w").pack(anchor="w", pady=(0, 12))
-    # START SHADOW button — chama POST /v1/shadow/start no VPS.
-    start_btn = tk.Label(box, text="  START SHADOW  ", fg=BG, bg=GREEN,
-                         font=(FONT, 8, "bold"), cursor="hand2",
-                         padx=12, pady=6)
-    start_btn.pack(anchor="w")
-    start_btn.bind("<Button-1>",
-                   lambda _e: _start_shadow_via_cockpit(launcher, state))
+    """Shadow mode landing — no slug selected."""
+    _render_hl2_empty(
+        parent,
+        title="SHADOW MODE",
+        blurb=("Shadow roda estratégias no VPS em modo observacional:\n"
+               "simula trades sem executar, mede edge real em OHLCV vivo.\n\n"
+               "Selecione um engine na sidebar, ou inicie um run via o\n"
+               "botão abaixo (chama systemctl start via cockpit admin)."),
+        actions=[("▶ START SHADOW", GREEN,
+                  lambda: _start_shadow_via_cockpit(launcher, state))],
+    )
     _schedule_shadow_refresh(launcher, state)
 
 
@@ -2008,66 +2015,32 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
 
 
 def _render_paper_empty_state(parent, launcher, state):
-    """No slug selected — paper tab landing."""
-    box = tk.Frame(parent, bg=BG)
-    box.pack(fill="both", expand=True, padx=20, pady=20)
-    tk.Label(box, text="PAPER MODE", fg=AMBER, bg=BG,
-             font=(FONT, 12, "bold")).pack(anchor="w")
-    tun_text, tun_fg = _get_tunnel_status_label()
-    row = tk.Frame(box, bg=BG)
-    row.pack(fill="x", pady=(4, 12))
-    tk.Label(row, text="TUNNEL: ", fg=DIM2, bg=BG,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(row, text=tun_text, fg=tun_fg, bg=BG,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(box,
-             text=("Paper runner executa o pod MILLENNIUM (CITADEL + JUMP\n"
-                   "+ RENAISSANCE) com posicoes simuladas, equity ao vivo,\n"
-                   "drawdown tracking, KS fast-halt. Account configuravel.\n\n"
-                   "Nenhum runner ativo. Start pelo botao abaixo ou via SSH:\n"
-                   "  sudo systemctl start millennium_paper.service"),
-             fg=DIM, bg=BG, font=(FONT, 7), justify="left",
-             anchor="w").pack(anchor="w", pady=(0, 12))
-    start_btn = tk.Label(box, text="  START PAPER ON VPS  ", fg=BG, bg=GREEN,
-                         font=(FONT, 8, "bold"), cursor="hand2",
-                         padx=12, pady=6)
-    start_btn.pack(anchor="w")
-    start_btn.bind("<Button-1>",
-                   lambda _e: _start_paper_via_cockpit(launcher, state))
+    """Paper landing — no slug selected."""
+    _render_hl2_empty(
+        parent,
+        title="PAPER MODE",
+        blurb=("Paper runner executa MILLENNIUM (CITADEL + JUMP + RENAISSANCE)\n"
+               "com posições simuladas, equity ao vivo, drawdown tracking e\n"
+               "KS fast-halt. Account configurável.\n\n"
+               "Selecione um engine na sidebar ou inicie o runner VPS abaixo."),
+        actions=[("▶ START PAPER", GREEN,
+                  lambda: _start_paper_via_cockpit(launcher, state))],
+        hint="Manual:  sudo systemctl start millennium_paper.service",
+    )
     _schedule_paper_refresh(launcher, state)
 
 
 def _render_paper_no_run(parent, launcher, state):
-    """Slug selected but no paper run found."""
-    box = tk.Frame(parent, bg=PANEL)
-    box.pack(fill="both", expand=True, padx=20, pady=20)
-    tk.Label(box, text="NO PAPER RUN VISIBLE", fg=DIM, bg=PANEL,
-             font=(FONT, 10, "bold")).pack(anchor="w")
-    tun_text, tun_fg = _get_tunnel_status_label()
-    row = tk.Frame(box, bg=PANEL)
-    row.pack(fill="x", pady=(4, 8))
-    tk.Label(row, text="TUNNEL: ", fg=DIM2, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(row, text=tun_text, fg=tun_fg, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left")
-    tk.Label(box,
-             text=("Nenhum paper run detectado via cockpit API.\n"
-                   "Pode ser: tunnel caiu, VPS runner parou, ou primeira vez."),
-             fg=DIM2, bg=PANEL, font=(FONT, 7), justify="left",
-             anchor="w").pack(anchor="w", pady=(0, 10))
-    btn_row = tk.Frame(box, bg=PANEL)
-    btn_row.pack(anchor="w")
-    start_btn = tk.Label(btn_row, text="  START PAPER ON VPS  ", fg=BG,
-                         bg=GREEN, font=(FONT, 8, "bold"),
-                         cursor="hand2", padx=12, pady=6)
-    start_btn.pack(side="left")
-    start_btn.bind("<Button-1>",
-                   lambda _e: _start_paper_via_cockpit(launcher, state))
-    tk.Label(box,
-             text=("Ou manual via SSH:\n"
-                   "  sudo systemctl start millennium_paper.service"),
-             fg=DIM2, bg=PANEL, font=(FONT, 6), justify="left",
-             anchor="w").pack(anchor="w", pady=(12, 0))
+    """Paper slug selected but cockpit shows no paper run."""
+    _render_hl2_empty(
+        parent,
+        title="NO PAPER RUN VISIBLE",
+        blurb=("Nenhum paper run detectado via cockpit API.\n"
+               "Tunnel offline, runner parado, ou ainda não iniciado."),
+        actions=[("▶ START PAPER ON VPS", GREEN,
+                  lambda: _start_paper_via_cockpit(launcher, state))],
+        hint="Manual:  sudo systemctl start millennium_paper.service",
+    )
     _schedule_paper_refresh(launcher, state)
 
 
@@ -2145,23 +2118,37 @@ def _refresh_paper_detail(launcher, state) -> None:
 
 
 def _render_vps_control_bar(parent, launcher, state) -> None:
-    """Compact bar showing VPS services + start/stop/restart buttons.
-    Visible at top of shadow/paper modes. Queries /v1/systemctl/is-active
-    for each service OR reads /v1/runs to infer state cheaply."""
-    bar = tk.Frame(parent, bg=BG2, highlightbackground=BORDER,
+    """HL2/institutional VPS control rail pinned above the detail pane.
+
+    One labelled row per service (shadow, paper) rendered as a grid:
+
+        ┌─ VPS · TUNNEL UP ─────────────────────────────────────┐
+        │ ●  MILLENNIUM SHADOW   RUNNING   [■STOP][↻RESTART]    │
+        │ ○  MILLENNIUM PAPER    STOPPED   [▶START]             │
+        └──────────────────────────────────────────────────────┘
+
+    Status inferred from /v1/runs (cheaper than systemctl is-active).
+    Tunnel state surfaces in the header so user sees "STOPPED" vs
+    "tunnel down" at a glance.
+    """
+    bar = tk.Frame(parent, bg=BG, highlightbackground=BORDER,
                    highlightthickness=1)
-    bar.pack(fill="x", padx=0, pady=(0, 6))
+    bar.pack(fill="x", padx=0, pady=(0, 4))
 
-    # Header
-    hdr = tk.Frame(bar, bg=BG2)
-    hdr.pack(fill="x", padx=8, pady=(4, 2))
-    tk.Label(hdr, text="VPS ENGINES", fg=AMBER, bg=BG2,
+    # Header strip — institutional caps, tunnel badge inline
+    hdr = tk.Frame(bar, bg=BG)
+    hdr.pack(fill="x", padx=10, pady=(5, 3))
+    tk.Label(hdr, text="VPS", fg=AMBER, bg=BG,
              font=(FONT, 7, "bold")).pack(side="left")
-    tun_text, tun_fg = _get_tunnel_status_label()
-    tk.Label(hdr, text=f"  TUNNEL {tun_text}", fg=tun_fg, bg=BG2,
+    tk.Label(hdr, text="  ·  TUNNEL ", fg=DIM2, bg=BG,
              font=(FONT, 6, "bold")).pack(side="left")
+    tun_text, tun_fg = _get_tunnel_status_label()
+    tk.Label(hdr, text=tun_text, fg=tun_fg, bg=BG,
+             font=(FONT, 7, "bold")).pack(side="left")
 
-    # Infer service state from /v1/runs (cheaper than systemctl is-active)
+    tk.Frame(bar, bg=BORDER, height=1).pack(fill="x", padx=10)
+
+    # Resolve service states from cockpit
     services_state = {"millennium_shadow": "unknown",
                       "millennium_paper": "unknown"}
     client = _get_cockpit_client()
@@ -2175,57 +2162,54 @@ def _render_vps_control_bar(parent, launcher, state) -> None:
                     svc = f"millennium_{mode}" if mode in ("shadow", "paper") else None
                     if svc and status == "running":
                         services_state[svc] = "running"
-                # If no running found, mark as stopped
                 for svc in list(services_state):
                     if services_state[svc] == "unknown":
                         services_state[svc] = "stopped"
         except Exception:
             pass
 
-    # One row per service
+    # Rows — institutional grid (fixed-width columns so pair aligns)
     for svc, svc_state in services_state.items():
         nice_name = svc.replace("millennium_", "MILLENNIUM ").upper()
-        row = tk.Frame(bar, bg=BG2)
-        row.pack(fill="x", padx=8, pady=1)
-        # Status dot
-        dot_color = GREEN if svc_state == "running" else (
-            DIM2 if svc_state == "stopped" else AMBER)
-        tk.Label(row, text="●", fg=dot_color, bg=BG2,
-                 font=(FONT, 8)).pack(side="left", padx=(0, 4))
-        # Name
-        tk.Label(row, text=nice_name, fg=WHITE, bg=BG2,
-                 font=(FONT, 7, "bold"), width=18,
+        row = tk.Frame(bar, bg=BG)
+        row.pack(fill="x", padx=10, pady=2)
+
+        running = svc_state == "running"
+        dot = "●" if running else "○"
+        dot_color = (GREEN if running else
+                     (DIM2 if svc_state == "stopped" else AMBER))
+        tk.Label(row, text=dot, fg=dot_color, bg=BG,
+                 font=(FONT, 9)).pack(side="left", padx=(0, 6))
+
+        tk.Label(row, text=nice_name, fg=WHITE, bg=BG,
+                 font=(FONT, 7, "bold"), width=20,
                  anchor="w").pack(side="left")
-        # State
+
         state_text = svc_state.upper()
-        state_color = GREEN if svc_state == "running" else (
-            DIM if svc_state == "stopped" else AMBER)
-        tk.Label(row, text=state_text, fg=state_color, bg=BG2,
+        state_color = (GREEN if running else
+                       (DIM if svc_state == "stopped" else AMBER))
+        tk.Label(row, text=state_text, fg=state_color, bg=BG,
                  font=(FONT, 7, "bold"), width=9,
                  anchor="w").pack(side="left")
-        # Action buttons (compact)
-        is_running = svc_state == "running"
 
         def _make_action(_svc, _action):
             return lambda _e: _systemctl_via_cockpit(
                 launcher, state, _svc, _action)
 
-        if is_running:
-            for label, color, action in [
-                ("STOP", RED, "stop"),
-                ("RESTART", AMBER, "restart"),
-            ]:
-                b = tk.Label(row, text=f" {label} ", fg=BG, bg=color,
-                             font=(FONT, 6, "bold"), cursor="hand2",
-                             padx=4, pady=1)
-                b.pack(side="left", padx=(4, 0))
-                b.bind("<Button-1>", _make_action(svc, action))
+        if running:
+            chips = [("■ STOP", RED, "stop"),
+                     ("↻ RESTART", AMBER, "restart")]
         else:
-            b = tk.Label(row, text=" START ", fg=BG, bg=GREEN,
-                         font=(FONT, 6, "bold"), cursor="hand2",
-                         padx=4, pady=1)
-            b.pack(side="left", padx=(4, 0))
-            b.bind("<Button-1>", _make_action(svc, "start"))
+            chips = [("▶ START", GREEN, "start")]
+        for label, color, action in chips:
+            chip = tk.Label(row, text=f" {label} ", fg=BG, bg=color,
+                            font=(FONT, 6, "bold"), cursor="hand2",
+                            padx=5, pady=1)
+            chip.pack(side="left", padx=(4, 0))
+            chip.bind("<Button-1>", _make_action(svc, action))
+
+    # Bottom spacing
+    tk.Frame(bar, bg=BG, height=4).pack(fill="x")
 
 
 def _systemctl_via_cockpit(launcher, state, service: str, action: str) -> None:
