@@ -47,6 +47,7 @@ from launcher_support.execution import (
 from launcher_support import cockpit_tab as cockpit_tab_mod
 from launcher_support import command_center as command_center_mod
 from launcher_support import dashboard_controls as dashboard_controls_mod
+from launcher_support.screens._metrics import timed_legacy_switch
 from launcher_support.menu_data import (
     BLOCK_DESCRIPTIONS as _MENU_BLOCK_DESCRIPTIONS,
     COMMAND_ROADMAPS as _MENU_COMMAND_ROADMAPS,
@@ -3984,6 +3985,7 @@ class App(tk.Tk):
 
         self._results_render_tab("overview")
 
+    @timed_legacy_switch("results_tab")
     def _results_render_tab(self, tab):
         if not hasattr(self, "_results_body") or not self._results_body.winfo_exists():
             return
@@ -4357,6 +4359,7 @@ class App(tk.Tk):
         self._results_list_canvas = canvas
         self._results_build_list_items()
 
+    @timed_legacy_switch("results_list")
     def _results_build_list_items(self):
         if self._results_list_inner is None:
             return
@@ -4494,6 +4497,7 @@ class App(tk.Tk):
             except Exception: pass
 
     # -- CHART RENDER (matplotlib via FigureCanvasTkAgg) --
+    @timed_legacy_switch("results_chart")
     def _results_render_chart(self, trade):
         # Destroy previous canvas (releases the Figure)
         for w in self._results_chart_frame.winfo_children():
@@ -4622,6 +4626,7 @@ class App(tk.Tk):
         # Keep reference so gc doesn't collect the figure while it's visible
         self._results_canvas = canvas
 
+    @timed_legacy_switch("results_data")
     def _results_render_data_panel(self, trade):
         for w in self._results_data_panel.winfo_children():
             try: w.destroy()
@@ -6063,6 +6068,7 @@ class App(tk.Tk):
         self._arb_detail_body = body
         self._arb_detail_default = default
 
+    @timed_legacy_switch("arb_detail")
     def _arb_show_detail(self, pair: dict):
         """Populate the detail pane with the factor breakdown of a pair."""
         body = getattr(self, "_arb_detail_body", None)
@@ -6762,6 +6768,7 @@ class App(tk.Tk):
                     text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
         threading.Thread(target=_worker, daemon=True).start()
 
+    @timed_legacy_switch("arb_basis")
     def _arb_basis_paint(self, inner, cols, pairs):
         for w in inner.winfo_children():
             w.destroy()
@@ -6845,6 +6852,7 @@ class App(tk.Tk):
                     text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
         threading.Thread(target=_worker, daemon=True).start()
 
+    @timed_legacy_switch("arb_spot")
     def _arb_spot_paint(self, inner, cols, pairs):
         for w in inner.winfo_children():
             w.destroy()
@@ -7121,6 +7129,7 @@ class App(tk.Tk):
                     pass
             self.after(60_000, _tick)
 
+    @timed_legacy_switch("funding_paint")
     def _funding_paint(self, rows, arb, stats):
         from datetime import datetime
         if not getattr(self, "_funding_alive", False):
@@ -8492,6 +8501,7 @@ class App(tk.Tk):
         self._eng_refresh()
         self._eng_poll_logs()
 
+    @timed_legacy_switch("eng_refresh")
     def _eng_refresh(self):
         """Rebuild the proc list with RUNNING + STOPPED sections, always
         visible. Each section sorted by recency DESC. Reschedules 2s tick."""
