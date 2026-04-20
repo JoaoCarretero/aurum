@@ -121,6 +121,20 @@ def _slice_cached_history(df: pd.DataFrame | None, period: str, limit: int,
     return subset
 
 
+def _slice_partial_cached_history(
+    df: pd.DataFrame | None,
+    *,
+    end_time_ms: int,
+) -> pd.DataFrame | None:
+    if df is None or df.empty:
+        return None
+    end_ts = pd.to_datetime(end_time_ms, unit="ms")
+    subset = df[df["time"] <= end_ts].sort_values("time").reset_index(drop=True)
+    if subset.empty:
+        return None
+    return subset
+
+
 def _fetch_binance_rows(url: str, params: dict, label: str) -> list[dict] | None:
     try:
         import requests
@@ -158,6 +172,8 @@ def fetch_funding_rate(symbol: str, limit: int = 100,
         url = "https://fapi.binance.com/fapi/v1/fundingRate"
         params: dict = {"symbol": symbol, "limit": limit}
         if end_time_ms is not None:
+            funding_period_ms = 8 * 60 * 60 * 1000
+            params["startTime"] = int(end_time_ms - max(limit - 1, 0) * funding_period_ms)
             params["endTime"] = int(end_time_ms)
         data = _fetch_binance_rows(url, params, f"funding rate {symbol}")
         if not data:
@@ -183,14 +199,19 @@ def fetch_open_interest(symbol: str, period: str = "15m", limit: int = 200,
     try:
         cols = ["time", "oi", "oi_value"]
         if end_time_ms is not None:
+            cached_frame = _load_cached_frame("open_interest", symbol, period, cols)
             cached = _slice_cached_history(
-                _load_cached_frame("open_interest", symbol, period, cols),
+                cached_frame,
                 period,
                 limit,
                 end_time_ms,
             )
             if cached is not None:
                 return cached
+            if limit > 500:
+                partial = _slice_partial_cached_history(cached_frame, end_time_ms=end_time_ms)
+                if partial is not None:
+                    return partial
         url = "https://fapi.binance.com/futures/data/openInterestHist"
         params: dict = {"symbol": symbol, "period": period, "limit": limit}
         # Bug 2 fix: when caller is running OOS/backtest with end_time_ms,
@@ -238,14 +259,19 @@ def fetch_long_short_ratio(symbol: str, period: str = "15m",
     try:
         cols = ["time", "ls_ratio", "long_pct", "short_pct"]
         if end_time_ms is not None:
+            cached_frame = _load_cached_frame("long_short_ratio", symbol, period, cols)
             cached = _slice_cached_history(
-                _load_cached_frame("long_short_ratio", symbol, period, cols),
+                cached_frame,
                 period,
                 limit,
                 end_time_ms,
             )
             if cached is not None:
                 return cached
+            if limit > 500:
+                partial = _slice_partial_cached_history(cached_frame, end_time_ms=end_time_ms)
+                if partial is not None:
+                    return partial
         url = "https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
         params: dict = {"symbol": symbol, "period": period, "limit": limit}
         # Bug 2 fix: propagate endTime to the live fetch so OOS/backtest

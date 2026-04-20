@@ -12,7 +12,6 @@ class RiskScreen(Screen):
     def __init__(self, parent: tk.Misc, app: Any):
         super().__init__(parent)
         self.app = app
-        self._content: tk.Frame | None = None
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -46,26 +45,9 @@ class RiskScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
-
-    def on_enter(self, **kwargs: Any) -> None:
-        del kwargs
         app = self.app
-        app.h_path.configure(text="> RISK")
-        app.h_stat.configure(text="CONSOLE", fg=AMBER_D)
-        app.f_lbl.configure(text="ESC voltar  |  H hub")
-        app._kb("<Escape>", lambda: app._menu("main"))
-        app._kb("<Key-0>", lambda: app._menu("main"))
-        app._bind_global_nav()
-
-        if self._content is None:
-            return
-        for child in self._content.winfo_children():
-            child.destroy()
-
         panel = app._ui_panel_frame(
-            self._content,
+            outer,
             "RISK ROUTER",
             "Current and planned monitoring modules",
         )
@@ -120,3 +102,13 @@ class RiskScreen(Screen):
             fg=AMBER_D,
         )
         app._ui_back_row(panel, lambda: app._menu("main"))
+
+    def on_enter(self, **kwargs: Any) -> None:
+        del kwargs
+        app = self.app
+        app.h_path.configure(text="> RISK")
+        app.h_stat.configure(text="CONSOLE", fg=AMBER_D)
+        app.f_lbl.configure(text="ESC voltar  |  H hub")
+        app._kb("<Escape>", lambda: app._menu("main"))
+        app._kb("<Key-0>", lambda: app._menu("main"))
+        app._bind_global_nav()

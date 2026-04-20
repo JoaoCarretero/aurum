@@ -1190,6 +1190,9 @@ class App(tk.Tk):
 
         self.proc = None
         self.oq = queue.Queue()
+        self._ui_task_queue = queue.Queue()
+        self._ui_task_after_id = None
+        self._ui_alive = True
         self.history = []  # nav history for back
         self._exec_progress_after_id = None
         self._exec_visual_mode = None
@@ -1234,6 +1237,7 @@ class App(tk.Tk):
 
         threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
+        self._ui_schedule_drain()
         self._splash()
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self._quit)
@@ -1452,6 +1456,41 @@ class App(tk.Tk):
                 return  # let Entry handle the keystroke
             callback()
         self.bind(key, wrapper)
+
+    def _ui_call_soon(self, callback):
+        """Queue a UI callback from any thread; drained on Tk main thread."""
+        if not getattr(self, "_ui_alive", False):
+            return
+        try:
+            self._ui_task_queue.put_nowait(callback)
+        except Exception:
+            return
+
+    def _ui_schedule_drain(self):
+        if not getattr(self, "_ui_alive", False):
+            return
+        try:
+            self._ui_task_after_id = self.after(50, self._ui_drain_tasks)
+        except (RuntimeError, tk.TclError):
+            self._ui_task_after_id = None
+
+    def _ui_drain_tasks(self):
+        self._ui_task_after_id = None
+        if not getattr(self, "_ui_alive", False):
+            return
+        drained = 0
+        max_drain = 200
+        while drained < max_drain:
+            try:
+                callback = self._ui_task_queue.get_nowait()
+            except queue.Empty:
+                break
+            drained += 1
+            try:
+                callback()
+            except Exception:
+                pass
+        self._ui_schedule_drain()
 
     def _tick(self):
         self.t_clk.configure(text=datetime.now().strftime("%H:%M:%S"))
@@ -6163,14 +6202,14 @@ class App(tk.Tk):
                     pass
                 top = opps[0] if opps else None
                 try:
-                    self.after(0, lambda: self._arb_hub_telem_update(
+                    self._ui_call_soon(lambda: self._arb_hub_telem_update(
                         stats, top, opps, arb_cc, arb_dd, arb_cd, basis, spot))
                 except (RuntimeError, tk.TclError):
                     # Tk root gone (test teardown / app shutdown) — drop update
                     pass
             except Exception as e:
                 try:
-                    self.after(0, lambda: self._arb_set_status_error(
+                    self._ui_call_soon(lambda: self._arb_set_status_error(
                         f"scan failed: {str(e)[:40]}"))
                 except (RuntimeError, tk.TclError):
                     pass
@@ -6410,9 +6449,9 @@ class App(tk.Tk):
                 scanner.scan()
                 scanner.scan_spot()
                 pairs = scanner.basis_pairs(min_basis_bps=5)[:20]
-                self.after(0, lambda: self._arb_basis_paint(inner, cols, pairs))
+                self._ui_call_soon(lambda: self._arb_basis_paint(inner, cols, pairs))
             except Exception as e:
-                self.after(0, lambda: tk.Label(inner,
+                self._ui_call_soon(lambda: tk.Label(inner,
                     text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -6494,9 +6533,9 @@ class App(tk.Tk):
                     self._funding_scanner = scanner
                 scanner.scan_spot()
                 pairs = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
-                self.after(0, lambda: self._arb_spot_paint(inner, cols, pairs))
+                self._ui_call_soon(lambda: self._arb_spot_paint(inner, cols, pairs))
             except Exception as e:
-                self.after(0, lambda: tk.Label(inner,
+                self._ui_call_soon(lambda: tk.Label(inner,
                     text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -6758,9 +6797,9 @@ class App(tk.Tk):
                     maybe_alert_telegram(rows, apr_threshold=100.0)
                 except Exception:
                     pass
-                self.after(0, lambda: self._funding_paint(rows, arb, stats))
+                self._ui_call_soon(lambda: self._funding_paint(rows, arb, stats))
             except Exception as e:
-                self.after(0, lambda: self._funding_fail(str(e)))
+                self._ui_call_soon(lambda: self._funding_fail(str(e)))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -7847,6 +7886,9 @@ class App(tk.Tk):
         self._eng_tail_thread: threading.Thread | None = None
         self._eng_log_queue: queue.Queue = queue.Queue()
         self._eng_after_id: str | None = None
+        self._eng_selected_key: str | None = None
+        self._eng_mode_filter: str = getattr(self, "_eng_mode_filter", "all")
+        self._eng_filter_tabs: dict[str, tk.Label] = {}
 
         _outer, outer = self._ui_page_shell(
             "ENGINE LOGS",
@@ -7872,6 +7914,33 @@ class App(tk.Tk):
             tk.Label(hrow, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG,
                      width=width, anchor="w").pack(side="left")
         tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
+
+        filter_row = tk.Frame(left, bg=BG)
+        filter_row.pack(fill="x", pady=(2, 6))
+        tk.Label(filter_row, text="FILTER", font=(FONT, 6, "bold"),
+                 fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
+        for idx, (tab_label, filter_name) in enumerate([
+            ("ALL", "all"),
+            ("SHADOW", "shadow"),
+            ("PAPER", "paper"),
+            ("DEMO", "demo"),
+            ("TESTNET", "testnet"),
+            ("LIVE", "live"),
+        ], start=1):
+            tab = tk.Label(
+                filter_row,
+                text=f" {idx}:{tab_label} ",
+                font=(FONT, 6, "bold"),
+                fg=AMBER_D if self._eng_mode_filter == filter_name else DIM,
+                bg=BG3 if self._eng_mode_filter == filter_name else BG,
+                cursor="hand2",
+                padx=5,
+                pady=2,
+            )
+            tab.pack(side="left", padx=(0, 3))
+            tab.bind("<Button-1>", lambda _e, f=filter_name: self._eng_set_mode_filter(f))
+            self._eng_filter_tabs[filter_name] = tab
+            self._kb(f"<Key-{idx}>", lambda f=filter_name: self._eng_set_mode_filter(f))
 
         list_wrap = tk.Frame(left, bg=BG)
         list_wrap.pack(fill="both", expand=True)
@@ -8060,6 +8129,7 @@ class App(tk.Tk):
                      font=(FONT, 7), fg=RED, bg=BG,
                      anchor="w").pack(fill="x")
             local_procs = []
+        local_procs = [p for p in local_procs if self._eng_is_engine_row(p)]
 
         vps_rows = self._eng_scan_vps_runs(limit=20)
         historical = self._eng_scan_historical_runs(limit=30, hours=72)
@@ -8070,19 +8140,25 @@ class App(tk.Tk):
         vps_ids = {r.get("_run_id") for r in vps_rows if r.get("_run_id")}
         historical = [h for h in historical
                       if self._eng_run_id_of(h) not in vps_ids]
+        historical = [h for h in historical if self._eng_is_engine_row(h)]
 
         running, stopped = [], []
         for row in local_procs + vps_rows + historical:
+            if not self._eng_matches_mode_filter(row):
+                continue
             if row.get("alive"):
                 running.append(row)
             else:
                 stopped.append(row)
         running.sort(key=self._eng_recency_key, reverse=True)
         stopped.sort(key=self._eng_recency_key, reverse=True)
+        self._eng_refresh_filter_tabs()
+        filt_label = (self._eng_mode_filter.upper()
+                      if self._eng_mode_filter != "all" else "ALL ENGINES")
 
         # --- RUNNING section ---------------------------------
         tk.Label(self._eng_list_wrap,
-                 text=f"  ●  RUNNING  ({len(running)})",
+                 text=f"  ●  RUNNING  ·  {filt_label}  ({len(running)})",
                  font=(FONT, 7, "bold"), fg=GREEN, bg=BG,
                  anchor="w").pack(fill="x", pady=(2, 2))
         if running:
@@ -8090,7 +8166,7 @@ class App(tk.Tk):
                 self._eng_render_row(p)
         else:
             tk.Label(self._eng_list_wrap,
-                     text="   — nenhum engine ativo (local ou VPS) —",
+                     text="   — nenhum engine ativo no filtro selecionado —",
                      font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
                      anchor="w").pack(fill="x", pady=2)
 
@@ -8098,7 +8174,7 @@ class App(tk.Tk):
         tk.Frame(self._eng_list_wrap, bg=DIM2,
                  height=1).pack(fill="x", pady=(6, 4), padx=8)
         tk.Label(self._eng_list_wrap,
-                 text=f"  ○  STOPPED (últimas 72h) ({len(stopped)})",
+                 text=f"  ○  STOPPED (últimas 72h)  ·  {filt_label}  ({len(stopped)})",
                  font=(FONT, 7, "bold"), fg=DIM, bg=BG,
                  anchor="w").pack(fill="x", pady=(2, 2))
         if stopped:
@@ -8106,7 +8182,7 @@ class App(tk.Tk):
                 self._eng_render_row(h)
         else:
             tk.Label(self._eng_list_wrap,
-                     text="   — sem runs recentes no disco —",
+                     text="   — sem runs recentes no filtro selecionado —",
                      font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
                      anchor="w").pack(fill="x", pady=2)
 
@@ -8130,6 +8206,77 @@ class App(tk.Tk):
         out["src"] = "local"
         out.setdefault("mode", str(proc.get("mode") or "live"))
         return out
+
+    def _eng_known_slugs(self) -> set[str]:
+        try:
+            from core.ops.proc import ENGINES as _ENGINES
+
+            known = {str(name).lower() for name in _ENGINES.keys()}
+        except Exception:
+            known = set()
+        known.update({
+            "aqr", "arbitrage", "backtest", "bridgewater", "citadel",
+            "darwin", "deshaw", "graham", "harmonics", "janestreet",
+            "jump", "kepos", "live", "mercurio", "millennium",
+            "multistrategy", "newton", "prometeu", "renaissance",
+            "thoth", "twosigma", "winton",
+        })
+        return known
+
+    def _eng_base_slug(self, row: dict) -> str:
+        raw = str(row.get("engine") or "").strip().lower()
+        if "(" in raw:
+            raw = raw.split("(", 1)[0].strip()
+        return raw
+
+    def _eng_is_engine_row(self, row: dict) -> bool:
+        if row.get("_remote"):
+            return True
+        base = self._eng_base_slug(row)
+        if base in {"prefetch"}:
+            return False
+        return base in self._eng_known_slugs()
+
+    def _eng_matches_mode_filter(self, row: dict) -> bool:
+        current = getattr(self, "_eng_mode_filter", "all")
+        if current == "all":
+            return True
+        return str(row.get("mode") or "").strip().lower() == current
+
+    def _eng_row_key(self, row: dict) -> str:
+        rid = row.get("_run_id")
+        if rid:
+            return f"run:{rid}"
+        pid = row.get("pid")
+        log_file = row.get("log_file") or row.get("log") or ""
+        return f"pid:{pid}|log:{log_file}"
+
+    def _eng_set_mode_filter(self, mode_name: str) -> None:
+        self._eng_mode_filter = mode_name
+        self._eng_selected_key = None
+        self._eng_selected_pid = None
+        try:
+            self._eng_log_text.config(state="normal")
+            self._eng_log_text.delete("1.0", "end")
+            self._eng_log_text.config(state="disabled")
+            self._eng_log_header.configure(
+                text=f" — select an engine log in {mode_name.upper()} — ",
+                fg=DIM,
+            )
+        except Exception:
+            pass
+        self._eng_refresh()
+
+    def _eng_refresh_filter_tabs(self) -> None:
+        for filter_name, tab in getattr(self, "_eng_filter_tabs", {}).items():
+            active = filter_name == getattr(self, "_eng_mode_filter", "all")
+            try:
+                tab.configure(
+                    fg=AMBER_D if active else DIM,
+                    bg=BG3 if active else BG,
+                )
+            except Exception:
+                pass
 
     def _eng_run_id_of(self, row: dict) -> str | None:
         rid = row.get("_run_id")
@@ -8234,6 +8381,13 @@ class App(tk.Tk):
                                                  "exports", "funding_scanner",
                                                  "macro"):
                 continue
+            base_slug = (
+                name.removesuffix("_shadow").removesuffix("_paper").lower()
+                if name.endswith(("_shadow", "_paper"))
+                else name.lower()
+            )
+            if base_slug not in self._eng_known_slugs():
+                continue
             # Derive display engine slug from dir name
             if name.endswith("_shadow"):
                 engine_slug = name.removesuffix("_shadow") + " (shadow)"
@@ -8299,6 +8453,7 @@ class App(tk.Tk):
     def _eng_render_row(self, proc: dict):
         alive = bool(proc.get("alive"))
         pid = proc.get("pid")
+        row_key = self._eng_row_key(proc)
         engine_full = str(proc.get("engine", "?"))
         # engine "MILLENNIUM (paper)" → split label + mode for column
         if "(" in engine_full and engine_full.endswith(")"):
@@ -8346,7 +8501,7 @@ class App(tk.Tk):
                 try: l.configure(bg=BG3)
                 except Exception: pass
         def _hover_off(_e=None, labels=labels, p=proc):
-            bg = BG3 if self._eng_selected_pid == p.get("pid") else BG
+            bg = BG3 if self._eng_selected_key == self._eng_row_key(p) else BG
             for l in labels:
                 try: l.configure(bg=bg)
                 except Exception: pass
@@ -8356,7 +8511,7 @@ class App(tk.Tk):
             w.bind("<Enter>", _hover_on)
             w.bind("<Leave>", _hover_off)
 
-        if self._eng_selected_pid == pid:
+        if self._eng_selected_key == row_key:
             for l in labels:
                 try: l.configure(bg=BG3)
                 except Exception: pass
@@ -8398,6 +8553,7 @@ class App(tk.Tk):
         """Stop old log tail, start a new one for the selected proc."""
         pid = proc.get("pid")
         self._eng_selected_pid = pid
+        self._eng_selected_key = self._eng_row_key(proc)
 
         # Stop old tail worker if any
         if self._eng_tail_thread is not None:
@@ -12042,6 +12198,14 @@ class App(tk.Tk):
 
     # --- QUIT --------------------------------------------
     def _quit(self):
+        self._ui_alive = False
+        aid = getattr(self, "_ui_task_after_id", None)
+        if aid is not None:
+            try:
+                self.after_cancel(aid)
+            except Exception:
+                pass
+            self._ui_task_after_id = None
         if self.proc and self.proc.poll() is None:
             r = messagebox.askyesnocancel("AURUM", "Engine running. Stop before closing?")
             if r is None: return

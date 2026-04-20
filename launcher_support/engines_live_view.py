@@ -45,6 +45,7 @@ Mode = Literal["paper", "demo", "testnet", "live", "shadow"]
 _MODE_ORDER: tuple[Mode, ...] = ("paper", "demo", "testnet", "live", "shadow")
 _DEFAULT_MODE: Mode = "paper"
 _DEFAULT_STATE_PATH = Path("data/ui_state.json")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _MODE_COLORS: dict[Mode, str] = {
     "paper":   MODE_PAPER,
@@ -236,6 +237,19 @@ _ENGINE_DIR_MAP: dict[str, str] = {
 }
 
 
+def _use_remote_shadow_cache() -> bool:
+    """Only trust the global ShadowPoller when running from the repo workspace.
+
+    Tests that chdir() into a temp tree expect pure local disk discovery and
+    must not inherit a live poller singleton from another launcher instance.
+    """
+    try:
+        cwd = Path.cwd().resolve()
+    except Exception:
+        return False
+    return cwd == _REPO_ROOT
+
+
 def _safe_float(value):
     try:
         return float(value)
@@ -301,7 +315,8 @@ def render(launcher, parent, *, on_escape) -> dict:
     `on_escape` is a no-arg callable invoked when ESC is pressed.
 
     Returns a handle dict:
-        {"refresh": callable, "cleanup": callable, "set_mode": callable}
+        {"refresh": callable, "cleanup": callable, "set_mode": callable,
+         "rebind": callable, "root": widget}
     """
     state: dict = {
         "mode":           load_mode(),
@@ -342,8 +357,28 @@ def render(launcher, parent, *, on_escape) -> dict:
         launcher._kb(seq, fn)
         state["bound_keys"].append(seq)
 
-    _kb("<Escape>", on_escape)
-    _kb("<Key-0>", on_escape)
+    def _bind_keys():
+        state["bound_keys"] = []
+        _kb("<Escape>", on_escape)
+        _kb("<Key-0>", on_escape)
+        _kb("<KeyPress-m>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
+        _kb("<KeyPress-M>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
+        for idx, mode_name in enumerate(_MODE_ORDER, start=1):
+            if idx > 9:
+                break
+            _kb(f"<KeyPress-{idx}>",
+                lambda _e=None, _m=mode_name: set_mode(_m))
+        _kb("<Up>", lambda _e=None: _move_selection(state, -1))
+        _kb("<Down>", lambda _e=None: _move_selection(state, 1))
+        _kb("<Left>", lambda _e=None: _move_live_selection(state, -1))
+        _kb("<Right>", lambda _e=None: _move_live_selection(state, 1))
+        _kb("<Return>", lambda _e=None: _activate_selection(state, launcher))
+        _kb("<KeyPress-l>", lambda _e=None: _open_selected_log(state, launcher))
+        _kb("<KeyPress-L>", lambda _e=None: _open_selected_log(state, launcher))
+        _kb("<KeyPress-s>", lambda _e=None: _stop_selected_live(state, launcher))
+        _kb("<KeyPress-S>", lambda _e=None: _stop_selected_live(state, launcher))
+        _kb("<KeyPress-b>", lambda _e=None: _open_selected_backtest(state, launcher))
+        _kb("<KeyPress-B>", lambda _e=None: _open_selected_backtest(state, launcher))
 
     def refresh():
         _render_master_list(state, launcher)
@@ -394,29 +429,15 @@ def render(launcher, parent, *, on_escape) -> dict:
     state["refresh"] = refresh
     state["set_mode"] = set_mode
 
-    _kb("<KeyPress-m>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
-    _kb("<KeyPress-M>", lambda _e=None: set_mode(cycle_mode(state["mode"])))
-    # Direct mode-select by digit: 1=paper 2=demo 3=testnet 4=live 5=shadow
-    # Mirrors _MODE_ORDER so user can teleport between views via keyboard.
-    for idx, mode_name in enumerate(_MODE_ORDER, start=1):
-        if idx > 9:
-            break
-        _kb(f"<KeyPress-{idx}>",
-            lambda _e=None, _m=mode_name: set_mode(_m))
-    _kb("<Up>", lambda _e=None: _move_selection(state, -1))
-    _kb("<Down>", lambda _e=None: _move_selection(state, 1))
-    _kb("<Left>", lambda _e=None: _move_live_selection(state, -1))
-    _kb("<Right>", lambda _e=None: _move_live_selection(state, 1))
-    _kb("<Return>", lambda _e=None: _activate_selection(state, launcher))
-    _kb("<KeyPress-l>", lambda _e=None: _open_selected_log(state, launcher))
-    _kb("<KeyPress-L>", lambda _e=None: _open_selected_log(state, launcher))
-    _kb("<KeyPress-s>", lambda _e=None: _stop_selected_live(state, launcher))
-    _kb("<KeyPress-S>", lambda _e=None: _stop_selected_live(state, launcher))
-    _kb("<KeyPress-b>", lambda _e=None: _open_selected_backtest(state, launcher))
-    _kb("<KeyPress-B>", lambda _e=None: _open_selected_backtest(state, launcher))
-
+    _bind_keys()
     refresh()
-    return {"refresh": refresh, "cleanup": cleanup, "set_mode": set_mode}
+    return {
+        "refresh": refresh,
+        "cleanup": cleanup,
+        "set_mode": set_mode,
+        "rebind": _bind_keys,
+        "root": root,
+    }
 
 
 def _build_header(parent, launcher, state) -> tk.Frame:
@@ -889,6 +910,12 @@ def _render_detail(state, launcher):
     bucket = state.get("selected_bucket")
     mode = state.get("mode")
 
+    if mode == "paper":
+        slug = "millennium"
+        bucket = "LIVE"
+        state["selected_slug"] = slug
+        state["selected_bucket"] = bucket
+
     # Master-detail com sidebar universal: renderiza sidebar primeiro
     # (todas as engines do registry) e depois dispatcha o detail pane
     # especifico do modo/bucket dentro de detail_inner.
@@ -1316,15 +1343,16 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     poller ativo, cai pro disco local (dev workflow preservado).
     """
     # Remote path via poller cache (nunca bloqueia)
-    try:
-        from launcher_support.tunnel_registry import get_shadow_poller
-        poller = get_shadow_poller()
-    except Exception:
-        poller = None
-    if poller is not None:
-        cached = poller.get_cached()
-        if cached is not None:
-            return cached  # (virtual_dir, heartbeat)
+    if _use_remote_shadow_cache():
+        try:
+            from launcher_support.tunnel_registry import get_shadow_poller
+            poller = get_shadow_poller()
+        except Exception:
+            poller = None
+        if poller is not None:
+            cached = poller.get_cached()
+            if cached is not None:
+                return cached  # (virtual_dir, heartbeat)
 
     # Local disk fallback (layout existente)
     root = Path("data/millennium_shadow")
@@ -1577,6 +1605,8 @@ def _engine_registry_for_sidebar(state) -> list[dict]:
     """Return list de {slug, display} pra sidebar. Inclui todas engines
     exibidas no bucket LIVE/READY atual — evita depender de import
     circular com launcher.ENGINES."""
+    if state.get("mode") == "paper":
+        return [{"slug": "millennium", "display": "MILLENNIUM"}]
     by_bucket = state.get("engines_by_bucket") or {}
     seen: set[str] = set()
     out: list[dict] = []
@@ -2390,6 +2420,9 @@ def _start_shadow_via_cockpit(launcher, state) -> None:
 def _toast(launcher, msg: str, error: bool = False) -> None:
     """Feedback transient: label flutuante que some em 4s. Evita popup modal."""
     try:
+        from launcher_support.audio import notify as _audio_notify
+
+        _audio_notify(launcher, error=error)
         color = RED if error else GREEN
         top = tk.Toplevel(launcher)
         top.overrideredirect(True)

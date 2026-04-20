@@ -38,7 +38,7 @@ from core import (
 from core.sentiment import (
     fetch_funding_rate, fetch_open_interest, fetch_long_short_ratio,
     funding_zscore, oi_delta_signal, ls_ratio_signal, composite_sentiment,
-    cached_coverage,
+    cached_coverage, _load_cached_frame,
 )
 from core.ops.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
@@ -80,7 +80,7 @@ RUNTIME_MIN_COVERAGE_FRACTION = 0.70
 #  SENTIMENT DATA COLLECTION
 # ══════════════════════════════════════════════════════════════
 
-def _sentiment_limits(window_days: int | None) -> tuple[int, int, int]:
+def _sentiment_limits(window_days: int | None, *, historical: bool = False) -> tuple[int, int, int]:
     """Return (funding_limit, oi_limit, ls_limit) sized to cover ``window_days``.
 
     Historical Binance Futures coverage:
@@ -95,8 +95,14 @@ def _sentiment_limits(window_days: int | None) -> tuple[int, int, int]:
     if window_days is None or window_days <= 0:
         return 100, 200, 200
     funding = min(1000, max(100, int(window_days * 3 * 1.2)))
-    oi      = min(500,  max(200, int(window_days * 96 * 1.1)))
-    ls      = min(500,  max(200, int(window_days * 96 * 1.1)))
+    oi_need = max(200, int(window_days * 96 * 1.1))
+    ls_need = max(200, int(window_days * 96 * 1.1))
+    if historical:
+        oi = oi_need
+        ls = ls_need
+    else:
+        oi = min(500, oi_need)
+        ls = min(500, ls_need)
     return funding, oi, ls
 
 
@@ -175,6 +181,30 @@ def _coverage_eligibility(
     }
 
 
+def _load_partial_cached_sentiment(
+    kind: str,
+    symbol: str,
+    period: str,
+    *,
+    end_time_ms: int,
+) -> pd.DataFrame | None:
+    columns_by_kind = {
+        "open_interest": ["time", "oi", "oi_value"],
+        "long_short_ratio": ["time", "ls_ratio", "long_pct", "short_pct"],
+    }
+    cols = columns_by_kind.get(kind)
+    if cols is None:
+        return None
+    cached = _load_cached_frame(kind, symbol, period, cols)
+    if cached is None or cached.empty:
+        return None
+    end_ts = pd.to_datetime(end_time_ms, unit="ms")
+    subset = cached[cached["time"] <= end_ts].sort_values("time").reset_index(drop=True)
+    if subset.empty:
+        return None
+    return subset
+
+
 def collect_sentiment(symbols: list, end_time_ms: int | None = None,
                       window_days: int | None = None) -> dict:
     """
@@ -187,7 +217,10 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
 
     Returns dict[symbol] = {funding_z: Series, oi_signal: Series, ls_signal: Series}
     """
-    funding_limit, oi_limit, ls_limit = _sentiment_limits(window_days)
+    funding_limit, oi_limit, ls_limit = _sentiment_limits(
+        window_days,
+        historical=end_time_ms is not None,
+    )
     sentiment = {}
     missing_historical: list[str] = []
     for sym in symbols:
@@ -205,11 +238,25 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
 
         # Open Interest
         oi_df = fetch_open_interest(sym, period="15m", limit=oi_limit, end_time_ms=end_time_ms)
+        if oi_df is None and end_time_ms is not None:
+            oi_df = _load_partial_cached_sentiment(
+                "open_interest",
+                sym,
+                "15m",
+                end_time_ms=end_time_ms,
+            )
         data["oi_df"] = oi_df
         data["oi_ready"] = oi_df is not None and len(oi_df) >= 10
 
         # Long/Short ratio
         ls_df = fetch_long_short_ratio(sym, period="15m", limit=ls_limit, end_time_ms=end_time_ms)
+        if ls_df is None and end_time_ms is not None:
+            ls_df = _load_partial_cached_sentiment(
+                "long_short_ratio",
+                sym,
+                "15m",
+                end_time_ms=end_time_ms,
+            )
         if ls_df is not None and len(ls_df) >= 5:
             data["ls_signal"] = ls_ratio_signal(ls_df)
             data["ls_df"] = ls_df
@@ -348,27 +395,32 @@ def _resolve_runtime_preset(
             "post_trade_cooldown_bars": max(0, int(post_trade_cooldown_bars)),
             "regime_thresholds": None,
             "symbol_health": None,
+            "min_coverage_fraction": 0.70,
         }
-    if name != "robust":
+    if name not in {"robust", "oi_research"}:
         raise ValueError(f"unknown preset: {preset}")
+    robust_symbol_health = {
+        "lookback": 8,
+        "block_min_trades": 5,
+        "block_expectancy": -0.35,
+        "block_loss_rate": 0.80,
+        "saturation_start": 6,
+        "saturation_full": 10,
+        "min_multiplier": 0.45,
+    }
+    robust_disable_oi = True if name == "robust" else bool(disable_oi)
+    max_active_components = 2 if robust_disable_oi else 3
     return {
-        "preset": "robust",
+        "preset": name,
         "strict_direction": True if not strict_direction else bool(strict_direction),
-        "min_components": max(2, int(min_components)),
+        "min_components": min(max_active_components, max(2, int(min_components))),
         "min_dir_thresh": 0.35 if min_dir_thresh is None else float(min_dir_thresh),
-        "disable_oi": True if not disable_oi else bool(disable_oi),
-        "allowed_macro_regimes": parsed_regimes,
+        "disable_oi": robust_disable_oi,
+        "allowed_macro_regimes": parsed_regimes if parsed_regimes is not None else {"BEAR", "CHOP"},
         "post_trade_cooldown_bars": max(0, int(post_trade_cooldown_bars)),
         "regime_thresholds": {"BEAR": 0.35, "BULL": 0.45, "CHOP": 0.55},
-        "symbol_health": None if not enable_symbol_health else {
-            "lookback": 8,
-            "block_min_trades": 5,
-            "block_expectancy": -0.35,
-            "block_loss_rate": 0.80,
-            "saturation_start": 6,
-            "saturation_full": 10,
-            "min_multiplier": 0.45,
-        },
+        "symbol_health": robust_symbol_health if enable_symbol_health else None,
+        "min_coverage_fraction": 0.85 if name == "oi_research" else 0.70,
     }
 
 
@@ -772,14 +824,15 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
 
         # ── PnL ──
         ep = float(exit_p)
+        slip_entry = SLIPPAGE + SPREAD
         slip_exit = SLIPPAGE + SPREAD
         if direction == "BULLISH":
-            entry_cost = entry * (1 + COMMISSION)
+            entry_cost = entry * (1 + COMMISSION + slip_entry)
             ep_net = ep * (1 - COMMISSION - slip_exit)
             funding = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl = size * (ep_net - entry_cost) + funding
         else:
-            entry_cost = entry * (1 - COMMISSION)
+            entry_cost = entry * (1 - COMMISSION - slip_entry)
             ep_net = ep * (1 + COMMISSION + slip_exit)
             funding = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl = size * (entry_cost - ep_net) + funding
@@ -979,16 +1032,16 @@ if __name__ == "__main__":
     _ap.add_argument("--no-menu", action="store_true")
     _ap.add_argument("--end", type=str, default=None,
                      help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
-    _ap.add_argument("--preset", choices=["robust", "legacy"], default="robust",
-                     help="Runtime preset. robust=funding+LS with harder gates; legacy=historical baseline path.")
+    _ap.add_argument("--preset", choices=["robust", "legacy", "oi_research"], default="robust",
+                     help="Runtime preset. robust=funding+LS main path with BEAR,CHOP filter; legacy=historical baseline; oi_research=OI-enabled research path with harder coverage.")
     _ap.add_argument("--disable-oi", action="store_true",
                      help="Disable OI channel for this run. Automatically enabled by preset=robust.")
     _ap.add_argument("--enable-symbol-health", action="store_true",
                      help="Enable adaptive per-symbol health control (research gate; default off).")
     _ap.add_argument("--allowed-regimes", default=None,
                      help="Optional comma-separated macro regimes to allow, e.g. BEAR or BEAR,BULL.")
-    _ap.add_argument("--min-coverage-fraction", type=float, default=0.70,
-                     help="Minimum fraction of the requested scan window that must have usable sentiment coverage.")
+    _ap.add_argument("--min-coverage-fraction", type=float, default=None,
+                     help="Minimum fraction of the requested scan window that must have usable sentiment coverage. Defaults by preset.")
     _ap.add_argument("--post-trade-cooldown-bars", type=int, default=0,
                      help="Optional per-symbol cooldown after any closed trade. preset=robust defaults to 6.")
     # Research gates (default OFF — preserve calibrated baseline).
@@ -1029,7 +1082,11 @@ if __name__ == "__main__":
     RUNTIME_POST_TRADE_COOLDOWN_BARS = _runtime["post_trade_cooldown_bars"]
     RUNTIME_REGIME_THRESHOLDS = _runtime["regime_thresholds"]
     RUNTIME_SYMBOL_HEALTH = _runtime["symbol_health"]
-    RUNTIME_MIN_COVERAGE_FRACTION = max(0.0, min(1.0, float(_args.min_coverage_fraction)))
+    runtime_min_coverage = _runtime.get("min_coverage_fraction", 0.70)
+    if _args.min_coverage_fraction is None:
+        RUNTIME_MIN_COVERAGE_FRACTION = max(0.0, min(1.0, float(runtime_min_coverage)))
+    else:
+        RUNTIME_MIN_COVERAGE_FRACTION = max(0.0, min(1.0, float(_args.min_coverage_fraction)))
 
     print(f"\n{SEP}")
     print(f"  BRIDGEWATER  ·  Macro Sentiment Contrarian")

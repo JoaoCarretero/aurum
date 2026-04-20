@@ -430,6 +430,27 @@ def test_engines_live_exit_cleans_handle(app, monkeypatch):
     assert app._engines_live_handle is None
 
 
+def test_engine_logs_filters_to_engine_modes(app):
+    app._eng_mode_filter = "shadow"
+    assert app._eng_matches_mode_filter({"mode": "shadow"}) is True
+    assert app._eng_matches_mode_filter({"mode": "paper"}) is False
+    app._eng_mode_filter = "all"
+    assert app._eng_matches_mode_filter({"mode": "paper"}) is True
+
+
+def test_engine_logs_excludes_non_engine_rows(app):
+    assert app._eng_is_engine_row({"engine": "bridgewater", "_remote": False}) is True
+    assert app._eng_is_engine_row({"engine": "prefetch", "_remote": False}) is False
+    assert app._eng_is_engine_row({"engine": "MILLENNIUM (shadow)", "_remote": True}) is True
+
+
+def test_migrated_screen_container_uses_dark_bg(app, mod):
+    app._data()
+    screen = app.screens._cache.get("data_reports")
+    assert screen is not None
+    assert screen.container.cget("bg") == mod.BG
+
+
 def test_terminal_routes_via_screen_manager(app):
     app._terminal()
     assert app.screens.current_name() == "terminal"

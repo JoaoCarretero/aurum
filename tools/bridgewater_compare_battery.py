@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime
@@ -23,6 +24,8 @@ from pathlib import Path
 import pandas as pd
 
 REPO = Path(__file__).resolve().parent.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 
 def _resolve_bridgewater_module():
@@ -122,22 +125,49 @@ def _variant_sentiment(sentiment_data: dict[str, dict], disable_oi: bool) -> dic
     return out
 
 
+def _resolve_variant_runtime(
+    bw,
+    *,
+    preset: str,
+    disable_oi: bool,
+    strict_direction: bool,
+    min_components: int,
+    min_dir_thresh: float | None,
+    enable_symbol_health: bool,
+    allowed_regimes: str | None,
+    post_trade_cooldown_bars: int,
+) -> dict:
+    runtime = bw._resolve_runtime_preset(
+        preset,
+        strict_direction=strict_direction,
+        min_components=min_components,
+        min_dir_thresh=min_dir_thresh,
+        disable_oi=False,
+        enable_symbol_health=enable_symbol_health,
+        allowed_regimes=allowed_regimes,
+        post_trade_cooldown_bars=post_trade_cooldown_bars,
+    )
+    variant = dict(runtime)
+    variant["disable_oi"] = bool(disable_oi)
+    max_components = 2 if disable_oi else 3
+    variant["min_components"] = min(max_components, int(runtime.get("min_components", 0)))
+    return variant
+
+
 def _run_variant(
     bw,
     *,
     variant_name: str,
-    disable_oi: bool,
     all_dfs: dict[str, pd.DataFrame],
     sentiment_data: dict[str, dict],
     macro_bias,
     corr: dict,
     n_candles: int,
     scan_days: int,
-    strict_direction: bool,
-    min_components: int,
-    min_dir_thresh: float | None,
+    runtime: dict,
     exit_on_reversal: bool,
 ) -> dict:
+    disable_oi = bool(runtime.get("disable_oi"))
     variant_sentiment = _variant_sentiment(sentiment_data, disable_oi=disable_oi)
     all_trades: list[dict] = []
     all_vetos: dict[str, int] = defaultdict(int)
@@ -160,9 +190,14 @@ def _run_variant(
             corr,
             sentiment_data=variant_sentiment,
             scan_start_idx=symbol_scan_start_idx,
-            strict_direction=strict_direction,
-            min_components=min_components,
-            min_dir_thresh=min_dir_thresh,
+            disable_oi=disable_oi,
+            allowed_macro_regimes=runtime.get("allowed_macro_regimes"),
+            post_trade_cooldown_bars=int(runtime.get("post_trade_cooldown_bars", 0)),
+            regime_thresholds=runtime.get("regime_thresholds"),
+            symbol_health=runtime.get("symbol_health"),
+            strict_direction=bool(runtime.get("strict_direction")),
+            min_components=int(runtime.get("min_components", 0)),
+            min_dir_thresh=runtime.get("min_dir_thresh"),
             exit_on_reversal=exit_on_reversal,
         )
         all_trades.extend(trades)
@@ -227,7 +262,9 @@ def _report_md(run_id: str, meta: dict, rows: list[dict]) -> str:
         ov = row.get("overfit") or {}
         ov_label = "-"
         if ov:
-            ov_label = f"{ov.get('passed', '-') }P/{ov.get('warnings', '-') }W/{ov.get('failed', '-') }F"
+            failed = ov.get("failed")
+            failed_label = "-" if failed is None else failed
+            ov_label = f"{ov.get('passed', '-')}P/{ov.get('warnings', '-')}W/{failed_label}F"
         lines.append(
             f"| {row['variant']} | {s['n_trades']} | {s['win_rate']:.1f}% | "
             f"{s['roi_pct']:+.2f}% | {_format_metric(s['sharpe'])} | {_format_metric(s['sortino'])} | "
@@ -259,6 +296,10 @@ def main() -> int:
     ap.add_argument("--symbols", default=None)
     ap.add_argument("--interval", default=bw.INTERVAL)
     ap.add_argument("--end", default=None)
+    ap.add_argument("--preset", choices=["robust", "legacy", "oi_research"], default="legacy")
+    ap.add_argument("--allowed-regimes", default=None)
+    ap.add_argument("--enable-symbol-health", action="store_true")
+    ap.add_argument("--post-trade-cooldown-bars", type=int, default=0)
     ap.add_argument("--strict-direction", action="store_true")
     ap.add_argument("--min-components", type=int, default=0)
     ap.add_argument("--min-dir-thresh", type=float, default=None)
@@ -333,20 +374,28 @@ def main() -> int:
     rows = []
     for variant_name, disable_oi in variants:
         print(f"running {variant_name} ...")
+        runtime = _resolve_variant_runtime(
+            bw,
+            preset=args.preset,
+            disable_oi=disable_oi,
+            strict_direction=args.strict_direction,
+            min_components=args.min_components,
+            min_dir_thresh=args.min_dir_thresh,
+            enable_symbol_health=args.enable_symbol_health,
+            allowed_regimes=args.allowed_regimes,
+            post_trade_cooldown_bars=args.post_trade_cooldown_bars,
+        )
         rows.append(
             _run_variant(
                 bw,
                 variant_name=variant_name,
-                disable_oi=disable_oi,
                 all_dfs=all_dfs,
                 sentiment_data=sentiment_data,
                 macro_bias=macro_bias,
                 corr=corr,
                 n_candles=n_candles,
                 scan_days=args.days,
-                strict_direction=args.strict_direction,
-                min_components=args.min_components,
-                min_dir_thresh=args.min_dir_thresh,
+                runtime=runtime,
                 exit_on_reversal=args.exit_on_reversal,
             )
         )
@@ -357,6 +406,10 @@ def main() -> int:
         "interval": bw.INTERVAL,
         "basket": basket_name,
         "symbols": eligible_symbols,
+        "preset": args.preset,
+        "allowed_regimes": args.allowed_regimes,
+        "enable_symbol_health": args.enable_symbol_health,
+        "post_trade_cooldown_bars": args.post_trade_cooldown_bars,
         "strict_direction": args.strict_direction,
         "min_components": args.min_components,
         "min_dir_thresh": args.min_dir_thresh,

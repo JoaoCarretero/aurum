@@ -60,6 +60,7 @@ from config.params import (
     _TF_MINUTES,
 )
 from core.data import fetch_all, validate
+from core.chronos import enrich_with_regime
 from core.ops.fs import atomic_write
 from core.hawkes import label_eta, rolling_branching_ratio
 from core.indicators import indicators
@@ -132,11 +133,17 @@ class KeposParams:
     # Volatility expansion filter
     atr_mean_window: int = 50
     atr_expansion_ratio: float = 1.3
+    rsi_exhaustion_level: float = 8.0
+    min_reentry_cooldown_bars: int = 6
+    hmm_enabled: bool = True
+    hmm_min_prob_chop: float = 0.35
+    hmm_max_trend_prob: float = 0.60
 
     # Exit levels
     stop_atr_mult: float = 1.2
     tp_atr_mult: float = 1.8
     max_bars_in_trade: int = 40
+    exit_on_hmm_trend: bool = True
 
     # Sizing (local fixed-risk-%)
     max_pct_equity: float = 0.02
@@ -188,6 +195,12 @@ def compute_features(df: pd.DataFrame, params: KeposParams) -> pd.DataFrame:
     its own normalization baseline.
     """
     df = indicators(df.copy())
+    hmm_enabled = bool(params.hmm_enabled)
+    if hmm_enabled:
+        try:
+            df = enrich_with_regime(df)
+        except Exception as exc:
+            log.warning("HMM unavailable for KEPOS (%s) - disabling regime filter", exc)
 
     eta = rolling_branching_ratio(
         df,
@@ -251,6 +264,8 @@ def decide_direction(df: pd.DataFrame, t: int, params: KeposParams) -> int:
     ext = df["kepos_price_ext_sigma"].iloc[t]
     atr_r = df["kepos_atr_ratio"].iloc[t]
     close = df["close"].iloc[t]
+    rsi = float(df["rsi"].iloc[t]) if "rsi" in df.columns else np.nan
+    ema_dist = float(df["dist_ema21"].iloc[t]) if "dist_ema21" in df.columns else np.nan
     if not np.isfinite(ext) or not np.isfinite(atr_r) or not np.isfinite(close):
         return 0
 
@@ -260,6 +275,26 @@ def decide_direction(df: pd.DataFrame, t: int, params: KeposParams) -> int:
         return 0
     if atr_r <= params.atr_expansion_ratio:
         return 0
+    if params.hmm_enabled:
+        prob_chop = float(df.get("hmm_prob_chop", pd.Series(np.nan, index=df.index)).iloc[t])
+        prob_bull = float(df.get("hmm_prob_bull", pd.Series(np.nan, index=df.index)).iloc[t])
+        prob_bear = float(df.get("hmm_prob_bear", pd.Series(np.nan, index=df.index)).iloc[t])
+        if np.isfinite(prob_chop) and prob_chop < params.hmm_min_prob_chop:
+            return 0
+        if ext > 0 and np.isfinite(prob_bull) and prob_bull > params.hmm_max_trend_prob:
+            return 0
+        if ext < 0 and np.isfinite(prob_bear) and prob_bear > params.hmm_max_trend_prob:
+            return 0
+    if np.isfinite(rsi):
+        if ext > 0 and rsi < 50.0 + params.rsi_exhaustion_level:
+            return 0
+        if ext < 0 and rsi > 50.0 - params.rsi_exhaustion_level:
+            return 0
+    if np.isfinite(ema_dist):
+        if ext > 0 and ema_dist <= 0:
+            return 0
+        if ext < 0 and ema_dist >= 0:
+            return 0
 
     # Default: fade the extension. invert_direction flips to "ride the spike".
     direction = -1 if ext > 0 else +1
@@ -337,6 +372,13 @@ def _resolve_exit(df: pd.DataFrame, bar_idx: int,
         return "tp", tp
     if _regime_exit_triggered(df, bar_idx, params):
         return "regime_exit", close
+    if params.exit_on_hmm_trend and params.hmm_enabled:
+        prob_bull = float(df.get("hmm_prob_bull", pd.Series(np.nan, index=df.index)).iloc[bar_idx])
+        prob_bear = float(df.get("hmm_prob_bear", pd.Series(np.nan, index=df.index)).iloc[bar_idx])
+        if direction == +1 and np.isfinite(prob_bear) and prob_bear > params.hmm_max_trend_prob:
+            return "hmm_trend_exit", close
+        if direction == -1 and np.isfinite(prob_bull) and prob_bull > params.hmm_max_trend_prob:
+            return "hmm_trend_exit", close
     if (bar_idx - entry_idx) >= params.max_bars_in_trade:
         return "time_stop", close
     return None
@@ -373,6 +415,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
     funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(params.interval, 15)
 
     open_trade: Optional[dict] = None
+    last_exit_idx = -10 ** 9
 
     for t in range(min_idx, n - 1):
         if open_trade is not None:
@@ -418,12 +461,17 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
                         pnl,
                         duration,
                     )
+                last_exit_idx = t
                 open_trade = None
             else:
                 continue  # still holding
 
         # Already holding? skip signal check
         if open_trade is not None:
+            continue
+
+        if (t - last_exit_idx) < params.min_reentry_cooldown_bars:
+            vetos["cooldown"] += 1
             continue
 
         direction = decide_direction(df, t, params)
@@ -760,12 +808,20 @@ def main() -> int:
                     help="|cum_N return| / σ threshold for price extension filter")
     ap.add_argument("--atr-ratio", type=float, default=None,
                     help="atr_expansion_ratio threshold")
+    ap.add_argument("--rsi-exhaustion", type=float, default=None,
+                    help="Minimum RSI distance from 50 required in the extension direction")
     ap.add_argument("--stop-atr", type=float, default=None,
                     help="stop_atr_mult (stop distance in ATR units)")
     ap.add_argument("--tp-atr", type=float, default=None,
                     help="tp_atr_mult (take-profit distance in ATR units)")
     ap.add_argument("--max-bars", type=int, default=None,
                     help="max_bars_in_trade (time stop)")
+    ap.add_argument("--cooldown-bars", type=int, default=None,
+                    help="Bars to wait after any exit before re-entering the same symbol")
+    ap.add_argument("--hmm-min-prob-chop", type=float, default=None,
+                    help="Minimum CHOP probability required when HMM gate is enabled")
+    ap.add_argument("--hmm-max-trend-prob", type=float, default=None,
+                    help="Maximum BULL/BEAR probability tolerated before blocking/reversing")
     ap.add_argument("--risk-pct", type=float, default=None,
                     help="max_pct_equity per trade (0.02 == 2 percent)")
     ap.add_argument("--end", type=str, default=None,
@@ -807,12 +863,20 @@ def main() -> int:
         params.price_ext_sigma = float(args.price_ext_sigma)
     if args.atr_ratio is not None:
         params.atr_expansion_ratio = float(args.atr_ratio)
+    if args.rsi_exhaustion is not None:
+        params.rsi_exhaustion_level = float(args.rsi_exhaustion)
     if args.stop_atr is not None:
         params.stop_atr_mult = float(args.stop_atr)
     if args.tp_atr is not None:
         params.tp_atr_mult = float(args.tp_atr)
     if args.max_bars is not None:
         params.max_bars_in_trade = int(args.max_bars)
+    if args.cooldown_bars is not None:
+        params.min_reentry_cooldown_bars = int(args.cooldown_bars)
+    if args.hmm_min_prob_chop is not None:
+        params.hmm_min_prob_chop = float(args.hmm_min_prob_chop)
+    if args.hmm_max_trend_prob is not None:
+        params.hmm_max_trend_prob = float(args.hmm_max_trend_prob)
     if args.risk_pct is not None:
         params.max_pct_equity = float(args.risk_pct)
     if params.eta_exit >= params.eta_critical:

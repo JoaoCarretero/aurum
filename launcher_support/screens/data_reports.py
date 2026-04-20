@@ -15,7 +15,9 @@ class DataReportsScreen(Screen):
         super().__init__(parent)
         self.app = app
         self.root_path = root_path
-        self._content: tk.Frame | None = None
+        self._total_label: tk.Label | None = None
+        self._count_labels: dict[str, tk.Label] = {}
+        self._rows_host: tk.Frame | None = None
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -49,48 +51,27 @@ class DataReportsScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
-
-    def on_enter(self, **kwargs: Any) -> None:
-        del kwargs
         app = self.app
-        app.h_path.configure(text="> DATA")
-        app.h_stat.configure(text="BROWSE", fg=AMBER_D)
-        app.f_lbl.configure(text="ESC back  |  click to open file  |  latest 200 indexed artifacts")
-        app._kb("<Escape>", lambda: app._menu("main"))
-
-        if self._content is None:
-            return
-        for child in self._content.winfo_children():
-            child.destroy()
-
         panel = app._ui_panel_frame(
-            self._content,
+            outer,
             "ARTIFACT INDEX",
             "Recent persisted files across runs and legacy engine directories",
         )
 
-        reports = self._collect_reports()
-        counts: dict[str, int] = {}
-        for _, _, section in reports:
-            counts[section] = counts.get(section, 0) + 1
-
         meta = tk.Frame(panel, bg=BG)
         meta.pack(fill="x", pady=(0, 8))
-        tk.Label(
+        self._total_label = tk.Label(
             meta,
-            text=f"TOTAL  {len(reports)}",
+            text="TOTAL  0",
             font=(FONT, 8, "bold"),
             fg=AMBER_D,
             bg=BG,
-        ).pack(side="left")
+        )
+        self._total_label.pack(side="left")
         for sec_name in ("RUNS", "ARBITRAGE", "DARWIN", "LEGACY"):
-            n = counts.get(sec_name, 0)
-            if n:
-                tk.Label(meta, text=f"{sec_name}  {n}", font=(FONT, 8), fg=DIM, bg=BG).pack(
-                    side="left", padx=(16, 0)
-                )
+            lbl = tk.Label(meta, text="", font=(FONT, 8), fg=DIM, bg=BG)
+            lbl.pack(side="left", padx=(16, 0))
+            self._count_labels[sec_name] = lbl
         tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
         app._ui_note(
             panel,
@@ -121,8 +102,6 @@ class DataReportsScreen(Screen):
             tag_bg=BG,
             title_width=18,
         )
-        app._kb("<Key-b>", app._data_backtests)
-        app._kb("<Key-e>", app._data_engines)
 
         canvas = tk.Canvas(panel, bg=BG, highlightthickness=0)
         sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
@@ -144,8 +123,42 @@ class DataReportsScreen(Screen):
         ).pack(fill="x")
         tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", pady=1)
 
+        self._rows_host = sf
+        app._ui_back_row(panel, lambda: app._menu("main"))
+
+    def on_enter(self, **kwargs: Any) -> None:
+        del kwargs
+        app = self.app
+        app.h_path.configure(text="> DATA")
+        app.h_stat.configure(text="BROWSE", fg=AMBER_D)
+        app.f_lbl.configure(text="ESC back  |  click to open file  |  latest 200 indexed artifacts")
+        app._kb("<Escape>", lambda: app._menu("main"))
+        app._kb("<Key-b>", app._data_backtests)
+        app._kb("<Key-e>", app._data_engines)
+
+        rows_host = self._rows_host
+        if rows_host is None:
+            return
+
+        reports = self._collect_reports()
+        counts: dict[str, int] = {}
+        for _, _, section in reports:
+            counts[section] = counts.get(section, 0) + 1
+
+        if self._total_label is not None:
+            self._total_label.configure(text=f"TOTAL  {len(reports)}")
+        for sec_name, lbl in self._count_labels.items():
+            n = counts.get(sec_name, 0)
+            lbl.configure(text=f"{sec_name}  {n}" if n else "")
+
+        for child in rows_host.winfo_children()[2:]:
+            try:
+                child.destroy()
+            except Exception:
+                pass
+
         if not reports:
-            tk.Label(sf, text="  No reports found.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w", pady=8)
+            tk.Label(rows_host, text="  No reports found.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w", pady=8)
             return
 
         sec_color = {
@@ -168,7 +181,7 @@ class DataReportsScreen(Screen):
             )
             col = sec_color.get(section, WHITE)
 
-            row = tk.Frame(sf, bg=BG, cursor="hand2")
+            row = tk.Frame(rows_host, bg=BG, cursor="hand2")
             row.pack(fill="x")
             sec_lbl = tk.Label(
                 row,
@@ -216,8 +229,6 @@ class DataReportsScreen(Screen):
                 widget.bind("<Enter>", _enter)
                 widget.bind("<Leave>", _leave)
                 widget.bind("<Button-1>", lambda _e, p=report_path: app._open_file(p))
-
-        app._ui_back_row(panel, lambda: app._menu("main"))
 
     def _collect_reports(self) -> list[tuple[Path, Any, str]]:
         reports: list[tuple[Path, Any, str]] = []

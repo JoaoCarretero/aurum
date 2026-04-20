@@ -18,6 +18,7 @@ class MacroBrainScreen(Screen):
         super().__init__(parent)
         self.app = app
         self.host: tk.Frame | None = None
+        self._rendered = False
 
     def build(self) -> None:
         self.host = tk.Frame(self.container, bg=BG)
@@ -35,19 +36,28 @@ class MacroBrainScreen(Screen):
         app.f_lbl.configure(text="ESC main menu  |  R refresh  |  C run cycle  |  bg cycle 5m")
         app._bind_global_nav()
 
-        try:
-            from macro_brain.dashboard_view import render as render_dashboard
+        if not self._rendered:
+            try:
+                from macro_brain.dashboard_view import render as render_dashboard
 
-            render_dashboard(host, app=app)
-        except Exception as exc:
-            tk.Label(
-                host,
-                text=f"Macro Brain failed to render:\n{exc}\n\nPress ESC -> main menu",
-                font=(FONT, 10),
-                fg=RED,
-                bg=BG,
-            ).pack(pady=40)
-            return
+                render_dashboard(host, app=app)
+                self._rendered = True
+            except Exception as exc:
+                tk.Label(
+                    host,
+                    text=f"Macro Brain failed to render:\n{exc}\n\nPress ESC -> main menu",
+                    font=(FONT, 10),
+                    fg=RED,
+                    bg=BG,
+                ).pack(pady=40)
+                return
+        else:
+            try:
+                from macro_brain.dashboard_view import tick_update
+
+                tick_update()
+            except Exception:
+                pass
 
         app._macro_page_token = object()
         token = app._macro_page_token

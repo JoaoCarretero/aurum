@@ -68,6 +68,7 @@ class ScreenManager:
                 screen = self._factories[name](self._parent)
                 screen.mount()
             except Exception as exc:
+                self._restore_previous(prev_screen)
                 self._current_name = prev_name
                 raise ScreenBuildError(name, original=exc) from exc
             self._cache[name] = screen
@@ -77,6 +78,7 @@ class ScreenManager:
         try:
             screen.on_enter(**kwargs)
         except Exception:
+            self._restore_previous(prev_screen)
             self._current_name = prev_name
             raise
         screen.pack()
@@ -86,3 +88,15 @@ class ScreenManager:
         phase = "first_visit" if is_first_visit else "reentry"
         emit_switch_metric(name, phase, ms=ms)
         return screen
+
+    def _restore_previous(self, prev_screen: Screen | None) -> None:
+        if prev_screen is None:
+            return
+        try:
+            prev_screen.pack()
+        except Exception:
+            pass
+        try:
+            prev_screen.on_enter()
+        except Exception:
+            pass

@@ -12,7 +12,6 @@ class TerminalScreen(Screen):
     def __init__(self, parent: tk.Misc, app: Any):
         super().__init__(parent)
         self.app = app
-        self._content: tk.Frame | None = None
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -46,26 +45,12 @@ class TerminalScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
+        content = tk.Frame(outer, bg=BG)
+        content.pack(fill="both", expand=True)
 
-    def on_enter(self, **kwargs: Any) -> None:
-        del kwargs
         app = self.app
-        app.h_path.configure(text="> TERMINAL")
-        app.h_stat.configure(text="DATA", fg=AMBER_D)
-        app.f_lbl.configure(text="ESC voltar  |  H hub  |  S strategies")
-        app._kb("<Escape>", lambda: app._menu("main"))
-        app._kb("<Key-0>", lambda: app._menu("main"))
-        app._bind_global_nav()
-
-        if self._content is None:
-            return
-        for child in self._content.winfo_children():
-            child.destroy()
-
         panel = app._ui_panel_frame(
-            self._content,
+            content,
             "RESEARCH ROUTER",
             "Available and planned market intelligence modules",
         )
@@ -120,3 +105,19 @@ class TerminalScreen(Screen):
                 )
 
         app._ui_back_row(panel, lambda: app._menu("main"))
+
+    def on_enter(self, **kwargs: Any) -> None:
+        del kwargs
+        app = self.app
+        app.h_path.configure(text="> TERMINAL")
+        app.h_stat.configure(text="DATA", fg=AMBER_D)
+        app.f_lbl.configure(text="ESC voltar  |  H hub  |  S strategies")
+        app._kb("<Escape>", lambda: app._menu("main"))
+        app._kb("<Key-0>", lambda: app._menu("main"))
+        app._bind_global_nav()
+
+        for key_label, cmd in {
+            "d": app._data,
+            "p": app._procs,
+        }.items():
+            app._kb(f"<Key-{key_label}>", cmd)

@@ -12,11 +12,13 @@ import tkinter as tk
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 
+from core.ui.ui_palette import BG
+
 
 class Screen(ABC):
     def __init__(self, parent: tk.Misc):
         self._parent = parent
-        self.container: tk.Frame = tk.Frame(parent)
+        self.container: tk.Frame = tk.Frame(parent, bg=BG)
         self._built = False
         self._tracked_after_ids: list[str] = []
         self._tracked_bindings: list[tuple[tk.Misc, str, str]] = []

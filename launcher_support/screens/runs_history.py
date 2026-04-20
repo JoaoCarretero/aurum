@@ -32,21 +32,20 @@ class RunsHistoryScreen(Screen):
         app.f_lbl.configure(text="ESC voltar  |  click row to expand  |  auto-refresh 5s")
         app._kb("<Escape>", app._data_center)
 
-        from launcher_support.runs_history import render_runs_history
+        from launcher_support.runs_history import render_runs_history, resume_runs_history
+
+        root = self._render_root
+        if root is not None and root.winfo_exists():
+            resume_runs_history(root, app)
+            return
 
         self._render_root = render_runs_history(host, app, client_factory=self.client_factory)
 
     def on_exit(self) -> None:
         super().on_exit()
         root = self._render_root
-        self._render_root = None
         if root is None:
             return
-        state = getattr(root, "_runs_history_state", None)
-        aid = state.get("refresh_aid") if isinstance(state, dict) else None
-        if aid is not None:
-            try:
-                self.app.after_cancel(aid)
-            except Exception:
-                pass
-            state["refresh_aid"] = None
+        from launcher_support.runs_history import pause_runs_history
+
+        pause_runs_history(root, self.app)

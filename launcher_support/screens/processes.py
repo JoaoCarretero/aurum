@@ -12,7 +12,8 @@ class ProcessesScreen(Screen):
     def __init__(self, parent: tk.Misc, app: Any):
         super().__init__(parent)
         self.app = app
-        self._content: tk.Frame | None = None
+        self._list_host: tk.Frame | None = None
+        self._empty_note: tk.Label | None = None
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -46,8 +47,24 @@ class ProcessesScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
+        app = self.app
+        panel = app._ui_panel_frame(
+            outer,
+            "PROCESS CONTROL",
+            "Live engines currently registered in the local process index",
+        )
+        self._empty_note = tk.Label(
+            panel,
+            text="No engines running.",
+            font=(FONT, 8),
+            fg=DIM,
+            bg=BG,
+            anchor="w",
+        )
+        self._list_host = tk.Frame(panel, bg=BG)
+        self._list_host.pack(fill="both", expand=True)
+
+        app._ui_back_row(panel, lambda: app._menu("main"))
 
     def on_enter(self, **kwargs: Any) -> None:
         del kwargs
@@ -58,16 +75,11 @@ class ProcessesScreen(Screen):
         app._kb("<Escape>", lambda: app._menu("main"))
         app._kb("<Key-r>", app._procs)
 
-        if self._content is None:
+        if self._list_host is None:
             return
-        for child in self._content.winfo_children():
+        for child in self._list_host.winfo_children():
             child.destroy()
 
-        panel = app._ui_panel_frame(
-            self._content,
-            "PROCESS CONTROL",
-            "Live engines currently registered in the local process index",
-        )
         try:
             from core.ops.proc import list_procs, stop_proc
 
@@ -77,7 +89,10 @@ class ProcessesScreen(Screen):
             stop_proc = None  # type: ignore[assignment]
 
         if not procs:
-            app._ui_note(panel, "No engines running.", fg=DIM)
+            if self._empty_note is not None:
+                self._empty_note.pack(fill="x", padx=14, pady=(4, 8))
+        elif self._empty_note is not None:
+            self._empty_note.pack_forget()
 
         def _safe_stop(pid: Any) -> None:
             if pid is None or stop_proc is None:
@@ -89,7 +104,7 @@ class ProcessesScreen(Screen):
             app.after(200, app._procs)
 
         for proc in procs:
-            row = tk.Frame(panel, bg=BG2)
+            row = tk.Frame(self._list_host, bg=BG2)
             row.pack(fill="x", padx=14, pady=2)
             tk.Label(
                 row,
@@ -117,5 +132,3 @@ class ProcessesScreen(Screen):
                 cursor="hand2",
                 command=lambda pid=proc.get("pid"): _safe_stop(pid),
             ).pack(side="right", padx=4, pady=2)
-
-        app._ui_back_row(panel, lambda: app._menu("main"))

@@ -135,12 +135,15 @@ class MedallionParams:
     w_seasonality: float = 0.10
     w_hmm_chop: float = 0.10
     ensemble_threshold: float = 0.45  # tuned so ~2-4 trades/sym/month @ 15m
+    min_active_components: int = 4
 
     # ── Exit ──
     stop_atr_mult: float = 1.0
     tp_atr_mult: float = 0.8       # shorter than stop: capture partial revert
     max_bars_in_trade: int = 8     # pillar #1 — short horizon
     exit_on_signal_flip: bool = True
+    exit_on_hmm_trend: bool = True
+    hmm_exit_trend_prob: float = 0.75
 
     # ── Kelly sizing (pillar #4) ──
     kelly_fraction: float = 0.25           # quarter-Kelly (safety)
@@ -203,6 +206,14 @@ def medallion_kelly_fraction(recent_pnls: list[float],
     q = 1.0 - p
     f_star = p - q / b if b > 0 else 0.0  # classic Kelly for binary bets
     f = max(0.0, f_star) * params.kelly_fraction
+    if len(recent_pnls) >= params.kelly_min_trades:
+        tail = recent_pnls[-params.kelly_rolling_trades:]
+        expectancy = float(np.mean(tail)) if tail else 0.0
+        loss_rate = sum(1 for pnl in tail if pnl < 0) / len(tail) if tail else 0.0
+        if expectancy <= 0:
+            f *= 0.5
+        if loss_rate >= 0.55:
+            f *= 0.75
     return float(min(f, f_cap))
 
 
@@ -425,6 +436,21 @@ def decide_direction(df: pd.DataFrame, t: int,
     if abs(score) < params.ensemble_threshold:
         return 0
 
+    ema_dev = float(row.get("med_ema_dev_z", np.nan))
+    seas = float(row.get("med_seasonality_z", np.nan))
+    active_components = 0
+    active_components += int(abs(z_ret) >= params.z_entry_min)
+    active_components += int(np.isfinite(z_vol) and z_vol >= params.vol_z_min)
+    active_components += int(np.isfinite(ema_dev) and abs(ema_dev) >= 1.0)
+    active_components += int(np.isfinite(ac) and ac <= params.autocorr_max)
+    if "rsi" in df.columns:
+        active_components += int(np.isfinite(rsi) and abs(rsi - 50.0) >= params.rsi_extreme_min)
+    active_components += int(np.isfinite(seas) and abs(seas) >= 0.75)
+    if params.hmm_enabled:
+        active_components += int(np.isfinite(pc) and pc >= params.hmm_min_prob_chop)
+    if active_components < params.min_active_components:
+        return 0
+
     direction = +1 if score > 0 else -1
     return -direction if params.invert_direction else direction
 
@@ -442,10 +468,14 @@ def calc_levels(df: pd.DataFrame, t: int, direction: int,
 
     if direction == +1:
         stop = entry - params.stop_atr_mult * atr
-        tp = entry + params.tp_atr_mult * atr
+        tp_floor = entry + params.tp_atr_mult * atr
+        ema_target = float(df.get(f"ema{params.ema_fast}", pd.Series(np.nan, index=df.index)).iloc[t])
+        tp = max(tp_floor, ema_target) if np.isfinite(ema_target) and ema_target > entry else tp_floor
     else:
         stop = entry + params.stop_atr_mult * atr
-        tp = entry - params.tp_atr_mult * atr
+        tp_floor = entry - params.tp_atr_mult * atr
+        ema_target = float(df.get(f"ema{params.ema_fast}", pd.Series(np.nan, index=df.index)).iloc[t])
+        tp = min(tp_floor, ema_target) if np.isfinite(ema_target) and ema_target < entry else tp_floor
     return entry, stop, tp
 
 
@@ -487,6 +517,14 @@ def _resolve_exit(df: pd.DataFrame, bar_idx: int,
                or (direction == -1 and score > 0.5 * params.ensemble_threshold)
         if flipped:
             return "signal_flip", close
+
+    if params.exit_on_hmm_trend and params.hmm_enabled:
+        pb = float(df.get("hmm_prob_bull", pd.Series(np.nan, index=df.index)).iloc[bar_idx])
+        pbr = float(df.get("hmm_prob_bear", pd.Series(np.nan, index=df.index)).iloc[bar_idx])
+        if direction == +1 and np.isfinite(pbr) and pbr >= params.hmm_exit_trend_prob:
+            return "hmm_trend_exit", close
+        if direction == -1 and np.isfinite(pb) and pb >= params.hmm_exit_trend_prob:
+            return "hmm_trend_exit", close
 
     if (bar_idx - entry_idx) >= params.max_bars_in_trade:
         return "time_stop", close
@@ -867,8 +905,12 @@ def main() -> int:
                     help="Min |z_return| to consider overshoot")
     ap.add_argument("--ensemble-threshold", type=float, default=None,
                     help="Composite score required to fire entry")
+    ap.add_argument("--min-components", type=int, default=None,
+                    help="Minimum number of active ensemble components required to enter")
     ap.add_argument("--kelly-fraction", type=float, default=None,
                     help="Fractional Kelly multiplier (quarter=0.25)")
+    ap.add_argument("--hmm-exit-trend-prob", type=float, default=None,
+                    help="Exit when opposite HMM trend probability reaches this threshold")
     ap.add_argument("--no-hmm", action="store_true",
                     help="Disable HMM regime gate")
     ap.add_argument("--end", type=str, default=None,
@@ -899,8 +941,12 @@ def main() -> int:
         params.z_entry_min = float(args.z_entry)
     if args.ensemble_threshold is not None:
         params.ensemble_threshold = float(args.ensemble_threshold)
+    if args.min_components is not None:
+        params.min_active_components = int(args.min_components)
     if args.kelly_fraction is not None:
         params.kelly_fraction = float(args.kelly_fraction)
+    if args.hmm_exit_trend_prob is not None:
+        params.hmm_exit_trend_prob = float(args.hmm_exit_trend_prob)
     if args.no_hmm:
         params.hmm_enabled = False
 

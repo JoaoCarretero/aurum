@@ -366,6 +366,26 @@ def test_compute_features_does_not_mutate_input():
 # Backtest smoke
 # ════════════════════════════════════════════════════════════════════
 
+def test_compute_features_hmm_failure_does_not_mutate_shared_params(monkeypatch):
+    import engines.kepos as kepos_mod
+
+    df = _make_ohlcv(800, seed=22)
+    params = KeposParams(
+        hawkes_window_bars=500, hawkes_refit_every=100,
+        hawkes_min_events=10, hawkes_vol_lookback=50,
+        hmm_enabled=True,
+    )
+
+    monkeypatch.setattr(
+        kepos_mod,
+        "enrich_with_regime",
+        lambda _df: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    _ = compute_features(df, params)
+    assert params.hmm_enabled is True
+
+
 def test_scan_symbol_smoke_returns_lists():
     df = _make_ohlcv(3500, seed=3)
     params = KeposParams(

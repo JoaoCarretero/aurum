@@ -14,7 +14,9 @@ class MarketsScreen(Screen):
         super().__init__(parent)
         self.app = app
         self.conn = conn
-        self._content: tk.Frame | None = None
+        self._active_label: tk.Label | None = None
+        self._routes_label: tk.Label | None = None
+        self._market_rows: dict[str, dict[str, tk.Widget]] = {}
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -48,8 +50,73 @@ class MarketsScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
+        app = self.app
+        panel = app._ui_panel_frame(
+            outer,
+            "MARKET ROUTER",
+            "Routing contexts, venue clusters and dashboard entry points",
+        )
+
+        summary = tk.Frame(panel, bg=BG)
+        summary.pack(fill="x", padx=10, pady=(0, 8))
+        self._active_label = tk.Label(
+            summary,
+            text="ACTIVE",
+            font=(FONT, 8, "bold"),
+            fg=AMBER_D,
+            bg=BG,
+        )
+        self._active_label.pack(side="left")
+        self._routes_label = tk.Label(
+            summary,
+            text=f"  ROUTES  {len(MARKETS)}",
+            font=(FONT, 8),
+            fg=DIM,
+            bg=BG,
+        )
+        self._routes_label.pack(side="left", padx=(12, 0))
+        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 8))
+
+        for idx, (market_key, info) in enumerate(MARKETS.items(), start=1):
+            available = info["available"]
+            row, name_lbl, desc_lbl = app._ui_action_row(
+                panel,
+                str(idx),
+                info["label"],
+                info["desc"],
+                available=available,
+                tag="",
+                tag_fg=BG,
+                tag_bg=BG2,
+                title_width=18,
+            )
+            tag_lbl = row.winfo_children()[-1]
+            self._market_rows[market_key] = {
+                "name": name_lbl,
+                "tag": tag_lbl,
+            }
+
+            if available:
+                def sel_market(_event=None, key=market_key) -> None:
+                    self.conn.active_market = key
+                    if key == "crypto_futures":
+                        app._crypto_dashboard()
+                    else:
+                        app._markets()
+
+                for widget in (row, name_lbl, desc_lbl):
+                    widget.bind("<Button-1>", sel_market)
+                    widget.bind("<Enter>", lambda _e, n=name_lbl: n.configure(fg=AMBER))
+                    widget.bind("<Leave>", lambda _e, n=name_lbl, k=market_key: self._restore_row_name(k, n))
+            else:
+                def show_coming(_event=None, label=info["label"]) -> None:
+                    app.h_stat.configure(text=f"{label} | COMING SOON", fg=AMBER_D)
+
+                for widget in (row, name_lbl, desc_lbl):
+                    widget.bind("<Button-1>", show_coming)
+
+        app._ui_note(panel, "[enter] keep current    [0] return", fg=DIM)
+        app._ui_back_row(panel, lambda: app._menu("main"))
 
     def on_enter(self, **kwargs: Any) -> None:
         del kwargs
@@ -62,74 +129,39 @@ class MarketsScreen(Screen):
         app._kb("<Return>", lambda: app._menu("main"))
         app._bind_global_nav()
 
-        if self._content is None:
-            return
-        for child in self._content.winfo_children():
-            child.destroy()
-
-        panel = app._ui_panel_frame(
-            self._content,
-            "MARKET ROUTER",
-            "Routing contexts, venue clusters and dashboard entry points",
-        )
-
-        summary = tk.Frame(panel, bg=BG)
-        summary.pack(fill="x", padx=10, pady=(0, 8))
         current_label = MARKETS.get(self.conn.active_market, {}).get("label", "?")
-        tk.Label(
-            summary,
-            text=f"ACTIVE  {current_label}",
-            font=(FONT, 8, "bold"),
-            fg=AMBER_D,
-            bg=BG,
-        ).pack(side="left")
-        tk.Label(
-            summary,
-            text=f"  ROUTES  {len(MARKETS)}",
-            font=(FONT, 8),
-            fg=DIM,
-            bg=BG,
-        ).pack(side="left", padx=(12, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 8))
+        if self._active_label is not None:
+            self._active_label.configure(text=f"ACTIVE  {current_label}")
+        if self._routes_label is not None:
+            self._routes_label.configure(text=f"  ROUTES  {len(MARKETS)}")
 
         for idx, (market_key, info) in enumerate(MARKETS.items(), start=1):
-            is_active = market_key == self.conn.active_market
             available = info["available"]
-            row, name_lbl, desc_lbl = app._ui_action_row(
-                panel,
-                str(idx),
-                info["label"],
-                info["desc"],
-                available=available,
-                tag=("ACTIVE" if is_active else ("COMING SOON" if not available else "OPEN")),
-                tag_fg=(BG if is_active else (DIM if not available else BG)),
-                tag_bg=(GREEN if is_active else (BG2 if not available else AMBER_D)),
-                title_width=18,
-            )
+            is_active = market_key == self.conn.active_market
+            row_meta = self._market_rows.get(market_key)
+            if row_meta is None:
+                continue
+            name_lbl = row_meta["name"]
+            tag_lbl = row_meta["tag"]
+            name_lbl.configure(fg=AMBER if is_active else WHITE)
+            if is_active:
+                tag_lbl.configure(text=" ACTIVE ", fg=BG, bg=GREEN)
+            elif not available:
+                tag_lbl.configure(text=" COMING SOON ", fg=DIM, bg=BG2)
+            else:
+                tag_lbl.configure(text=" OPEN ", fg=BG, bg=AMBER_D)
 
             if available:
-                def sel_market(_event=None, key=market_key, was_active=is_active, name=name_lbl) -> None:
-                    self.conn.active_market = key
-                    if key == "crypto_futures":
-                        app._crypto_dashboard()
-                    else:
-                        app._markets()
-
-                for widget in (row, name_lbl, desc_lbl):
-                    widget.bind("<Button-1>", sel_market)
-                    widget.bind("<Enter>", lambda _e, n=name_lbl: n.configure(fg=AMBER))
-                    widget.bind(
-                        "<Leave>",
-                        lambda _e, n=name_lbl, a=is_active: n.configure(fg=AMBER if a else WHITE),
-                    )
-                app._kb(f"<Key-{idx}>", sel_market)
+                app._kb(f"<Key-{idx}>", lambda _e=None, key=market_key: self._select_market(key))
             else:
-                def show_coming(_event=None, label=info["label"]) -> None:
-                    app.h_stat.configure(text=f"{label} | COMING SOON", fg=AMBER_D)
+                app._kb(f"<Key-{idx}>", lambda _e=None, label=info["label"]: app.h_stat.configure(text=f"{label} | COMING SOON", fg=AMBER_D))
 
-                for widget in (row, name_lbl, desc_lbl):
-                    widget.bind("<Button-1>", show_coming)
-                app._kb(f"<Key-{idx}>", show_coming)
+    def _select_market(self, key: str) -> None:
+        self.conn.active_market = key
+        if key == "crypto_futures":
+            self.app._crypto_dashboard()
+        else:
+            self.app._markets()
 
-        app._ui_note(panel, "[enter] keep current    [0] return", fg=DIM)
-        app._ui_back_row(panel, lambda: app._menu("main"))
+    def _restore_row_name(self, market_key: str, label: tk.Widget) -> None:
+        label.configure(fg=AMBER if market_key == self.conn.active_market else WHITE)

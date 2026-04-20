@@ -34,9 +34,20 @@ class EnginesLiveScreen(Screen):
         app._bind_global_nav()
 
         prior = getattr(app, "_engines_live_handle", None)
-        if prior and callable(prior.get("cleanup")):
+        prior_root = prior.get("root") if isinstance(prior, dict) else None
+        if (
+            isinstance(prior, dict)
+            and prior_root is not None
+            and getattr(prior_root, "winfo_exists", lambda: False)()
+        ):
             try:
-                prior["cleanup"]()
+                rebind = prior.get("rebind")
+                if callable(rebind):
+                    rebind()
+                refresh = prior.get("refresh")
+                if callable(refresh):
+                    refresh()
+                return
             except Exception:
                 pass
 
@@ -63,4 +74,3 @@ class EnginesLiveScreen(Screen):
                 prior["cleanup"]()
             except Exception:
                 pass
-        app._engines_live_handle = None

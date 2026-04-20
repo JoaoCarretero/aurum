@@ -12,7 +12,6 @@ class SettingsScreen(Screen):
     def __init__(self, parent: tk.Misc, app: Any):
         super().__init__(parent)
         self.app = app
-        self._content: tk.Frame | None = None
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -46,26 +45,9 @@ class SettingsScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
-
-    def on_enter(self, **kwargs: Any) -> None:
-        del kwargs
         app = self.app
-        app.h_path.configure(text="> SETTINGS")
-        app.h_stat.configure(text="CONFIG", fg=AMBER_D)
-        app.f_lbl.configure(text="ESC voltar  |  H hub")
-        app._kb("<Escape>", lambda: app._menu("main"))
-        app._kb("<Key-0>", lambda: app._menu("main"))
-        app._bind_global_nav()
-
-        if self._content is None:
-            return
-        for child in self._content.winfo_children():
-            child.destroy()
-
         panel = app._ui_panel_frame(
-            self._content,
+            outer,
             "CONFIGURATION ROUTER",
             "Editable and planned configuration modules",
         )
@@ -98,3 +80,28 @@ class SettingsScreen(Screen):
                 app._kb(f"<Key-{idx + 1}>", cmd)
 
         app._ui_back_row(panel, lambda: app._menu("main"))
+
+    def on_enter(self, **kwargs: Any) -> None:
+        del kwargs
+        app = self.app
+        app.h_path.configure(text="> SETTINGS")
+        app.h_stat.configure(text="CONFIG", fg=AMBER_D)
+        app.f_lbl.configure(text="ESC voltar  |  H hub")
+        app._kb("<Escape>", lambda: app._menu("main"))
+        app._kb("<Key-0>", lambda: app._menu("main"))
+        app._bind_global_nav()
+
+        cfgs = [
+            app._cfg_keys,
+            app._cfg_macro_keys,
+            app._cfg_tg,
+            None,
+            None,
+            None,
+            None,
+            app._cfg_vps,
+            None,
+        ]
+        for idx, cmd in enumerate(cfgs, start=1):
+            if cmd:
+                app._kb(f"<Key-{idx}>", cmd)

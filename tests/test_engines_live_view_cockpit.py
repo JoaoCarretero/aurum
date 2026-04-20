@@ -199,3 +199,18 @@ def test_shadow_active_slugs_uses_dynamic_engine_attr():
         assert _shadow_active_slugs() == {"citadel"}
     finally:
         tunnel_registry.reset_for_tests()
+
+
+def test_engine_registry_for_sidebar_paper_mode_forces_millennium():
+    from launcher_support.engines_live_view import _engine_registry_for_sidebar
+
+    registry = _engine_registry_for_sidebar({
+        "mode": "paper",
+        "selected_slug": "citadel",
+        "engines_by_bucket": {
+            "LIVE": [{"slug": "citadel", "display": "CITADEL"}],
+            "READY": [{"slug": "millennium", "display": "MILLENNIUM"}],
+        },
+    })
+
+    assert registry == [{"slug": "millennium", "display": "MILLENNIUM"}]

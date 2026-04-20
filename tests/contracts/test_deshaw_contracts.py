@@ -57,6 +57,11 @@ def test_runtime_snapshot_overrides_reflect_effective_cli_params(monkeypatch):
     monkeypatch.setattr(deshaw, "NEWTON_MAX_HOLD", 72)
     monkeypatch.setattr(deshaw, "NEWTON_SIZE_MULT", 0.3)
     monkeypatch.setattr(deshaw, "NEWTON_MIN_PAIRS", 2)
+    monkeypatch.setattr(deshaw, "_ENTRY_CHOP_ONLY", True)
+    monkeypatch.setattr(deshaw, "_ALLOWED_MACRO_ENTRY", {"CHOP", "BULL"})
+    monkeypatch.setattr(deshaw, "_MIN_HMM_CHOP_PROB", 0.35)
+    monkeypatch.setattr(deshaw, "_MAX_HMM_TREND_PROB", 0.55)
+    monkeypatch.setattr(deshaw, "_MAX_REVALIDATION_MISSES", 1)
     monkeypatch.setattr(deshaw, "INTERVAL", "1h")
     monkeypatch.setattr(deshaw, "SCAN_DAYS", 1095)
     monkeypatch.setattr(deshaw, "N_CANDLES", 26280)
@@ -73,6 +78,11 @@ def test_runtime_snapshot_overrides_reflect_effective_cli_params(monkeypatch):
     assert snapshot["NEWTON_COINT_PVALUE"] == 0.15
     assert snapshot["NEWTON_HALFLIFE_MAX"] == 300
     assert snapshot["NEWTON_MAX_HOLD"] == 72
+    assert snapshot["NEWTON_ENTRY_CHOP_ONLY"] is True
+    assert snapshot["NEWTON_ALLOWED_MACRO_ENTRY"] == "BULL,CHOP"
+    assert snapshot["NEWTON_MIN_HMM_CHOP_PROB"] == 0.35
+    assert snapshot["NEWTON_MAX_HMM_TREND_PROB"] == 0.55
+    assert snapshot["NEWTON_MAX_REVALIDATION_MISSES"] == 1
     assert snapshot["INTERVAL"] == "1h"
     assert snapshot["SCAN_DAYS"] == 1095
     assert snapshot["N_CANDLES"] == 26280

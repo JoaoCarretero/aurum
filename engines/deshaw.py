@@ -98,6 +98,33 @@ _ROLLING_MIN_SIGHTINGS = int(globals().get("NEWTON_ROLLING_MIN_SIGHTINGS", 2))
 _PAIR_EDGE_COST_MULT = float(globals().get("NEWTON_PAIR_EDGE_COST_MULT", 1.0))
 _PAIR_MIN_TRAIN_TRADES = int(globals().get("NEWTON_PAIR_MIN_TRAIN_TRADES", 3))
 _PAIR_MIN_PROFIT_FACTOR = float(globals().get("NEWTON_PAIR_MIN_PROFIT_FACTOR", 1.1))
+_ENTRY_CHOP_ONLY = bool(globals().get("NEWTON_ENTRY_CHOP_ONLY", True))
+_ALLOWED_MACRO_ENTRY = {
+    token.strip().upper()
+    for token in str(globals().get("NEWTON_ALLOWED_MACRO_ENTRY", "CHOP,BULL")).split(",")
+    if token.strip()
+}
+_MIN_HMM_CHOP_PROB = float(globals().get("NEWTON_MIN_HMM_CHOP_PROB", 0.35))
+_MAX_HMM_TREND_PROB = float(globals().get("NEWTON_MAX_HMM_TREND_PROB", 0.55))
+_MAX_REVALIDATION_MISSES = int(globals().get("NEWTON_MAX_REVALIDATION_MISSES", 1))
+
+
+def _spread_regime_input(merged: pd.DataFrame) -> pd.DataFrame:
+    """Build a HMM input frame from the spread residual itself.
+
+    DE SHAW's thesis is about mean reversion of the *relationship* between
+    legs, not the absolute trend regime of leg A. We therefore derive the
+    regime signal from the residual spread (`spread - spread_mean`) and shift
+    it into positive territory so chronos can safely compute log returns.
+    """
+    spread = merged["spread"].astype(float)
+    spread_mean = merged["spread_mean"].astype(float)
+    residual = (spread - spread_mean).fillna(0.0)
+    floor = max(float(residual.std(ddof=0)) * 0.1, 1.0)
+    synthetic_close = residual - float(residual.min()) + floor
+    regime_df = merged.copy()
+    regime_df["close"] = synthetic_close
+    return regime_df
 
 
 def _runtime_newton_snapshot() -> dict:
@@ -114,6 +141,11 @@ def _runtime_newton_snapshot() -> dict:
         "NEWTON_MAX_HOLD": int(NEWTON_MAX_HOLD),
         "NEWTON_SIZE_MULT": float(NEWTON_SIZE_MULT),
         "NEWTON_MIN_PAIRS": int(NEWTON_MIN_PAIRS),
+        "NEWTON_ENTRY_CHOP_ONLY": bool(_ENTRY_CHOP_ONLY),
+        "NEWTON_ALLOWED_MACRO_ENTRY": ",".join(sorted(_ALLOWED_MACRO_ENTRY)),
+        "NEWTON_MIN_HMM_CHOP_PROB": float(_MIN_HMM_CHOP_PROB),
+        "NEWTON_MAX_HMM_TREND_PROB": float(_MAX_HMM_TREND_PROB),
+        "NEWTON_MAX_REVALIDATION_MISSES": int(_MAX_REVALIDATION_MISSES),
     }
 
 
@@ -607,11 +639,10 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     if len(merged) < 300:
         return [], {}
 
-    # HMM runs on the primary leg's price action (sym_a). ``merged`` uses
-    # the ``a_close`` column for sym_a, so alias it temporarily so that
-    # enrich_with_regime finds a ``close`` column as expected.
-    merged["close"] = merged["a_close"]
-    merged = enrich_with_regime(merged)
+    # Run regime detection on the spread residual, not on leg A outright.
+    # The thesis is spread mean reversion; using leg A's price regime would
+    # gate a relative-value signal with an unrelated absolute-trend object.
+    merged = enrich_with_regime(_spread_regime_input(merged))
 
     trades = []
     vetos = defaultdict(int)
@@ -665,6 +696,7 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
     last_recalc_idx = None
     pair_reactivate_at = -1
     recalc_window = max(200, NEWTON_SPREAD_WINDOW + 50, int(NEWTON_RECALC_EVERY) * 4)
+    revalidation_misses = 0
 
     consecutive_losses = 0
     cooldown_until = -1
@@ -903,10 +935,15 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
             refreshed = _revalidate_pair_window(df_a, df_b, idx, recalc_window)
             last_recalc_idx = idx
             if refreshed is None:
-                if pair_active:
-                    vetos["pair_decay"] += 1
-                pair_active = False
+                revalidation_misses += 1
+                if revalidation_misses > _MAX_REVALIDATION_MISSES:
+                    if pair_active:
+                        vetos["pair_decay"] += 1
+                    pair_active = False
+                else:
+                    vetos["pair_revalidation_grace"] += 1
             else:
+                revalidation_misses = 0
                 pair_active = True
                 active_pair.update(refreshed)
 
@@ -931,6 +968,24 @@ def scan_pair(df_a: pd.DataFrame, df_b: pd.DataFrame,
             direction = "BULLISH"   # spread too low → long spread → long A, short B
 
         if direction is None:
+            continue
+
+        macro_entry = str(macro_b).upper()
+        if _ENTRY_CHOP_ONLY and macro_entry not in _ALLOWED_MACRO_ENTRY:
+            vetos[f"macro_block:{macro_entry}"] += 1
+            continue
+
+        hmm_chop = _hmm_pc[idx] if idx < len(_hmm_pc) else np.nan
+        hmm_bull = _hmm_pb[idx] if idx < len(_hmm_pb) else np.nan
+        hmm_bear = _hmm_pbr[idx] if idx < len(_hmm_pbr) else np.nan
+        if np.isfinite(hmm_chop) and hmm_chop < _MIN_HMM_CHOP_PROB:
+            vetos["hmm_not_chop"] += 1
+            continue
+        if np.isfinite(hmm_bull) and hmm_bull > _MAX_HMM_TREND_PROB:
+            vetos["hmm_trend_bull"] += 1
+            continue
+        if np.isfinite(hmm_bear) and hmm_bear > _MAX_HMM_TREND_PROB:
+            vetos["hmm_trend_bear"] += 1
             continue
 
         # vol filter
@@ -1200,6 +1255,14 @@ if __name__ == "__main__":
                      help="Override NEWTON_MAX_HOLD")
     _ap.add_argument("--size-mult", type=float, default=None,
                      help="Override NEWTON_SIZE_MULT")
+    _ap.add_argument("--allowed-macro-entry", type=str, default=None,
+                     help="Comma-separated macro regimes allowed at entry (e.g. CHOP,BULL)")
+    _ap.add_argument("--min-hmm-chop-prob", type=float, default=None,
+                     help="Override NEWTON_MIN_HMM_CHOP_PROB")
+    _ap.add_argument("--max-hmm-trend-prob", type=float, default=None,
+                     help="Override NEWTON_MAX_HMM_TREND_PROB")
+    _ap.add_argument("--max-revalidation-misses", type=int, default=None,
+                     help="Override NEWTON_MAX_REVALIDATION_MISSES")
     _ap.add_argument("--end", type=str, default=None,
                      help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
     _args, _ = _ap.parse_known_args()
@@ -1222,6 +1285,18 @@ if __name__ == "__main__":
         NEWTON_MAX_HOLD = int(_args.max_hold)
     if _args.size_mult is not None:
         NEWTON_SIZE_MULT = float(_args.size_mult)
+    if _args.allowed_macro_entry is not None:
+        _ALLOWED_MACRO_ENTRY = {
+            token.strip().upper()
+            for token in str(_args.allowed_macro_entry).split(",")
+            if token.strip()
+        }
+    if _args.min_hmm_chop_prob is not None:
+        _MIN_HMM_CHOP_PROB = float(_args.min_hmm_chop_prob)
+    if _args.max_hmm_trend_prob is not None:
+        _MAX_HMM_TREND_PROB = float(_args.max_hmm_trend_prob)
+    if _args.max_revalidation_misses is not None:
+        _MAX_REVALIDATION_MISSES = int(_args.max_revalidation_misses)
 
     print(f"\n{SEP}")
     print(f"  DE SHAW  ·  Statistical Mean Reversion")
@@ -1428,6 +1503,13 @@ if __name__ == "__main__":
     save_run_artifacts(
         RUN_DIR, _config, all_trades, eq, _summary,
         overfit_results=audit_results,
+        diagnostics={
+            "vetos": all_vetos,
+            "conditional": cond,
+            "walk_forward": wf,
+            "walk_forward_by_regime": wf_regime,
+            "by_symbol_trade_counts": {sym: len(ts) for sym, ts in by_sym.items()},
+        },
     )
     append_to_index(RUN_DIR, _summary, _config, audit_results)
 

@@ -13,7 +13,7 @@ class DataCenterScreen(Screen):
         super().__init__(parent)
         self.app = app
         self._subtitle_label: tk.Label | None = None
-        self._content: tk.Frame | None = None
+        self._stat_tags: dict[str, tk.Label] = {}
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -48,8 +48,61 @@ class DataCenterScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
+        content = tk.Frame(outer, bg=BG)
+        content.pack(fill="both", expand=True)
+
+        app = self.app
+        panel = app._ui_panel_frame(content, "DATA ROUTING")
+        sections = [
+            (
+                "PRIMARY ROUTES",
+                [
+                    ("H", "RUNS HISTORY", "unified cockpit: local + VPS runs, results, trades, logs", "runs", app._data_runs_history),
+                    ("B", "BACKTESTS", "validated runs, metrics and run-level inspection", "backtests", app._data_backtests),
+                    ("E", "ENGINE LOGS", "running and recent engines with live tail", "engines", app._data_engines),
+                ],
+            ),
+            (
+                "HISTORICAL CACHE",
+                [
+                    ("P", "OHLCV LAKE", "inspeciona cache local e baixa novos dados", "cache", app._data_lake),
+                ],
+            ),
+            (
+                "ARTIFACTS",
+                [
+                    ("R", "REPORT INDEX", "raw JSON and persisted report artifact browser", "reports", app._data),
+                ],
+            ),
+            (
+                "EXTERNAL REVIEW",
+                [
+                    ("X", "EXPORT ANALYSIS", "single-file snapshot for external analysis workflows", "export", app._export_analysis),
+                ],
+            ),
+        ]
+
+        for section_name, items in sections:
+            sec = app._ui_section(panel, section_name)
+            for key_label, name, desc, stat_key, cmd in items:
+                row, name_lbl, desc_lbl = app._ui_action_row(
+                    sec,
+                    key_label,
+                    name,
+                    desc,
+                    command=cmd,
+                    title_width=20,
+                    tag="",
+                    tag_fg=AMBER_D,
+                    tag_bg=BG,
+                )
+                tag_lbl = row.winfo_children()[-1]
+                self._stat_tags[stat_key] = tag_lbl
+                for widget in (row, name_lbl, desc_lbl):
+                    widget.bind("<Enter>", lambda _e, n=name_lbl: n.configure(fg=AMBER))
+                    widget.bind("<Leave>", lambda _e, n=name_lbl: n.configure(fg="white"))
+
+        app._ui_back_row(panel, lambda: app._menu("main"))
 
     def on_enter(self, **kwargs: Any) -> None:
         del kwargs
@@ -74,97 +127,28 @@ class DataCenterScreen(Screen):
                 f"{rep_count} files | cache {cache_tag}"
             )
 
-        if self._content is None:
-            return
-        for child in self._content.winfo_children():
-            child.destroy()
+        stats = {
+            "runs": "banco de dados",
+            "backtests": f"{bt_count} runs on disk",
+            "engines": f"{eng_running} running | {eng_total} total",
+            "cache": cache_tag,
+            "reports": f"{rep_count} files indexed",
+            "export": "< 2 MB JSON",
+        }
+        for key, value in stats.items():
+            lbl = self._stat_tags.get(key)
+            if lbl is not None:
+                lbl.configure(text=f" {value} ")
 
-        panel = app._ui_panel_frame(self._content, "DATA ROUTING")
-        sections = [
-            (
-                "PRIMARY ROUTES",
-                [
-                    (
-                        "H",
-                        "RUNS HISTORY",
-                        "unified cockpit: local + VPS runs, results, trades, logs",
-                        "banco de dados",
-                        lambda: app._data_runs_history(),
-                    ),
-                    (
-                        "B",
-                        "BACKTESTS",
-                        "validated runs, metrics and run-level inspection",
-                        f"{bt_count} runs on disk",
-                        lambda: app._data_backtests(),
-                    ),
-                    (
-                        "E",
-                        "ENGINE LOGS",
-                        "running and recent engines with live tail",
-                        f"{eng_running} running | {eng_total} total",
-                        lambda: app._data_engines(),
-                    ),
-                ],
-            ),
-            (
-                "HISTORICAL CACHE",
-                [
-                    (
-                        "P",
-                        "OHLCV LAKE",
-                        "inspeciona cache local e baixa novos dados",
-                        cache_tag,
-                        lambda: app._data_lake(),
-                    ),
-                ],
-            ),
-            (
-                "ARTIFACTS",
-                [
-                    (
-                        "R",
-                        "REPORT INDEX",
-                        "raw JSON and persisted report artifact browser",
-                        f"{rep_count} files indexed",
-                        lambda: app._data(),
-                    ),
-                ],
-            ),
-            (
-                "EXTERNAL REVIEW",
-                [
-                    (
-                        "X",
-                        "EXPORT ANALYSIS",
-                        "single-file snapshot for external analysis workflows",
-                        "< 2 MB JSON",
-                        lambda: app._export_analysis(),
-                    ),
-                ],
-            ),
-        ]
-
-        for section_name, items in sections:
-            sec = app._ui_section(panel, section_name)
-            for key_label, name, desc, stat, cmd in items:
-                row, name_lbl, desc_lbl = app._ui_action_row(
-                    sec,
-                    key_label,
-                    name,
-                    desc,
-                    command=cmd,
-                    title_width=20,
-                    tag=stat,
-                    tag_fg=AMBER_D,
-                    tag_bg=BG,
-                )
-                for widget in (row, name_lbl, desc_lbl):
-                    widget.bind("<Enter>", lambda _e, n=name_lbl: n.configure(fg=AMBER))
-                    widget.bind("<Leave>", lambda _e, n=name_lbl: n.configure(fg="white"))
-                app._kb(f"<Key-{key_label.lower()}>", cmd)
-
-        app._ui_back_row(panel, lambda: app._menu("main"))
+        for key_label, cmd in {
+            "h": app._data_runs_history,
+            "b": app._data_backtests,
+            "e": app._data_engines,
+            "p": app._data_lake,
+            "r": app._data,
+            "x": app._export_analysis,
+        }.items():
+            app._kb(f"<Key-{key_label}>", cmd)
 
     def _cache_tag(self) -> str:
         try:

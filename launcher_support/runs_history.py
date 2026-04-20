@@ -382,6 +382,31 @@ def render_runs_history(parent: tk.Widget, launcher,
     return root
 
 
+def resume_runs_history(root: tk.Widget, launcher) -> None:
+    """Re-arm auto-refresh and repaint an existing mounted runs-history tree."""
+    state = getattr(root, "_runs_history_state", None)
+    if not isinstance(state, dict):
+        return
+    refresh_fn = state.get("refresh_fn")
+    if callable(refresh_fn):
+        refresh_fn()
+        _schedule_refresh(launcher, state, refresh_fn)
+
+
+def pause_runs_history(root: tk.Widget, launcher) -> None:
+    """Cancel the auto-refresh timer for an existing mounted runs-history tree."""
+    state = getattr(root, "_runs_history_state", None)
+    if not isinstance(state, dict):
+        return
+    aid = state.get("refresh_aid")
+    if aid is not None:
+        try:
+            launcher.after_cancel(aid)
+        except Exception:
+            pass
+        state["refresh_aid"] = None
+
+
 def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
     hdr = tk.Frame(parent, bg=BG)
     hdr.pack(fill="x", padx=10, pady=(8, 2))
@@ -464,9 +489,14 @@ def _refresh_runs(state: dict, launcher,
             client = None
         vps = collect_vps_runs(client)
         merged = merge_runs(local, vps)
-        state["rows"] = merged
+        def _apply_vps_rows():
+            state["rows"] = merged
+            _paint_rows(state)
         try:
-            launcher.after(0, lambda: _paint_rows(state))
+            if hasattr(launcher, "_ui_call_soon"):
+                launcher._ui_call_soon(_apply_vps_rows)
+            else:
+                launcher.after(0, _apply_vps_rows)
         except Exception:
             pass
 

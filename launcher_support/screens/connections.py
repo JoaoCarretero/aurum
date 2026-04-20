@@ -13,8 +13,8 @@ class ConnectionsScreen(Screen):
         super().__init__(parent)
         self.app = app
         self.conn = conn
-        self._content: tk.Frame | None = None
         self._wheel_canvas: tk.Canvas | None = None
+        self._status_tags: dict[str, tk.Label] = {}
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -48,26 +48,9 @@ class ConnectionsScreen(Screen):
         tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
         tk.Frame(outer, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
-        self._content = tk.Frame(outer, bg=BG)
-        self._content.pack(fill="both", expand=True)
-
-    def on_enter(self, **kwargs: Any) -> None:
-        del kwargs
         app = self.app
-        app.h_path.configure(text="> CONNECTIONS")
-        app.h_stat.configure(text="ROUTING", fg=GREEN)
-        app.f_lbl.configure(text="ESC return  |  number select  |  H hub")
-        app._kb("<Escape>", lambda: app._menu("main"))
-        app._kb("<Key-0>", lambda: app._menu("main"))
-        app._bind_global_nav()
-
-        if self._content is None:
-            return
-        for child in self._content.winfo_children():
-            child.destroy()
-
         panel = app._ui_panel_frame(
-            self._content,
+            outer,
             "ACCESS MATRIX",
             "Configured services and setup entry points",
         )
@@ -142,7 +125,7 @@ class ConnectionsScreen(Screen):
                 else:
                     cmd = lambda d=desc: app.h_stat.configure(text=f"{d} - setup coming soon", fg=AMBER_D)
 
-                app._ui_action_row(
+                row, name_lbl, desc_lbl = app._ui_action_row(
                     sec,
                     key_label,
                     provider.upper(),
@@ -153,8 +136,60 @@ class ConnectionsScreen(Screen):
                     tag_bg=tag_bg,
                     title_width=20,
                 )
+                self._status_tags[provider] = row.winfo_children()[-1]
 
         app._ui_back_row(sf, lambda: app._menu("main"))
+
+    def on_enter(self, **kwargs: Any) -> None:
+        del kwargs
+        app = self.app
+        app.h_path.configure(text="> CONNECTIONS")
+        app.h_stat.configure(text="ROUTING", fg=GREEN)
+        app.f_lbl.configure(text="ESC return  |  number select  |  H hub")
+        app._kb("<Escape>", lambda: app._menu("main"))
+        app._kb("<Key-0>", lambda: app._menu("main"))
+        app._bind_global_nav()
+
+        providers = [
+            ("1", "binance_futures", "Binance Futures"),
+            ("2", "binance_spot", "Binance Spot"),
+            ("3", "bybit", "Bybit"),
+            ("4", "okx", "OKX"),
+            ("5", "hyperliquid", "Hyperliquid"),
+            ("6", "gate", "Gate.io"),
+            ("7", "mt5", "MetaTrader 5 - Forex, CFDs, Indices"),
+            ("8", "ib", "Interactive Brokers - Equities, Options"),
+            ("9", "alpaca", "Alpaca - Commission-free US equities"),
+            ("A", "coinglass", "CoinGlass - OI, liquidations"),
+            ("B", "glassnode", "Glassnode - on-chain"),
+            ("C", "cftc", "CFTC COT - public API (no key)"),
+            ("D", "fred", "FRED - macro data (no key)"),
+            ("E", "yahoo", "Yahoo Finance - equities (no key)"),
+            ("T", "telegram", "Telegram Bot"),
+            ("W", "discord", "Discord Webhook"),
+        ]
+        for key_label, provider, desc in providers:
+            conn = self.conn.get(provider)
+            is_conn = conn.get("connected", False)
+            is_public = conn.get("public", False)
+            tag_lbl = self._status_tags.get(provider)
+            if tag_lbl is not None:
+                if is_conn:
+                    tag_lbl.configure(
+                        text=" PUBLIC API " if is_public else " CONNECTED ",
+                        fg=BG,
+                        bg=GREEN,
+                    )
+                else:
+                    tag_lbl.configure(text=" OFFLINE ", fg=DIM, bg=BG2)
+
+            if provider == "binance_futures":
+                cmd = app._cfg_keys
+            elif provider == "telegram":
+                cmd = app._cfg_tg
+            else:
+                cmd = lambda d=desc: app.h_stat.configure(text=f"{d} - setup coming soon", fg=AMBER_D)
+            app._kb(f"<Key-{key_label.lower()}>", cmd)
 
     def on_exit(self) -> None:
         canvas = self._wheel_canvas

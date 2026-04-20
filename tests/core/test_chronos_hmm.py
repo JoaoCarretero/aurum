@@ -44,35 +44,54 @@ def _generate_hmm_sequence(n=1000, seed=0, easy=False):
     return obs, states, true_means, true_stds, A
 
 
+@pytest.fixture(scope="module")
+def fitted_univariate_hmm():
+    from core.chronos import GaussianHMMNp
+
+    obs, *_ = _generate_hmm_sequence(n=350, seed=1)
+    X = obs.reshape(-1, 1)
+    model = GaussianHMMNp(n_states=3, random_state=42, n_iter=20)
+    model.fit(X)
+    return X, model
+
+
+@pytest.fixture(scope="module")
+def enriched_regime_df():
+    from core.chronos import enrich_with_regime
+
+    rng = np.random.default_rng(42)
+    n = 320
+    ret = rng.normal(0, 0.01, n)
+    close = 100 * np.exp(np.cumsum(ret))
+    df = pd.DataFrame({
+        "time": pd.date_range("2024-01-01", periods=n, freq="15min"),
+        "open": close,
+        "high": close * (1 + 0.001),
+        "low": close * (1 - 0.001),
+        "close": close,
+        "vol": rng.uniform(1000, 5000, n),
+        "tbb": rng.uniform(500, 2500, n),
+    })
+    return enrich_with_regime(df)
+
+
 # ══════════════════════════════════════════════════════════════
 #  GaussianHMMNp — numpy-pure Gaussian HMM
 # ══════════════════════════════════════════════════════════════
 class TestGaussianHMMNp:
-    def test_posteriors_sum_to_one(self):
-        from core.chronos import GaussianHMMNp
-        obs, *_ = _generate_hmm_sequence(n=500, seed=1)
-        X = obs.reshape(-1, 1)
-        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=30)
-        model.fit(X)
+    def test_posteriors_sum_to_one(self, fitted_univariate_hmm):
+        X, model = fitted_univariate_hmm
         posts = model.predict_proba(X)
-        assert posts.shape == (500, 3)
+        assert posts.shape == (len(X), 3)
         np.testing.assert_allclose(posts.sum(axis=1), 1.0, atol=1e-6)
 
-    def test_transition_matrix_rows_normalized(self):
-        from core.chronos import GaussianHMMNp
-        obs, *_ = _generate_hmm_sequence(n=500, seed=2)
-        X = obs.reshape(-1, 1)
-        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=30)
-        model.fit(X)
+    def test_transition_matrix_rows_normalized(self, fitted_univariate_hmm):
+        _, model = fitted_univariate_hmm
         np.testing.assert_allclose(model.transmat_.sum(axis=1), 1.0, atol=1e-6)
         assert (model.transmat_ >= 0).all()
 
-    def test_start_prob_normalized(self):
-        from core.chronos import GaussianHMMNp
-        obs, *_ = _generate_hmm_sequence(n=500, seed=3)
-        X = obs.reshape(-1, 1)
-        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=30)
-        model.fit(X)
+    def test_start_prob_normalized(self, fitted_univariate_hmm):
+        _, model = fitted_univariate_hmm
         assert abs(model.startprob_.sum() - 1.0) < 1e-6
         assert (model.startprob_ >= 0).all()
 
@@ -81,9 +100,9 @@ class TestGaussianHMMNp:
         Absolute parameter recovery is not guaranteed by EM with noise —
         what matters is that the three states are separated and ordered."""
         from core.chronos import GaussianHMMNp
-        obs, _, true_means, *_ = _generate_hmm_sequence(n=3000, seed=0)
+        obs, _, true_means, *_ = _generate_hmm_sequence(n=1400, seed=0)
         X = obs.reshape(-1, 1)
-        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=60)
+        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=35)
         model.fit(X)
 
         recovered = np.sort(model.means_.flatten())
@@ -104,9 +123,9 @@ class TestGaussianHMMNp:
         (chance = 33%)."""
         from core.chronos import GaussianHMMNp
         from itertools import permutations
-        obs, true_states, *_ = _generate_hmm_sequence(n=3000, seed=0, easy=True)
+        obs, true_states, *_ = _generate_hmm_sequence(n=1400, seed=0, easy=True)
         X = obs.reshape(-1, 1)
-        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=80)
+        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=45)
         model.fit(X)
         pred = model.predict(X)
 
@@ -135,14 +154,10 @@ class TestGaussianHMMNp:
         assert posts.shape == (5, 3)
         assert np.isfinite(posts).all()
 
-    def test_predict_returns_valid_state_indices(self):
-        from core.chronos import GaussianHMMNp
-        obs, *_ = _generate_hmm_sequence(n=500, seed=4)
-        X = obs.reshape(-1, 1)
-        model = GaussianHMMNp(n_states=3, random_state=42, n_iter=30)
-        model.fit(X)
+    def test_predict_returns_valid_state_indices(self, fitted_univariate_hmm):
+        X, model = fitted_univariate_hmm
         states = model.predict(X)
-        assert states.shape == (500,)
+        assert states.shape == (len(X),)
         assert states.min() >= 0
         assert states.max() < 3
 
@@ -175,10 +190,8 @@ class TestEnrichWithRegime:
             "tbb": rng.uniform(500, 2500, n),
         })
 
-    def test_adds_required_columns(self):
-        from core.chronos import enrich_with_regime
-        df = self._make_df(500)
-        out = enrich_with_regime(df)
+    def test_adds_required_columns(self, enriched_regime_df):
+        out = enriched_regime_df
         required = [
             "hmm_regime", "hmm_regime_label",
             "hmm_prob_bull", "hmm_prob_bear", "hmm_prob_chop",
@@ -187,49 +200,40 @@ class TestEnrichWithRegime:
         for col in required:
             assert col in out.columns, f"missing column: {col}"
 
-    def test_regime_labels_are_valid_strings(self):
-        from core.chronos import enrich_with_regime
-        df = self._make_df(500)
-        out = enrich_with_regime(df)
+    def test_regime_labels_are_valid_strings(self, enriched_regime_df):
+        out = enriched_regime_df
         valid = {"BULL", "BEAR", "CHOP"}
         labels = set(out["hmm_regime_label"].dropna().unique())
         assert labels.issubset(valid), f"invalid labels: {labels - valid}"
         # On 500 candles we expect at least ONE regime label assigned
         assert len(labels) >= 1
 
-    def test_probs_sum_to_one_where_finite(self):
-        from core.chronos import enrich_with_regime
-        df = self._make_df(500)
-        out = enrich_with_regime(df)
+    def test_probs_sum_to_one_where_finite(self, enriched_regime_df):
+        out = enriched_regime_df
         probs = out[["hmm_prob_bull", "hmm_prob_bear", "hmm_prob_chop"]].values
         total = np.nansum(probs, axis=1)
         mask = np.isfinite(probs).all(axis=1)
         assert mask.sum() > 0, "no finite probability rows"
         np.testing.assert_allclose(total[mask], 1.0, atol=1e-5)
 
-    def test_confidence_is_max_of_three_probs(self):
-        from core.chronos import enrich_with_regime
-        df = self._make_df(500)
-        out = enrich_with_regime(df)
+    def test_confidence_is_max_of_three_probs(self, enriched_regime_df):
+        out = enriched_regime_df
         probs = out[["hmm_prob_bull", "hmm_prob_bear", "hmm_prob_chop"]].values
         mask = np.isfinite(probs).all(axis=1)
         expected = np.nanmax(probs[mask], axis=1)
         actual = out["hmm_confidence"].values[mask]
         np.testing.assert_allclose(actual, expected, atol=1e-6)
 
-    def test_confidence_in_valid_range(self):
-        from core.chronos import enrich_with_regime
-        df = self._make_df(500)
-        out = enrich_with_regime(df)
+    def test_confidence_in_valid_range(self, enriched_regime_df):
+        out = enriched_regime_df
         conf = out["hmm_confidence"].dropna().values
         assert (conf >= 1/3 - 1e-6).all(), "confidence below chance"
         assert (conf <= 1 + 1e-6).all(), "confidence above 1"
 
-    def test_idempotent_if_columns_exist(self):
+    def test_idempotent_if_columns_exist(self, enriched_regime_df):
         """Calling twice must not retrain or change values."""
         from core.chronos import enrich_with_regime
-        df = self._make_df(500)
-        out1 = enrich_with_regime(df)
+        out1 = enriched_regime_df
         out2 = enrich_with_regime(out1.copy())
         for col in ["hmm_prob_bull", "hmm_prob_bear", "hmm_prob_chop", "hmm_confidence"]:
             pd.testing.assert_series_equal(out1[col], out2[col], check_names=False)

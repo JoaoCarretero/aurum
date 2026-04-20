@@ -140,6 +140,16 @@ def test_collect_sentiment_propagates_end_time_to_all_fetchers(monkeypatch):
     assert seen["funding"][1] == 1234567890
     assert seen["oi"][1] == 1234567890
     assert seen["ls"][1] == 1234567890
+    assert seen["oi"][0] > 500
+    assert seen["ls"][0] > 500
+
+
+def test_sentiment_limits_keep_live_caps_but_expand_historical_oos_window():
+    live = bridgewater._sentiment_limits(30, historical=False)
+    historical = bridgewater._sentiment_limits(30, historical=True)
+
+    assert live == (108, 500, 500)
+    assert historical == (108, 3168, 3168)
 
 
 def test_collect_sentiment_fails_closed_when_historical_oi_ls_unavailable(monkeypatch):
@@ -211,6 +221,49 @@ def test_collect_sentiment_fails_when_any_symbol_lacks_historical_coverage(monke
 
     with pytest.raises(RuntimeError, match="ETHUSDT: oi\\(cache=empty\\)"):
         bridgewater.collect_sentiment(["BTCUSDT", "ETHUSDT"], end_time_ms=1234567890, window_days=30)
+
+
+def test_collect_sentiment_uses_partial_cached_history_for_oos(monkeypatch):
+    def _funding(sym, limit=0, end_time_ms=None):
+        return pd.DataFrame(
+            {
+                "time": pd.date_range("2026-01-01", periods=10, freq="8h"),
+                "funding_rate": [0.001] * 10,
+            }
+        )
+
+    monkeypatch.setattr(bridgewater, "fetch_funding_rate", _funding)
+    monkeypatch.setattr(bridgewater, "fetch_open_interest", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bridgewater, "fetch_long_short_ratio", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        bridgewater,
+        "_load_partial_cached_sentiment",
+        lambda kind, sym, period, end_time_ms: pd.DataFrame(
+            {
+                "time": pd.date_range("2026-01-01", periods=12, freq="15min"),
+                **(
+                    {"oi": [1000.0] * 12, "oi_value": [100000.0] * 12}
+                    if kind == "open_interest"
+                    else {"ls_ratio": [1.0] * 12, "long_pct": [0.5] * 12, "short_pct": [0.5] * 12}
+                ),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        bridgewater,
+        "funding_zscore",
+        lambda df, window=30: pd.Series([0.0] * len(df), index=df.index),
+    )
+    monkeypatch.setattr(
+        bridgewater,
+        "ls_ratio_signal",
+        lambda df: pd.Series([0.0] * len(df), index=df.index),
+    )
+
+    out = bridgewater.collect_sentiment(["BTCUSDT"], end_time_ms=1234567890, window_days=30)
+
+    assert out["BTCUSDT"]["oi_ready"] is True
+    assert out["BTCUSDT"]["ls_ready"] is True
 
 
 def test_parse_symbols_override_normalizes_symbols():
@@ -322,10 +375,11 @@ def test_runtime_preset_robust_forces_disciplined_funding_ls_mode():
         "min_components": 2,
         "min_dir_thresh": 0.35,
         "disable_oi": True,
-        "allowed_macro_regimes": None,
+        "allowed_macro_regimes": {"BEAR", "CHOP"},
         "post_trade_cooldown_bars": 0,
         "regime_thresholds": {"BEAR": 0.35, "BULL": 0.45, "CHOP": 0.55},
         "symbol_health": None,
+        "min_coverage_fraction": 0.70,
     }
 
 
@@ -351,6 +405,7 @@ def test_runtime_preset_legacy_preserves_explicit_runtime_overrides():
         "post_trade_cooldown_bars": 3,
         "regime_thresholds": None,
         "symbol_health": None,
+        "min_coverage_fraction": 0.70,
     }
 
 
@@ -374,6 +429,63 @@ def test_runtime_preset_robust_can_enable_symbol_health():
         "saturation_start": 6,
         "saturation_full": 10,
         "min_multiplier": 0.45,
+    }
+
+
+def test_runtime_preset_robust_allows_explicit_regime_override():
+    resolved = bridgewater._resolve_runtime_preset(
+        "robust",
+        strict_direction=False,
+        min_components=0,
+        min_dir_thresh=None,
+        disable_oi=False,
+        enable_symbol_health=False,
+        allowed_regimes="CHOP",
+        post_trade_cooldown_bars=0,
+    )
+
+    assert resolved["allowed_macro_regimes"] == {"CHOP"}
+
+
+def test_runtime_preset_robust_caps_min_components_to_available_channels():
+    resolved = bridgewater._resolve_runtime_preset(
+        "robust",
+        strict_direction=False,
+        min_components=4,
+        min_dir_thresh=None,
+        disable_oi=False,
+        enable_symbol_health=False,
+        allowed_regimes=None,
+        post_trade_cooldown_bars=0,
+    )
+
+    assert resolved["disable_oi"] is True
+    assert resolved["min_components"] == 2
+
+
+def test_runtime_preset_oi_research_keeps_oi_on_and_hardens_coverage():
+    resolved = bridgewater._resolve_runtime_preset(
+        "oi_research",
+        strict_direction=False,
+        min_components=0,
+        min_dir_thresh=None,
+        disable_oi=False,
+        enable_symbol_health=False,
+        allowed_regimes=None,
+        post_trade_cooldown_bars=0,
+    )
+
+    assert resolved == {
+        "preset": "oi_research",
+        "strict_direction": True,
+        "min_components": 2,
+        "min_dir_thresh": 0.35,
+        "disable_oi": False,
+        "allowed_macro_regimes": {"BEAR", "CHOP"},
+        "post_trade_cooldown_bars": 0,
+        "regime_thresholds": {"BEAR": 0.35, "BULL": 0.45, "CHOP": 0.55},
+        "symbol_health": None,
+        "min_coverage_fraction": 0.85,
     }
 
 
