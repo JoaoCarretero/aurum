@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 import tkinter as tk
 
+from core.ops.health import runtime_health
 from launcher_support.screens.base import Screen
 from launcher_support.screens.manager import ScreenManager
 
@@ -172,3 +173,14 @@ def test_on_enter_arbitrary_error_propagates_and_keeps_current(tk_root):
     with pytest.raises(RuntimeError):
         mgr.show("boom")
     assert mgr.current_name() == "foo"
+
+
+def test_show_emits_first_visit_then_reentry_metric(tk_root):
+    runtime_health.counters.clear()
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("foo", _Recording)
+    mgr.show("foo")
+    mgr.show("foo")
+    snap = runtime_health.snapshot()
+    assert snap.get("screen.foo.first_visit") == 1
+    assert snap.get("screen.foo.reentry") == 1

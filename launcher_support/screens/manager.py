@@ -13,11 +13,13 @@ in memory for instant re-entry.
 """
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from typing import Any, Callable
 
 from launcher_support.screens.base import Screen
 from launcher_support.screens.exceptions import ScreenBuildError
+from launcher_support.screens._metrics import emit_switch_metric
 
 ScreenFactory = Callable[[tk.Misc], Screen]
 
@@ -49,6 +51,7 @@ class ScreenManager:
         if name not in self._factories:
             raise ValueError(f"unknown screen: {name!r}")
 
+        t0 = time.perf_counter()
         prev_name = self._current_name
         prev_screen = self._cache.get(prev_name) if prev_name else None
         if prev_screen is not None:
@@ -78,4 +81,8 @@ class ScreenManager:
             raise
         screen.pack()
         self._current_name = name
+
+        ms = (time.perf_counter() - t0) * 1000.0
+        phase = "first_visit" if is_first_visit else "reentry"
+        emit_switch_metric(name, phase, ms=ms)
         return screen
