@@ -55,6 +55,25 @@ def _engine_from_dir(run_dir: Path) -> tuple[str, str]:
     return "unknown", "unknown"
 
 
+def _effective_status(hb: Heartbeat, now: datetime | None = None):
+    """Derive a status that accounts for zombie runs.
+
+    A runner killed by SIGKILL never writes status=stopped; its heartbeat
+    stays frozen at 'running' until an operator hand-edits the file.
+    Treat any 'running' heartbeat whose last_tick_at is older than
+    ``max(tick_sec * 3, 600s)`` as effectively stopped. The underlying
+    heartbeat file is not modified — this is purely the API-level view.
+    """
+    if hb.status != "running" or hb.last_tick_at is None:
+        return hb.status
+    now = now or datetime.now(timezone.utc)
+    staleness_threshold = max((hb.tick_sec or 900) * 3, 600)
+    age = (now - hb.last_tick_at).total_seconds()
+    if age > staleness_threshold:
+        return "stopped"
+    return hb.status
+
+
 def _summarize_run(run_dir: Path) -> RunSummary:
     hb = load_heartbeat(run_dir)
     manifest = load_manifest(run_dir)
@@ -69,7 +88,7 @@ def _summarize_run(run_dir: Path) -> RunSummary:
         run_id=hb.run_id,
         engine=engine,
         mode=mode,
-        status=hb.status,
+        status=_effective_status(hb),
         started_at=started_at,
         last_tick_at=hb.last_tick_at,
         novel_total=hb.novel_total,

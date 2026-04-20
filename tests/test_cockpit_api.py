@@ -87,6 +87,56 @@ def test_runs_lists_existing(tmp_path, client):
     assert runs[0]["novel_total"] == 625
 
 
+def test_runs_list_marks_zombie_as_stopped(tmp_path, client):
+    """A heartbeat stuck on 'running' with stale last_tick_at surfaces as stopped.
+
+    Reproduces the 2026-04-20 incident: a paper runner killed by
+    systemd SIGKILL never updates status; /v1/runs would report
+    'running' forever until hand-edit. The API should derive the
+    effective status so the cockpit sidebar doesn't lie.
+    """
+    from datetime import datetime, timezone, timedelta
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+    _make_run(
+        tmp_path, "millennium_paper", "zombie_run",
+        heartbeat={
+            "run_id": "zombie_run", "status": "running",
+            "ticks_ok": 3, "ticks_fail": 0, "novel_total": 625,
+            "last_tick_at": stale_ts,
+            "last_error": None, "tick_sec": 900,
+        },
+        manifest={
+            "run_id": "zombie_run", "engine": "millennium", "mode": "paper",
+            "started_at": stale_ts, "commit": "x", "branch": "x",
+            "config_hash": "x", "host": "x",
+        },
+    )
+    r = client.get("/v1/runs", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    runs = r.json()
+    assert len(runs) == 1
+    # tick_sec=900 -> threshold = max(2700, 600) = 2700s. 4h >> 45m so stale.
+    assert runs[0]["status"] == "stopped"
+
+
+def test_runs_list_keeps_fresh_running_run_as_running(tmp_path, client):
+    """Sanity check: healthy heartbeats are NOT downgraded to stopped."""
+    from datetime import datetime, timezone, timedelta
+    fresh_ts = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    _make_run(
+        tmp_path, "millennium_shadow", "healthy_run",
+        heartbeat={
+            "run_id": "healthy_run", "status": "running",
+            "ticks_ok": 10, "ticks_fail": 0, "novel_total": 100,
+            "last_tick_at": fresh_ts,
+            "last_error": None, "tick_sec": 900,
+        },
+    )
+    r = client.get("/v1/runs", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    assert r.json()[0]["status"] == "running"
+
+
 def test_runs_admin_token_works(tmp_path, client):
     """Admin token herda read scope."""
     _make_run(
