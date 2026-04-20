@@ -65,9 +65,14 @@ def main() -> int:
     shutil.copy2(DB_PATH, backup_path)
     print(f"\nbackup: {backup_path} ({human(backup_path.stat().st_size)})")
 
-    con = sqlite3.connect(DB_PATH)
-    con.execute("VACUUM")
-    con.close()
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5.0) as con:
+            con.execute("VACUUM")
+    except sqlite3.OperationalError as e:
+        print(f"\nVACUUM failed: {e}", file=sys.stderr)
+        print(f"Backup preserved at {backup_path}", file=sys.stderr)
+        print("Hint: stop launcher/cockpit/live engines holding the DB, then retry.", file=sys.stderr)
+        return 2
 
     size_after = DB_PATH.stat().st_size
     print(f"\nsize after:  {human(size_after)}")

@@ -54,6 +54,7 @@ norecursedirs = [
     ".test_tmp",
     "tests/_tmp",
     "_tmp",
+    "_archive",
     "pytest-cache-files-*",
     "pytest-run-*",
     "tmp*",

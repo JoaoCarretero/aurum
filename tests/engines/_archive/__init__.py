@@ -1,1 +1,1 @@
-"""Archived engine tests. Not collected by pytest (excluded in conftest)."""
+"""Archived engine tests. Excluded from pytest collection via pyproject.toml norecursedirs."""

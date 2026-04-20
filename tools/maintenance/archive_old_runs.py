@@ -9,13 +9,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import shutil
+import os
 import sys
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from core.ops.fs import robust_rmtree  # noqa: E402
+
 DATA = ROOT / "data"
 ARCHIVE_ROOT = Path.home() / "aurum-archive"
 
@@ -50,7 +54,9 @@ def select_to_archive(parent: Path, keep_last: int) -> tuple[list[Path], list[Pa
     if not parent.is_dir():
         return [], []
     children = [p for p in parent.iterdir() if p.is_dir()]
-    children.sort(key=lambda p: p.stat().st_mtime)
+    # Sort by name — run dirs use YYYY-MM-DD_HHMM* format so lex sort == chrono sort,
+    # and immune to mtime drift from OneDrive re-sync.
+    children.sort(key=lambda p: p.name)
     if len(children) <= keep_last:
         return children, []
     archive = children[:-keep_last]
@@ -63,16 +69,35 @@ def archive_and_remove(*, to_archive: list[Path], archive_zip: Path) -> int:
     if not to_archive:
         return 0
     archive_zip.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive_zip, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        for run in to_archive:
-            for p in run.rglob("*"):
-                if p.is_file():
-                    zf.write(p, p.relative_to(run.parent))
+    tmp_zip = archive_zip.with_suffix(archive_zip.suffix + ".tmp")
+    try:
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            for run in to_archive:
+                for p in run.rglob("*"):
+                    if p.is_file():
+                        zf.write(p, p.relative_to(run.parent))
+        os.replace(tmp_zip, archive_zip)
+    except Exception:
+        # Leave the partial tmp on disk for forensics, but remove before re-run if present.
+        if tmp_zip.exists():
+            try:
+                tmp_zip.unlink()
+            except OSError:
+                pass
+        raise
     removed = 0
+    failed: list[Path] = []
     for run in to_archive:
-        shutil.rmtree(run, ignore_errors=True)
-        if not run.exists():
+        if robust_rmtree(run):
             removed += 1
+        else:
+            failed.append(run)
+    if failed:
+        print(
+            f"WARNING: {len(failed)} dir(s) survived rmtree (OneDrive lock?): "
+            f"{[str(p) for p in failed]}",
+            file=sys.stderr,
+        )
     return removed
 
 
@@ -96,7 +121,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
-    stamp = datetime.now().strftime("%Y-%m-%d")
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     targets = [args.engine] if args.engine else DEFAULT_ENGINE_DIRS
     for e in targets:
         process(e, keep_last=args.keep, apply=args.apply, stamp=stamp)
