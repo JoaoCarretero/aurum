@@ -67,6 +67,7 @@ class ShadowPoller:
 
     client_factory: Callable[[], object | None]
     engine: str = "millennium"
+    mode: str = "shadow"
     poll_sec: float = 5.0
     trades_limit: int = 20
 
@@ -154,7 +155,17 @@ class ShadowPoller:
                 self._last_error = None
             return
         try:
-            run = client.latest_run(engine=self.engine)
+            run = client.latest_run(engine=self.engine, mode=self.mode)
+        except TypeError:
+            # Older cockpit_client without the `mode` kwarg: fall back
+            # to the engine-only call so panel doesn't die during a
+            # partial deploy.
+            try:
+                run = client.latest_run(engine=self.engine)
+            except Exception as exc:  # noqa: BLE001
+                self._record_error(
+                    f"latest_run (compat) failed: {type(exc).__name__}")
+                return
         except Exception as exc:  # noqa: BLE001
             self._record_error(f"latest_run failed: {type(exc).__name__}")
             return

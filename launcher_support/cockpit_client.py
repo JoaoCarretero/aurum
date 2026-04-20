@@ -80,15 +80,26 @@ class CockpitClient:
             raise PermissionError("admin_token não configurado em CockpitConfig")
         return self._post(f"/v1/runs/{run_id}/kill", admin=True)
 
-    def latest_run(self, engine: str) -> dict | None:
-        """Helper: retorna o summary mais recente pro engine, ou None."""
+    def latest_run(self, engine: str,
+                   mode: str | None = None) -> dict | None:
+        """Most recent summary for (engine, mode). When `mode` is None,
+        matches any mode. The API returns runs sorted by mtime DESC, so
+        the first match is the freshest.
+
+        Without the mode filter, a paper run could shadow (heh) a shadow
+        run on panels that assume mode=shadow — e.g. the shadow poller
+        would end up pointing at the paper run in the launcher.
+        """
         try:
             runs = self.list_runs()
         except (OSError, CircuitOpen, urllib.error.URLError):
             runs = self._load_cache("runs.json") or []
         for r in runs:
-            if r.get("engine") == engine:
-                return r
+            if r.get("engine") != engine:
+                continue
+            if mode is not None and r.get("mode") != mode:
+                continue
+            return r
         return None
 
     # ─── Internals ─────────────────────────────────────────────

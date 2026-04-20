@@ -9,6 +9,9 @@ from core import db as trade_db
 from core.connections import ConnectionManager, DEFAULT_STATE
 from core.engine_base import EngineRuntime
 from core import proc
+from core.ops import HealthLedger, atomic_write_json, runtime_health
+from core.risk import RiskGateConfig, RiskState, check_gates
+from core.ui import FundingScanner, PortfolioMonitor
 
 
 def test_proc_registry_stays_in_sync_with_config_registry():
@@ -86,3 +89,26 @@ def test_trade_db_list_runs_normalizes_legacy_engine_aliases(tmp_path, monkeypat
 
     assert len(trade_db.list_runs(engine="multi", limit=10)) == 1
     assert len(trade_db.list_runs(engine="arb", limit=10)) == 1
+
+
+def test_canonical_ops_package_exports_same_runtime_contract():
+    from core.ops import EngineRuntime as OpsEngineRuntime
+
+    assert OpsEngineRuntime is EngineRuntime
+    assert HealthLedger is runtime_health.__class__
+    assert callable(atomic_write_json)
+
+
+def test_canonical_risk_package_exports_live_gate_types():
+    decision = check_gates(
+        RiskState(account_equity=1_000.0, open_positions=[]),
+        RiskGateConfig(),
+    )
+
+    assert decision.severity == "allow"
+    assert hasattr(decision, "reason")
+
+
+def test_canonical_ui_package_exports_dashboard_entrypoints():
+    assert PortfolioMonitor.__name__ == "PortfolioMonitor"
+    assert FundingScanner.__name__ == "FundingScanner"
