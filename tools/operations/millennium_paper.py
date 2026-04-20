@@ -537,6 +537,15 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
     _write_account(state.account, state.ks, len(state.open_positions),
                    state.trades_closed, metrics)
     state.ticks_ok += 1
+    # Always emit a per-tick INFO line so `journalctl -u millennium_paper`
+    # doesn't look dead on silent ticks. Mirrors shadow's TICK log.
+    log.info(
+        "TICK ok=%d novel=%d open=%d equity=%.2f dd=%.2f%% ks=%s primed=%s",
+        state.ticks_ok, state.novel_since_prime,
+        len(state.open_positions), state.account.equity,
+        state.account.drawdown_pct, state.ks.state.value,
+        "yes" if state.primed else "no",
+    )
     _write_heartbeat({
         "run_id": RUN_ID, "status": "running",
         "started_at": RUN_TS.isoformat(),
