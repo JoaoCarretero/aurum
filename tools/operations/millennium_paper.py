@@ -207,7 +207,7 @@ def _fetch_new_bars(symbol: str, since_iso: str | None) -> list[dict]:
     """
     try:
         from core.data import fetch as core_fetch
-        df = core_fetch(symbol, interval="15m", limit=20)
+        df = core_fetch(symbol, interval="15m", n_candles=20)
     except Exception as exc:  # noqa: BLE001
         log.warning("fetch_new_bars %s failed: %s", symbol, exc)
         return []
@@ -242,6 +242,7 @@ class RunnerState:
     executor: PaperExecutor = field(init=False)
     pos_mgr: PositionManager = field(init=False)
     metrics: MetricsStreamer = field(init=False)
+    tick_sec: int = 900
     open_positions: list[Position] = field(default_factory=list)
     seen_keys: set = field(default_factory=set)
     last_bar_ts_by_symbol: dict[str, str] = field(default_factory=dict)
@@ -251,6 +252,7 @@ class RunnerState:
     novel_since_prime: int = 0
     last_novel_at: str | None = None
     trades_closed: int = 0
+    primed: bool = False
 
     def __post_init__(self):
         from config.params import (
@@ -271,7 +273,7 @@ class RunnerState:
         )
         self.pos_mgr = PositionManager(
             commission=COMMISSION, funding_per_8h=FUNDING_PER_8H,
-            tick_sec=900,
+            tick_sec=self.tick_sec,
         )
         self.metrics = MetricsStreamer(account_size=self.account_size)
 
@@ -279,6 +281,51 @@ class RunnerState:
 def _trade_key(trade: dict) -> tuple:
     return (str(trade.get("strategy")), str(trade.get("symbol")),
             str(trade.get("open_ts") or trade.get("timestamp")))
+
+
+def _signal_age_seconds(trade: dict) -> float | None:
+    """Age of trade signal in seconds (UTC now - signal timestamp).
+
+    Returns None if the timestamp is missing or unparseable. Accepts both
+    ISO ('2026-04-20T11:15:00+00:00') and the legacy CITADEL format
+    ('2026-04-20 11:15:00' naive = UTC).
+    """
+    raw = trade.get("open_ts") or trade.get("timestamp")
+    if raw is None:
+        return None
+    try:
+        if hasattr(raw, "to_pydatetime"):
+            ts = raw.to_pydatetime()
+        elif isinstance(raw, datetime):
+            ts = raw
+        else:
+            s = str(raw).strip()
+            if "T" not in s and " " in s:
+                s = s.replace(" ", "T", 1)
+            s = s.replace("Z", "+00:00")
+            ts = datetime.fromisoformat(s)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except Exception:  # noqa: BLE001
+        return None
+    return (datetime.now(timezone.utc) - ts).total_seconds()
+
+
+def _is_live_signal(trade: dict, tick_sec: int,
+                    tolerance_mult: float = 2.0) -> bool:
+    """True if signal is from the most recent bar(s).
+
+    A signal is 'live' when its timestamp is within ``tolerance_mult×tick_sec``
+    of now. Default tolerance is 2× — for a 15m tick, accepts signals whose
+    bar opened in the last 30 minutes. Protects paper from treating 90d of
+    backscan history as novel opens (bug 2026-04-19).
+    """
+    age = _signal_age_seconds(trade)
+    if age is None:
+        return False
+    if age < -tick_sec:
+        return False
+    return age <= tolerance_mult * tick_sec
 
 
 def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
@@ -398,6 +445,13 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
         except Exception as exc:  # noqa: BLE001
             log.warning("scan failed: %s", exc)
             all_trades = []
+        # First tick primes seen_keys without opening positions. The
+        # MILLENNIUM scan returns *all* historical trades in the 90d
+        # DataFrame; without priming, paper would treat 628 backscan
+        # signals as novels and open the first 5 using prices from
+        # months ago (bug 2026-04-19).
+        priming = not state.primed
+        primed_count = 0
         for t in all_trades:
             key = _trade_key(t)
             if key in state.seen_keys:
@@ -405,8 +459,24 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
             state.seen_keys.add(key)
             state.novel_total += 1
             state.last_novel_at = now_iso
-            if notify:
-                state.novel_since_prime += 1
+            if priming:
+                primed_count += 1
+                continue
+            state.novel_since_prime += 1
+
+            # Live-bar filter: only open on signals from the most recent
+            # bar. Rejects residual history that slips past priming (e.g.
+            # a deleted+readded bar between ticks).
+            if not _is_live_signal(t, state.tick_sec):
+                _append_jsonl(SIGNALS_PATH, {
+                    "ts": now_iso, "engine": t.get("strategy"),
+                    "symbol": t.get("symbol"),
+                    "direction": t.get("direction"),
+                    "decision": "skipped",
+                    "reason": "stale_bar",
+                    "signal_ts": str(t.get("timestamp") or t.get("open_ts")),
+                })
+                continue
 
             # 4. Portfolio gate V1: MAX_OPEN_POSITIONS only
             try:
@@ -448,6 +518,11 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 )
 
     # 5. Metrics + snapshots
+    if state.ks.state == KSState.NORMAL and not state.primed:
+        # After a successful first scan, paper is primed — future ticks
+        # open positions.
+        state.primed = True
+        log.info("PAPER PRIMED tick=%d signals_seen=%d", tick_idx, primed_count)
     metrics = state.metrics.current_metrics()
     state.metrics.record_equity_point(
         tick=tick_idx, ts=now_iso,
@@ -465,7 +540,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
     _write_heartbeat({
         "run_id": RUN_ID, "status": "running",
         "started_at": RUN_TS.isoformat(),
-        "tick_sec": 900, "ticks_ok": state.ticks_ok,
+        "tick_sec": state.tick_sec, "ticks_ok": state.ticks_ok,
         "ticks_fail": state.ticks_fail,
         "novel_total": state.novel_total,
         "novel_since_prime": state.novel_since_prime,
@@ -473,6 +548,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
         "last_tick_at": now_iso,
         "last_error": None,
         "mode": "paper",
+        "primed": state.primed,
         "account_size": state.account_size,
         "equity": round(state.account.equity, 2),
         "drawdown_pct": round(state.account.drawdown_pct, 3),
@@ -514,7 +590,7 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
 
     _write_manifest(account_size)
 
-    state = RunnerState(account_size=account_size)
+    state = RunnerState(account_size=account_size, tick_sec=tick_sec)
     deadline = time.time() + run_hours * 3600.0 if run_hours > 0 else None
     stop = {"flag": False, "reason": ""}
 

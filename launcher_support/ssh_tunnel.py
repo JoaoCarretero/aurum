@@ -54,6 +54,92 @@ _FAST_DEATH_WINDOW_SEC = 30.0      # deaths within this window count as "fast de
 _STDERR_TRUNC = 120
 
 
+def _reap_orphan_tunnel_on_port(local_port: int) -> int:
+    """Kill orphan ssh processes listening on local_port.
+
+    Runs as preflight before spawning a new tunnel. Only targets ``ssh.exe``/
+    ``ssh`` — a cockpit API or unrelated process on the port is left alone
+    (and the caller will fail loudly). Returns number of processes killed.
+    No-op if the port is free.
+    """
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.3)
+    try:
+        probe.bind(("127.0.0.1", int(local_port)))
+        probe.close()
+        return 0
+    except OSError:
+        probe.close()
+
+    if os.name == "nt":
+        return _reap_tunnel_windows(int(local_port))
+    return _reap_tunnel_posix(int(local_port))
+
+
+def _reap_tunnel_windows(local_port: int) -> int:
+    needle = f":{local_port}"
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano"], timeout=5,
+            stderr=subprocess.DEVNULL,
+        ).decode("latin-1", errors="replace")
+    except Exception:
+        return 0
+    pids: set[int] = set()
+    for line in out.splitlines():
+        if needle not in line or "LISTENING" not in line:
+            continue
+        parts = line.split()
+        if parts and parts[-1].isdigit():
+            pids.add(int(parts[-1]))
+    killed = 0
+    for pid in pids:
+        try:
+            img = subprocess.check_output(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                timeout=3, stderr=subprocess.DEVNULL,
+            ).decode("latin-1", errors="replace")
+            if "ssh.exe" not in img.lower():
+                continue
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            killed += 1
+        except Exception:
+            continue
+    return killed
+
+
+def _reap_tunnel_posix(local_port: int) -> int:
+    killed = 0
+    try:
+        out = subprocess.check_output(
+            ["lsof", "-iTCP", f"-sTCP:LISTEN", "-P", "-n"],
+            timeout=3, stderr=subprocess.DEVNULL,
+        ).decode("utf-8", errors="replace")
+    except Exception:
+        return 0
+    needle = f":{local_port}"
+    for line in out.splitlines():
+        if needle not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        name, pid_s = parts[0], parts[1]
+        if not name.startswith("ssh") or not pid_s.isdigit():
+            continue
+        try:
+            import signal as _sig
+            os.kill(int(pid_s), _sig.SIGKILL)
+            killed += 1
+        except Exception:
+            continue
+    return killed
+
+
 def _classify_stderr(text: str) -> str | None:
     """Return human-readable classification of stderr, or None if empty.
 
@@ -179,6 +265,16 @@ class TunnelManager:
                 return
             self._started = True
             self._stop_event.clear()
+            # Reap any orphan ssh tunnel parked on our local port (common
+            # after a launcher crash — OpenSSH won't die until explicitly
+            # killed, and a second tunnel can't bind the same port).
+            try:
+                n = _reap_orphan_tunnel_on_port(self._config.local_port)
+                if n:
+                    logger.info("reaped %d orphan ssh tunnel proc(s) on :%d",
+                                n, self._config.local_port)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("orphan reap failed (non-fatal): %s", exc)
             # Prepare log dir + rotate
             try:
                 self._log_dir.mkdir(parents=True, exist_ok=True)

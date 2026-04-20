@@ -1,5 +1,6 @@
 """Integration: KS gate triggers flatten + stop."""
 import json
+from datetime import datetime, timezone
 
 
 def test_ks_fast_halt_flattens_and_stops(tmp_path, monkeypatch):
@@ -22,32 +23,34 @@ def test_ks_fast_halt_flattens_and_stops(tmp_path, monkeypatch):
     monkeypatch.setattr(mp, "HEARTBEAT_PATH", run_dir / "state" / "heartbeat.json")
 
     state = mp.RunnerState(account_size=10_000.0)
+    live_ts = datetime.now(timezone.utc).isoformat()
 
-    # Signal on tick 1 (one-shot): size=30 at entry=100 => notional=3000
+    # Signal on tick 2 (post-prime): size=30 at entry=100 => notional=3000
     scan_state = {"call_count": 0}
 
     def fake_scan(notify=False):
         scan_state["call_count"] += 1
-        if scan_state["call_count"] == 1:
+        if scan_state["call_count"] == 2:
             return [
                 {"strategy": "CITADEL", "symbol": "BTCUSDT", "direction": "LONG",
                  "entry": 100.0, "stop": 95.0, "target": 110.0, "size": 30.0,
-                 "timestamp": "2026-04-19T14:00:00Z", "primed": False,
-                 "open_ts": "2026-04-19T14:00:00Z"}
+                 "timestamp": live_ts, "primed": False,
+                 "open_ts": live_ts}
             ]
         return []
     monkeypatch.setattr(mp, "_scan_new_signals", fake_scan)
 
-    # Bar plunge on tick 2: close at 96 => MTM = (96-100)*30 = -120 < -100 fast thr
+    # Bar plunge on tick 3: close at 96 => MTM = (96-100)*30 = -120 < -100 fast thr
     monkeypatch.setattr(mp, "_fetch_new_bars",
                         lambda s, since: [
                             {"high": 100.5, "low": 96.0, "close": 96.0,
-                             "time": "2026-04-19T14:15:00Z"}
+                             "time": live_ts}
                         ])
 
-    mp.run_one_tick(state, tick_idx=1, notify=False)
+    mp.run_one_tick(state, tick_idx=1, notify=False)  # prime
+    mp.run_one_tick(state, tick_idx=2, notify=False)  # open
     assert len(state.open_positions) == 1
-    mp.run_one_tick(state, tick_idx=2, notify=False)
+    mp.run_one_tick(state, tick_idx=3, notify=False)  # KS trip
     # KS fast_threshold @10k = -100; unrealized ~= (96-100)*30 = -120 < -100 => FAST_HALT
     assert state.ks.state.value == "FAST_HALT"
     assert len(state.open_positions) == 0
