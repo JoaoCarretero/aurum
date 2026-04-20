@@ -1,8 +1,21 @@
 """MILLENNIUM live bootstrap runner.
 
-This is a dedicated entrypoint for preparing the live path of the
-MILLENNIUM pod without pretending the full multi-engine execution loop is
-validated yet.
+Entrypoint for preparing the live path of the MILLENNIUM pod, used by
+``tools/maintenance/millennium_shadow.py`` and the shadow VPS service.
+Kept distinct from ``engines/millennium.py`` (the backtest orchestrator)
+so the live path can advance through paper -> demo -> testnet -> live
+without destabilizing backtest behavior.
+
+Consumers:
+  - tools/maintenance/millennium_shadow.py  (shadow runner, VPS service)
+  - tests/engines/test_millennium_live_*    (smoke + contract tests)
+
+When the full multi-engine live execution loop is validated end-to-end,
+this module either absorbs into engines/millennium.py or gets a clear
+deprecation path. Until then, it stays as the deliberate bootstrap shim.
+
+NOT on the CORE PROTEGIDO list — changes here are allowed with the
+normal review bar.
 """
 from __future__ import annotations
 

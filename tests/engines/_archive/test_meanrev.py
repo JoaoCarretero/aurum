@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from engines.meanrev import MeanRevParams, decide_entry, simulate_trade
+from engines._archive.meanrev import MeanRevParams, decide_entry, simulate_trade
 
 
 def test_decide_entry_long_fires_on_extreme_neg_deviation_and_oversold_rsi():
