@@ -9,11 +9,31 @@ from launcher_support.screens.exceptions import (
     ScreenContextError,
 )
 from launcher_support.screens.base import Screen
+from launcher_support.screens.registry import register_default_screens
+from launcher_support.screens.connections import ConnectionsScreen
+from launcher_support.screens.data_center import DataCenterScreen
+from launcher_support.screens.data_reports import DataReportsScreen
 from launcher_support.screens.manager import ScreenManager
+from launcher_support.screens.main_menu import MainMenuScreen
+from launcher_support.screens.markets import MarketsScreen
+from launcher_support.screens.processes import ProcessesScreen
+from launcher_support.screens.risk import RiskScreen
+from launcher_support.screens.settings import SettingsScreen
+from launcher_support.screens.terminal import TerminalScreen
 
 __all__ = [
+    "ConnectionsScreen",
+    "DataCenterScreen",
+    "DataReportsScreen",
+    "register_default_screens",
+    "SettingsScreen",
+    "ProcessesScreen",
+    "RiskScreen",
+    "TerminalScreen",
+    "MarketsScreen",
     "Screen",
     "ScreenManager",
+    "MainMenuScreen",
     "ScreenError",
     "ScreenBuildError",
     "ScreenContextError",

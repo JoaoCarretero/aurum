@@ -253,6 +253,142 @@ def test_live_refresh_schedule_registered(app):
     assert app._menu_live_after_id is not None
 
 
+def test_data_center_routes_via_screen_manager(app):
+    app._data_center()
+    assert app.screens.current_name() == "data_center"
+    assert app.main.winfo_manager() == ""
+
+
+def test_data_center_reentry_reuses_cached_screen(app):
+    app._data_center()
+    first = app.screens._cache.get("data_center")
+    app._menu_main_bloomberg()
+    app._data_center()
+    second = app.screens._cache.get("data_center")
+    assert first is not None
+    assert first is second
+
+
+def test_settings_routes_via_screen_manager(app):
+    app._config()
+    assert app.screens.current_name() == "settings"
+    assert app.main.winfo_manager() == ""
+
+
+def test_settings_reentry_reuses_cached_screen(app):
+    app._config()
+    first = app.screens._cache.get("settings")
+    app._menu_main_bloomberg()
+    app._config()
+    second = app.screens._cache.get("settings")
+    assert first is not None
+    assert first is second
+
+
+def test_processes_routes_via_screen_manager(app):
+    app._procs()
+    assert app.screens.current_name() == "processes"
+    assert app.main.winfo_manager() == ""
+
+
+def test_processes_reentry_reuses_cached_screen(app):
+    app._procs()
+    first = app.screens._cache.get("processes")
+    app._menu_main_bloomberg()
+    app._procs()
+    second = app.screens._cache.get("processes")
+    assert first is not None
+    assert first is second
+
+
+def test_risk_routes_via_screen_manager(app):
+    app._risk_menu()
+    assert app.screens.current_name() == "risk"
+    assert app.main.winfo_manager() == ""
+
+
+def test_risk_reentry_reuses_cached_screen(app):
+    app._risk_menu()
+    first = app.screens._cache.get("risk")
+    app._menu_main_bloomberg()
+    app._risk_menu()
+    second = app.screens._cache.get("risk")
+    assert first is not None
+    assert first is second
+
+
+def test_connections_routes_via_screen_manager(app):
+    app._connections()
+    assert app.screens.current_name() == "connections"
+    assert app.main.winfo_manager() == ""
+
+
+def test_connections_reentry_reuses_cached_screen(app):
+    app._connections()
+    first = app.screens._cache.get("connections")
+    app._menu_main_bloomberg()
+    app._connections()
+    second = app.screens._cache.get("connections")
+    assert first is not None
+    assert first is second
+
+
+def test_connections_exit_clears_mousewheel_binding(app):
+    app._connections()
+    screen = app.screens._cache.get("connections")
+    assert screen is not None
+    app._menu_main_bloomberg()
+    assert getattr(screen, "_wheel_canvas", None) is None
+
+
+def test_terminal_routes_via_screen_manager(app):
+    app._terminal()
+    assert app.screens.current_name() == "terminal"
+    assert app.main.winfo_manager() == ""
+
+
+def test_terminal_reentry_reuses_cached_screen(app):
+    app._terminal()
+    first = app.screens._cache.get("terminal")
+    app._menu_main_bloomberg()
+    app._terminal()
+    second = app.screens._cache.get("terminal")
+    assert first is not None
+    assert first is second
+
+
+def test_data_reports_routes_via_screen_manager(app):
+    app._data()
+    assert app.screens.current_name() == "data_reports"
+    assert app.main.winfo_manager() == ""
+
+
+def test_data_reports_reentry_reuses_cached_screen(app):
+    app._data()
+    first = app.screens._cache.get("data_reports")
+    app._menu_main_bloomberg()
+    app._data()
+    second = app.screens._cache.get("data_reports")
+    assert first is not None
+    assert first is second
+
+
+def test_markets_routes_via_screen_manager(app):
+    app._markets()
+    assert app.screens.current_name() == "markets"
+    assert app.main.winfo_manager() == ""
+
+
+def test_markets_reentry_reuses_cached_screen(app):
+    app._markets()
+    first = app.screens._cache.get("markets")
+    app._menu_main_bloomberg()
+    app._markets()
+    second = app.screens._cache.get("markets")
+    assert first is not None
+    assert first is second
+
+
 def test_draw_cd_center_accepts_radius_override(app):
     import tkinter as tk
     canvas = tk.Canvas(app, width=200, height=200, bg="#0a0a0a")

@@ -1331,16 +1331,14 @@ class App(tk.Tk):
         # self.main in legacy path. Sibling survives across switches.
         self.screens_container = tk.Frame(self, bg=BG)
         # Packed lazily on first screens.show(); pack_forget-ed when legacy path active.
-        from launcher_support.screens import ScreenManager
-        from launcher_support.screens.splash import SplashScreen
+        from launcher_support.screens import ScreenManager, register_default_screens
         self.screens = ScreenManager(parent=self.screens_container)
-        # SYSTEM_TAGLINE and _conn are module-level globals in launcher.py —
-        # captured by the lambda closure and injected into SplashScreen.
-        self.screens.register(
-            "splash",
-            lambda parent: SplashScreen(
-                parent=parent, app=self, conn=_conn, tagline=SYSTEM_TAGLINE,
-            ),
+        register_default_screens(
+            self.screens,
+            app=self,
+            conn=_conn,
+            root_path=ROOT,
+            tagline=SYSTEM_TAGLINE,
         )
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
@@ -2340,168 +2338,15 @@ class App(tk.Tk):
         self._clr()
         self._clear_kb()
         self.history.clear()
-        # Edge-aligned 2x2: tiles extend to within 44px of the panel edge
-        # (52/868), leaving a 288px gap in the middle for the CD router.
-        self._active_tile_slots = [
-            ("nw", 192, 182),
-            ("ne", 728, 182),
-            ("sw", 192, 340),
-            ("se", 728, 340),
-        ]
-        self._active_cd_center = (460, 261)
-        self.h_stat.configure(text="DESK SELECT", fg=AMBER_B)
-        self.h_path.configure(text="> MAIN  |  DESK ROUTER")
-        self.f_lbl.configure(text="1-4 open desk  |  arrows navigate  |  enter select  |  esc landing")
-
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(
-            f,
-            bg=BG,
-            highlightthickness=0,
-            width=self._MENU_DESIGN_W,
-            height=self._MENU_DESIGN_H,
-        )
-        canvas.pack(fill="both", expand=True)
-        self._menu_canvas = canvas
-        self._menu_render_scale = 1.0
-        canvas.bind("<Configure>", self._render_main_menu)
-
-        if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
-            self._menu_live_fetch_async()
-
-        # Persistent outer frame (survives tile_expand so the screen stays enquadrada)
-        canvas.delete("frame")
-        # Double border + accent rail for a proper framed window
-        canvas.create_rectangle(24, 18, 896, 522, outline=AMBER_D,
-                                width=2, tags="frame")
-        canvas.create_rectangle(28, 22, 892, 518, outline=BORDER,
-                                width=1, tags="frame")
-        # Top title-bar with accent rail
-        canvas.create_rectangle(32, 24, 888, 40, outline="",
-                                fill=BG2, tags="frame")
-        canvas.create_line(32, 40, 888, 40, fill=AMBER, width=1, tags="frame")
-        canvas.create_text(42, 32, anchor="w", text="AURUM FINANCE",
-                           font=(FONT, 8, "bold"), fill=WHITE, tags="frame")
-        canvas.create_rectangle(170, 26, 260, 38, outline=AMBER,
-                                fill=BG, width=1, tags="frame")
-        canvas.create_text(215, 32, anchor="center", text="MAIN MENU",
-                           font=(FONT, 8, "bold"), fill=AMBER, tags="frame")
-        canvas.create_text(876, 32, anchor="e",
-                           text="DESK ROUTER / BLOOMBERG MODE",
-                           font=(FONT, 7), fill=DIM, tags="frame")
-        # Bottom rail so the frame reads as a single window
-        canvas.create_line(32, 510, 888, 510, fill=AMBER_D, width=1, tags="frame")
-
-        # ROUTING HEADER — 3 colunas limpas (DESK · PROFILE · NAV), sem logo
-        # redundante (a brand já está na title bar do frame) e sem overlap.
-        self._draw_panel(canvas, 52, 58, 868, 108,
-                         title="  ROUTING HEADER  ", accent=AMBER, tag="menu")
-
-        def _col(x_lbl, label, x_val, value, value_fg=WHITE):
-            canvas.create_text(x_lbl, 78, anchor="w", text=label,
-                               font=(FONT, 7, "bold"), fill=DIM, tags="menu")
-            canvas.create_text(x_val, 78, anchor="w", text=value,
-                               font=(FONT, 9, "bold"), fill=value_fg, tags="menu")
-
-        # Col 1 — DESK ROUTER
-        _col(66, "DESK", 110, "AURUM ROUTER", AMBER)
-        canvas.create_text(66, 96, anchor="w",
-                           text="markets · execute · research · control",
-                           font=(FONT, 7), fill=DIM, tags="menu")
-        # Divider
-        canvas.create_line(296, 68, 296, 100,
-                           fill=self._dim_color(AMBER, 0.4), width=1, tags="menu")
-        # Col 2 — PROFILE
-        _col(310, "PROFILE", 364, "PAPER · LOCAL", GREEN)
-        canvas.create_text(310, 96, anchor="w",
-                           text="operator mode · kill-switch armed",
-                           font=(FONT, 7), fill=DIM, tags="menu")
-        canvas.create_line(556, 68, 556, 100,
-                           fill=self._dim_color(AMBER, 0.4), width=1, tags="menu")
-        # Col 3 — NAVIGATION
-        _col(570, "NAV", 604, "1-4 · ENTER · ESC", WHITE)
-        canvas.create_text(570, 96, anchor="w",
-                           text="click tile · number key · esc to landing",
-                           font=(FONT, 7), fill=DIM, tags="menu")
-
-        self._draw_cd_center(canvas, r=52)
-        # Subtle separator below ROUTING HEADER (bottom separator removed —
-        # SYSTEM CONTEXT title chip was overlapping it).
-        canvas.create_line(60, 118, 860, 118,
-                           fill=self._dim_color(AMBER, 0.3),
-                           width=1, tags="menu")
-        self._draw_spokes(canvas, self._menu_focused_tile)
-        for idx in range(4):
-            self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
-
-        # SYSTEM CONTEXT — panel sits 10px below tile band (tiles end @ 399),
-        # panel 412-504 gives room for title chip (402-424) + KV rows (432-492)
-        self._draw_panel(canvas, 52, 412, 868, 504,
-                         title="  SYSTEM CONTEXT  ", accent=AMBER, tag="menu")
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("main_menu")
         try:
-            market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNSET")
+            self.focus_set()
         except Exception:
-            market_label = "UNSET"
-        # Tight 16px line height fits 4 rows inside the panel body (432-492)
-        self._draw_kv_rows(canvas, 78, 434, [
-            ("ENGINE",  "DESK ROUTER",         TILE_MARKETS),
-            ("MODE",    "OPERATOR",            WHITE),
-            ("ACCOUNT", "PAPER",               GREEN),
-            ("MARKET",  market_label.upper(),  AMBER_B),
-        ], value_x=218, line_h=16, tag="menu")
-        self._draw_kv_rows(canvas, 468, 434, [
-            ("BASKET",      "DEFAULT",             WHITE),
-            ("TIMEFRAME",   "15M",                 TILE_EXECUTE),
-            ("ENVIRONMENT", "LOCAL",               TILE_RESEARCH),
-            ("RISK",        "KILL-SWITCH ARMED",   RED),
-        ], value_x=630, line_h=16, tag="menu")
-
-        def _canvas_click(event):
-            try:
-                ex, ey = event.x, event.y
-                hit = None
-                for idx in range(4):
-                    x1, y1, x2, y2 = self._tile_rect(idx)
-                    if x1 <= ex <= x2 and y1 <= ey <= y2:
-                        hit = idx
-                        break
-                if hit is None:
-                    # Clicked outside any tile — show feedback so user knows
-                    # the click was registered (was confusing before).
-                    self.h_stat.configure(
-                        text=f"NO TILE @ ({ex},{ey})", fg=AMBER_D,
-                    )
-                    return "break"
-                label = MAIN_GROUPS[hit][0]
-                self.h_stat.configure(text=f"→ {label}", fg=AMBER_B)
-                self._menu_tile_focus(hit)
-                self._menu_tile_expand(hit)
-                return "break"
-            except Exception as exc:
-                import traceback
-                tb = traceback.format_exc()
-                try:
-                    messagebox.showerror(
-                        "Menu click",
-                        f"{type(exc).__name__}: {exc}\n\n{tb}",
-                    )
-                except Exception:
-                    pass
-        canvas.bind("<Button-1>", _canvas_click)
-
-        for n in (1, 2, 3, 4):
-            self._kb(f"<Key-{n}>", lambda _n=n - 1: (self._menu_tile_focus(_n), self._menu_tile_expand(_n)))
-        self._kb("<Right>", lambda: self._menu_tile_focus_delta(+1))
-        self._kb("<Left>", lambda: self._menu_tile_focus_delta(-1))
-        self._kb("<Down>", lambda: self._menu_tile_focus_delta(+2))
-        self._kb("<Up>", lambda: self._menu_tile_focus_delta(-2))
-        self._kb("<Tab>", lambda: self._menu_tile_focus_delta(+1))
-        self._kb("<Return>", lambda: self._menu_tile_expand(self._menu_focused_tile))
-        self._kb("<Escape>", self._splash)
-        self._bind_global_nav()
-        self._render_main_menu()
-        self._menu_live_schedule()
+            pass
 
     def _render_main_menu(self, _event=None) -> None:
         canvas = self._menu_canvas
@@ -5288,170 +5133,31 @@ class App(tk.Tk):
     def _market_onchain(self):        self._market_route("onchain")
 
     def _markets(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> MARKETS"); self.h_stat.configure(text="SELECT", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC return  |  ENTER keep current  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._kb("<Return>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell(
-            "MARKETS",
-            "Select active market routing and environment context",
-        )
-        panel = self._ui_panel_frame(
-            body,
-            "MARKET ROUTER",
-            "Routing contexts, venue clusters and dashboard entry points",
-        )
-
-        summary = tk.Frame(panel, bg=BG)
-        summary.pack(fill="x", padx=10, pady=(0, 8))
-        current_label = MARKETS.get(_conn.active_market, {}).get("label", "?")
-        tk.Label(summary, text=f"ACTIVE  {current_label}", font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG).pack(side="left")
-        tk.Label(summary, text=f"  ROUTES  {len(MARKETS)}", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(12, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 8))
-
-        for i, (mk, info) in enumerate(MARKETS.items()):
-            num = i + 1
-            is_active = mk == _conn.active_market
-            avail = info["available"]
-            row, nl, dl = self._ui_action_row(
-                panel,
-                str(num),
-                info["label"],
-                info["desc"],
-                available=avail,
-                tag=("ACTIVE" if is_active else ("COMING SOON" if not avail else "OPEN")),
-                tag_fg=(BG if is_active else (DIM if not avail else BG)),
-                tag_bg=(GREEN if is_active else (BG2 if not avail else AMBER_D)),
-                title_width=18,
-            )
-
-            if avail:
-                def sel_market(event=None, k=mk):
-                    _conn.active_market = k
-                    if k == "crypto_futures":
-                        self._crypto_dashboard()
-                    else:
-                        self._markets()  # refresh
-                for w in [row, nl, dl]:
-                    w.bind("<Button-1>", sel_market)
-                    w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=nl, a=is_active: n.configure(fg=AMBER if a else WHITE))
-                self._kb(f"<Key-{num}>", sel_market)
-            else:
-                def show_coming(event=None, label=info["label"]):
-                    self.h_stat.configure(text=f"{label} | COMING SOON", fg=AMBER_D)
-                for w in [row, nl, dl]:
-                    w.bind("<Button-1>", show_coming)
-                self._kb(f"<Key-{num}>", show_coming)
-
-        self._ui_note(panel, "[enter] keep current    [0] return", fg=DIM)
-        self._ui_back_row(panel, lambda: self._menu("main"))
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("markets")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     # --- CONNECTIONS (Layer 2) ----------------------------
     def _connections(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> CONNECTIONS"); self.h_stat.configure(text="ROUTING", fg=GREEN)
-        self.f_lbl.configure(text="ESC return  |  number select  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell(
-            "CONNECTIONS",
-            "Exchange, broker, data-provider and notification endpoints",
-        )
-        panel = self._ui_panel_frame(
-            body,
-            "ACCESS MATRIX",
-            "Configured services and setup entry points",
-        )
-
-        sections = [
-            ("CRYPTO EXCHANGES", [
-                ("1", "binance_futures", "Binance Futures"),
-                ("2", "binance_spot", "Binance Spot"),
-                ("3", "bybit", "Bybit"),
-                ("4", "okx", "OKX"),
-                ("5", "hyperliquid", "Hyperliquid"),
-                ("6", "gate", "Gate.io"),
-            ]),
-            ("BROKERS", [
-                ("7", "mt5", "MetaTrader 5 — Forex, CFDs, Indices"),
-                ("8", "ib", "Interactive Brokers — Equities, Options"),
-                ("9", "alpaca", "Alpaca — Commission-free US equities"),
-            ]),
-            ("DATA PROVIDERS", [
-                ("A", "coinglass", "CoinGlass — OI, liquidations"),
-                ("B", "glassnode", "Glassnode — on-chain"),
-                ("C", "cftc", "CFTC COT — public API (no key)"),
-                ("D", "fred", "FRED — macro data (no key)"),
-                ("E", "yahoo", "Yahoo Finance — equities (no key)"),
-            ]),
-            ("NOTIFICATIONS", [
-                ("T", "telegram", "Telegram Bot"),
-                ("W", "discord", "Discord Webhook"),
-            ]),
-        ]
-
-        # Scrollable
-        canvas = tk.Canvas(panel, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
-        sf = tk.Frame(canvas, bg=BG)
-        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        window_id = canvas.create_window((0, 0), window=sf, anchor="nw")
-        self._bind_canvas_window_width(canvas, window_id, pad_x=6)
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
-        sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
-        def _wheel(event):
-            try:
-                canvas.yview_scroll(-1 * (event.delta // 120), "units")
-            except Exception:
-                pass
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-        canvas.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
-        for section_name, items in sections:
-            sec = self._ui_section(sf, section_name)
-
-            for key_label, provider, desc in items:
-                conn = _conn.get(provider)
-                is_conn = conn.get("connected", False)
-                is_public = conn.get("public", False)
-
-                if is_conn:
-                    tag = "PUBLIC API" if is_public else "CONNECTED"
-                    tag_fg = BG
-                    tag_bg = GREEN
-                else:
-                    tag = "OFFLINE"
-                    tag_fg = DIM
-                    tag_bg = BG2
-                # Click handler — only binance_futures and telegram are actionable
-                if provider == "binance_futures":
-                    cmd = lambda: self._cfg_keys()
-                elif provider == "telegram":
-                    cmd = lambda: self._cfg_tg()
-                else:
-                    def _coming(event=None, d=desc):
-                        self.h_stat.configure(text=f"{d} — setup coming soon", fg=AMBER_D)
-                    cmd = _coming
-
-                self._ui_action_row(
-                    sec, key_label, provider.upper(), desc,
-                    command=cmd,
-                    tag=tag, tag_fg=tag_fg, tag_bg=tag_bg, title_width=20,
-                )
-
-        # Visible BACK row at the bottom of the scrollable list
-        self._ui_back_row(sf, lambda: self._menu("main"))
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("connections")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     # --- ARBITRAGE (Layer 2) ------------------------------
     def _alchemy_enter(self):
@@ -7279,62 +6985,17 @@ class App(tk.Tk):
 
     # --- TERMINAL (Layer 2) -------------------------------
     def _terminal(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> TERMINAL"); self.h_stat.configure(text="DATA", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  H hub  |  S strategies")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell("TERMINAL", "Data, charts and research routing")
-        panel = self._ui_panel_frame(body, "RESEARCH ROUTER", "Available and planned market intelligence modules")
-
-        sections = [
-            ("MARKET DATA", [
-                ("1", "Price Monitor",       "Watchlist ao vivo com múltiplos TFs", False),
-                ("2", "Orderbook Depth",     "L2 data, bid/ask heatmap", False),
-                ("3", "Funding Rates",       "Cross-exchange funding comparison", False),
-                ("4", "Liquidation Map",     "Estimated liquidation levels", False),
-            ]),
-            ("MACRO & FUNDAMENTAL", [
-                ("5", "COT Report",          "CFTC Commitment of Traders", False),
-                ("6", "Economic Calendar",   "Fed, CPI, PMI, NFP, FOMC", False),
-                ("7", "Macro Dashboard",     "DXY, yields, M2, fear & greed", False),
-                ("8", "Token Fundamentals",  "TVL, supply, unlocks, revenue", False),
-            ]),
-            ("RESEARCH", [
-                ("9", "Correlation Matrix",  "Cross-asset correlation radar", False),
-                ("A", "Regime Detector",     "Current market regime (HMM/GARCH)", False),
-                ("B", "Seasonality",         "Hour/day/month patterns", False),
-            ]),
-            ("LOCAL DATA", [
-                ("D", "Reports & Logs",      "Browse backtest reports", True),
-                ("P", "Processes",           "Manage running engines", True),
-            ]),
-        ]
-
-        for section_name, items in sections:
-            sec = self._ui_section(panel, section_name)
-
-            for key_label, name, desc, available in items:
-                tag = None if available else "COMING SOON"
-
-                if name == "Reports & Logs":
-                    cmd = lambda: self._data()
-                elif name == "Processes":
-                    cmd = lambda: self._procs()
-                elif available:
-                    cmd = lambda n=name: self.h_stat.configure(text=f"{n}", fg=AMBER_D)
-                else:
-                    cmd = lambda n=name: self.h_stat.configure(text=f"{n} — COMING SOON", fg=DIM)
-
-                self._ui_action_row(
-                    sec, key_label, name, desc,
-                    command=cmd,
-                    available=available, tag=tag, tag_fg=DIM, tag_bg=BG2, title_width=22,
-                )
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("terminal")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     # --- DATA CENTER (hub) ---------------------------------
     def _data_center(self):
@@ -7350,79 +7011,17 @@ class App(tk.Tk):
                         live log tail streaming).
           REPORTS    →  legacy _data raw JSON/log file browser.
         """
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA")
-        self.h_stat.configure(text="CENTER", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P lake  |  X export")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        # Quick counts for each card so the user sees signal, not just titles.
-        bt_count = self._data_count_backtests()
-        eng_running, eng_total = self._data_count_procs()
-        rep_count = self._data_count_reports()
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("data_center")
         try:
-            from core import cache as _cache_mod
-            _cache_info = _cache_mod.info()
-            _cache_tag = (f"{_cache_info['n_files']} files · "
-                          f"{_cache_info['total_bytes']/1024/1024:.1f} MB"
-                          if _cache_info["n_files"]
-                          else "vazio")
+            self.focus_set()
         except Exception:
-            _cache_tag = "indisponivel"
-
-        _outer, body = self._ui_page_shell(
-            "DATA CENTER",
-            f"{bt_count} runs · {eng_running}/{eng_total} engines · "
-            f"{rep_count} files · cache {_cache_tag}",
-            pad_y=10,
-        )
-        panel = self._ui_panel_frame(body, "DATA ROUTING")
-
-        sections = [
-            ("PRIMARY ROUTES", [
-                ("H", "RUNS HISTORY",
-                 "unified cockpit: local + VPS runs, results, trades, logs",
-                 "banco de dados", lambda: self._data_runs_history()),
-                ("B", "BACKTESTS", "validated runs, metrics and run-level inspection",
-                 f"{bt_count} runs on disk", lambda: self._data_backtests()),
-                ("E", "ENGINE LOGS", "running and recent engines with live tail",
-                 f"{eng_running} running · {eng_total} total", lambda: self._data_engines()),
-            ]),
-            ("HISTORICAL CACHE", [
-                ("P", "OHLCV LAKE", "inspeciona cache local e baixa novos dados",
-                 _cache_tag, lambda: self._data_lake()),
-            ]),
-            ("ARTIFACTS", [
-                ("R", "REPORT INDEX", "raw JSON and persisted report artifact browser",
-                 f"{rep_count} files indexed", lambda: self._data()),
-            ]),
-            ("EXTERNAL REVIEW", [
-                ("X", "EXPORT ANALYSIS", "single-file snapshot for external analysis workflows",
-                 "< 2 MB JSON", lambda: self._export_analysis()),
-            ]),
-        ]
-
-        for section_name, items in sections:
-            sec = self._ui_section(panel, section_name)
-            for key_label, name, desc, stat, cmd in items:
-                row, name_lbl, desc_lbl = self._ui_action_row(
-                    sec, key_label, name, desc,
-                    command=cmd,
-                    title_width=20,
-                    tag=stat,
-                    tag_fg=AMBER_D,
-                    tag_bg=BG,
-                )
-                for w in (row, name_lbl, desc_lbl):
-                    w.bind("<Enter>", lambda e, n=name_lbl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=name_lbl: n.configure(fg=WHITE))
-
-                key_bind = f"<Key-{key_label.lower()}>"
-                self._kb(key_bind, cmd)
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
+            pass
 
     # --- DATA > OHLCV LAKE (cache browser + downloader) -------
     def _data_lake(self):
@@ -9616,48 +9215,17 @@ class App(tk.Tk):
         self._macro_cycle_after  = self.after(300_000, _auto_cycle)
 
     def _risk_menu(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> RISK"); self.h_stat.configure(text="CONSOLE", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell("RISK CONSOLE", "Portfolio and risk management surfaces")
-        panel = self._ui_panel_frame(body, "RISK ROUTER", "Current and planned monitoring modules")
-
-        sections = [
-            ("PORTFOLIO", [
-                ("1", "Open Positions",     "All active positions across venues"),
-                ("2", "P&L Today",          "Real-time daily P&L"),
-                ("3", "P&L History",        "Historical equity curve"),
-                ("4", "Exposure Map",       "Sector/asset heatmap"),
-            ]),
-            ("RISK METRICS", [
-                ("5", "VaR Calculator",     "Value at Risk (1d, 5d, 30d)"),
-                ("6", "Drawdown Monitor",   "Current DD + historical worst"),
-                ("7", "Correlation Risk",   "Portfolio correlation exposure"),
-                ("8", "Kill Switch Status", "3-layer kill switch state"),
-            ]),
-            ("STRESS TEST", [
-                ("9", "Market Crash",       "-20% BTC in 1h scenario"),
-                ("A", "Liquidity Crisis",   "Spread blowout + slippage spike"),
-                ("B", "Black Swan",         "Custom shock parameters"),
-            ]),
-        ]
-
-        for section_name, items in sections:
-            sec = self._ui_section(panel, section_name)
-
-            for key_label, name, desc in items:
-                self._ui_action_row(
-                    sec, key_label, name, desc,
-                    available=False, tag="COMING SOON", tag_fg=DIM, tag_bg=BG2, title_width=22,
-                )
-
-        self._ui_note(panel, "Risk console modules are in development.", fg=DIM)
-        self._ui_note(panel, "Backtest stress tests remain available in STRATEGIES > MILLENNIUM.", fg=AMBER_D)
-        self._ui_back_row(panel, lambda: self._menu("main"))
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("risk")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     # --- SPECIAL SCREENS ---------------------------------
     def _special(self, key):
@@ -9666,221 +9234,43 @@ class App(tk.Tk):
         elif key == "config": self._config()
 
     def _data(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA"); self.h_stat.configure(text="BROWSE", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC back  |  click to open file  |  latest 200 indexed artifacts")
-        self._kb("<Escape>", lambda: self._menu("main"))
-
-        _outer, body = self._ui_page_shell("DATA & REPORTS", "Indexed JSON and report artifacts across the data tree")
-        panel = self._ui_panel_frame(body, "ARTIFACT INDEX", "Recent persisted files across runs and legacy engine directories")
-
-        # Walk every known data tree and tag each file with the section it
-        # came from. Previous filter `"reports" in str(r) or "darwin" in str(r)`
-        # ignored the entire data/runs/ modern layout and left this screen
-        # empty for every backtest run after the write-path refactor. [Fase 0.1 / D1]
-        reports: list[tuple[Path, object, str]] = []  # (path, stat, section)
-        dd = ROOT / "data"
-
-        def _collect(root: Path, section: str, pattern: str = "*.json"):
-            if not root.exists():
-                return
-            for r in root.rglob(pattern):
-                try:
-                    reports.append((r, r.stat(), section))
-                except (OSError, FileNotFoundError):
-                    continue
-
-        if dd.exists():
-            _collect(dd / "runs",      "RUNS")       # modern backtest runs
-            _collect(dd / "darwin",    "DARWIN")     # darwin evolution logs
-            _collect(dd / "arbitrage", "ARBITRAGE")  # arbitrage session reports
-            # Legacy per-engine dirs
-            for legacy in ("mercurio", "newton", "thoth", "prometeu",
-                           "multistrategy", "live"):
-                _collect(dd / legacy, legacy.upper())
-            # Legacy dated reports tree (data/YYYY-MM-DD/reports/*.json)
-            for dated in dd.iterdir() if dd.exists() else []:
-                if dated.is_dir() and dated.name[:4].isdigit() and (dated / "reports").exists():
-                    _collect(dated / "reports", "LEGACY")
-            reports.sort(key=lambda rs: rs[1].st_mtime, reverse=True)
-
-        counts: dict[str, int] = {}
-        for _r, _st, section in reports:
-            counts[section] = counts.get(section, 0) + 1
-
-        meta = tk.Frame(panel, bg=BG)
-        meta.pack(fill="x", pady=(0, 8))
-        tk.Label(meta, text=f"TOTAL  {len(reports)}", font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG).pack(side="left")
-        for sec_name in ("RUNS", "ARBITRAGE", "DARWIN", "LEGACY"):
-            n = counts.get(sec_name, 0)
-            if n:
-                tk.Label(meta, text=f"{sec_name}  {n}", font=(FONT, 8),
-                         fg=DIM, bg=BG).pack(side="left", padx=(16, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
-        self._ui_note(
-            panel,
-            "Artifact index is chronological. Open BACKTESTS for validated run review; use this screen for raw persisted files.",
-            fg=DIM,
-        )
-
-        routes = self._ui_section(panel, "ROUTES", note="review and drill-down")
-        self._ui_action_row(
-            routes, "B", "BACKTESTS", "Open validated run browser with metrics and detail panel",
-            command=self._data_backtests, tag="PRIMARY", tag_fg=AMBER_D, tag_bg=BG, title_width=18,
-        )
-        self._ui_action_row(
-            routes, "E", "ENGINE LOGS", "Open running-engine log tail and process inspection",
-            command=self._data_engines, tag="OPERATIONS", tag_fg=AMBER_D, tag_bg=BG, title_width=18,
-        )
-        self._kb("<Key-b>", self._data_backtests)
-        self._kb("<Key-e>", self._data_engines)
-
-        canvas = tk.Canvas(panel, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
-        sf = tk.Frame(canvas, bg=BG)
-        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        window_id = canvas.create_window((0,0), window=sf, anchor="nw")
-        self._bind_canvas_window_width(canvas, window_id, pad_x=6)
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
-        sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
-
-        tk.Label(sf, text=f"  {'SECTION':<10} {'FILE':<60} {'DATE':<15} {'SIZE':>8}",
-                 font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x")
-        tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", pady=1)
-
-        if not reports:
-            tk.Label(sf, text="  No reports found.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w", pady=8)
-            return
-
-        # Section → color for the badge
-        sec_color = {
-            "RUNS":      AMBER,
-            "DARWIN":    GREEN,
-            "ARBITRAGE": AMBER_B,
-            "LEGACY":    DIM,
-        }
-
-        for r, st, section in reports[:200]:
-            try:
-                rel = str(r.relative_to(ROOT))
-            except ValueError:
-                rel = str(r)
-            mt = datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
-            sz = f"{st.st_size/1024:.0f}K" if st.st_size < 1024*1024 else f"{st.st_size/(1024*1024):.1f}M"
-            col = sec_color.get(section, WHITE)
-
-            row = tk.Frame(sf, bg=BG, cursor="hand2")
-            row.pack(fill="x")
-            sec_lbl = tk.Label(row, text=f" {section:<9}", font=(FONT, 7, "bold"),
-                               fg=col, bg=BG, width=10, anchor="w")
-            sec_lbl.pack(side="left")
-            name_lbl = tk.Label(row, text=f" {rel:<60}",
-                                font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
-            name_lbl.pack(side="left")
-            date_lbl = tk.Label(row, text=f" {mt:<15}",
-                                font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
-            date_lbl.pack(side="left")
-            size_lbl = tk.Label(row, text=f" {sz:>8}",
-                                font=(FONT, 7), fg=DIM, bg=BG, anchor="e")
-            size_lbl.pack(side="left")
-            tk.Frame(row, bg=DIM2, height=1).pack(side="bottom", fill="x")
-
-            labels = (sec_lbl, name_lbl, date_lbl, size_lbl)
-
-            def _enter(_e=None, labels=labels):
-                for l in labels:
-                    try: l.configure(bg=BG3)
-                    except tk.TclError: pass
-                try: name_lbl.configure(fg=WHITE)
-                except tk.TclError: pass
-            def _leave(_e=None, labels=labels):
-                for l in labels:
-                    try: l.configure(bg=BG)
-                    except tk.TclError: pass
-                try: name_lbl.configure(fg=DIM)
-                except tk.TclError: pass
-
-            for w in (row, *labels):
-                w.bind("<Enter>", _enter)
-                w.bind("<Leave>", _leave)
-                w.bind("<Button-1>", lambda e, p=r: self._open_file(p))
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("data_reports")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     def _procs(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> PROCS"); self.h_stat.configure(text="MANAGE", fg=GREEN)
-        self.f_lbl.configure(text="ESC back  |  R refresh")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-r>", self._procs)
-
-        _outer, body = self._ui_page_shell("PROCESSES", "Running engine processes and control actions", content_width=820)
-        panel = self._ui_panel_frame(body, "PROCESS CONTROL", "Live engines currently registered in the local process index")
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("processes")
         try:
-            from core.ops.proc import list_procs, stop_proc
-            ps = [p for p in list_procs() if p.get("alive")]
+            self.focus_set()
         except Exception:
-            ps = []
-            stop_proc = None  # type: ignore
-        if not ps:
-            self._ui_note(panel, "No engines running.", fg=DIM)
-
-        def _safe_stop(pid):
-            """stop_proc can raise on dead PIDs or permission errors — catch
-            everything and re-render so the list stays in sync."""
-            if pid is None or stop_proc is None:
-                return
-            try:
-                stop_proc(int(pid))
-            except Exception as e:
-                self.h_stat.configure(text=f"STOP FAILED: {str(e)[:30]}", fg=RED)
-            self.after(200, self._procs)
-
-        for p in ps:
-            row = tk.Frame(panel, bg=BG3); row.pack(fill="x", padx=14, pady=2)
-            tk.Label(row, text=f" {p.get('engine','?').upper()} ", font=(FONT, 8, "bold"), fg=BG, bg=GREEN).pack(side="left")
-            tk.Label(row, text=f"  PID {p.get('pid','?')}", font=(FONT, 9), fg=WHITE, bg=BG3, padx=6, pady=4).pack(side="left")
-            tk.Button(row, text="STOP", font=(FONT, 7, "bold"), fg=RED, bg=BG3, border=0, cursor="hand2",
-                      command=lambda pid=p.get("pid"): _safe_stop(pid)).pack(side="right", padx=4, pady=2)
-        self._ui_back_row(panel, lambda: self._menu("main"))
+            pass
 
     def _config(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> SETTINGS"); self.h_stat.configure(text="CONFIG", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell("SETTINGS", "Configuration surfaces for credentials, deploy and operator defaults")
-        panel = self._ui_panel_frame(body, "CONFIGURATION ROUTER", "Editable and planned configuration modules")
-
-        cfgs = [
-            ("API KEYS",           "Exchange & broker credentials",      self._cfg_keys,  True),
-            ("MACRO BRAIN APIS",   "FRED, NewsAPI (data sources)",       self._cfg_macro_keys, True),
-            ("TELEGRAM",           "Bot token & chat ID",                self._cfg_tg,    True),
-            ("RISK PARAMETERS",    "Account size, max risk, leverage",   None,            False),
-            ("STRATEGY DEFAULTS",  "Timeframes, symbols, baskets",      None,            False),
-            ("DISPLAY",            "Theme, font size, ticker symbols",   None,            False),
-            ("DATA DIRECTORY",     "Where reports & logs are stored",    None,            False),
-            ("VPS / DEPLOY",       "Remote server SSH connection",       self._cfg_vps,   True),
-            ("BACKUP / RESTORE",   "Export/import all settings",         None,            False),
-        ]
-        for i, (name, desc, cmd, available) in enumerate(cfgs):
-            self._ui_action_row(
-                panel, str(i + 1), name, desc,
-                command=cmd if available else None,
-                available=available,
-                tag=None if available else "COMING SOON",
-                tag_fg=DIM, tag_bg=BG2, title_width=20,
-            )
-            if cmd and available:
-                self._kb(f"<Key-{i+1}>", cmd)
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
-        # <Key-0> is already bound at the top of _config; no rebind here.
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("settings")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     # --- CONFIG EDITORS ----------------------------------
     def _cfg_edit(self, title, fields, load_fn, save_fn, back_fn=None):

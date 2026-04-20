@@ -1,8 +1,8 @@
-"""MainMenuScreen - ScreenManager migration for launcher._menu_main_bloomberg.
+"""MainMenuScreen for the Bloomberg-style launcher desk router.
 
-This keeps the Bloomberg desk router mounted in a cached screen container.
-The canvas is created once; subsequent visits repaint the menu state without
-destroying the entire legacy widget tree.
+This migrates ``App._menu_main_bloomberg`` to the ScreenManager pattern:
+widgets are built once, the canvas is reused across visits, and only the
+menu state is repainted on re-entry.
 """
 from __future__ import annotations
 
@@ -11,8 +11,24 @@ from tkinter import messagebox
 from typing import Any
 
 from core.data.connections import MARKETS
-from core.ui.ui_palette import AMBER, AMBER_B, AMBER_D, BG, BG2, BORDER, DIM, FONT, GREEN, TILE_EXECUTE, TILE_MARKETS, TILE_RESEARCH, WHITE, RED
-from launcher_support.menu_data import MAIN_MENU
+from core.ui.ui_palette import (
+    AMBER,
+    AMBER_B,
+    AMBER_D,
+    BG,
+    BG2,
+    BORDER,
+    DIM,
+    FONT,
+    GREEN,
+    RED,
+    TILE_CONTROL,
+    TILE_EXECUTE,
+    TILE_MARKETS,
+    TILE_RESEARCH,
+    WHITE,
+)
+from launcher_support.menu_data import main_groups
 from launcher_support.screens.base import Screen
 
 
@@ -49,6 +65,7 @@ class MainMenuScreen(Screen):
             ("se", 728, 340),
         ]
         app._active_cd_center = (460, 261)
+        app._menu_render_scale = 1.0
         app.h_stat.configure(text="DESK SELECT", fg=AMBER_B)
         app.h_path.configure(text="> MAIN  |  DESK ROUTER")
         app.f_lbl.configure(
@@ -62,33 +79,114 @@ class MainMenuScreen(Screen):
         self._bind(canvas, "<Configure>", app._render_main_menu)
         self._bind(canvas, "<Button-1>", self._canvas_click)
 
-        if not any(app._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
+        if not any(
+            app._menu_live.get(key) for key in ("markets", "execute", "research", "control")
+        ):
             app._menu_live_fetch_async()
 
         canvas.create_rectangle(24, 18, 896, 522, outline=AMBER_D, width=2, tags="frame")
         canvas.create_rectangle(28, 22, 892, 518, outline=BORDER, width=1, tags="frame")
         canvas.create_rectangle(32, 24, 888, 40, outline="", fill=BG2, tags="frame")
         canvas.create_line(32, 40, 888, 40, fill=AMBER, width=1, tags="frame")
-        canvas.create_text(42, 32, anchor="w", text="AURUM FINANCE", font=(FONT, 8, "bold"), fill=WHITE, tags="frame")
+        canvas.create_text(
+            42,
+            32,
+            anchor="w",
+            text="AURUM FINANCE",
+            font=(FONT, 8, "bold"),
+            fill=WHITE,
+            tags="frame",
+        )
         canvas.create_rectangle(170, 26, 260, 38, outline=AMBER, fill=BG, width=1, tags="frame")
-        canvas.create_text(215, 32, anchor="center", text="MAIN MENU", font=(FONT, 8, "bold"), fill=AMBER, tags="frame")
-        canvas.create_text(876, 32, anchor="e", text="DESK ROUTER / BLOOMBERG MODE", font=(FONT, 7), fill=DIM, tags="frame")
+        canvas.create_text(
+            215,
+            32,
+            anchor="center",
+            text="MAIN MENU",
+            font=(FONT, 8, "bold"),
+            fill=AMBER,
+            tags="frame",
+        )
+        canvas.create_text(
+            876,
+            32,
+            anchor="e",
+            text="DESK ROUTER / BLOOMBERG MODE",
+            font=(FONT, 7),
+            fill=DIM,
+            tags="frame",
+        )
         canvas.create_line(32, 510, 888, 510, fill=AMBER_D, width=1, tags="frame")
 
-        app._draw_panel(canvas, 52, 58, 868, 108, title="  ROUTING HEADER  ", accent=AMBER, tag="menu")
+        app._draw_panel(
+            canvas,
+            52,
+            58,
+            868,
+            108,
+            title="  ROUTING HEADER  ",
+            accent=AMBER,
+            tag="menu",
+        )
 
-        def _col(x_lbl: int, label: str, x_val: int, value: str, value_fg: str = WHITE) -> None:
-            canvas.create_text(x_lbl, 78, anchor="w", text=label, font=(FONT, 7, "bold"), fill=DIM, tags="menu")
-            canvas.create_text(x_val, 78, anchor="w", text=value, font=(FONT, 9, "bold"), fill=value_fg, tags="menu")
+        def _col(
+            x_lbl: int,
+            label: str,
+            x_val: int,
+            value: str,
+            value_fg: str = WHITE,
+        ) -> None:
+            canvas.create_text(
+                x_lbl,
+                78,
+                anchor="w",
+                text=label,
+                font=(FONT, 7, "bold"),
+                fill=DIM,
+                tags="menu",
+            )
+            canvas.create_text(
+                x_val,
+                78,
+                anchor="w",
+                text=value,
+                font=(FONT, 9, "bold"),
+                fill=value_fg,
+                tags="menu",
+            )
 
         _col(66, "DESK", 110, "AURUM ROUTER", AMBER)
-        canvas.create_text(66, 96, anchor="w", text="markets · execute · research · control", font=(FONT, 7), fill=DIM, tags="menu")
+        canvas.create_text(
+            66,
+            96,
+            anchor="w",
+            text="markets | execute | research | control",
+            font=(FONT, 7),
+            fill=DIM,
+            tags="menu",
+        )
         canvas.create_line(296, 68, 296, 100, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
-        _col(310, "PROFILE", 364, "PAPER · LOCAL", GREEN)
-        canvas.create_text(310, 96, anchor="w", text="operator mode · kill-switch armed", font=(FONT, 7), fill=DIM, tags="menu")
+        _col(310, "PROFILE", 364, "PAPER | LOCAL", GREEN)
+        canvas.create_text(
+            310,
+            96,
+            anchor="w",
+            text="operator mode | kill-switch armed",
+            font=(FONT, 7),
+            fill=DIM,
+            tags="menu",
+        )
         canvas.create_line(556, 68, 556, 100, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
-        _col(570, "NAV", 604, "1-4 · ENTER · ESC", WHITE)
-        canvas.create_text(570, 96, anchor="w", text="click tile · number key · esc to landing", font=(FONT, 7), fill=DIM, tags="menu")
+        _col(570, "NAV", 604, "1-4 | ENTER | ESC", WHITE)
+        canvas.create_text(
+            570,
+            96,
+            anchor="w",
+            text="click tile | number key | esc to landing",
+            font=(FONT, 7),
+            fill=DIM,
+            tags="menu",
+        )
 
         app._draw_cd_center(canvas, r=52)
         canvas.create_line(60, 118, 860, 118, fill=app._dim_color(AMBER, 0.3), width=1, tags="menu")
@@ -96,23 +194,48 @@ class MainMenuScreen(Screen):
         for idx in range(4):
             app._draw_isometric_tile(canvas, idx, idx == app._menu_focused_tile)
 
-        app._draw_panel(canvas, 52, 412, 868, 504, title="  SYSTEM CONTEXT  ", accent=AMBER, tag="menu")
+        app._draw_panel(
+            canvas,
+            52,
+            412,
+            868,
+            504,
+            title="  SYSTEM CONTEXT  ",
+            accent=AMBER,
+            tag="menu",
+        )
         try:
             market_label = MARKETS.get(self.conn.active_market, {}).get("label", "UNSET")
         except Exception:
             market_label = "UNSET"
-        app._draw_kv_rows(canvas, 78, 434, [
-            ("ENGINE", "DESK ROUTER", TILE_MARKETS),
-            ("MODE", "OPERATOR", WHITE),
-            ("ACCOUNT", "PAPER", GREEN),
-            ("MARKET", market_label.upper(), AMBER_B),
-        ], value_x=218, line_h=16, tag="menu")
-        app._draw_kv_rows(canvas, 468, 434, [
-            ("BASKET", "DEFAULT", WHITE),
-            ("TIMEFRAME", "15M", TILE_EXECUTE),
-            ("ENVIRONMENT", "LOCAL", TILE_RESEARCH),
-            ("RISK", "KILL-SWITCH ARMED", RED),
-        ], value_x=630, line_h=16, tag="menu")
+        app._draw_kv_rows(
+            canvas,
+            78,
+            434,
+            [
+                ("ENGINE", "DESK ROUTER", TILE_MARKETS),
+                ("MODE", "OPERATOR", WHITE),
+                ("ACCOUNT", "PAPER", GREEN),
+                ("MARKET", market_label.upper(), AMBER_B),
+            ],
+            value_x=218,
+            line_h=16,
+            tag="menu",
+        )
+        app._draw_kv_rows(
+            canvas,
+            468,
+            434,
+            [
+                ("BASKET", "DEFAULT", WHITE),
+                ("TIMEFRAME", "15M", TILE_EXECUTE),
+                ("ENVIRONMENT", "LOCAL", TILE_RESEARCH),
+                ("RISK", "KILL-SWITCH ARMED", RED),
+            ],
+            value_x=630,
+            line_h=16,
+            tag="menu",
+        )
 
         for n in (1, 2, 3, 4):
             app._kb(
@@ -149,6 +272,7 @@ class MainMenuScreen(Screen):
 
     def _canvas_click(self, event: tk.Event) -> str:
         app = self.app
+        groups = self._main_groups()
         try:
             ex, ey = event.x, event.y
             hit = None
@@ -160,8 +284,8 @@ class MainMenuScreen(Screen):
             if hit is None:
                 app.h_stat.configure(text=f"NO TILE @ ({ex},{ey})", fg=AMBER_D)
                 return "break"
-            label = MAIN_MENU[hit][0]
-            app.h_stat.configure(text=f"→ {label}", fg=AMBER_B)
+            label = groups[hit][0]
+            app.h_stat.configure(text=f"-> {label}", fg=AMBER_B)
             app._menu_tile_focus(hit)
             app._menu_tile_expand(hit)
             return "break"
@@ -182,3 +306,12 @@ class MainMenuScreen(Screen):
             return
         app._menu_live_fetch_async()
         app._menu_live_after_id = self._after(5000, self._schedule_live_refresh)
+
+    def _main_groups(self) -> list[tuple[str, str, str, list[tuple[str, str]]]]:
+        return main_groups(
+            MARKETS,
+            TILE_MARKETS,
+            TILE_EXECUTE,
+            TILE_RESEARCH,
+            TILE_CONTROL,
+        )
