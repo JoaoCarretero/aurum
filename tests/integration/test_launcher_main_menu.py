@@ -362,6 +362,35 @@ def test_macro_brain_exit_clears_token_and_timers(app, monkeypatch):
     assert screen._tracked_after_ids == []
 
 
+def test_runs_history_routes_via_screen_manager(app):
+    app._data_runs_history()
+    assert app.screens.current_name() == "runs_history"
+    assert app.main.winfo_manager() == ""
+
+
+def test_runs_history_reentry_reuses_cached_screen(app):
+    app._data_runs_history()
+    first = app.screens._cache.get("runs_history")
+    app._menu_main_bloomberg()
+    app._data_runs_history()
+    second = app.screens._cache.get("runs_history")
+    assert first is not None
+    assert first is second
+
+
+def test_runs_history_exit_cancels_refresh(app):
+    app._data_runs_history()
+    screen = app.screens._cache.get("runs_history")
+    assert screen is not None
+    root = screen._render_root
+    assert root is not None
+    state = getattr(root, "_runs_history_state", None)
+    assert isinstance(state, dict)
+    assert state.get("refresh_aid") is not None
+    app._menu_main_bloomberg()
+    assert state.get("refresh_aid") is None
+
+
 def test_terminal_routes_via_screen_manager(app):
     app._terminal()
     assert app.screens.current_name() == "terminal"

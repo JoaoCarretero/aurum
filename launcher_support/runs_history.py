@@ -375,6 +375,7 @@ def render_runs_history(parent: tk.Widget, launcher,
     def _refresh():
         _refresh_runs(state, launcher, client_factory)
     state["refresh_fn"] = _refresh
+    root._runs_history_state = state
 
     _refresh()
     _schedule_refresh(launcher, state, _refresh)

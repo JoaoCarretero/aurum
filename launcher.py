@@ -7809,26 +7809,18 @@ class App(tk.Tk):
 
     # --- RUNS HISTORY (unified database of every run) ------------
     def _data_runs_history(self):
-        """Tela institucional de todas as runs (local + VPS) em uma
-        única tabela com detalhe expansível. Substitui a caça pelos
-        data/ subdirs ou systemctl status quando user quer ver "o que
-        rodou e o resultado."""
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA > RUNS HISTORY")
-        self.h_stat.configure(text="LIVE", fg=GREEN)
-        self.f_lbl.configure(
-            text="ESC voltar  |  click row to expand  |  auto-refresh 5s")
-        self._kb("<Escape>", lambda: self._data_center())
-
-        _outer, outer = self._ui_page_shell(
-            "RUNS HISTORY",
-            "Every shadow/paper run, local disk + VPS cockpit, newest first",
-        )
-
-        from launcher_support.runs_history import render_runs_history
-        from launcher_support.engines_live_view import _get_cockpit_client
-
-        render_runs_history(outer, self, client_factory=_get_cockpit_client)
+        """Tela institucional de todas as runs via ScreenManager."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("runs_history")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     # --- ENGINE LOGS (live proc list + log tail) --------------
     def _data_engines(self):

@@ -19,6 +19,7 @@ from launcher_support.screens.macro_brain import MacroBrainScreen
 from launcher_support.screens.markets import MarketsScreen
 from launcher_support.screens.processes import ProcessesScreen
 from launcher_support.screens.risk import RiskScreen
+from launcher_support.screens.runs_history import RunsHistoryScreen
 from launcher_support.screens.settings import SettingsScreen
 from launcher_support.screens.terminal import TerminalScreen
 
@@ -31,6 +32,7 @@ __all__ = [
     "SettingsScreen",
     "ProcessesScreen",
     "RiskScreen",
+    "RunsHistoryScreen",
     "TerminalScreen",
     "MarketsScreen",
     "Screen",
