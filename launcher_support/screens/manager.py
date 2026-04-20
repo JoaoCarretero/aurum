@@ -17,6 +17,7 @@ import tkinter as tk
 from typing import Any, Callable
 
 from launcher_support.screens.base import Screen
+from launcher_support.screens.exceptions import ScreenBuildError
 
 ScreenFactory = Callable[[tk.Misc], Screen]
 
@@ -39,26 +40,42 @@ class ScreenManager:
         return self._current_name
 
     def show(self, name: str, **kwargs: Any) -> Screen:
-        """Show the named screen, creating it on first access."""
+        """Show the named screen, creating it on first access.
+
+        On build/on_enter failure, keeps the previously-current screen
+        logically current (caller must re-pack or show another screen to
+        recover UX).
+        """
         if name not in self._factories:
             raise ValueError(f"unknown screen: {name!r}")
 
-        # Hide current screen first (if any)
-        if self._current_name is not None:
-            prev = self._cache.get(self._current_name)
-            if prev is not None:
-                try:
-                    prev.on_exit()
-                except Exception:
-                    pass
-                prev.pack_forget()
+        prev_name = self._current_name
+        prev_screen = self._cache.get(prev_name) if prev_name else None
+        if prev_screen is not None:
+            try:
+                prev_screen.on_exit()
+            except Exception:
+                pass
+            prev_screen.pack_forget()
 
         screen = self._cache.get(name)
-        if screen is None:
-            screen = self._factories[name](self._parent)
+        is_first_visit = screen is None
+        if is_first_visit:
+            try:
+                screen = self._factories[name](self._parent)
+                screen.mount()
+            except Exception as exc:
+                self._current_name = prev_name
+                raise ScreenBuildError(name, original=exc) from exc
             self._cache[name] = screen
-        screen.mount()
-        screen.on_enter(**kwargs)
+        else:
+            screen.mount()
+
+        try:
+            screen.on_enter(**kwargs)
+        except Exception:
+            self._current_name = prev_name
+            raise
         screen.pack()
         self._current_name = name
         return screen

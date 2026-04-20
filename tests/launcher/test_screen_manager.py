@@ -100,3 +100,75 @@ def test_current_screen_pack_forget_on_switch(tk_root):
     tk_root.update_idletasks()
     assert foo.container.winfo_manager() == ""
     assert bar.container.winfo_manager() == "pack"
+
+
+# ─── Error paths ──────────────────────────────────────────────
+
+from launcher_support.screens.exceptions import (
+    ScreenBuildError,
+    ScreenContextError,
+)
+
+
+class _BuildFails(Screen):
+    def build(self) -> None:
+        raise RuntimeError("nope")
+
+    def on_enter(self, **kwargs) -> None:
+        pass
+
+
+class _EnterFails(Screen):
+    def build(self) -> None:
+        pass
+
+    def on_enter(self, **kwargs) -> None:
+        if "run_id" not in kwargs:
+            raise ScreenContextError("pic", missing=["run_id"])
+
+
+def test_build_failure_raises_screen_build_error(tk_root):
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("bad", _BuildFails)
+    with pytest.raises(ScreenBuildError) as excinfo:
+        mgr.show("bad")
+    assert excinfo.value.screen_name == "bad"
+    assert isinstance(excinfo.value.original, RuntimeError)
+
+
+def test_build_failure_keeps_previous_current(tk_root):
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("foo", _Recording)
+    mgr.register("bad", _BuildFails)
+    mgr.show("foo")
+    with pytest.raises(ScreenBuildError):
+        mgr.show("bad")
+    # Previous screen is still logically current
+    assert mgr.current_name() == "foo"
+
+
+def test_on_enter_context_error_propagates_and_keeps_current(tk_root):
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("foo", _Recording)
+    mgr.register("pic", _EnterFails)
+    mgr.show("foo")
+    with pytest.raises(ScreenContextError):
+        mgr.show("pic")  # missing run_id
+    assert mgr.current_name() == "foo"
+
+
+def test_on_enter_arbitrary_error_propagates_and_keeps_current(tk_root):
+    class _Boom(Screen):
+        def build(self):
+            pass
+
+        def on_enter(self, **kwargs):
+            raise RuntimeError("boom")
+
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("foo", _Recording)
+    mgr.register("boom", _Boom)
+    mgr.show("foo")
+    with pytest.raises(RuntimeError):
+        mgr.show("boom")
+    assert mgr.current_name() == "foo"
