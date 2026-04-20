@@ -1380,6 +1380,19 @@ class App(tk.Tk):
         # chain instead of stacking.
         self._funding_alive = False
         self._funding_timer_armed = False
+        # ENGINES LIVE cockpit owns ShadowPoller + WSPriceFeed + detail
+        # tickers. Without this teardown, navigating away (BACKTEST, MAIN,
+        # DATA, ...) leaves those pollers alive in background threads,
+        # contending for aurum.db and the GIL. The 2026-04-20 freeze
+        # reproduced when the user clicked BACKTEST after ENGINES LIVE —
+        # picker render never got enough main-thread time to complete.
+        prior_live = getattr(self, "_engines_live_handle", None)
+        if prior_live and callable(prior_live.get("cleanup")):
+            try:
+                prior_live["cleanup"]()
+            except Exception:
+                pass
+            self._engines_live_handle = None
         for w in self.main.winfo_children(): w.destroy()
 
     def _clear_kb(self):
