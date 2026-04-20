@@ -46,6 +46,9 @@ include = ["config*", "core*", "analysis*", "engines*", "bot*", "api*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-p no:cacheprovider"
+markers = [
+    "gui: requires a Tk-capable display (opt-in via -m gui or run all)",
+]
 norecursedirs = [
     ".git",
     ".worktrees",
