@@ -50,9 +50,14 @@ from tools.operations.paper_position_manager import (  # noqa: E402
 )
 from tools.operations.paper_ks_gate import KSLiveGate, KSState  # noqa: E402
 from tools.operations.paper_metrics import MetricsStreamer  # noqa: E402
+from tools.operations.run_id import build_run_id, sanitize_label  # noqa: E402
 
 RUN_TS = datetime.now(timezone.utc)
-RUN_ID = RUN_TS.strftime("%Y-%m-%d_%H%M")
+# Module-level LABEL reads from env at import (systemd path). CLI --label
+# later overrides via _configure_run(). Tests monkeypatch RUN_ID/paths
+# directly and never exercise _configure_run.
+LABEL: str | None = sanitize_label(os.environ.get("AURUM_PAPER_LABEL"))
+RUN_ID = build_run_id(RUN_TS, LABEL)
 RUN_DIR = ROOT / "data" / "millennium_paper" / RUN_ID
 LOGS_DIR = RUN_DIR / "logs"
 REPORTS_DIR = RUN_DIR / "reports"
@@ -70,6 +75,37 @@ ACCOUNT_PATH = STATE_DIR / "account.json"
 HEARTBEAT_PATH = STATE_DIR / "heartbeat.json"
 MANIFEST_PATH = STATE_DIR / "manifest.json"
 KILL_FLAG = RUN_DIR / ".kill"
+
+
+def _configure_run(label: str | None) -> None:
+    """Re-point module-level paths at a new RUN_ID built from ``label``.
+
+    Called from main() after argparse when --label differs from the
+    env-derived LABEL. Rebuilds RUN_ID, RUN_DIR and every path global.
+    Safe to call multiple times; mkdir is idempotent.
+    """
+    global LABEL, RUN_ID, RUN_DIR, LOGS_DIR, REPORTS_DIR, STATE_DIR
+    global PAPER_LOG, TRADES_PATH, EQUITY_PATH, FILLS_PATH, SIGNALS_PATH
+    global POSITIONS_PATH, ACCOUNT_PATH, HEARTBEAT_PATH, MANIFEST_PATH
+    global KILL_FLAG
+    LABEL = sanitize_label(label)
+    RUN_ID = build_run_id(RUN_TS, LABEL)
+    RUN_DIR = ROOT / "data" / "millennium_paper" / RUN_ID
+    LOGS_DIR = RUN_DIR / "logs"
+    REPORTS_DIR = RUN_DIR / "reports"
+    STATE_DIR = RUN_DIR / "state"
+    for _d in (LOGS_DIR, REPORTS_DIR, STATE_DIR):
+        _d.mkdir(parents=True, exist_ok=True)
+    PAPER_LOG = LOGS_DIR / "paper.log"
+    TRADES_PATH = REPORTS_DIR / "trades.jsonl"
+    EQUITY_PATH = REPORTS_DIR / "equity.jsonl"
+    FILLS_PATH = REPORTS_DIR / "fills.jsonl"
+    SIGNALS_PATH = REPORTS_DIR / "signals.jsonl"
+    POSITIONS_PATH = STATE_DIR / "positions.json"
+    ACCOUNT_PATH = STATE_DIR / "account.json"
+    HEARTBEAT_PATH = STATE_DIR / "heartbeat.json"
+    MANIFEST_PATH = STATE_DIR / "manifest.json"
+    KILL_FLAG = RUN_DIR / ".kill"
 
 log = logging.getLogger("millennium_paper")
 log.setLevel(logging.INFO)
@@ -182,6 +218,7 @@ def _write_manifest(account_size: float) -> None:
         branch = "unknown"
     payload = {
         "run_id": RUN_ID, "engine": "millennium", "mode": "paper",
+        "label": LABEL,
         "started_at": RUN_TS.isoformat(),
         "commit": commit, "branch": branch,
         "config_hash": compute_config_hash(),
@@ -532,6 +569,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
     )
     _write_heartbeat({
         "run_id": RUN_ID, "status": "running",
+        "label": LABEL,
         "started_at": RUN_TS.isoformat(),
         "tick_sec": state.tick_sec, "ticks_ok": state.ticks_ok,
         "ticks_fail": state.ticks_fail,
@@ -554,6 +592,7 @@ def _write_run_summary(state: RunnerState, stopped_reason: str) -> None:
     summary = {
         "run_id": RUN_ID,
         "mode": "paper",
+        "label": LABEL,
         "account_size": state.account_size,
         "started_at": RUN_TS.isoformat(),
         "stopped_at": datetime.now(timezone.utc).isoformat(),
@@ -670,7 +709,14 @@ def main() -> int:
                                                      10_000.0)))
     parser.add_argument("--tick-sec", type=int, default=900)
     parser.add_argument("--run-hours", type=float, default=0.0)
+    parser.add_argument("--label", type=str, default=None,
+                        help="optional instance label (sanitized to [a-z0-9-], max 40). "
+                             "overrides AURUM_PAPER_LABEL env.")
     args = parser.parse_args()
+    # CLI --label overrides env-derived LABEL only when explicitly passed.
+    # Rebuild paths so manifest/heartbeat/logs land in the labeled RUN_DIR.
+    if args.label is not None and sanitize_label(args.label) != LABEL:
+        _configure_run(args.label)
     return run_paper(args.tick_sec, args.run_hours, args.account_size)
 
 

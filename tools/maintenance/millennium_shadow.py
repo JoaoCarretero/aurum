@@ -21,6 +21,7 @@ import contextlib
 import io
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -39,9 +40,11 @@ from tools.operations.millennium_signal_gate import (  # noqa: E402
     signal_timestamp,
     trade_key,
 )
+from tools.operations.run_id import build_run_id, sanitize_label  # noqa: E402
 
 RUN_TS = datetime.now(timezone.utc)
-RUN_ID = RUN_TS.strftime("%Y-%m-%d_%H%M")
+LABEL: str | None = sanitize_label(os.environ.get("AURUM_SHADOW_LABEL"))
+RUN_ID = build_run_id(RUN_TS, LABEL)
 RUN_DIR = ROOT / "data" / "millennium_shadow" / RUN_ID
 LOGS_DIR = RUN_DIR / "logs"
 REPORTS_DIR = RUN_DIR / "reports"
@@ -53,6 +56,28 @@ SHADOW_LOG = LOGS_DIR / "shadow.log"
 TRADES_PATH = REPORTS_DIR / "shadow_trades.jsonl"
 HEARTBEAT_PATH = STATE_DIR / "heartbeat.json"
 KILL_FLAG = RUN_DIR / ".kill"
+
+
+def _configure_run(label: str | None) -> None:
+    """Re-point module-level paths at a new RUN_ID built from ``label``.
+
+    Called from main() after argparse when --label differs from the
+    env-derived LABEL. Rebuilds RUN_ID, RUN_DIR and every path global.
+    """
+    global LABEL, RUN_ID, RUN_DIR, LOGS_DIR, REPORTS_DIR, STATE_DIR
+    global SHADOW_LOG, TRADES_PATH, HEARTBEAT_PATH, KILL_FLAG
+    LABEL = sanitize_label(label)
+    RUN_ID = build_run_id(RUN_TS, LABEL)
+    RUN_DIR = ROOT / "data" / "millennium_shadow" / RUN_ID
+    LOGS_DIR = RUN_DIR / "logs"
+    REPORTS_DIR = RUN_DIR / "reports"
+    STATE_DIR = RUN_DIR / "state"
+    for _d in (LOGS_DIR, REPORTS_DIR, STATE_DIR):
+        _d.mkdir(parents=True, exist_ok=True)
+    SHADOW_LOG = LOGS_DIR / "shadow.log"
+    TRADES_PATH = REPORTS_DIR / "shadow_trades.jsonl"
+    HEARTBEAT_PATH = STATE_DIR / "heartbeat.json"
+    KILL_FLAG = RUN_DIR / ".kill"
 
 log = logging.getLogger("millennium_shadow")
 log.setLevel(logging.INFO)
@@ -140,7 +165,8 @@ def _git_describe() -> tuple[str, str]:
     return _run(["git", "rev-parse", "--short", "HEAD"]), _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 
 
-def _write_manifest(run_dir: Path, run_id: str, engine: str, mode: str) -> None:
+def _write_manifest(run_dir: Path, run_id: str, engine: str, mode: str,
+                    label: str | None = None) -> None:
     """Write manifest.json once at runner start. Idempotent: overwrites if exists."""
     import platform
     import socket
@@ -151,6 +177,7 @@ def _write_manifest(run_dir: Path, run_id: str, engine: str, mode: str) -> None:
         "run_id": run_id,
         "engine": engine,
         "mode": mode,
+        "label": label,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "commit": commit or "unknown",
         "branch": branch or "unknown",
@@ -199,6 +226,7 @@ def _append_per_engine(trade: dict) -> None:
             "run_id": f"{slug}_shadow_{RUN_ID}",
             "engine": slug,
             "mode": "shadow",
+            "label": LABEL,
             "parent_run_id": RUN_ID,
             "started_at": RUN_TS.isoformat(),
         }
@@ -258,6 +286,7 @@ def _write_run_summary(ticks_ok: int, ticks_fail: int, novel_total: int,
         "run_id": RUN_ID,
         "engine": "millennium",
         "mode": "shadow",
+        "label": LABEL,
         "started_at": RUN_TS.isoformat(),
         "stopped_at": stopped_at,
         "stopped_reason": stopped_reason,
@@ -293,6 +322,7 @@ def _write_per_engine_summaries(ticks_ok: int, ticks_fail: int,
             "run_id": f"{slug}_shadow_{RUN_ID}",
             "engine": slug,
             "mode": "shadow",
+            "label": LABEL,
             "parent_run_id": RUN_ID,
             "started_at": RUN_TS.isoformat(),
             "stopped_at": stopped_at,
@@ -430,7 +460,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     with contextlib.suppress(AttributeError, ValueError):
         signal.signal(signal.SIGTERM, _handle_signal)
 
-    _write_manifest(RUN_DIR, run_id=RUN_ID, engine="millennium", mode="shadow")
+    _write_manifest(RUN_DIR, run_id=RUN_ID, engine="millennium", mode="shadow",
+                    label=LABEL)
 
     log.info("SHADOW START run=%s tick=%ds hours=%.1f dir=%s",
              RUN_ID, tick_sec, run_hours, RUN_DIR)
@@ -442,6 +473,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     _write_heartbeat({
         "run_id": RUN_ID,
         "status": "running",
+        "label": LABEL,
         "started_at": RUN_TS.isoformat(),
         "tick_sec": tick_sec,
         "run_hours": run_hours,
@@ -487,6 +519,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
             _write_heartbeat({
                 "run_id": RUN_ID,
                 "status": "running",
+                "label": LABEL,
                 "started_at": RUN_TS.isoformat(),
                 "tick_sec": tick_sec,
                 "run_hours": run_hours,
@@ -512,6 +545,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
             _write_heartbeat({
                 "run_id": RUN_ID,
                 "status": "running",
+                "label": LABEL,
                 "started_at": RUN_TS.isoformat(),
                 "tick_sec": tick_sec,
                 "run_hours": run_hours,
@@ -539,6 +573,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     _write_heartbeat({
         "run_id": RUN_ID,
         "status": "stopped",
+        "label": LABEL,
         "stopped_reason": stop_requested["reason"] or "deadline",
         "started_at": RUN_TS.isoformat(),
         "stopped_at": stopped_at_str,
@@ -587,6 +622,9 @@ def main() -> int:
                     help="seconds between ticks (default 900 = 15min)")
     ap.add_argument("--run-hours", type=float, default=24.0,
                     help="total run duration in hours; 0 = forever (default 24)")
+    ap.add_argument("--label", type=str, default=None,
+                    help="optional instance label (sanitized to [a-z0-9-], max 40). "
+                         "overrides AURUM_SHADOW_LABEL env.")
     args = ap.parse_args()
 
     if args.tick_sec < 60:
@@ -595,6 +633,9 @@ def main() -> int:
     if args.run_hours < 0:
         print("run-hours must be >= 0", file=sys.stderr)
         return 2
+
+    if args.label is not None and sanitize_label(args.label) != LABEL:
+        _configure_run(args.label)
 
     return run_shadow(args.tick_sec, args.run_hours)
 

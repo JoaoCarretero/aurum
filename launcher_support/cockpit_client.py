@@ -102,6 +102,28 @@ class CockpitClient:
             return r
         return None
 
+    def active_runs_for(self, engine: str,
+                        mode: str | None = None) -> list[dict]:
+        """All RUNNING runs matching (engine, mode), sorted started_at DESC.
+
+        Counterpart to :meth:`latest_run` for multi-instance UIs — returns
+        every concurrent run so the operator can pick which one to
+        inspect. Stopped and failed runs are excluded. Falls back to the
+        disk cache on network failure like other client methods.
+        """
+        try:
+            runs = self.list_runs()
+        except (OSError, CircuitOpen, urllib.error.URLError):
+            runs = self._load_cache("runs.json") or []
+        matches = [
+            r for r in runs
+            if r.get("engine") == engine
+            and r.get("status") == "running"
+            and (mode is None or r.get("mode") == mode)
+        ]
+        matches.sort(key=lambda r: r.get("started_at") or "", reverse=True)
+        return matches
+
     # ─── Internals ─────────────────────────────────────────────
 
     def _check_breaker(self) -> None:

@@ -119,6 +119,53 @@ def test_runs_list_marks_zombie_as_stopped(tmp_path, client):
     assert runs[0]["status"] == "stopped"
 
 
+def test_runs_list_includes_label_from_manifest(tmp_path, client):
+    """Multi-instance (Fase 2): RunSummary carrega label do manifest."""
+    _make_run(
+        tmp_path, "millennium_paper", "2026-04-20_165432_kelly5-10k",
+        heartbeat={
+            "run_id": "2026-04-20_165432_kelly5-10k", "status": "running",
+            "ticks_ok": 2, "ticks_fail": 0, "novel_total": 3,
+            "last_tick_at": "2026-04-20T16:55:00+00:00",
+            "last_error": None, "tick_sec": 900,
+            "label": "kelly5-10k",
+        },
+        manifest={
+            "run_id": "2026-04-20_165432_kelly5-10k", "engine": "millennium",
+            "mode": "paper", "label": "kelly5-10k",
+            "started_at": "2026-04-20T16:54:32+00:00",
+            "commit": "abc", "branch": "feat/phi-engine",
+            "config_hash": "x", "host": "local",
+        },
+    )
+    r = client.get("/v1/runs", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    runs = r.json()
+    assert len(runs) == 1
+    assert runs[0]["label"] == "kelly5-10k"
+
+
+def test_runs_list_label_null_when_manifest_omits(tmp_path, client):
+    """Backward-compat: runs antigos sem label surfacem label=None."""
+    _make_run(
+        tmp_path, "millennium_shadow", "legacy_2026-04-18_0229",
+        heartbeat={
+            "run_id": "legacy_2026-04-18_0229", "status": "running",
+            "ticks_ok": 5, "ticks_fail": 0, "novel_total": 625,
+            "last_tick_at": "2026-04-18T03:00:00+00:00",
+            "last_error": None, "tick_sec": 900,
+        },
+        manifest={
+            "run_id": "legacy_2026-04-18_0229", "engine": "millennium",
+            "mode": "shadow", "started_at": "2026-04-18T02:29:38+00:00",
+            "commit": "x", "branch": "x", "config_hash": "x", "host": "x",
+        },
+    )
+    r = client.get("/v1/runs", headers={"Authorization": "Bearer READ123"})
+    assert r.status_code == 200
+    assert r.json()[0]["label"] is None
+
+
 def test_runs_list_keeps_fresh_running_run_as_running(tmp_path, client):
     """Sanity check: healthy heartbeats are NOT downgraded to stopped."""
     from datetime import datetime, timezone, timedelta

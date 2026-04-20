@@ -31,6 +31,8 @@ class Manifest(BaseModel):
     config_hash: str
     host: str
     python_version: str | None = None
+    label: str | None = None
+    model_config = ConfigDict(extra="allow")
 
 
 class Heartbeat(BaseModel):
@@ -63,6 +65,7 @@ class RunSummary(BaseModel):
     started_at: datetime
     last_tick_at: datetime | None = None
     novel_total: int = 0
+    label: str | None = None
 
 
 class RunDetail(BaseModel):

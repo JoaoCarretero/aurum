@@ -59,6 +59,86 @@ def test_list_runs_returns_list(cfg, tmp_cache):
     assert runs[0]["engine"] == "millennium"
 
 
+def test_active_runs_for_filters_by_engine_and_mode(cfg, tmp_cache):
+    """Multi-instance (Fase 3): list all RUNNING runs matching (engine, mode).
+
+    latest_run returns 1; active_runs_for returns N so the UI can offer
+    an instance picker when the user has 2 paper runs side-by-side.
+    """
+    client = CockpitClient(cfg, cache_dir=tmp_cache)
+    body = [
+        {"run_id": "2026-04-20_165432_kelly5", "engine": "millennium",
+         "mode": "paper", "status": "running",
+         "started_at": "2026-04-20T16:54:32+00:00",
+         "last_tick_at": "2026-04-20T17:00:00+00:00",
+         "novel_total": 2, "label": "kelly5"},
+        {"run_id": "2026-04-20_170012_kelly10", "engine": "millennium",
+         "mode": "paper", "status": "running",
+         "started_at": "2026-04-20T17:00:12+00:00",
+         "last_tick_at": "2026-04-20T17:00:30+00:00",
+         "novel_total": 1, "label": "kelly10"},
+        {"run_id": "2026-04-19_1937", "engine": "millennium",
+         "mode": "shadow", "status": "running",
+         "started_at": "2026-04-19T19:37:00+00:00",
+         "last_tick_at": "2026-04-20T17:00:00+00:00",
+         "novel_total": 664, "label": None},
+        {"run_id": "old_stopped", "engine": "millennium",
+         "mode": "paper", "status": "stopped",
+         "started_at": "2026-04-19T19:35:00+00:00",
+         "last_tick_at": "2026-04-19T20:00:00+00:00",
+         "novel_total": 0, "label": None},
+    ]
+    with patch("urllib.request.urlopen", return_value=_fake_response(body)):
+        runs = client.active_runs_for("millennium", mode="paper")
+    # Only the 2 running paper runs — stopped excluded, shadow excluded
+    assert len(runs) == 2
+    labels = {r.get("label") for r in runs}
+    assert labels == {"kelly5", "kelly10"}
+
+
+def test_active_runs_for_sorted_by_started_at_desc(cfg, tmp_cache):
+    """Most recent first, matching CockpitClient.latest_run convention."""
+    client = CockpitClient(cfg, cache_dir=tmp_cache)
+    body = [
+        {"run_id": "old", "engine": "millennium", "mode": "paper",
+         "status": "running",
+         "started_at": "2026-04-20T10:00:00+00:00",
+         "last_tick_at": "2026-04-20T17:00:00+00:00",
+         "novel_total": 10},
+        {"run_id": "new", "engine": "millennium", "mode": "paper",
+         "status": "running",
+         "started_at": "2026-04-20T17:00:00+00:00",
+         "last_tick_at": "2026-04-20T17:05:00+00:00",
+         "novel_total": 2},
+    ]
+    with patch("urllib.request.urlopen", return_value=_fake_response(body)):
+        runs = client.active_runs_for("millennium", mode="paper")
+    assert [r["run_id"] for r in runs] == ["new", "old"]
+
+
+def test_active_runs_for_empty_when_no_match(cfg, tmp_cache):
+    client = CockpitClient(cfg, cache_dir=tmp_cache)
+    with patch("urllib.request.urlopen", return_value=_fake_response([])):
+        assert client.active_runs_for("millennium", mode="paper") == []
+
+
+def test_active_runs_for_uses_cache_on_network_fail(cfg, tmp_cache):
+    """Network fail → falls back to cached runs.json, same as latest_run."""
+    tmp_cache.mkdir(parents=True, exist_ok=True)
+    (tmp_cache / "runs.json").write_text(json.dumps([
+        {"run_id": "cached", "engine": "millennium", "mode": "paper",
+         "status": "running",
+         "started_at": "2026-04-20T16:00:00+00:00",
+         "last_tick_at": "2026-04-20T17:00:00+00:00",
+         "novel_total": 3, "label": "kelly5"},
+    ]))
+    client = CockpitClient(cfg, cache_dir=tmp_cache)
+    with patch("urllib.request.urlopen", side_effect=OSError("down")):
+        runs = client.active_runs_for("millennium", mode="paper")
+    assert len(runs) == 1
+    assert runs[0]["run_id"] == "cached"
+
+
 def test_circuit_opens_after_3_fails(cfg, tmp_cache):
     client = CockpitClient(cfg, cache_dir=tmp_cache)
     with patch("urllib.request.urlopen", side_effect=OSError("conn refused")):

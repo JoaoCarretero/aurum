@@ -1989,9 +1989,86 @@ def _render_shadow_empty_state(parent, launcher, state):
 # equity.jsonl via cockpit API endpoints added in feat/millennium-paper.
 # Shows full trading dashboard via render_detail paper kwargs.
 
-def _fetch_paper_run_id(launcher) -> str | None:
-    """Find the most recent paper run_id via cockpit /v1/runs.
-    Falls back to None if cockpit unreachable or no paper run exists."""
+def _render_paper_instance_picker(parent, active_runs: list[dict],
+                                  state: dict, launcher) -> None:
+    """Compact row of clickable instance tags above the paper detail.
+
+    Shown only when 2+ paper runs are active concurrently (multi-instance
+    operation). Each tag reads "<LABEL>  <Nt>" where N is tick count.
+    Selected run draws in AMBER; others in DIM. Click updates
+    ``state["selected_run_id"]`` and triggers a detail re-render.
+    """
+    row = tk.Frame(parent, bg=PANEL, highlightbackground=BORDER,
+                   highlightthickness=1)
+    row.pack(fill="x", padx=8, pady=(4, 2))
+    tk.Label(row, text="INSTANCES:", fg=DIM, bg=PANEL,
+             font=(FONT, 7, "bold")).pack(side="left", padx=(6, 4), pady=2)
+    current = state.get("selected_run_id")
+    # If nothing picked yet, highlight the most recent (index 0)
+    effective = current if current and any(
+        r.get("run_id") == current for r in active_runs
+    ) else (active_runs[0].get("run_id") if active_runs else None)
+
+    def _make_click(rid: str):
+        def _click(_event=None):
+            state["selected_run_id"] = rid
+            _render_detail(state, launcher)
+        return _click
+
+    for r in active_runs:
+        rid = r.get("run_id") or ""
+        label = r.get("label") or f"#{rid.split('_')[-1][:6]}" if rid else "?"
+        ticks = r.get("novel_total", 0)
+        fg = AMBER if rid == effective else DIM
+        tag = tk.Label(row, text=f" {label}  {ticks}t ",
+                       fg=fg, bg=PANEL, font=(FONT, 7),
+                       padx=4, cursor="hand2")
+        tag.pack(side="left", padx=2, pady=2)
+        tag.bind("<Button-1>", _make_click(rid))
+
+
+def _active_paper_runs(launcher) -> list[dict]:
+    """All RUNNING paper runs via cockpit /v1/runs, sorted started_at DESC.
+
+    Returns [] if cockpit unreachable or no paper runs visible. The list
+    is kept on the launcher to power the multi-instance picker above the
+    detail pane — one entry per concurrent paper run.
+    """
+    client = _get_cockpit_client()
+    if client is None:
+        return []
+    if hasattr(client, "active_runs_for"):
+        try:
+            return client.active_runs_for("millennium", mode="paper")
+        except Exception:
+            return []
+    # Legacy fallback for tests that stub list_runs only
+    try:
+        runs = client.list_runs() if hasattr(client, "list_runs") else \
+            client._get("/v1/runs")
+    except Exception:
+        return []
+    if not isinstance(runs, list):
+        return []
+    matches = [r for r in runs
+               if r.get("mode") == "paper"
+               and r.get("status") == "running"]
+    matches.sort(key=lambda r: r.get("started_at") or "", reverse=True)
+    return matches
+
+
+def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
+    """Resolve which paper run_id the detail pane should render.
+
+    Precedence:
+      1. ``state["selected_run_id"]`` — if it points at a still-active
+         paper run (operator picked this explicitly via the instance
+         picker).
+      2. Most recent active paper run.
+      3. Most recent paper run of any status (legacy fallback so stopped
+         runs still surface when nothing else is alive).
+      4. ``None`` — cockpit unreachable or no paper runs at all.
+    """
     client = _get_cockpit_client()
     if client is None:
         return None
@@ -2005,7 +2082,13 @@ def _fetch_paper_run_id(launcher) -> str | None:
     paper_runs = [r for r in runs if r.get("mode") == "paper"]
     if not paper_runs:
         return None
-    # Most recent first (cockpit already sorts DESC)
+    active = [r for r in paper_runs if r.get("status") == "running"]
+    if state is not None:
+        picked = state.get("selected_run_id")
+        if picked and any(r.get("run_id") == picked for r in active):
+            return picked
+    if active:
+        return active[0].get("run_id")
     return paper_runs[0].get("run_id")
 
 
@@ -2062,8 +2145,15 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     """
     name = meta.get("display", slug.upper())
 
-    # Discover latest paper run_id (cockpit /v1/runs filtered by mode)
-    run_id = _fetch_paper_run_id(launcher)
+    # Multi-instance picker: if 2+ paper runs are active, let the operator
+    # pick which one to render. Selection persists in state["selected_run_id"]
+    # so the next refresh cycle keeps the same run in focus.
+    active_runs = _active_paper_runs(launcher)
+    if len(active_runs) >= 2:
+        _render_paper_instance_picker(parent, active_runs, state, launcher)
+
+    # Discover which paper run_id the detail pane should render
+    run_id = _fetch_paper_run_id(launcher, state)
     if run_id is None:
         _render_paper_no_run(parent, launcher, state)
         return

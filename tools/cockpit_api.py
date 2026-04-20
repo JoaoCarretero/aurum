@@ -82,9 +82,13 @@ def _summarize_run(run_dir: Path) -> RunSummary:
         engine = manifest.engine
         mode = manifest.mode
         started_at = manifest.started_at
+        label = manifest.label
     else:
         engine, mode = _engine_from_dir(run_dir)
         started_at = hb.last_tick_at or datetime.now(timezone.utc)
+        # Heartbeat allows extras — label may be there as fallback
+        extras = hb.model_extra or {}
+        label = extras.get("label")
     return RunSummary(
         run_id=hb.run_id,
         engine=engine,
@@ -93,6 +97,7 @@ def _summarize_run(run_dir: Path) -> RunSummary:
         started_at=started_at,
         last_tick_at=hb.last_tick_at,
         novel_total=hb.novel_total,
+        label=label,
     )
 
 
