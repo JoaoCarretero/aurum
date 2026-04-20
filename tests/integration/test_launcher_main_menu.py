@@ -236,11 +236,15 @@ def test_splash_click_routes_to_main(app, monkeypatch):
 
 
 def test_splash_pulse_disarms_on_menu_switch(app):
+    """Post-migration: SplashScreen owns the timer; switching cancels it."""
     app._splash()
-    assert app._splash_pulse_after_id is not None
-    app._splash_canvas = None
-    app._splash_pulse_tick()
-    assert app._splash_pulse_after_id is None
+    splash = app.screens._cache.get("splash")
+    assert splash is not None
+    # Timer is armed inside SplashScreen via self._after (tracked)
+    assert len(splash._tracked_after_ids) >= 1
+    # Switch to any other screen -> on_exit cancels tracked timers
+    app._menu_main_bloomberg()
+    assert splash._tracked_after_ids == []
 
 
 def test_live_refresh_schedule_registered(app):
@@ -261,14 +265,17 @@ def test_draw_cd_center_accepts_radius_override(app):
 
 
 def test_app_has_splash_pulse_state(app):
-    # __init__ calls _splash() which arms the pulse and sets the canvas.
-    assert hasattr(app, "_splash_cursor_on")
-    assert isinstance(app._splash_cursor_on, bool)
-    assert hasattr(app, "_splash_pulse_after_id")
-    # Re-arm the pulse if a prior test cleared it.
-    if app._splash_pulse_after_id is None:
+    """Post-migration: splash state lives in SplashScreen instance."""
+    # Re-enter splash if a prior test switched away
+    if app.screens.current_name() != "splash":
         app._splash()
-    assert app._splash_pulse_after_id is not None
+    assert app.screens.current_name() == "splash"
+    splash = app.screens._cache.get("splash")
+    assert splash is not None
+    assert splash.canvas is not None
+    # Pulse timer is armed via self._after (tracked)
+    assert len(splash._tracked_after_ids) >= 1
+    # Legacy-compat attribute still exposed for callers that read it
     assert hasattr(app, "_splash_canvas")
     assert app._splash_canvas is not None
 

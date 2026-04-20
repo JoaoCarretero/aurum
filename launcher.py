@@ -1326,6 +1326,22 @@ class App(tk.Tk):
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
         self.main = tk.Frame(self, bg=BG); self.main.pack(fill="both", expand=True)
+        # screens_container is a SIBLING of self.main (direct child of root),
+        # NOT a child of self.main — because _clr() destroys all children of
+        # self.main in legacy path. Sibling survives across switches.
+        self.screens_container = tk.Frame(self, bg=BG)
+        # Packed lazily on first screens.show(); pack_forget-ed when legacy path active.
+        from launcher_support.screens import ScreenManager
+        from launcher_support.screens.splash import SplashScreen
+        self.screens = ScreenManager(parent=self.screens_container)
+        # SYSTEM_TAGLINE and _conn are module-level globals in launcher.py —
+        # captured by the lambda closure and injected into SplashScreen.
+        self.screens.register(
+            "splash",
+            lambda parent: SplashScreen(
+                parent=parent, app=self, conn=_conn, tagline=SYSTEM_TAGLINE,
+            ),
+        )
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # Footer
@@ -1395,6 +1411,26 @@ class App(tk.Tk):
                 pass
             self._engines_live_handle = None
         for w in self.main.winfo_children(): w.destroy()
+        # Default to LEGACY mode: self.main visible, screens_container hidden.
+        # Migrated-screen wrappers (e.g. _splash) flip this AFTER _clr.
+        sc = getattr(self, "screens_container", None)
+        if sc is not None and sc.winfo_manager():
+            sc.pack_forget()
+        if not self.main.winfo_manager():
+            self.main.pack(fill="both", expand=True)
+        # If a migrated screen is currently active, give it an on_exit tick
+        # so timers/bindings get cancelled when legacy navigation happens
+        # without going through ScreenManager.show().
+        mgr = getattr(self, "screens", None)
+        if mgr is not None and mgr.current_name() is not None:
+            current = mgr._cache.get(mgr.current_name())
+            if current is not None:
+                try:
+                    current.on_exit()
+                except Exception:
+                    pass
+                current.pack_forget()
+                mgr._current_name = None
 
     def _clear_kb(self):
         """Clear our custom global keybindings before a screen switch.
@@ -2249,121 +2285,27 @@ class App(tk.Tk):
         self.after(33, self._cd_draw)  # ~30 fps
 
     def _splash(self):
-        """Premium institutional landing screen."""
+        """Premium institutional landing screen (migrated to ScreenManager)."""
         self._clr()
         self._clear_kb()
         self.history.clear()
-        self.h_path.configure(text="")
-        self.h_stat.configure(text="READY", fg=AMBER_B)
-        self.f_lbl.configure(text="ENTER proceed  |  CLICK proceed  |  Q quit")
-
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(
-            f,
-            bg=BG,
-            highlightthickness=0,
-            width=self._SPLASH_DESIGN_W,
-            height=self._SPLASH_DESIGN_H,
-        )
-        canvas.pack(fill="both", expand=True)
-        self._menu_canvas = canvas
-        self._splash_canvas = canvas
-        self._splash_render_scale = 1.0
-        canvas.bind("<Configure>", self._render_splash)
-
-        canvas.create_line(48, 48, 872, 48, fill=AMBER_D, width=1)
-        canvas.create_line(48, 596, 872, 596, fill=DIM2, width=1)
-
-        # Centered column: logo → wordmark → tagline. Single vertical
-        # axis (x=460). The CD router card has fixed offsets calibrated
-        # for r=52 (main-menu); at r=28 its top strip covers the logo
-        # and DESK ROUTER overlaps the A U R U M inner text, so the
-        # splash uses a clean direct logo draw instead.
-        LOGO_CX, LOGO_CY = 460, 108
-        self._draw_aurum_logo(canvas, LOGO_CX, LOGO_CY, scale=40,
-                              tag="splash-logo")
-
-        # Institutional wordmark stack:
-        #   AURUM — white, heavy, generous letter-tracking (hero).
-        #   FINANCE — muted amber, smaller, sits as a quiet partner.
-        #   thin rule — full-width institutional divider.
-        #   tagline — dim caption, the terminal's subtitle in small caps.
-        # BANNER_PREMIUM is bypassed on purpose — its trailing "\n" was
-        # pushing the bounding box up and throwing center alignment off.
-        canvas.create_text(LOGO_CX, 180, anchor="center",
-                           text="A U R U M",
-                           font=(FONT, 22, "bold"), fill=WHITE,
-                           tags="wordmark")
-        canvas.create_text(LOGO_CX, 210, anchor="center",
-                           text="F I N A N C E",
-                           font=(FONT, 12), fill=AMBER_D,
-                           tags="wordmark")
-        canvas.create_line(LOGO_CX - 140, 230, LOGO_CX + 140, 230,
-                           fill=AMBER_D, width=1, tags="wordmark")
-        canvas.create_text(LOGO_CX, 246, anchor="center", text=SYSTEM_TAGLINE,
-                           font=(FONT, 8, "bold"), fill=DIM, tags="subtitle")
-        canvas.create_line(280, 268, 640, 268, fill=BORDER, width=1,
-                           tags="subtitle")
-
-        try:
-            st = _conn.status_summary()
-            market_val = st.get("market", "-")
-        except Exception:
-            market_val = "-"
-        try:
-            keys = self._load_json("keys.json")
-            has_tg = bool(keys.get("telegram", {}).get("bot_token"))
-            has_keys = bool(keys.get("demo", {}).get("api_key") or keys.get("testnet", {}).get("api_key"))
-        except Exception:
-            has_tg = False
-            has_keys = False
-
-        market_cell = "LIVE" if market_val and market_val != "-" else "OFFLINE"
-        market_col = GREEN if market_cell == "LIVE" else DIM
-        conn_cell = "BINANCE READY" if has_keys else "OFFLINE"
-        conn_col = GREEN if has_keys else DIM
-        tg_cell = "ONLINE" if has_tg else "OFFLINE"
-        tg_col = GREEN if has_tg else DIM
-
-        # Single session overview panel, two tidy columns — divider
-        # removed, the visual hierarchy is carried by the panel border
-        # and the column spacing alone.
-        self._draw_panel(canvas, 140, 296, 780, 414, title="SESSION OVERVIEW",
-                         accent=AMBER, tag="splash")
-        self._draw_kv_rows(canvas, 168, 330, [
-            ("ENGINE", "AURUM CORE", WHITE),
-            ("MODE", "OPERATOR CONSOLE", AMBER_B),
-            ("ACCOUNT", "PAPER · MULTI", WHITE),
-            ("ENVIRONMENT", "LOCAL", WHITE),
-        ], value_x=316, tag="splash")
-        self._draw_kv_rows(canvas, 472, 330, [
-            ("MARKET FEED", market_cell, market_col),
-            ("CONNECTION", conn_cell, conn_col),
-            ("TELEGRAM", tg_cell, tg_col),
-            ("RISK", "KILL-SWITCH ARMED", RED),
-        ], value_x=640, tag="splash")
-
-        # One pulsing prompt, nothing else — the old layout had
-        # three stacked call-to-action lines which competed. The
-        # single blinking line reads like a terminal cursor.
-        self._splash_cursor_on = True
-        canvas.create_text(460, 500, anchor="center",
-                           text="[ ENTER TO ACCESS DESK ]_",
-                           font=(FONT, 11, "bold"), fill=AMBER_B,
-                           tags="prompt2")
-
-        click_handler = lambda e: self._splash_on_click()
-        canvas.bind("<Button-1>", click_handler)
+        # Hide legacy main body; show screens_container (sibling of self.main).
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        # Legacy compat: ENTER/space still routed via Terminal-level kb.
+        # Registered here because _clear_kb wipes them on every switch.
         self._kb("<Return>", self._splash_on_click)
         self._kb("<space>", self._splash_on_click)
-        self._bind_global_nav()
-        self._render_splash()
+        screen = self.screens.show("splash")
+        # Expose canvas handle for legacy callers (_splash_pulse_tick, etc).
+        self._splash_canvas = screen.canvas
+        self._menu_canvas = screen.canvas
         try:
             self.focus_set()
         except Exception:
             pass
-        self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
 
     def _render_splash(self, _event=None) -> None:
         canvas = self._splash_canvas
