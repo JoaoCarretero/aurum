@@ -8,6 +8,7 @@ from launcher_support.screens.connections import ConnectionsScreen
 from launcher_support.screens.data_center import DataCenterScreen
 from launcher_support.screens.data_reports import DataReportsScreen
 from launcher_support.screens.main_menu import MainMenuScreen
+from launcher_support.screens.macro_brain import MacroBrainScreen
 from launcher_support.screens.markets import MarketsScreen
 from launcher_support.screens.processes import ProcessesScreen
 from launcher_support.screens.risk import RiskScreen
@@ -32,6 +33,10 @@ def register_default_screens(
     manager.register(
         "main_menu",
         lambda parent: MainMenuScreen(parent=parent, app=app, conn=conn),
+    )
+    manager.register(
+        "macro_brain",
+        lambda parent: MacroBrainScreen(parent=parent, app=app),
     )
     manager.register(
         "markets",

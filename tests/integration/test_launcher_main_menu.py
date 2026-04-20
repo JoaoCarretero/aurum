@@ -341,6 +341,27 @@ def test_connections_exit_clears_mousewheel_binding(app):
     assert getattr(screen, "_wheel_canvas", None) is None
 
 
+def test_macro_brain_routes_via_screen_manager(app, monkeypatch):
+    monkeypatch.setattr("macro_brain.dashboard_view.render", lambda parent, app=None: None)
+    monkeypatch.setattr("macro_brain.brain.run_once", lambda force=False: None)
+    app._macro_brain_menu()
+    assert app.screens.current_name() == "macro_brain"
+    assert app.main.winfo_manager() == ""
+
+
+def test_macro_brain_exit_clears_token_and_timers(app, monkeypatch):
+    monkeypatch.setattr("macro_brain.dashboard_view.render", lambda parent, app=None: None)
+    monkeypatch.setattr("macro_brain.brain.run_once", lambda force=False: None)
+    app._macro_brain_menu()
+    screen = app.screens._cache.get("macro_brain")
+    assert screen is not None
+    assert app._macro_page_token is not None
+    assert len(screen._tracked_after_ids) >= 2
+    app._menu_main_bloomberg()
+    assert app._macro_page_token is None
+    assert screen._tracked_after_ids == []
+
+
 def test_terminal_routes_via_screen_manager(app):
     app._terminal()
     assert app.screens.current_name() == "terminal"

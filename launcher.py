@@ -9127,92 +9127,18 @@ class App(tk.Tk):
 
     # --- RISK (Layer 2) ----------------------------------
     def _macro_brain_menu(self):
-        """Macro Brain cockpit — intro screen + dense market data.
-
-        Background cycle runs every 5 min in a daemon thread, keeping the
-        store fresh without touching the UI. Prices flow in naturally —
-        we never redraw the whole page (that would yank the user around
-        if they navigated elsewhere mid-tick). Pressing R gives a manual
-        refresh; the auto-render approach was removed after it caused
-        teleport-back bugs.
-
-        ESC → main menu (trade engines).
-        ENTER/space also → main menu (from splash click).
-        """
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="")  # Cockpit is intro — no nav breadcrumb
-        self.h_stat.configure(text="COCKPIT", fg=AMBER)
-        self.f_lbl.configure(
-            text="ESC main menu  |  R refresh  |  C run cycle  |  bg cycle 5m")
-        # Strong escape bindings — cockpit should never be a dead end
-        self._kb("<Escape>",   lambda: self._menu("main"))
-        self._kb("<Key-0>",    lambda: self._menu("main"))
-        self._kb("<BackSpace>", lambda: self._menu("main"))
-        self._bind_global_nav()
-        # Override global R (risk) → refresh cockpit (after global nav binds)
-        self._kb("<Key-r>",    lambda: self._macro_brain_menu())
+        """Macro Brain cockpit routed via ScreenManager."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("macro_brain")
         try:
-            from macro_brain.dashboard_view import render as _macro_render
-            _macro_render(self.main, app=self)
-        except Exception as e:
-            tk.Label(self.main,
-                     text=f"Macro Brain failed to render:\n{e}\n\nPress ESC → main menu",
-                     font=(FONT, 10), fg=RED, bg=BG).pack(pady=40)
-            return
-
-        # Tag the page so the auto-cycle loop knows when to stop. _clr()
-        # resets this to None on any navigation, so out-of-page ticks
-        # no-op instead of re-entering the cockpit.
-        self._macro_page_token = object()
-        tok = self._macro_page_token
-
-        def _still_here(t):
-            return getattr(self, "_macro_page_token", None) is t
-
-        # -- Continuous flow: tick every 10s, no destroy/rebuild ------
-        # dashboard_view.tick_update() reads the macro store and pushes
-        # fresh values to existing Tk labels in place. No flicker, no
-        # teleport, prices just "flow" like a ticker tape.
-        def _auto_tick():
-            if not _still_here(tok):
-                return
-            try:
-                from macro_brain.dashboard_view import tick_update
-                tick_update()
-            except Exception:
-                pass
-            self._macro_render_after = self.after(10_000, _auto_tick)
-
-        # Background cycle every 5 min — actively fetches new prices from
-        # the macro brain's configured sources. Runs in a daemon thread so
-        # Tk never blocks on network I/O. After fetch completes, the next
-        # tick picks up the new values. No UI rebuild involved.
-        def _auto_cycle():
-            if not _still_here(tok):
-                return
-            import threading
-            def _work():
-                try:
-                    from macro_brain.brain import run_once
-                    run_once(force=False)  # respects source-level cadences
-                except Exception:
-                    pass
-            threading.Thread(target=_work, daemon=True).start()
-            self._macro_cycle_after = self.after(300_000, _auto_cycle)
-
-        # Kick a cycle immediately so the user doesn't wait 5 min on first
-        # open — same worker pattern so it never blocks the UI.
-        import threading
-        def _kickoff():
-            try:
-                from macro_brain.brain import run_once
-                run_once(force=False)
-            except Exception:
-                pass
-        threading.Thread(target=_kickoff, daemon=True).start()
-
-        self._macro_render_after = self.after(10_000, _auto_tick)
-        self._macro_cycle_after  = self.after(300_000, _auto_cycle)
+            self.focus_set()
+        except Exception:
+            pass
 
     def _risk_menu(self):
         self._clr()
