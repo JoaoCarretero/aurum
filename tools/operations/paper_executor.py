@@ -23,14 +23,29 @@ from dataclasses import dataclass
 from typing import Callable
 
 
+def canonical_direction(d: str) -> str:
+    """Normalize engine/signal direction to {LONG, SHORT}.
+
+    Engines emit "BULLISH"/"BEARISH"; some call sites pass "LONG"/"SHORT"
+    directly. Everything downstream assumes LONG/SHORT, so we collapse
+    here. Unknown forms pass through so the caller sees the failure.
+    """
+    up = str(d).upper()
+    if up in ("LONG", "BULLISH", "BULL"):
+        return "LONG"
+    if up in ("SHORT", "BEARISH", "BEAR"):
+        return "SHORT"
+    return up
+
+
 @dataclass
 class Position:
     id: str
     engine: str
     symbol: str
-    direction: str          # "LONG" | "SHORT"
+    direction: str          # "LONG" | "SHORT" (normalized via canonical_direction)
     entry_price: float
-    stop: float
+    stop: float               # initial stop — NEVER modified; reference for risk math
     target: float
     size: float
     notional: float
@@ -41,6 +56,14 @@ class Position:
     mtm_price: float | None = None
     bars_held: int = 0
     funding_accumulated: float = 0.0  # cumulative funding cost (positive drains LONG, credits SHORT)
+    # Streaming-version of label_trade state — mutated tick-by-tick by
+    # PositionManager. cur_stop rides up (LONG) / down (SHORT) as BE +
+    # trailing trigger.
+    cur_stop: float = 0.0
+    be_done: bool = False
+    trail_done: bool = False
+    liq_long: float = -1.0     # sentinel; set at open for LONG when LEVERAGE>1
+    liq_short: float = 0.0     # sentinel; set at open for SHORT when LEVERAGE>1
 
 
 _id_counter = itertools.count(1)
@@ -70,7 +93,7 @@ class PaperExecutor:
         opened_at_iso: str,
         live_price_fn: Callable[[str], float | None] | None = None,
     ) -> Position:
-        direction = str(signal["direction"]).upper()
+        direction = canonical_direction(signal["direction"])
         stop = float(signal["stop"])
         target = float(signal["target"])
         size_native = float(signal.get("size") or 0.0)
@@ -95,6 +118,12 @@ class PaperExecutor:
         commission_paid = entry_fill * size_scaled * self.commission
         notional = entry_fill * size_scaled
 
+        # Liquidation thresholds — reuse core.signals._liq_prices so paper
+        # matches backtest exactly. Note _liq_prices speaks BULLISH/BEARISH.
+        from core.signals import _liq_prices
+        liq_long, liq_short = _liq_prices(
+            entry_fill, "BULLISH" if direction == "LONG" else "BEARISH")
+
         return Position(
             id=_next_id(),
             engine=str(signal.get("strategy") or signal.get("engine") or "UNKNOWN").upper(),
@@ -108,4 +137,7 @@ class PaperExecutor:
             opened_at=opened_at_iso,
             opened_at_idx=opened_at_idx,
             commission_paid=commission_paid,
+            cur_stop=stop,
+            liq_long=liq_long,
+            liq_short=liq_short,
         )

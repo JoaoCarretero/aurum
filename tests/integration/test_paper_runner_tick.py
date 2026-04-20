@@ -37,18 +37,20 @@ def test_runner_single_tick_open_then_exit(tmp_path, monkeypatch):
     def fake_scan(notify=False):
         scan_state["call_count"] += 1
         if scan_state["call_count"] == 2:
+            # Tight target inside BE envelope (target < entry + BE*risk = 102)
+            # so the exit path is unambiguously "target" — trail/BE don't fire.
             return [
                 {"strategy": "CITADEL", "symbol": "BTCUSDT", "direction": "LONG",
-                 "entry": 100.0, "stop": 98.0, "target": 104.0, "size": 1.0,
+                 "entry": 100.0, "stop": 98.0, "target": 101.5, "size": 1.0,
                  "timestamp": live_ts, "primed": False,
                  "open_ts": live_ts}
             ]
         return []
     monkeypatch.setattr(mp, "_scan_new_signals", fake_scan)
 
-    # Fake bars for exit: one bar that hits target 104
+    # Fake bars for exit: one bar that hits target 101.5 without arming BE/trail
     def fake_fetch_new_bars(symbol, since):
-        return [{"high": 105.0, "low": 99.5, "close": 104.5,
+        return [{"high": 101.8, "low": 99.5, "close": 101.6,
                  "time": live_ts}]
     monkeypatch.setattr(mp, "_fetch_new_bars", fake_fetch_new_bars)
 
