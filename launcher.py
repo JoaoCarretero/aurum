@@ -48,6 +48,10 @@ from launcher_support import cockpit_tab as cockpit_tab_mod
 from launcher_support import command_center as command_center_mod
 from launcher_support import dashboard_controls as dashboard_controls_mod
 from launcher_support.screens._metrics import timed_legacy_switch
+from launcher_support.screens._persistence import (
+    configure_screen_logging as _configure_screen_logging,
+    dump_screen_metrics as _dump_screen_metrics,
+)
 from launcher_support.menu_data import (
     BLOCK_DESCRIPTIONS as _MENU_BLOCK_DESCRIPTIONS,
     COMMAND_ROADMAPS as _MENU_COMMAND_ROADMAPS,
@@ -1172,6 +1176,10 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
+        try:
+            _configure_screen_logging()
+        except Exception:
+            pass
         self.title("AURUM Terminal")
         self.configure(bg=BG)
         self._configure_windows_dpi()
@@ -12242,6 +12250,10 @@ class App(tk.Tk):
                 tunnel.stop(timeout_sec=3.0)
             except Exception:
                 pass
+        try:
+            _dump_screen_metrics(reason="quit")
+        except Exception:
+            pass
         self.destroy()
 
 
