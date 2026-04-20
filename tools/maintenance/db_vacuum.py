@@ -27,16 +27,33 @@ def human(n: int) -> str:
 
 
 def top_tables(db: Path, limit: int = 5) -> list[tuple[str, int]]:
-    con = sqlite3.connect(db)
-    cur = con.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    names = [r[0] for r in cur.fetchall()]
-    sizes = []
-    for name in names:
-        cur.execute(f"SELECT COUNT(*) FROM '{name}'")
-        sizes.append((name, cur.fetchone()[0]))
-    con.close()
+    with sqlite3.connect(db) as con:
+        cur = con.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        names = [r[0] for r in cur.fetchall()]
+        sizes = []
+        for name in names:
+            quoted_name = '"' + str(name).replace('"', '""') + '"'
+            cur.execute(f"SELECT COUNT(*) FROM {quoted_name}")
+            sizes.append((name, cur.fetchone()[0]))
     return sorted(sizes, key=lambda x: -x[1])[:limit]
+
+
+def backup_db(db_path: Path, backup_dir: Path, *, now: datetime | None = None) -> Path:
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"{db_path.name}.{stamp}.bak"
+    shutil.copy2(db_path, backup_path)
+    return backup_path
+
+
+def run_vacuum(db_path: Path, *, backup_dir: Path = BACKUP_DIR, now: datetime | None = None) -> tuple[Path, int, int]:
+    size_before = db_path.stat().st_size
+    backup_path = backup_db(db_path, backup_dir, now=now)
+    with sqlite3.connect(db_path, timeout=5.0) as con:
+        con.execute("VACUUM")
+    size_after = db_path.stat().st_size
+    return backup_path, size_before, size_after
 
 
 def main() -> int:
@@ -59,22 +76,15 @@ def main() -> int:
         print("\ndry-run — pass --apply to VACUUM")
         return 0
 
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    backup_path = BACKUP_DIR / f"aurum.db.{stamp}.bak"
-    shutil.copy2(DB_PATH, backup_path)
-    print(f"\nbackup: {backup_path} ({human(backup_path.stat().st_size)})")
-
     try:
-        with sqlite3.connect(DB_PATH, timeout=5.0) as con:
-            con.execute("VACUUM")
+        backup_path, _size_before, size_after = run_vacuum(DB_PATH)
     except sqlite3.OperationalError as e:
         print(f"\nVACUUM failed: {e}", file=sys.stderr)
-        print(f"Backup preserved at {backup_path}", file=sys.stderr)
+        print(f"Backup preserved at {BACKUP_DIR}", file=sys.stderr)
         print("Hint: stop launcher/cockpit/live engines holding the DB, then retry.", file=sys.stderr)
         return 2
 
-    size_after = DB_PATH.stat().st_size
+    print(f"\nbackup: {backup_path} ({human(backup_path.stat().st_size)})")
     print(f"\nsize after:  {human(size_after)}")
     print(f"delta:       {human(size_before - size_after)} freed")
     return 0

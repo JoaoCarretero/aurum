@@ -1,16 +1,4 @@
-"""Backfill BTCUSDT OI/LS cache retroactively via Binance endTime pagination.
-
-The Binance /futures/data/openInterestHist and /globalLongShortAccountRatio
-endpoints accept endTime and return up to limit=500 observations at/before
-that instant. They retain ~30 days of history; older endTimes return empty.
-
-This script steps endTime backward in chunks of (limit-1)*period_ms so each
-request fills an adjacent 5.2-day window. Stops when the API returns empty
-or overlaps existing cache completely.
-
-Usage:
-    python tools/maintenance/bridgewater_cache_backfill.py --symbols BTCUSDT --period 15m
-"""
+"""Backfill BTCUSDT OI/LS cache retroactively via Binance endTime pagination."""
 from __future__ import annotations
 
 import argparse
@@ -24,24 +12,27 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.sentiment import (
-    fetch_open_interest,
-    fetch_long_short_ratio,
-    cached_coverage,
+from core.sentiment import (  # noqa: E402
     _PERIOD_MS,
     _load_cached_frame,
+    cached_coverage,
+    fetch_long_short_ratio,
+    fetch_open_interest,
 )
 
 
-def _earliest_contiguous_ts(kind: str, symbol: str, period: str) -> pd.Timestamp | None:
-    """Find the earliest timestamp of the most-recent contiguous block.
-    Isolated historical probes (e.g. a single row from 2023) are skipped.
-    """
+def earliest_contiguous_ts(
+    kind: str,
+    symbol: str,
+    period: str,
+    *,
+    load_cached_frame=_load_cached_frame,
+) -> pd.Timestamp | None:
     cols = {
         "open_interest": ["time", "oi", "oi_value"],
         "long_short_ratio": ["time", "ls_ratio", "long_pct", "short_pct"],
     }[kind]
-    df = _load_cached_frame(kind, symbol, period, cols)
+    df = load_cached_frame(kind, symbol, period, cols)
     if df is None or df.empty:
         return None
     df = df.sort_values("time").reset_index(drop=True)
@@ -51,67 +42,71 @@ def _earliest_contiguous_ts(kind: str, symbol: str, period: str) -> pd.Timestamp
     return last_block["time"].min()
 
 
-def backfill_one(kind: str, symbol: str, period: str, limit: int, max_iterations: int = 20) -> int:
-    """Step endTime backward in (limit-1) period steps until the API stops
-    returning data or we've iterated max_iterations times.
-    Returns the number of successful fetches.
-    """
-    fetch = fetch_open_interest if kind == "open_interest" else fetch_long_short_ratio
+def backfill_one(
+    kind: str,
+    symbol: str,
+    period: str,
+    limit: int,
+    max_iterations: int = 20,
+    *,
+    fetch_open_interest_fn=fetch_open_interest,
+    fetch_long_short_ratio_fn=fetch_long_short_ratio,
+    cached_coverage_fn=cached_coverage,
+    earliest_contiguous_ts_fn=earliest_contiguous_ts,
+    sleep_fn=time.sleep,
+) -> int:
+    fetch = fetch_open_interest_fn if kind == "open_interest" else fetch_long_short_ratio_fn
     period_ms = _PERIOD_MS[period]
     step_ms = (limit - 1) * period_ms
 
-    cov0 = cached_coverage(kind, symbol, period)
-    rows0 = cov0["rows"] if cov0 else 0
-    start_ts = _earliest_contiguous_ts(kind, symbol, period)
+    coverage = cached_coverage_fn(kind, symbol, period)
+    rows_before = coverage["rows"] if coverage else 0
+    start_ts = earliest_contiguous_ts_fn(kind, symbol, period)
     if start_ts is None:
         start_ts = pd.Timestamp.utcnow().tz_localize(None)
-    print(f"  [{kind}] {symbol}: start cache = {rows0} rows, earliest_contiguous = {start_ts}")
+    print(f"  [{kind}] {symbol}: start cache = {rows_before} rows, earliest_contiguous = {start_ts}")
 
-    # Step endTime backward from (earliest_contiguous - 1 period)
     end_ms = int(start_ts.timestamp() * 1000) - period_ms
     successes = 0
-    for i in range(max_iterations):
-        df = fetch(symbol, period=period, limit=limit, end_time_ms=end_ms)
-        cov = cached_coverage(kind, symbol, period)
-        if cov is None:
-            print(f"    iter {i}: API returned None at endTime={pd.Timestamp(end_ms, unit='ms')}")
+    for idx in range(max_iterations):
+        fetch(symbol, period=period, limit=limit, end_time_ms=end_ms)
+        coverage = cached_coverage_fn(kind, symbol, period)
+        if coverage is None:
+            print(f"    iter {idx}: API returned None at endTime={pd.Timestamp(end_ms, unit='ms')}")
             break
-        delta = cov["rows"] - rows0
+        delta = coverage["rows"] - rows_before
         if delta == 0:
-            print(f"    iter {i}: no new rows (API at historical limit)")
+            print(f"    iter {idx}: no new rows (API at historical limit)")
             break
-        print(f"    iter {i}: +{delta} rows, earliest now {cov['start']}")
-        rows0 = cov["rows"]
+        print(f"    iter {idx}: +{delta} rows, earliest now {coverage['start']}")
+        rows_before = coverage["rows"]
         successes += 1
         end_ms -= step_ms
-        time.sleep(0.3)
+        sleep_fn(0.3)
     return successes
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--symbols", default="BTCUSDT",
-                    help="Comma-separated list (default: BTCUSDT)")
-    ap.add_argument("--period", default="15m")
-    ap.add_argument("--limit", type=int, default=500)
-    ap.add_argument("--max-iterations", type=int, default=20)
-    ap.add_argument("--kinds", default="open_interest,long_short_ratio")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--symbols", default="BTCUSDT", help="Comma-separated list (default: BTCUSDT)")
+    parser.add_argument("--period", default="15m")
+    parser.add_argument("--limit", type=int, default=500)
+    parser.add_argument("--max-iterations", type=int, default=20)
+    parser.add_argument("--kinds", default="open_interest,long_short_ratio")
+    args = parser.parse_args()
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
 
-    for sym in symbols:
+    for symbol in symbols:
         for kind in kinds:
-            print(f"\n=== {kind} {sym} @{args.period} ===")
-            backfill_one(kind, sym, args.period, args.limit, args.max_iterations)
+            print(f"\n=== {kind} {symbol} @{args.period} ===")
+            backfill_one(kind, symbol, args.period, args.limit, args.max_iterations)
 
     print("\nFinal coverage:")
-    for sym in symbols:
+    for symbol in symbols:
         for kind in kinds:
-            cov = cached_coverage(kind, sym, args.period)
-            print(f"  {sym} {kind}: {cov}")
-
+            print(f"  {symbol} {kind}: {cached_coverage(kind, symbol, args.period)}")
     return 0
 
 

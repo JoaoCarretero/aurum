@@ -25,6 +25,7 @@ def run_check(*, root: Path = ROOT) -> tuple[list[str], list[str]]:
 
     plaintext_path = root / "config" / "keys.json"
     encrypted_path = root / "config" / "keys.json.enc"
+    risk_gates_path = root / "config" / "risk_gates.json"
     allow_plaintext = _env_truthy("AURUM_ALLOW_PLAINTEXT_KEYS")
     key_password = os.environ.get("AURUM_KEY_PASSWORD", "").strip()
     mt5_password = os.environ.get("MT5_VNC_PASSWORD", "").strip()
@@ -41,6 +42,9 @@ def run_check(*, root: Path = ROOT) -> tuple[list[str], list[str]]:
             warnings.append("plaintext key fallback enabled via AURUM_ALLOW_PLAINTEXT_KEYS")
     else:
         errors.append("no key store found; expected config/keys.json.enc or config/keys.json")
+
+    if not risk_gates_path.exists():
+        errors.append("config/risk_gates.json is missing")
 
     if not mt5_password:
         warnings.append("MT5_VNC_PASSWORD is not set")

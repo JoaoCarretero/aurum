@@ -1,22 +1,7 @@
-"""AURUM — rebuild data/aurum.db from disk reports (index.json + engine dirs).
-
-Fonte de verdade: os JSON reports no disco (`data/<engine>/<run_id>/reports/*.json`
-e `data/runs/<run_id>/citadel_*_v*.json`). Este script varre tudo, limpa
-DB runs/trades e re-executa `core.db.save_run()` pra cada report válido.
-
-Corrige o drift entre DB e index.json observado em 2026-04-17: 155 runs
-no DB sem entry no index, 102 entries no index sem row no DB. O rebuild
-a partir do disco garante consistência forte.
-
-Uso:
-    python tools/maintenance/rebuild_db.py                 # dry-run
-    python tools/maintenance/rebuild_db.py --apply         # backup + wipe + rebuild
-    python tools/maintenance/rebuild_db.py --apply --no-backup
-"""
+"""AURUM - rebuild data/aurum.db from disk reports."""
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sqlite3
 import sys
@@ -30,23 +15,21 @@ if str(ROOT) not in sys.path:
 from core.ops.db import DB_PATH, save_run  # noqa: E402
 
 DATA = ROOT / "data"
-INDEX = DATA / "index.json"
 
-# Mapa engine -> pasta root + padrão do JSON file dentro de reports/.
 ENGINE_PATTERNS = {
-    "citadel":     (DATA / "runs",          "citadel_*_v*.json"),
-    "bridgewater": (DATA / "bridgewater",   "*.json"),
-    "jump":        (DATA / "jump",          "*.json"),
-    "deshaw":      (DATA / "deshaw",        "*.json"),
-    "renaissance": (DATA / "renaissance",   "*.json"),
-    "millennium":  (DATA / "millennium",    "*.json"),
-    "twosigma":    (DATA / "twosigma",      "*.json"),
-    "aqr":         (DATA / "aqr",           "*.json"),
-    "janestreet":  (DATA / "janestreet",    "*.json"),
-    "kepos":       (DATA / "kepos",         "*.json"),
-    "medallion":   (DATA / "medallion",     "*.json"),
-    "graham":      (DATA / "graham",        "*.json"),
-    "phi":         (DATA / "phi",           "*.json"),
+    "citadel": (Path("runs"), "citadel_*_v*.json"),
+    "bridgewater": (Path("bridgewater"), "*.json"),
+    "jump": (Path("jump"), "*.json"),
+    "deshaw": (Path("deshaw"), "*.json"),
+    "renaissance": (Path("renaissance"), "*.json"),
+    "millennium": (Path("millennium"), "*.json"),
+    "twosigma": (Path("twosigma"), "*.json"),
+    "aqr": (Path("aqr"), "*.json"),
+    "janestreet": (Path("janestreet"), "*.json"),
+    "kepos": (Path("kepos"), "*.json"),
+    "medallion": (Path("medallion"), "*.json"),
+    "graham": (Path("graham"), "*.json"),
+    "phi": (Path("phi"), "*.json"),
 }
 
 SKIP_NAMES = {
@@ -56,17 +39,15 @@ SKIP_NAMES = {
 }
 
 
-def _find_reports() -> list[tuple[str, Path]]:
-    """Return list of (engine_slug, json_path) — report JSONs only."""
+def find_reports(*, data_dir: Path = DATA) -> list[tuple[str, Path]]:
     found: list[tuple[str, Path]] = []
-    for engine, (root, pattern) in ENGINE_PATTERNS.items():
+    for engine, (root_rel, pattern) in ENGINE_PATTERNS.items():
+        root = data_dir / root_rel
         if not root.exists():
             continue
         for run_dir in root.iterdir():
             if not run_dir.is_dir():
                 continue
-            # CITADEL: reports no próprio run_dir
-            # Outros engines: reports em run_dir/reports/
             if engine == "citadel":
                 candidates = list(run_dir.glob(pattern))
             else:
@@ -74,78 +55,85 @@ def _find_reports() -> list[tuple[str, Path]]:
                 if not reports_dir.exists():
                     continue
                 candidates = list(reports_dir.glob(pattern))
-            for p in candidates:
-                if p.name in SKIP_NAMES:
-                    continue
-                # mais recente primeiro por mtime
-                found.append((engine, p))
+            for path in candidates:
+                if path.name not in SKIP_NAMES:
+                    found.append((engine, path))
     return found
 
 
-def _backup_db(dry_run: bool) -> Path | None:
-    if not DB_PATH.exists():
+def backup_db(*, db_path: Path = DB_PATH, dry_run: bool = False, stamp: str | None = None) -> Path | None:
+    if not db_path.exists():
         return None
-    ts = time.strftime("%Y-%m-%d_%H%M%S")
-    dst = DB_PATH.with_suffix(f".bak_{ts}.db")
+    stamp = stamp or time.strftime("%Y-%m-%d_%H%M%S")
+    dst = db_path.with_suffix(f".bak_{stamp}.db")
     if dry_run:
         print(f"[dry-run] backup DB -> {dst.name}")
         return dst
-    shutil.copy2(DB_PATH, dst)
+    shutil.copy2(db_path, dst)
     print(f"  backup DB -> {dst}")
     return dst
 
 
-def _wipe_db(dry_run: bool) -> None:
-    if not DB_PATH.exists():
+def wipe_db(*, db_path: Path = DB_PATH, dry_run: bool = False) -> None:
+    if not db_path.exists():
         return
     if dry_run:
-        print(f"[dry-run] DELETE FROM runs, trades (wipe)")
+        print("[dry-run] DELETE FROM runs, trades (wipe)")
         return
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path)
     try:
         conn.execute("DELETE FROM trades")
         conn.execute("DELETE FROM runs")
-        conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('trades')")
+        seq_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'"
+        ).fetchone()
+        if seq_exists:
+            conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('trades')")
         conn.commit()
         conn.execute("VACUUM")
     finally:
         conn.close()
-    print(f"  wiped DB ({DB_PATH})")
+    print(f"  wiped DB ({db_path})")
 
 
-def _current_counts() -> tuple[int, int]:
-    if not DB_PATH.exists():
+def current_counts(*, db_path: Path = DB_PATH) -> tuple[int, int]:
+    if not db_path.exists():
         return (0, 0)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path)
     try:
-        rn = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
-        tn = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        runs_n = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        trades_n = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
     finally:
         conn.close()
-    return (rn, tn)
+    return (runs_n, trades_n)
+
+
+def report_counts(reports: list[tuple[str, Path]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for engine, _path in reports:
+        counts[engine] = counts.get(engine, 0) + 1
+    return counts
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--apply", action="store_true",
-                    help="execute the wipe + rebuild (default: dry-run)")
-    ap.add_argument("--no-backup", action="store_true",
-                    help="skip DB backup (dangerous)")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true", help="execute the wipe + rebuild (default: dry-run)")
+    parser.add_argument("--no-backup", action="store_true", help="skip DB backup (dangerous)")
+    args = parser.parse_args()
 
     dry = not args.apply
 
     print("=== AURUM DB rebuild ===")
-    r0, t0 = _current_counts()
-    print(f"  current DB: {r0} runs · {t0} trades · {DB_PATH.stat().st_size / 1024 / 1024:.1f} MB" if DB_PATH.exists() else "  current DB: missing")
+    runs_n, trades_n = current_counts()
+    if DB_PATH.exists():
+        print(f"  current DB: {runs_n} runs · {trades_n} trades · {DB_PATH.stat().st_size / 1024 / 1024:.1f} MB")
+    else:
+        print("  current DB: missing")
 
-    reports = _find_reports()
+    reports = find_reports()
     print(f"  reports found on disk: {len(reports)}")
-    per_engine: dict[str, int] = {}
-    for eng, _ in reports:
-        per_engine[eng] = per_engine.get(eng, 0) + 1
-    for eng in sorted(per_engine):
-        print(f"    {eng:14s} {per_engine[eng]:4d}")
+    for engine in sorted(report_counts(reports)):
+        print(f"    {engine:14s} {report_counts(reports)[engine]:4d}")
 
     if dry:
         print()
@@ -159,40 +147,36 @@ def main() -> int:
         return 0
 
     if not args.no_backup:
-        _backup_db(False)
+        backup_db(dry_run=False)
 
-    _wipe_db(False)
+    wipe_db(dry_run=False)
 
     ok = 0
     fail = 0
     skipped = 0
-    for i, (engine, path) in enumerate(reports, start=1):
+    for idx, (engine, path) in enumerate(reports, start=1):
         try:
-            rid = save_run(engine, str(path))
-            if rid:
+            run_id = save_run(engine, str(path))
+            if run_id:
                 ok += 1
             else:
                 skipped += 1
         except Exception as exc:  # noqa: BLE001
             fail += 1
             print(f"  FAIL {path.name}: {type(exc).__name__}: {exc}")
-        if i % 25 == 0:
-            print(f"  progress: {i}/{len(reports)} (ok={ok}, skipped={skipped}, fail={fail})")
+        if idx % 25 == 0:
+            print(f"  progress: {idx}/{len(reports)} (ok={ok}, skipped={skipped}, fail={fail})")
 
     print()
     print(f"  saved:   {ok}")
     print(f"  skipped: {skipped}")
     print(f"  failed:  {fail}")
 
-    r1, t1 = _current_counts()
-    print(f"  final DB: {r1} runs · {t1} trades · "
-          f"{DB_PATH.stat().st_size / 1024 / 1024:.1f} MB")
+    runs_n, trades_n = current_counts()
+    print(f"  final DB: {runs_n} runs · {trades_n} trades · {DB_PATH.stat().st_size / 1024 / 1024:.1f} MB")
 
-    conn = sqlite3.connect(DB_PATH)
-    try:
+    with sqlite3.connect(DB_PATH) as conn:
         conn.execute("VACUUM")
-    finally:
-        conn.close()
     print(f"  VACUUM done · {DB_PATH.stat().st_size / 1024 / 1024:.1f} MB")
 
     return 0 if fail == 0 else 1

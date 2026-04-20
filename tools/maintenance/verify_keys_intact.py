@@ -1,27 +1,15 @@
-"""AURUM — verify config/keys.json is not a fresh placeholder template.
+"""AURUM - verify config/keys.json is not a fresh placeholder template.
 
 Runs automatically pre-commit (via hook) and can be invoked manually
 before any risky operation. Detects the "COLE_AQUI" template-wipe scenario
-that happened 2026-04-19 when an agent (Codex or other) reset keys.json
-to placeholders silently, costing the shadow/paper cockpit and VPS tunnel.
+that happened 2026-04-19 when an agent reset keys.json to placeholders,
+costing the shadow/paper cockpit and VPS tunnel.
 
 Exit codes:
-    0 — keys.json healthy (no critical placeholders in sections that matter)
-    1 — WIPED: keys.json is a template (has placeholders where real secrets
+    0 - keys.json healthy (no critical placeholders in sections that matter)
+    1 - WIPED: keys.json is a template (has placeholders where real secrets
         must live). Refuses to pass.
-    2 — MISSING: keys.json does not exist.
-
-Sections checked for placeholder wipe:
-    - vps_ssh.host, vps_ssh.key_path
-    - cockpit_api.read_token, cockpit_api.admin_token
-    - telegram.bot_token, telegram.chat_id
-
-Sections allowed to have placeholders (user may not use them yet):
-    - demo.api_key, testnet.api_key, live.api_key, macro_brain.*
-
-Usage:
-    python tools/maintenance/verify_keys_intact.py
-    python tools/maintenance/verify_keys_intact.py --strict  # check ALL keys
+    2 - MISSING: keys.json does not exist or is unreadable.
 """
 from __future__ import annotations
 
@@ -35,14 +23,12 @@ KEYS_PATH = ROOT / "config" / "keys.json"
 
 PLACEHOLDER_MARKERS = ("COLE_AQUI", "PASTE_HERE", "REPLACE_ME")
 
-# Sections that CANNOT be placeholder — breaking these breaks operation.
 CRITICAL_SECTIONS = {
     "vps_ssh": ("host", "key_path"),
     "cockpit_api": ("read_token", "admin_token"),
     "telegram": ("bot_token", "chat_id"),
 }
 
-# Sections checked under --strict (exchange keys, macro_brain)
 STRICT_SECTIONS = {
     "demo": ("api_key", "api_secret"),
     "testnet": ("api_key", "api_secret"),
@@ -52,12 +38,7 @@ STRICT_SECTIONS = {
 
 
 def _is_placeholder(value) -> bool:
-    if not isinstance(value, str):
-        return False
-    for marker in PLACEHOLDER_MARKERS:
-        if marker in value:
-            return True
-    return False
+    return isinstance(value, str) and any(marker in value for marker in PLACEHOLDER_MARKERS)
 
 
 def _check_sections(data: dict, sections: dict) -> list[str]:
@@ -67,41 +48,45 @@ def _check_sections(data: dict, sections: dict) -> list[str]:
         if not isinstance(block, dict):
             problems.append(f"{section}: MISSING or not a dict")
             continue
-        for f in fields:
-            v = block.get(f)
-            if _is_placeholder(v):
-                problems.append(f"{section}.{f}: PLACEHOLDER ({v!r})")
+        for field in fields:
+            value = block.get(field)
+            if _is_placeholder(value):
+                problems.append(f"{section}.{field}: PLACEHOLDER ({value!r})")
     return problems
+
+
+def run_check(*, path: Path = KEYS_PATH, strict: bool = False) -> tuple[int, list[str]]:
+    if not path.exists():
+        return 2, [f"MISSING: {path} does not exist."]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return 2, [f"MISSING: {path} unreadable: {exc}"]
+
+    sections = dict(CRITICAL_SECTIONS)
+    if strict:
+        sections.update(STRICT_SECTIONS)
+    problems = _check_sections(data, sections)
+    if problems:
+        return 1, problems
+    return 0, []
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--strict", action="store_true",
-                        help="Also check exchange + macro_brain keys")
-    parser.add_argument("--path", type=Path, default=KEYS_PATH,
-                        help="Path to keys.json (default config/keys.json)")
+    parser.add_argument("--strict", action="store_true", help="Also check exchange + macro_brain keys")
+    parser.add_argument("--path", type=Path, default=KEYS_PATH, help="Path to keys.json (default config/keys.json)")
     args = parser.parse_args()
 
-    if not args.path.exists():
-        print(f"MISSING: {args.path} does not exist.", file=sys.stderr)
+    code, problems = run_check(path=args.path, strict=args.strict)
+    if code == 2:
+        for problem in problems:
+            print(problem, file=sys.stderr)
         return 2
-
-    try:
-        data = json.loads(args.path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        print(f"MISSING: {args.path} unreadable: {exc}", file=sys.stderr)
-        return 2
-
-    sections = dict(CRITICAL_SECTIONS)
-    if args.strict:
-        sections.update(STRICT_SECTIONS)
-
-    problems = _check_sections(data, sections)
-
-    if problems:
+    if code == 1:
         print("KEYS.JSON WIPED OR PLACEHOLDER-ONLY:", file=sys.stderr)
-        for p in problems:
-            print(f"  - {p}", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
         print("", file=sys.stderr)
         print(
             "INCIDENT: Critical sections of config/keys.json have placeholder\n"
@@ -114,7 +99,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"OK — {args.path} has no placeholder in critical sections.")
+    print(f"OK - {args.path} has no placeholder in critical sections.")
     if args.strict:
         print("      (--strict also verified exchange + macro_brain keys)")
     return 0

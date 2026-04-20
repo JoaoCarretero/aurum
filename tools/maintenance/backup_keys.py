@@ -1,22 +1,7 @@
-"""AURUM — defensive backup of config/keys.json.
+"""AURUM - defensive backup of config/keys.json.
 
 Creates timestamped copies outside the repo so a future agent that
-silently overwrites keys.json does NOT destroy recovery options. Runs
-on-demand (idempotent, cheap) and from the launcher bootstrap.
-
-Backup location priority:
-  1. $AURUM_KEYS_BACKUP_DIR       (if set)
-  2. ~/.aurum-backups/keys/       (default, outside the OneDrive synced repo)
-
-Retention:
-  - Keeps the N most recent backups (default: 20) — rotates oldest first.
-  - Every backup is a plain copy; if you want encryption-at-rest use
-    tools/maintenance/encrypt_keys.py separately.
-
-Exit codes:
-    0 — backup written (or was already identical to latest)
-    1 — source keys.json missing
-    2 — backup dir unwritable
+silently overwrites keys.json does not destroy recovery options.
 """
 from __future__ import annotations
 
@@ -40,26 +25,30 @@ def _default_backup_dir() -> Path:
 
 
 def _hash_file(path: Path) -> str:
-    h = hashlib.sha256()
+    digest = hashlib.sha256()
     with open(path, "rb") as fh:
         while chunk := fh.read(65536):
-            h.update(chunk)
-    return h.hexdigest()
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _latest_backup(backup_dir: Path) -> Path | None:
     if not backup_dir.exists():
         return None
-    candidates = sorted(backup_dir.glob("keys.json.*.bak"),
-                        key=lambda p: p.stat().st_mtime,
-                        reverse=True)
+    candidates = sorted(
+        backup_dir.glob("keys.json.*.bak"),
+        key=lambda p: p.name,
+        reverse=True,
+    )
     return candidates[0] if candidates else None
 
 
 def _rotate(backup_dir: Path, keep: int) -> None:
-    backups = sorted(backup_dir.glob("keys.json.*.bak"),
-                     key=lambda p: p.stat().st_mtime,
-                     reverse=True)
+    backups = sorted(
+        backup_dir.glob("keys.json.*.bak"),
+        key=lambda p: p.name,
+        reverse=True,
+    )
     for old in backups[keep:]:
         try:
             old.unlink()
@@ -67,37 +56,51 @@ def _rotate(backup_dir: Path, keep: int) -> None:
             pass
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--keep", type=int, default=20,
-                        help="Retain last N backups (default 20)")
-    parser.add_argument("--dir", type=Path, default=None,
-                        help="Backup dir override")
-    args = parser.parse_args()
+def run_backup(
+    *,
+    keys_path: Path = KEYS_PATH,
+    backup_dir: Path | None = None,
+    keep: int = 20,
+    now: datetime | None = None,
+) -> tuple[int, Path | None, bool]:
+    if not keys_path.exists():
+        return 1, None, False
 
-    if not KEYS_PATH.exists():
-        print(f"MISSING: {KEYS_PATH}", file=sys.stderr)
-        return 1
-
-    backup_dir = args.dir or _default_backup_dir()
+    backup_dir = backup_dir or _default_backup_dir()
     try:
         backup_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        print(f"backup dir unwritable: {exc}", file=sys.stderr)
-        return 2
+    except OSError:
+        return 2, None, False
 
-    # Skip if identical to latest backup (no churn)
     latest = _latest_backup(backup_dir)
-    if latest is not None:
-        if _hash_file(KEYS_PATH) == _hash_file(latest):
-            print(f"SKIP — identical to latest backup ({latest.name})")
-            return 0
+    if latest is not None and _hash_file(keys_path) == _hash_file(latest):
+        _rotate(backup_dir, keep)
+        return 0, latest, True
 
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
     dest = backup_dir / f"keys.json.{stamp}.bak"
-    shutil.copy2(KEYS_PATH, dest)
-    _rotate(backup_dir, args.keep)
-    print(f"OK — backup -> {dest}")
+    shutil.copy2(keys_path, dest)
+    _rotate(backup_dir, keep)
+    return 0, dest, False
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--keep", type=int, default=20, help="Retain last N backups (default 20)")
+    parser.add_argument("--dir", type=Path, default=None, help="Backup dir override")
+    args = parser.parse_args()
+
+    code, path, skipped = run_backup(backup_dir=args.dir, keep=args.keep)
+    if code == 1:
+        print(f"MISSING: {KEYS_PATH}", file=sys.stderr)
+        return 1
+    if code == 2:
+        print("backup dir unwritable", file=sys.stderr)
+        return 2
+    if skipped and path is not None:
+        print(f"SKIP - identical to latest backup ({path.name})")
+    elif path is not None and path.exists() and path.stat().st_size > 0:
+        print(f"OK - backup -> {path}")
     return 0
 
 

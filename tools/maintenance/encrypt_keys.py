@@ -1,40 +1,45 @@
-"""AURUM — one-time migration: encrypt config/keys.json.
-
-Reads the existing plaintext ``config/keys.json``, prompts for a
-master password twice, encrypts with ``core.key_store.KeyStore``,
-and writes ``config/keys.json.enc`` next to the plaintext file.
-
-The plaintext file is **NOT** deleted by this script — the user
-verifies the encrypted path works (set AURUM_KEY_PASSWORD, run the
-live engine in paper mode once, watch for the "Keys loaded from
-encrypted store" log line) and then deletes the plaintext file
-manually.
-
-Usage
------
-    python tools/maintenance/encrypt_keys.py
-
-    $ master password: ***************
-    $ repeat:          ***************
-    written config/keys.json.enc
-    next steps:
-      1. set AURUM_KEY_PASSWORD in your shell or launcher env
-      2. run python -m engines.live (or via aurum_cli) in paper mode
-      3. confirm the log shows "Keys loaded from encrypted store"
-      4. delete config/keys.json manually
-
-Exit codes
-----------
-    0 — encrypted file written
-    1 — plaintext source missing
-    2 — passwords don't match
-    3 — cryptography not installed
-"""
+"""AURUM - one-time migration: encrypt config/keys.json."""
 from __future__ import annotations
 
 import getpass
 import sys
 from pathlib import Path
+
+
+def run_encrypt(
+    *,
+    plaintext: Path,
+    encrypted: Path,
+    password: str,
+    password_repeat: str,
+    key_store_cls=None,
+    unavailable_error_cls=None,
+) -> int:
+    if not plaintext.exists():
+        return 1
+    if encrypted.exists():
+        return 1
+    if password != password_repeat:
+        return 2
+    if len(password) < 8:
+        return 2
+
+    if key_store_cls is None or unavailable_error_cls is None:
+        try:
+            from core.risk.key_store import KeyStore, KeyStoreUnavailableError
+        except ImportError:
+            return 3
+        key_store_cls = KeyStore
+        unavailable_error_cls = KeyStoreUnavailableError
+
+    try:
+        ks = key_store_cls(plaintext_path=plaintext, encrypted_path=encrypted)
+        ks.encrypt_from_plaintext(password)
+    except unavailable_error_cls:
+        return 3
+    except Exception:
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -43,18 +48,18 @@ def main() -> int:
     encrypted = root / "config" / "keys.json.enc"
 
     if not plaintext.exists():
-        print(f"  ! {plaintext} does not exist — nothing to encrypt")
+        print(f"  ! {plaintext} does not exist - nothing to encrypt")
         return 1
 
     try:
         from core.risk.key_store import KeyStore, KeyStoreUnavailableError
-    except ImportError as e:
-        print(f"  ! cannot import KeyStore: {e}")
+    except ImportError as exc:
+        print(f"  ! cannot import KeyStore: {exc}")
         return 3
 
     if encrypted.exists():
-        print(f"  ! {encrypted} already exists — aborting to avoid overwrite")
-        print(f"    remove the existing file manually if you want to re-encrypt")
+        print(f"  ! {encrypted} already exists - aborting to avoid overwrite")
+        print("    remove the existing file manually if you want to re-encrypt")
         return 1
 
     try:
@@ -64,28 +69,28 @@ def main() -> int:
         print("\n  ! cancelled")
         return 2
 
-    if pw1 != pw2:
-        print("  ! passwords do not match")
+    code = run_encrypt(
+        plaintext=plaintext,
+        encrypted=encrypted,
+        password=pw1,
+        password_repeat=pw2,
+        key_store_cls=KeyStore,
+        unavailable_error_cls=KeyStoreUnavailableError,
+    )
+    if code == 2:
+        if pw1 != pw2:
+            print("  ! passwords do not match")
+        else:
+            print("  ! password must be at least 8 characters")
         return 2
-
-    if len(pw1) < 8:
-        print("  ! password must be at least 8 characters")
-        return 2
-
-    try:
-        ks = KeyStore(
-            plaintext_path=plaintext,
-            encrypted_path=encrypted,
-        )
-        ks.encrypt_from_plaintext(pw1)
-    except KeyStoreUnavailableError as e:
-        print(f"  ! {e}")
+    if code == 3:
+        print("  ! cryptography / keystore backend unavailable")
         return 3
-    except Exception as e:
-        print(f"  ! encryption failed: {type(e).__name__}: {e}")
+    if code == 1:
+        print("  ! encryption failed")
         return 1
 
-    print(f"  ✓ written {encrypted.relative_to(root)}")
+    print(f"  OK written {encrypted.relative_to(root)}")
     print()
     print("  next steps:")
     print("    1. set AURUM_KEY_PASSWORD in your shell or launcher env")
@@ -93,7 +98,7 @@ def main() -> int:
     print("    3. confirm the log shows 'Keys loaded from encrypted store'")
     print("    4. delete config/keys.json manually")
     print()
-    print("  the plaintext file was NOT removed — verify the encrypted")
+    print("  the plaintext file was NOT removed - verify the encrypted")
     print("  path works before deleting it.")
     return 0
 
