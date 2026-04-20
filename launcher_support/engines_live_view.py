@@ -351,16 +351,15 @@ def render(launcher, parent, *, on_escape) -> dict:
         _refresh_header(state)
         _refresh_footer(state)
 
-    def cleanup():
-        for aid in list(state.get("after_handles", [])):
-            try:
-                launcher.after_cancel(aid)
-            except Exception:
-                pass
-        state["after_handles"] = []
-        # Cancel any pending shadow-panel refresh so it doesn't fire after
-        # the user has left the cockpit screen.
-        for key in ("shadow_after_id", "shadow_refresh_aid"):
+    def _cancel_refresh_timers():
+        """Cancel every after() slot that schedules a mode-specific rerender.
+
+        Must run before set_mode/cleanup — without this, the prior mode's
+        refresh chain keeps firing every 5s on top of the new mode's one,
+        stacking destroy+rebuild cycles that freeze the main loop.
+        """
+        for key in ("shadow_after_id", "shadow_refresh_aid",
+                    "paper_refresh_aid"):
             aid = state.pop(key, None)
             if aid is not None:
                 try:
@@ -368,9 +367,23 @@ def render(launcher, parent, *, on_escape) -> dict:
                 except Exception:
                     pass
 
+    def cleanup():
+        for aid in list(state.get("after_handles", [])):
+            try:
+                launcher.after_cancel(aid)
+            except Exception:
+                pass
+        state["after_handles"] = []
+        _cancel_refresh_timers()
+
     def set_mode(mode):
         if mode not in _MODE_ORDER:
             return
+        if mode == state.get("mode"):
+            return
+        # Kill the prior mode's refresh timers BEFORE touching state so no
+        # callback lands on a detail_host that's about to be destroyed.
+        _cancel_refresh_timers()
         state["mode"] = mode
         try:
             save_mode(mode)
