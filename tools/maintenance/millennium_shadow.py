@@ -34,6 +34,11 @@ if str(ROOT) not in sys.path:
 
 from core.ops.fs import atomic_write  # noqa: E402
 from core.risk.key_store import KeyStoreError, load_runtime_keys  # noqa: E402
+from tools.operations.millennium_signal_gate import (  # noqa: E402
+    is_live_signal,
+    signal_timestamp,
+    trade_key,
+)
 
 RUN_TS = datetime.now(timezone.utc)
 RUN_ID = RUN_TS.strftime("%Y-%m-%d_%H%M")
@@ -302,11 +307,7 @@ def _write_per_engine_summaries(ticks_ok: int, ticks_fail: int,
 
 def _trade_key(trade: dict) -> tuple:
     """Stable dedup key: engine + symbol + entry timestamp."""
-    return (
-        str(trade.get("strategy") or "").upper(),
-        str(trade.get("symbol") or "").upper(),
-        trade.get("timestamp"),
-    )
+    return trade_key(trade)
 
 
 def _fmt_num(v) -> str:
@@ -344,7 +345,11 @@ def _tg_signal(trade: dict) -> None:
     _tg_send("\n".join(lines))
 
 
-def _run_tick(seen_keys: set, notify: bool = True) -> tuple[int, int, int, str | None]:
+def _run_tick(
+    seen_keys: set,
+    tick_sec: int,
+    notify: bool = True,
+) -> tuple[int, int, int, str | None]:
     """Run one shadow tick. Returns (novel_count, total_scanned, engines_ok,
     last_novel_observed_at).
 
@@ -386,6 +391,15 @@ def _run_tick(seen_keys: set, notify: bool = True) -> tuple[int, int, int, str |
         observed_at = datetime.now(timezone.utc).isoformat()
         record["shadow_observed_at"] = observed_at
         record["primed"] = primed_flag
+        if notify and not is_live_signal(record, tick_sec=tick_sec, reference_ts=observed_at):
+            log.info(
+                "STALE signal skipped strategy=%s symbol=%s signal_ts=%s observed_at=%s",
+                str(record.get("strategy") or "?").upper(),
+                str(record.get("symbol") or "?").upper(),
+                signal_timestamp(record),
+                observed_at,
+            )
+            continue
         _append_trade(record)
         _append_per_engine(record)
         novel += 1
@@ -456,7 +470,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
 
         try:
             novel, scanned, engines_ok, tick_last_novel = _run_tick(
-                seen_keys, notify=not first_tick)
+                seen_keys, tick_sec=tick_sec, notify=not first_tick)
             was_first = first_tick
             first_tick = False
             ticks_ok += 1

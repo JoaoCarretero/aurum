@@ -165,6 +165,8 @@ def test_runner_rejects_stale_signal_post_prime(tmp_path, monkeypatch):
     mp.run_one_tick(state, tick_idx=1, notify=False)
     mp.run_one_tick(state, tick_idx=2, notify=False)
     assert len(state.open_positions) == 0
+    assert state.novel_since_prime == 0
+    assert state.last_novel_at is None
 
     signals_path = run_dir / "reports" / "signals.jsonl"
     lines = [json.loads(ln) for ln in signals_path.read_text().splitlines() if ln.strip()]

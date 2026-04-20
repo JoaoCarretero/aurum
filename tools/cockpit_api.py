@@ -36,6 +36,7 @@ from core.shadow_contract import (  # noqa: E402
     Heartbeat, Manifest, RunSummary, RunDetail,
     find_runs, load_heartbeat, load_manifest,
 )
+from tools.operations.millennium_signal_gate import is_live_signal  # noqa: E402
 
 VERSION = "1.0.0"
 STARTED_AT = datetime.now(timezone.utc)
@@ -174,13 +175,21 @@ def build_app() -> FastAPI:
         return load_heartbeat(run_dir)
 
     @app.get("/v1/runs/{run_id}/trades")
-    def run_trades(run_id: str, request: Request, limit: int = 50, since: str | None = None):
+    def run_trades(
+        run_id: str,
+        request: Request,
+        limit: int = 50,
+        since: str | None = None,
+        include_primed: bool = False,
+    ):
         _check_auth(request)
         if limit < 1 or limit > 500:
             raise HTTPException(status_code=400, detail="limit must be 1..500")
         run_dir = _find_run_by_id(data_root, run_id)
         if run_dir is None:
             raise HTTPException(status_code=404, detail="run not found")
+        hb = load_heartbeat(run_dir)
+        tick_sec = int(hb.tick_sec or 900)
         since_dt = None
         if since:
             try:
@@ -202,6 +211,20 @@ def build_app() -> FastAPI:
                 records.append(_json.loads(ln))
             except ValueError:
                 continue
+        if not include_primed:
+            records = [r for r in records if not r.get("primed", False)]
+        if run_dir.parent.name.endswith("_shadow"):
+            records = [
+                r for r in records
+                if (
+                    not r.get("shadow_observed_at")
+                    or is_live_signal(
+                        r,
+                        tick_sec=tick_sec,
+                        reference_ts=r.get("shadow_observed_at"),
+                    )
+                )
+            ]
         if since_dt is not None:
             def _ts_after(rec: dict) -> bool:
                 raw = rec.get("timestamp")

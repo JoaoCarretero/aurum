@@ -311,6 +311,59 @@ def test_trades_since_invalid_format_returns_400(tmp_path, client):
     assert r.status_code == 400
 
 
+def test_trades_exclude_primed_and_stale_shadow_records_by_default(tmp_path, client):
+    run_dir = _make_run(
+        tmp_path, "millennium_shadow", "r_live_only",
+        heartbeat={
+            "run_id": "r_live_only", "status": "running",
+            "ticks_ok": 2, "ticks_fail": 0, "novel_total": 3,
+            "novel_since_prime": 1,
+            "last_tick_at": "2026-04-20T10:45:00+00:00",
+            "last_error": None, "tick_sec": 900,
+        },
+    )
+    reports = run_dir / "reports"
+    reports.mkdir()
+    (reports / "shadow_trades.jsonl").write_text("\n".join([
+        json.dumps({
+            "timestamp": "2026-04-20T10:00:00+00:00",
+            "shadow_observed_at": "2026-04-20T10:05:00+00:00",
+            "symbol": "BTCUSDT", "strategy": "CITADEL",
+            "direction": "LONG", "primed": True,
+        }),
+        json.dumps({
+            "timestamp": "2026-01-24T08:00:00+00:00",
+            "shadow_observed_at": "2026-04-20T10:20:00+00:00",
+            "symbol": "ETHUSDT", "strategy": "JUMP",
+            "direction": "LONG", "primed": False,
+        }),
+        json.dumps({
+            "timestamp": "2026-04-20T10:15:00+00:00",
+            "shadow_observed_at": "2026-04-20T10:20:00+00:00",
+            "symbol": "SOLUSDT", "strategy": "RENAISSANCE",
+            "direction": "SHORT", "primed": False,
+        }),
+    ]))
+
+    r = client.get(
+        "/v1/runs/r_live_only/trades",
+        headers={"Authorization": "Bearer READ123"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    assert body["trades"][0]["symbol"] == "SOLUSDT"
+
+    r_all = client.get(
+        "/v1/runs/r_live_only/trades?include_primed=true",
+        headers={"Authorization": "Bearer READ123"},
+    )
+    assert r_all.status_code == 200
+    body_all = r_all.json()
+    assert body_all["count"] == 2
+    assert [t["symbol"] for t in body_all["trades"]] == ["BTCUSDT", "SOLUSDT"]
+
+
 def test_kill_requires_admin(tmp_path, client):
     _make_run(
         tmp_path, "millennium_shadow", "r5",

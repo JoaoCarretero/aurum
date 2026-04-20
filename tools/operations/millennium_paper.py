@@ -36,6 +36,12 @@ from core.shadow_contract import compute_config_hash  # noqa: E402
 from core.data.ws_price_feed import (  # noqa: E402
     WSPriceFeed, make_live_price_fn,
 )
+from tools.operations.millennium_signal_gate import (  # noqa: E402
+    is_live_signal,
+    signal_age_seconds,
+    signal_timestamp,
+    trade_key,
+)
 from tools.operations.paper_account import PaperAccount  # noqa: E402
 from tools.operations.paper_executor import PaperExecutor, Position  # noqa: E402
 from tools.operations.paper_position_manager import (  # noqa: E402
@@ -283,36 +289,11 @@ class RunnerState:
 
 
 def _trade_key(trade: dict) -> tuple:
-    return (str(trade.get("strategy")), str(trade.get("symbol")),
-            str(trade.get("open_ts") or trade.get("timestamp")))
+    return trade_key(trade)
 
 
 def _signal_age_seconds(trade: dict) -> float | None:
-    """Age of trade signal in seconds (UTC now - signal timestamp).
-
-    Returns None if the timestamp is missing or unparseable. Accepts both
-    ISO ('2026-04-20T11:15:00+00:00') and the legacy CITADEL format
-    ('2026-04-20 11:15:00' naive = UTC).
-    """
-    raw = trade.get("open_ts") or trade.get("timestamp")
-    if raw is None:
-        return None
-    try:
-        if hasattr(raw, "to_pydatetime"):
-            ts = raw.to_pydatetime()
-        elif isinstance(raw, datetime):
-            ts = raw
-        else:
-            s = str(raw).strip()
-            if "T" not in s and " " in s:
-                s = s.replace(" ", "T", 1)
-            s = s.replace("Z", "+00:00")
-            ts = datetime.fromisoformat(s)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-    except Exception:  # noqa: BLE001
-        return None
-    return (datetime.now(timezone.utc) - ts).total_seconds()
+    return signal_age_seconds(trade)
 
 
 def _is_live_signal(trade: dict, tick_sec: int,
@@ -324,12 +305,7 @@ def _is_live_signal(trade: dict, tick_sec: int,
     bar opened in the last 30 minutes. Protects paper from treating 90d of
     backscan history as novel opens (bug 2026-04-19).
     """
-    age = _signal_age_seconds(trade)
-    if age is None:
-        return False
-    if age < -tick_sec:
-        return False
-    return age <= tolerance_mult * tick_sec
+    return is_live_signal(trade, tick_sec=tick_sec, tolerance_mult=tolerance_mult)
 
 
 def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
@@ -462,11 +438,9 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 continue
             state.seen_keys.add(key)
             state.novel_total += 1
-            state.last_novel_at = now_iso
             if priming:
                 primed_count += 1
                 continue
-            state.novel_since_prime += 1
 
             # Live-bar filter: only open on signals from the most recent
             # bar. Rejects residual history that slips past priming (e.g.
@@ -478,9 +452,11 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "direction": t.get("direction"),
                     "decision": "skipped",
                     "reason": "stale_bar",
-                    "signal_ts": str(t.get("timestamp") or t.get("open_ts")),
+                    "signal_ts": str(signal_timestamp(t)),
                 })
                 continue
+            state.novel_since_prime += 1
+            state.last_novel_at = now_iso
 
             # 4. Portfolio gate V1: MAX_OPEN_POSITIONS only
             try:
