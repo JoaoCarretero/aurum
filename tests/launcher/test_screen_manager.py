@@ -59,3 +59,44 @@ def test_unknown_screen_raises(tk_root):
     mgr = ScreenManager(parent=tk_root)
     with pytest.raises(ValueError, match="unknown screen"):
         mgr.show("nonexistent")
+
+
+def test_second_show_same_name_reuses_cached_instance(tk_root):
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("foo", _Recording)
+    a = mgr.show("foo")
+    b = mgr.show("foo", y=2)
+    assert a is b
+    # build called once; enter called twice (one per show)
+    assert [e[0] for e in a.events] == ["build", "enter", "exit", "enter"]
+    assert a.events[-1][1] == {"y": 2}
+
+
+def test_switch_exits_previous_before_enter_next(tk_root):
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("foo", _Recording)
+    mgr.register("bar", _Recording)
+
+    foo = mgr.show("foo")
+    bar = mgr.show("bar", mode="live")
+
+    foo_events = [e[0] for e in foo.events]
+    bar_events = [e[0] for e in bar.events]
+    assert foo_events == ["build", "enter", "exit"]
+    assert bar_events == ["build", "enter"]
+    assert mgr.current_name() == "bar"
+
+
+def test_current_screen_pack_forget_on_switch(tk_root):
+    mgr = ScreenManager(parent=tk_root)
+    mgr.register("foo", _Recording)
+    mgr.register("bar", _Recording)
+
+    foo = mgr.show("foo")
+    tk_root.update_idletasks()
+    assert foo.container.winfo_manager() == "pack"
+
+    bar = mgr.show("bar")
+    tk_root.update_idletasks()
+    assert foo.container.winfo_manager() == ""
+    assert bar.container.winfo_manager() == "pack"

@@ -42,6 +42,17 @@ class ScreenManager:
         """Show the named screen, creating it on first access."""
         if name not in self._factories:
             raise ValueError(f"unknown screen: {name!r}")
+
+        # Hide current screen first (if any)
+        if self._current_name is not None:
+            prev = self._cache.get(self._current_name)
+            if prev is not None:
+                try:
+                    prev.on_exit()
+                except Exception:
+                    pass
+                prev.pack_forget()
+
         screen = self._cache.get(name)
         if screen is None:
             screen = self._factories[name](self._parent)
