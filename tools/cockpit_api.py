@@ -210,9 +210,23 @@ def build_app() -> FastAPI:
         run_dir = _find_run_by_id(data_root, run_id)
         if run_dir is None:
             raise HTTPException(status_code=404, detail="run not found")
-        log_path = run_dir / "logs" / "shadow.log"
-        if not log_path.exists():
-            return {"run_id": run_id, "lines": [], "grep": grep, "path": str(log_path)}
+        # Cockpit serves shadow + paper + live runs — try each canonical
+        # name plus any *.log fallback so paper runs don't hand back empty.
+        logs_dir = run_dir / "logs"
+        candidates = [
+            logs_dir / "shadow.log",
+            logs_dir / "paper.log",
+            logs_dir / "live.log",
+            logs_dir / "engine.log",
+        ]
+        log_path = next((p for p in candidates if p.exists()), None)
+        if log_path is None and logs_dir.exists():
+            fallback = sorted(logs_dir.glob("*.log"))
+            if fallback:
+                log_path = fallback[0]
+        if log_path is None or not log_path.exists():
+            return {"run_id": run_id, "lines": [], "grep": grep,
+                    "path": str(logs_dir / "shadow.log")}
         try:
             text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:

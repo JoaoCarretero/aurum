@@ -315,9 +315,14 @@ def render_detail(
     health.pack(fill="x", padx=12, pady=(0, 10))
     ticks_ok = heartbeat.get("ticks_ok")
     ticks_fail = heartbeat.get("ticks_fail")
-    novel_total = heartbeat.get("novel_total")
+    # Preferir novel_since_prime (signals frescos pós-restart). Fallback
+    # pra novel_total só quando o engine ainda não expõe o contador novo
+    # (shadow velho). User não quer ver 628 backscan ao restartar.
+    novel_raw = heartbeat.get("novel_since_prime")
+    if novel_raw is None:
+        novel_raw = heartbeat.get("novel_total")
     fail_n = int(ticks_fail or 0)
-    novel_n = int(novel_total or 0)
+    novel_n = int(novel_raw or 0)
     _metric_card(health, "TICKS OK",
                  "—" if ticks_ok is None else str(ticks_ok),
                  GREEN if (ticks_ok or 0) > 0 else DIM2)
@@ -325,7 +330,7 @@ def render_detail(
                  "—" if ticks_fail is None else str(ticks_fail),
                  RED if fail_n > 0 else DIM2)
     _metric_card(health, "SIGNALS",
-                 "—" if novel_total is None else str(novel_total),
+                 "—" if novel_raw is None else str(novel_raw),
                  AMBER_B if novel_n > 0 else DIM2)
     _metric_card(health, "UPTIME",
                  _uptime_from_heartbeat(heartbeat), WHITE)
@@ -600,21 +605,24 @@ def _last_sig_age(trades: list[dict],
 
 
 def _uptime_from_heartbeat(hb: dict) -> str:
-    # `run_hours` no heartbeat eh o max-hours CLI arg (estatico), nao
-    # elapsed. Uptime real = (stopped_at | last_tick_at | now) - started_at.
+    # Uptime = (stopped_at if parado) - started_at | now - started_at se
+    # running. `last_tick_at` NÃO é o fim do uptime — tick acontece a cada
+    # 15min, e o serviço fica vivo entre ticks. Usar last_tick_at congela o
+    # display em "10s" imediatamente após o primeiro tick.
     from datetime import datetime, timezone
     started = hb.get("started_at")
     if not started:
         return "—"
     try:
-        t0 = datetime.fromisoformat(str(started))
+        t0 = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return "—"
-    ref = hb.get("stopped_at") or hb.get("last_tick_at")
+    status = str(hb.get("status") or "").lower()
+    stopped = hb.get("stopped_at")
     t1 = None
-    if ref:
+    if status != "running" and stopped:
         try:
-            t1 = datetime.fromisoformat(str(ref))
+            t1 = datetime.fromisoformat(str(stopped).replace("Z", "+00:00"))
         except (TypeError, ValueError):
             t1 = None
     if t1 is None:

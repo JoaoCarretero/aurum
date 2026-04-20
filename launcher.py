@@ -8670,23 +8670,85 @@ class App(tk.Tk):
         except tk.TclError:
             return
 
-        log_file = proc.get("log_file") or ""
+        # Three proc shapes coexist: live-local sets `log_file`; historical
+        # local scan and VPS scan set `log`. Prefer log_file then fall back.
+        log_file = proc.get("log_file") or proc.get("log") or ""
         engine = proc.get("engine", "?")
         self._eng_log_header.configure(
             text=f"  {engine} · pid {pid} · {log_file}", fg=AMBER_D)
 
         if not log_file:
+            try:
+                self._eng_log_text.config(state="normal")
+                self._eng_log_text.insert(
+                    "end", "(no log file available for this run)\n")
+                self._eng_log_text.config(state="disabled")
+            except tk.TclError:
+                pass
             return
 
-        log_path = ROOT / log_file if not Path(log_file).is_absolute() else Path(log_file)
-        t = threading.Thread(
-            target=self._eng_tail_worker,
-            args=(log_path, self._eng_tail_stop),
-            daemon=True)
+        if proc.get("_remote") or str(log_file).startswith("remote:"):
+            run_id = proc.get("_run_id") or str(log_file).split(":", 1)[-1]
+            t = threading.Thread(
+                target=self._eng_tail_remote_worker,
+                args=(run_id, self._eng_tail_stop),
+                daemon=True)
+        else:
+            log_path = ROOT / log_file if not Path(log_file).is_absolute() else Path(log_file)
+            t = threading.Thread(
+                target=self._eng_tail_worker,
+                args=(log_path, self._eng_tail_stop),
+                daemon=True)
         t.start()
         self._eng_tail_thread = t
         # Trigger list re-render so the new selection highlights
         self._eng_refresh()
+
+    def _eng_tail_remote_worker(self, run_id: str,
+                                 stop_event: threading.Event):
+        """Poll cockpit /v1/runs/<id>/log every 2s, pushing new lines.
+
+        Cockpit API only exposes tail-of-file today, so we keep a cursor
+        (the last line we emitted) and deduplicate by suffix match on the
+        next poll. Crude but sufficient for a 15-min-tick engine.
+        """
+        try:
+            from launcher_support.engines_live_view import _get_cockpit_client
+            client = _get_cockpit_client()
+        except Exception as exc:
+            self._eng_log_queue.put((
+                "SYSTEM", f"(cockpit client unavailable: {exc})"))
+            return
+        if client is None:
+            self._eng_log_queue.put((
+                "SYSTEM", "(cockpit_api not configured — VPS logs "
+                "unavailable)"))
+            return
+
+        seen_last: str | None = None
+        while not stop_event.is_set():
+            try:
+                payload = client._get(f"/v1/runs/{run_id}/log?tail=500")
+            except Exception as exc:
+                self._eng_log_queue.put((
+                    "SYSTEM", f"(cockpit log fetch failed: "
+                              f"{type(exc).__name__})"))
+                if stop_event.wait(5.0):
+                    return
+                continue
+            lines = payload.get("lines") if isinstance(payload, dict) else None
+            if lines:
+                # Skip lines we already emitted: find the overlap with
+                # seen_last (last line we pushed).
+                if seen_last is not None and seen_last in lines:
+                    idx = len(lines) - 1 - lines[::-1].index(seen_last)
+                    lines = lines[idx + 1:]
+                for ln in lines:
+                    self._eng_log_queue.put(("LINE", ln))
+                if lines:
+                    seen_last = lines[-1]
+            if stop_event.wait(2.0):
+                return
 
     def _eng_tail_worker(self, log_path: Path, stop_event: threading.Event):
         """Read the log file tail-f style, push new lines into the queue.
