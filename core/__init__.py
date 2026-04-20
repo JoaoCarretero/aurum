@@ -57,7 +57,12 @@ def __getattr__(name: str):
 
 
 def __dir__():
-    return sorted(list(_LAZY.keys()) + list(globals().keys()))
+    """Public attribute listing — lazy names + already-resolved public globals."""
+    public_globals = {
+        name for name in globals()
+        if not name.startswith("_") and name != "annotations"
+    }
+    return sorted(set(_LAZY.keys()) | public_globals)
 
 
 __all__ = list(_LAZY.keys())

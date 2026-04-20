@@ -37,12 +37,13 @@ def compute_cache_key(X: np.ndarray, params: dict[str, Any]) -> str:
     h.update(str(X.shape).encode())
     h.update(str(X.dtype).encode())
     if X.size:
-        # Include first & last rows + a few checksums — enough entropy
-        # to detect any realistic re-fit scenario.
-        h.update(X[0].tobytes())
-        h.update(X[-1].tobytes())
-        h.update(str(float(X.sum())).encode())
-        h.update(str(float(np.var(X))).encode())
+        # np.ascontiguousarray guards against non-contiguous views
+        # produced by strided slicing in walk-forward batteries.
+        h.update(np.ascontiguousarray(X[0]).tobytes())
+        h.update(np.ascontiguousarray(X[-1]).tobytes())
+        # IEEE-754 bytes of the scalar — deterministic, no repr round-trip.
+        h.update(np.float64(X.sum()).tobytes())
+        h.update(np.float64(np.var(X)).tobytes())
     # Sorted params for deterministic hashing
     for k in sorted(params.keys()):
         h.update(f"{k}={params[k]!r}".encode())
@@ -62,8 +63,12 @@ def cache_get(key: str) -> Optional[dict[str, Any]]:
                 _CACHE[key] = val
                 _STATS["hits"] += 1
                 return val
-            except Exception:
-                pass
+            except (pickle.UnpicklingError, EOFError, OSError):
+                # Corrupt persist entry — remove so we don't hit this path again.
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
     _STATS["misses"] += 1
     return None
 

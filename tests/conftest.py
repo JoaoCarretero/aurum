@@ -61,14 +61,15 @@ def tmp_run(tmp_path_factory):
 # mutable DataFrame should call .copy() inline to avoid polluting the
 # shared instance.
 #
-# Why session scope: fixture construction cost was ~3% of suite time
-# because every indicator/signal test rebuilt the same synthetic series.
-
-import numpy as np
-import pandas as pd
+# numpy/pandas imports are deferred inside _build_ohlcv so that tests
+# not requesting these fixtures don't pay the import cost at conftest
+# collection time — mirrors the B4 lazy-init philosophy.
 
 
-def _build_ohlcv(n_bars: int, seed: int) -> "pd.DataFrame":
+def _build_ohlcv(n_bars: int, seed: int):
+    import numpy as np
+    import pandas as pd
+
     rng = np.random.default_rng(seed)
     close = 100 + np.cumsum(rng.normal(0, 0.5, n_bars))
     high = close + np.abs(rng.normal(0, 0.3, n_bars))

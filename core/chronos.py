@@ -202,11 +202,14 @@ class GaussianHMMNp:
         K = self.n_states
 
         if n_samples < 2 or K == 1:
+            # No .copy() here — cache_get copies on retrieval to protect
+            # cached state from caller mutation, which is the stronger
+            # guarantee. Skipping the copy on set saves 4 allocs per miss.
             cache_set(_key, {
-                "means_": self.means_.copy(),
-                "covars_": self.covars_.copy(),
-                "transmat_": self.transmat_.copy(),
-                "startprob_": self.startprob_.copy(),
+                "means_": self.means_,
+                "covars_": self.covars_,
+                "transmat_": self.transmat_,
+                "startprob_": self.startprob_,
             })
             return self
 
@@ -252,11 +255,12 @@ class GaussianHMMNp:
                 break
             prev_ll = ll
 
+        # No .copy() here — defensive copy happens on cache_get.
         cache_set(_key, {
-            "means_": self.means_.copy(),
-            "covars_": self.covars_.copy(),
-            "transmat_": self.transmat_.copy(),
-            "startprob_": self.startprob_.copy(),
+            "means_": self.means_,
+            "covars_": self.covars_,
+            "transmat_": self.transmat_,
+            "startprob_": self.startprob_,
         })
         return self
 
