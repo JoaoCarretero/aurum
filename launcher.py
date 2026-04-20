@@ -8285,8 +8285,9 @@ class App(tk.Tk):
                  fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", pady=(0, 4))
 
         hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
-        for label, width in [("STATE", 7), ("ENGINE", 10), ("PID", 7),
-                             ("STARTED", 12)]:
+        for label, width in [("STATE", 6), ("ENGINE", 9), ("MODE", 6),
+                             ("SRC", 5), ("STARTED", 12), ("UP", 6),
+                             ("SIG", 4)]:
             tk.Label(hrow, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG,
                      width=width, anchor="w").pack(side="left")
         tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
@@ -8396,33 +8397,65 @@ class App(tk.Tk):
             b.pack(side="left", padx=2)
             b.bind("<Button-1>", lambda e, c=cmd: c())
 
-        # -- RIGHT: log tail viewer ---------------------------
+        # -- RIGHT: log tail viewer (top) + entries table (bottom) --
         right = tk.Frame(split, bg=PANEL,
                          highlightbackground=BORDER, highlightthickness=1)
         right.pack(side="right", fill="both", expand=True)
 
-        tk.Label(right, text="LOG TAIL", font=(FONT, 7, "bold"),
-                 fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw", padx=8, pady=(8, 2))
-        tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=8, pady=(0, 4))
+        # TOP — log tail (fixed at 55% height via a weighted split)
+        log_section = tk.Frame(right, bg=PANEL)
+        log_section.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+
+        tk.Label(log_section, text="LOG TAIL", font=(FONT, 7, "bold"),
+                 fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw")
+        tk.Frame(log_section, bg=DIM2, height=1).pack(fill="x", pady=(1, 4))
 
         self._eng_log_header = tk.Label(
-            right, text=" — select a proc to stream its log — ",
+            log_section, text=" — select a proc to stream its log — ",
             font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w")
-        self._eng_log_header.pack(fill="x", padx=8)
+        self._eng_log_header.pack(fill="x")
 
         self._eng_log_text = tk.Text(
-            right, wrap="word", bg=BG, fg=WHITE, font=(FONT, 8),
+            log_section, wrap="word", bg=BG, fg=WHITE, font=(FONT, 8),
             insertbackground=WHITE, padx=6, pady=6,
-            borderwidth=0, highlightthickness=0)
-        self._eng_log_text.pack(fill="both", expand=True, padx=8, pady=(2, 8))
+            borderwidth=0, highlightthickness=0, height=14)
+        self._eng_log_text.pack(fill="both", expand=True, pady=(2, 4))
         self._eng_log_text.config(state="disabled")
+
+        # BOTTOM — entries table (signals/trades)
+        tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=8, pady=(2, 0))
+        entries_section = tk.Frame(right, bg=PANEL)
+        entries_section.pack(fill="both", expand=False, padx=8, pady=(4, 8))
+
+        header_row = tk.Frame(entries_section, bg=PANEL)
+        header_row.pack(fill="x")
+        self._eng_entries_header = tk.Label(
+            header_row, text="ENTRIES", font=(FONT, 7, "bold"),
+            fg=AMBER_D, bg=PANEL, anchor="w")
+        self._eng_entries_header.pack(side="left")
+        self._eng_entries_status = tk.Label(
+            header_row, text="", font=(FONT, 7),
+            fg=DIM, bg=PANEL, anchor="e")
+        self._eng_entries_status.pack(side="right")
+        tk.Frame(entries_section, bg=DIM2, height=1).pack(fill="x", pady=(1, 4))
+
+        self._eng_entries_text = tk.Text(
+            entries_section, wrap="none", bg=BG, fg=WHITE,
+            font=(FONT, 7), padx=6, pady=4,
+            borderwidth=0, highlightthickness=0, height=10)
+        self._eng_entries_text.pack(fill="both", expand=True)
+        self._eng_entries_text.config(state="disabled")
+
+        self._eng_entries_stop: threading.Event = threading.Event()
+        self._eng_entries_thread: threading.Thread | None = None
 
         # Initial list render + auto-refresh tick
         self._eng_refresh()
         self._eng_poll_logs()
 
     def _eng_refresh(self):
-        """Rebuild the proc list and reschedule the 2s auto-refresh tick."""
+        """Rebuild the proc list with RUNNING + STOPPED sections, always
+        visible. Each section sorted by recency DESC. Reschedules 2s tick."""
         if not hasattr(self, "_eng_list_wrap"):
             return
         try:
@@ -8437,49 +8470,63 @@ class App(tk.Tk):
 
         try:
             from core.ops.proc import list_procs
-            procs = list_procs()
+            local_procs = [self._eng_normalize_local_proc(p)
+                           for p in (list_procs() or [])]
         except Exception as e:
             tk.Label(self._eng_list_wrap,
                      text=f"  list_procs failed: {e}",
                      font=(FONT, 7), fg=RED, bg=BG,
                      anchor="w").pack(fill="x")
-            procs = []
+            local_procs = []
 
-        # VPS runs via cockpit API — shadow/paper que vivem no servidor.
-        # Aparecem AO LADO dos local procs, com marker 'VPS' no pid.
-        vps_rows = self._eng_scan_vps_runs(limit=10)
+        vps_rows = self._eng_scan_vps_runs(limit=20)
+        historical = self._eng_scan_historical_runs(limit=30, hours=72)
 
-        if procs:
-            # Live local procs first
-            for p in procs:
-                self._eng_render_row(p)
+        # Dedup: VPS runs are usually also on local disk via rsync/mount;
+        # when both show the same run_id, keep only the VPS row (it has
+        # live heartbeat). Same for historical vs VPS.
+        vps_ids = {r.get("_run_id") for r in vps_rows if r.get("_run_id")}
+        historical = [h for h in historical
+                      if self._eng_run_id_of(h) not in vps_ids]
 
-        if vps_rows:
-            if procs:
-                tk.Frame(self._eng_list_wrap, bg=DIM2,
-                         height=1).pack(fill="x", pady=(6, 4), padx=8)
-            tk.Label(self._eng_list_wrap,
-                     text="  — VPS runs (via cockpit API) —",
-                     font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
-                     anchor="w").pack(fill="x", pady=(2, 2))
-            for v in vps_rows:
-                self._eng_render_row(v)
-
-        # Fallback local: if nothing live/VPS, surface historical disk runs
-        if not procs and not vps_rows:
-            historical = self._eng_scan_historical_runs(limit=15, hours=48)
-            if historical:
-                tk.Label(self._eng_list_wrap,
-                         text="  — no LIVE procs; showing recent runs on disk —",
-                         font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
-                         anchor="w").pack(fill="x", pady=(4, 2))
-                for h in historical:
-                    self._eng_render_row(h)
+        running, stopped = [], []
+        for row in local_procs + vps_rows + historical:
+            if row.get("alive"):
+                running.append(row)
             else:
-                tk.Label(self._eng_list_wrap,
-                         text="  — no tracked engines and no recent runs —",
-                         font=(FONT, 7), fg=DIM, bg=BG,
-                         anchor="w").pack(fill="x", pady=8)
+                stopped.append(row)
+        running.sort(key=self._eng_recency_key, reverse=True)
+        stopped.sort(key=self._eng_recency_key, reverse=True)
+
+        # --- RUNNING section ---------------------------------
+        tk.Label(self._eng_list_wrap,
+                 text=f"  ●  RUNNING  ({len(running)})",
+                 font=(FONT, 7, "bold"), fg=GREEN, bg=BG,
+                 anchor="w").pack(fill="x", pady=(2, 2))
+        if running:
+            for p in running:
+                self._eng_render_row(p)
+        else:
+            tk.Label(self._eng_list_wrap,
+                     text="   — nenhum engine ativo (local ou VPS) —",
+                     font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
+                     anchor="w").pack(fill="x", pady=2)
+
+        # --- STOPPED section (last 72h) ----------------------
+        tk.Frame(self._eng_list_wrap, bg=DIM2,
+                 height=1).pack(fill="x", pady=(6, 4), padx=8)
+        tk.Label(self._eng_list_wrap,
+                 text=f"  ○  STOPPED (últimas 72h) ({len(stopped)})",
+                 font=(FONT, 7, "bold"), fg=DIM, bg=BG,
+                 anchor="w").pack(fill="x", pady=(2, 2))
+        if stopped:
+            for h in stopped[:30]:
+                self._eng_render_row(h)
+        else:
+            tk.Label(self._eng_list_wrap,
+                     text="   — sem runs recentes no disco —",
+                     font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
+                     anchor="w").pack(fill="x", pady=2)
 
         # Reschedule
         try:
@@ -8491,6 +8538,41 @@ class App(tk.Tk):
             self._eng_after_id = self.after(2000, self._eng_refresh)
         except Exception:
             pass
+
+    def _eng_normalize_local_proc(self, proc: dict) -> dict:
+        """Standardize shapes from core.ops.proc.list_procs into the same
+        schema used by VPS + historical rows."""
+        out = dict(proc)
+        out.setdefault("alive", bool(proc.get("alive")))
+        out["_remote"] = False
+        out["src"] = "local"
+        out.setdefault("mode", str(proc.get("mode") or "live"))
+        return out
+
+    def _eng_run_id_of(self, row: dict) -> str | None:
+        rid = row.get("_run_id")
+        if rid:
+            return rid
+        rd = row.get("run_dir")
+        if rd:
+            return str(rd).rstrip("/").rsplit("/", 1)[-1]
+        return None
+
+    def _eng_recency_key(self, row: dict) -> float:
+        """Higher = more recent. Uses last_tick_at > started_at > 0."""
+        from datetime import datetime, timezone
+        for key in ("last_tick_at", "started_at", "started"):
+            v = row.get(key) or row.get("_heartbeat", {}).get(key)
+            if not v:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                return ts.timestamp()
+            except Exception:
+                continue
+        return 0.0
 
     def _eng_scan_vps_runs(self, limit: int = 10) -> list[dict]:
         """Query cockpit API /v1/runs and produce pseudo-proc rows for VPS
@@ -8523,15 +8605,25 @@ class App(tk.Tk):
             alive = status == "running"
             started = r.get("started_at") or r.get("last_tick_at") or ""
             started_str = str(started)[:16].replace("T", " ") if started else ""
+            # Fetch heartbeat for uptime + signal count. Silent fail —
+            # the list-view still renders, just without metrics.
+            hb: dict = {}
+            try:
+                hb = client._get(f"/v1/runs/{r.get('run_id')}/heartbeat") or {}
+            except Exception:
+                hb = {}
             rows.append({
                 "engine": label,
+                "mode": mode,
                 "pid": "VPS" if alive else "-",
                 "started": started_str,
+                "started_at": r.get("started_at"),
                 "alive": alive,
                 "log": f"remote:{r.get('run_id')}",
                 "run_dir": f"remote://{r.get('run_id')}",
                 "_remote": True,
                 "_run_id": r.get("run_id"),
+                "_heartbeat": hb,
             })
         return rows
 
@@ -8594,13 +8686,30 @@ class App(tk.Tk):
                         logs = list(logs_dir.glob("*.log"))
                         if logs:
                             log_path = str(logs[0])
+                # Best-effort heartbeat read for uptime + signal count
+                hb: dict = {}
+                hb_path = run_dir / "state" / "heartbeat.json"
+                if hb_path.exists():
+                    try:
+                        import json as _json
+                        hb = _json.loads(hb_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        hb = {}
+                # Derive mode from dir name (millennium_paper -> paper)
+                _mode = "paper" if name.endswith("_paper") else (
+                    "shadow" if name.endswith("_shadow") else "live")
                 rows.append((mtime, {
                     "engine": engine_slug,
+                    "mode": _mode,
                     "pid": "-",
                     "started": run_dt.strftime("%m-%d %H:%M"),
+                    "started_at": hb.get("started_at"),
                     "alive": False,
                     "log": log_path,
                     "run_dir": str(run_dir),
+                    "_remote": False,
+                    "_run_id": run_dir.name,
+                    "_heartbeat": hb,
                 }))
         rows.sort(key=lambda t: t[0], reverse=True)
         return [r for _, r in rows[:limit]]
@@ -8608,19 +8717,38 @@ class App(tk.Tk):
     def _eng_render_row(self, proc: dict):
         alive = bool(proc.get("alive"))
         pid = proc.get("pid")
-        engine = proc.get("engine", "?")
-        started = str(proc.get("started", ""))[:16].replace("T", " ")
-        state = "LIVE" if alive else "done"
+        engine_full = str(proc.get("engine", "?"))
+        # engine "MILLENNIUM (paper)" → split label + mode for column
+        if "(" in engine_full and engine_full.endswith(")"):
+            base, mode = engine_full.split("(", 1)
+            engine = base.strip()[:9]
+            mode = mode.rstrip(")").strip()[:6]
+        else:
+            engine = engine_full[:9]
+            mode = str(proc.get("mode") or "live")[:6]
+        started_raw = str(proc.get("started", "") or "")
+        started = started_raw[:16].replace("T", " ")
+        src = "VPS" if proc.get("_remote") else "local"
+        state = "●LIVE" if alive else "○done"
         state_color = GREEN if alive else DIM
+        hb = proc.get("_heartbeat") or {}
+        up_text = self._eng_uptime_of(proc, hb)
+        sig_n = hb.get("novel_since_prime")
+        if sig_n is None:
+            sig_n = hb.get("novel_total")
+        sig_text = "—" if sig_n is None else str(sig_n)
 
         row = tk.Frame(self._eng_list_wrap, bg=BG, cursor="hand2")
         row.pack(fill="x", pady=0)
 
         cells = [
-            (state,   7,  state_color, "bold"),
-            (engine, 10,  WHITE,       "bold"),
-            (str(pid), 7, AMBER_D,     "normal"),
+            (state,    6, state_color, "bold"),
+            (engine,   9, WHITE,       "bold"),
+            (mode,     6, AMBER,       "normal"),
+            (src,      5, (GREEN if src == "VPS" else DIM2), "normal"),
             (started, 12, DIM,         "normal"),
+            (up_text,  6, WHITE,       "normal"),
+            (sig_text, 4, AMBER_B if (sig_n or 0) > 0 else DIM2, "bold"),
         ]
         labels = []
         for text, width, color, weight in cells:
@@ -8651,6 +8779,39 @@ class App(tk.Tk):
                 try: l.configure(bg=BG3)
                 except Exception: pass
 
+    def _eng_uptime_of(self, proc: dict, hb: dict) -> str:
+        """Short uptime string (e.g. '2h15m', '45m'). Empty if unknown."""
+        from datetime import datetime, timezone
+        started_raw = (hb.get("started_at") or proc.get("started_at")
+                       or proc.get("started") or "")
+        if not started_raw:
+            return "—"
+        try:
+            t0 = datetime.fromisoformat(str(started_raw).replace("Z", "+00:00"))
+            if t0.tzinfo is None:
+                t0 = t0.replace(tzinfo=timezone.utc)
+        except Exception:
+            return "—"
+        if not proc.get("alive"):
+            stopped_raw = hb.get("stopped_at")
+            try:
+                t1 = datetime.fromisoformat(
+                    str(stopped_raw).replace("Z", "+00:00"))
+                if t1.tzinfo is None:
+                    t1 = t1.replace(tzinfo=timezone.utc)
+            except Exception:
+                t1 = datetime.now(timezone.utc)
+        else:
+            t1 = datetime.now(timezone.utc)
+        secs = max(0, int((t1 - t0).total_seconds()))
+        if secs < 60:
+            return f"{secs}s"
+        if secs < 3600:
+            return f"{secs // 60}m"
+        hours = secs // 3600
+        mins = (secs % 3600) // 60
+        return f"{hours}h{mins:02d}m" if hours < 24 else f"{hours // 24}d{hours % 24}h"
+
     def _eng_select(self, proc: dict):
         """Stop old log tail, start a new one for the selected proc."""
         pid = proc.get("pid")
@@ -8661,6 +8822,13 @@ class App(tk.Tk):
             self._eng_tail_stop.set()
             self._eng_tail_thread = None
         self._eng_tail_stop = threading.Event()
+
+        # Stop old entries worker too, and refresh entries for new proc
+        if getattr(self, "_eng_entries_thread", None) is not None:
+            self._eng_entries_stop.set()
+            self._eng_entries_thread = None
+        self._eng_entries_stop = threading.Event()
+        self._eng_load_entries(proc)
 
         # Clear the text widget and reset header
         try:
@@ -8703,6 +8871,145 @@ class App(tk.Tk):
         self._eng_tail_thread = t
         # Trigger list re-render so the new selection highlights
         self._eng_refresh()
+
+    def _eng_load_entries(self, proc: dict) -> None:
+        """Populate the ENTRIES pane with signals/trades for this proc.
+
+        VPS: GET /v1/runs/<id>/trades (and fall back to signals.jsonl).
+        Local: reads reports/trades.jsonl + reports/signals.jsonl from
+        the run_dir. Runs the HTTP portion in a daemon thread so the UI
+        never blocks on a slow tunnel.
+        """
+        # Clear viewer + header immediately so the user sees the selection
+        # landed, even before the async fetch finishes.
+        try:
+            self._eng_entries_text.config(state="normal")
+            self._eng_entries_text.delete("1.0", "end")
+            self._eng_entries_text.config(state="disabled")
+        except tk.TclError:
+            return
+        engine = proc.get("engine", "?")
+        rid = self._eng_run_id_of(proc) or "?"
+        try:
+            self._eng_entries_header.configure(
+                text=f"ENTRIES  ·  {engine}  ·  {rid}")
+            self._eng_entries_status.configure(text="loading...", fg=DIM)
+        except tk.TclError:
+            pass
+
+        def worker(p=proc, stop=self._eng_entries_stop):
+            lines, summary = self._eng_fetch_entries(p, stop)
+            if stop.is_set():
+                return
+            self.after(0, lambda: self._eng_apply_entries(lines, summary))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        self._eng_entries_thread = t
+
+    def _eng_fetch_entries(self, proc: dict,
+                           stop: threading.Event) -> tuple[list[str], str]:
+        """Blocking fetch of entries. Returns (formatted_lines, summary)."""
+        lines: list[str] = []
+        if proc.get("_remote"):
+            rid = proc.get("_run_id")
+            if not rid:
+                return [], "no run_id"
+            try:
+                from launcher_support.engines_live_view import _get_cockpit_client
+                client = _get_cockpit_client()
+            except Exception:
+                return [], "cockpit client unavailable"
+            if client is None:
+                return [], "cockpit not configured"
+            # For paper runs, signals are more interesting than trades
+            # (trades.jsonl only grows on close). Shadow uses trades.
+            mode = str(proc.get("mode") or "").lower()
+            try:
+                if mode == "paper":
+                    payload = client._get(
+                        f"/v1/runs/{rid}/trades?limit=50") or {}
+                else:
+                    payload = client._get(
+                        f"/v1/runs/{rid}/trades?limit=50") or {}
+                records = payload.get("trades") or []
+            except Exception as exc:
+                return [], f"fetch failed: {type(exc).__name__}"
+            if not records:
+                return [], "sem entries"
+            for rec in records:
+                if stop.is_set():
+                    break
+                lines.append(self._eng_fmt_entry(rec))
+            return lines, f"{len(records)} entries"
+
+        # Local
+        rd = proc.get("run_dir")
+        if not rd:
+            return [], "sem run_dir"
+        from pathlib import Path as _P
+        run_dir = _P(rd)
+        for candidate in ("reports/trades.jsonl", "reports/signals.jsonl"):
+            f = run_dir / candidate
+            if not f.exists():
+                continue
+            import json as _json
+            try:
+                raw = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            records = []
+            for ln in raw.splitlines()[-50:]:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    records.append(_json.loads(ln))
+                except Exception:
+                    continue
+            if not records:
+                continue
+            for rec in records:
+                if stop.is_set():
+                    break
+                lines.append(self._eng_fmt_entry(rec))
+            return lines, f"{len(records)} from {candidate}"
+        return [], "sem entries no run_dir"
+
+    def _eng_fmt_entry(self, rec: dict) -> str:
+        """Compact one-line formatter for a signal/trade record."""
+        ts = (rec.get("ts") or rec.get("timestamp")
+              or rec.get("shadow_observed_at") or "")
+        ts_s = str(ts)[:19].replace("T", " ")
+        strat = str(rec.get("strategy") or rec.get("engine") or "?")[:11]
+        sym = str(rec.get("symbol") or "?")[:9]
+        direction = str(rec.get("direction") or rec.get("trade_type")
+                        or "")[:4]
+        entry = rec.get("entry") or rec.get("entry_price")
+        decision = rec.get("decision") or rec.get("exit_reason") or ""
+        pnl = rec.get("pnl") or rec.get("pnl_after_fees")
+        tail = ""
+        if pnl is not None:
+            tail = f"  pnl={pnl:+.2f}"
+        elif decision:
+            tail = f"  [{decision}]"
+        entry_s = f"  entry={entry:.5g}" if isinstance(entry, (int, float)) else ""
+        return f"{ts_s}  {strat:<11} {sym:<9} {direction:<4}{entry_s}{tail}"
+
+    def _eng_apply_entries(self, lines: list[str], summary: str) -> None:
+        """UI-thread sink for worker results — repaints the entries text."""
+        try:
+            self._eng_entries_text.config(state="normal")
+            self._eng_entries_text.delete("1.0", "end")
+            if lines:
+                self._eng_entries_text.insert("end", "\n".join(lines) + "\n")
+            else:
+                self._eng_entries_text.insert("end", f"   — {summary} —\n")
+            self._eng_entries_text.config(state="disabled")
+            self._eng_entries_status.configure(
+                text=summary, fg=AMBER_D if lines else DIM2)
+        except tk.TclError:
+            pass
 
     def _eng_tail_remote_worker(self, run_id: str,
                                  stop_event: threading.Event):
