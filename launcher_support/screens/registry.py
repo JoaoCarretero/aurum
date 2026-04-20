@@ -7,6 +7,7 @@ from typing import Any
 from launcher_support.screens.connections import ConnectionsScreen
 from launcher_support.screens.data_center import DataCenterScreen
 from launcher_support.screens.data_reports import DataReportsScreen
+from launcher_support.screens.engines_live import EnginesLiveScreen
 from launcher_support.screens.main_menu import MainMenuScreen
 from launcher_support.screens.macro_brain import MacroBrainScreen
 from launcher_support.screens.markets import MarketsScreen
@@ -50,6 +51,10 @@ def register_default_screens(
     manager.register(
         "terminal",
         lambda parent: TerminalScreen(parent=parent, app=app),
+    )
+    manager.register(
+        "engines_live",
+        lambda parent: EnginesLiveScreen(parent=parent, app=app, conn=conn),
     )
     manager.register(
         "data_center",

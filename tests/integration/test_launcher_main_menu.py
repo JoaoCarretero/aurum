@@ -391,6 +391,45 @@ def test_runs_history_exit_cancels_refresh(app):
     assert state.get("refresh_aid") is None
 
 
+def test_engines_live_routes_via_screen_manager(app, monkeypatch):
+    monkeypatch.setattr(
+        "launcher_support.engines_live_view.render",
+        lambda launcher, parent, on_escape=None: {"cleanup": lambda: None},
+    )
+    app._strategies_live()
+    assert app.screens.current_name() == "engines_live"
+    assert app.main.winfo_manager() == ""
+
+
+def test_engines_live_reentry_reuses_cached_screen(app, monkeypatch):
+    monkeypatch.setattr(
+        "launcher_support.engines_live_view.render",
+        lambda launcher, parent, on_escape=None: {"cleanup": lambda: None},
+    )
+    app._strategies_live()
+    first = app.screens._cache.get("engines_live")
+    app._menu_main_bloomberg()
+    app._strategies_live()
+    second = app.screens._cache.get("engines_live")
+    assert first is not None
+    assert first is second
+
+
+def test_engines_live_exit_cleans_handle(app, monkeypatch):
+    calls = []
+
+    def _render(_launcher, _parent, on_escape=None):
+        del on_escape
+        return {"cleanup": lambda: calls.append("cleanup")}
+
+    monkeypatch.setattr("launcher_support.engines_live_view.render", _render)
+    app._strategies_live()
+    assert app._engines_live_handle is not None
+    app._menu_main_bloomberg()
+    assert calls == ["cleanup"]
+    assert app._engines_live_handle is None
+
+
 def test_terminal_routes_via_screen_manager(app):
     app._terminal()
     assert app.screens.current_name() == "terminal"

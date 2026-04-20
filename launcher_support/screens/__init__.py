@@ -13,6 +13,7 @@ from launcher_support.screens.registry import register_default_screens
 from launcher_support.screens.connections import ConnectionsScreen
 from launcher_support.screens.data_center import DataCenterScreen
 from launcher_support.screens.data_reports import DataReportsScreen
+from launcher_support.screens.engines_live import EnginesLiveScreen
 from launcher_support.screens.manager import ScreenManager
 from launcher_support.screens.main_menu import MainMenuScreen
 from launcher_support.screens.macro_brain import MacroBrainScreen
@@ -27,6 +28,7 @@ __all__ = [
     "ConnectionsScreen",
     "DataCenterScreen",
     "DataReportsScreen",
+    "EnginesLiveScreen",
     "MacroBrainScreen",
     "register_default_screens",
     "SettingsScreen",

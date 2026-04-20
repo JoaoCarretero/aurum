@@ -9042,27 +9042,18 @@ class App(tk.Tk):
         self._strategies(filter_group="BACKTEST")
 
     def _strategies_live(self):
-        """Live/demo/testnet entry point — cockpit view with safety gates.
-
-        Implementation lives in launcher_support.engines_live_view — this
-        method only sets up the screen chrome and delegates rendering.
-        """
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> ENGINES")
-        market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
-        self.h_stat.configure(text=market_label, fg=AMBER_D)
-        self.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run  |  M cycle mode")
-        self._bind_global_nav()
-        from launcher_support import engines_live_view
-        prior = getattr(self, "_engines_live_handle", None)
-        if prior and callable(prior.get("cleanup")):
-            try:
-                prior["cleanup"]()
-            except Exception:
-                pass
-        self._engines_live_handle = engines_live_view.render(
-            self, self.main, on_escape=lambda: self._menu("main"),
-        )
+        """Live/demo/testnet entry point routed via ScreenManager."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("engines_live")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     def _strategies_render_tab(self, tab):
         if not hasattr(self, "_strategies_inner") or self._strategies_inner is None:
