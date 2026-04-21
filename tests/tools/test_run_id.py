@@ -99,3 +99,25 @@ class TestBuildRunId:
     def test_naive_ts_accepted(self):
         ts = datetime(2026, 4, 20, 16, 54, 32)
         assert build_run_id(ts=ts) == "2026-04-20_165432"
+
+    def test_with_mode_paper_appends_p_suffix(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        assert build_run_id(ts=ts, mode="paper") == "2026-04-20_165432p"
+
+    def test_with_mode_shadow_appends_s_suffix(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        assert build_run_id(ts=ts, mode="shadow") == "2026-04-20_165432s"
+
+    def test_mode_none_keeps_plain_id(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        assert build_run_id(ts=ts, mode=None) == "2026-04-20_165432"
+
+    def test_mode_with_label_both_applied(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        assert build_run_id(ts=ts, mode="paper", label="kelly5") == \
+            "2026-04-20_165432p_kelly5"
+
+    def test_unknown_mode_ignored(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        # Unknown mode string → no suffix added, falls through as if mode=None.
+        assert build_run_id(ts=ts, mode="nonsense") == "2026-04-20_165432"

@@ -48,7 +48,7 @@ from tools.operations.run_id import build_run_id, sanitize_label  # noqa: E402
 
 RUN_TS = datetime.now(timezone.utc)
 LABEL: str | None = sanitize_label(os.environ.get("AURUM_SHADOW_LABEL"))
-RUN_ID = build_run_id(RUN_TS, LABEL)
+RUN_ID = build_run_id(RUN_TS, LABEL, mode="shadow")
 RUN_DIR = ROOT / "data" / "millennium_shadow" / RUN_ID
 LOGS_DIR = RUN_DIR / "logs"
 REPORTS_DIR = RUN_DIR / "reports"
@@ -71,7 +71,7 @@ def _configure_run(label: str | None) -> None:
     global LABEL, RUN_ID, RUN_DIR, LOGS_DIR, REPORTS_DIR, STATE_DIR
     global SHADOW_LOG, TRADES_PATH, HEARTBEAT_PATH, KILL_FLAG
     LABEL = sanitize_label(label)
-    RUN_ID = build_run_id(RUN_TS, LABEL)
+    RUN_ID = build_run_id(RUN_TS, LABEL, mode="shadow")
     RUN_DIR = ROOT / "data" / "millennium_shadow" / RUN_ID
     LOGS_DIR = RUN_DIR / "logs"
     REPORTS_DIR = RUN_DIR / "reports"
@@ -710,12 +710,22 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         ticks_fail=ticks_fail,
         stopped_reason=stop_requested["reason"] or "deadline",
     )
+    # Pre-check: skip graceful if tick 1 never created the row (e.g.
+    # shadow crashed at boot, DB migrated later). Without this, upsert
+    # raises "missing required fields" because we only pass ended_at+status.
     try:
-        db_live_runs.upsert(
-            run_id=RUN_ID,
-            ended_at=datetime.now(timezone.utc).isoformat(),
-            status="stopped",
-        )
+        if db_live_runs.get_live_run(RUN_ID) is not None:
+            db_live_runs.upsert(
+                run_id=RUN_ID,
+                ended_at=datetime.now(timezone.utc).isoformat(),
+                status="stopped",
+            )
+        else:
+            log.warning(
+                "db_live_runs: no row for %s to finalize "
+                "(never created — tick 1 did not complete)",
+                RUN_ID,
+            )
     except Exception:
         log.exception("db_live_runs final upsert failed")
     log.info(
