@@ -35,9 +35,10 @@ _RESEARCH_DIRS: tuple[str, ...] = (
 
 _ENGINES_PRESERVED: tuple[str, ...] = (
     "citadel", "bridgewater", "jump", "deshaw", "renaissance",
-    "millennium", "twosigma", "aqr", "janestreet", "kepos", "medallion",
-    "graham", "meanrev", "ornstein", "ornstein_v2", "phi",
-    "millennium_live", "millennium_paper", "millennium_shadow", "live",
+    "millennium", "multistrategy", "twosigma", "aqr", "janestreet",
+    "kepos", "medallion", "graham", "meanrev", "ornstein", "ornstein_v2",
+    "phi", "millennium_live", "millennium_paper", "millennium_shadow",
+    "live",
 )
 
 
