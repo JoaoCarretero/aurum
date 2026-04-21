@@ -155,6 +155,15 @@ def test_ssh_command_shape(tmp_path: Path) -> None:
     assert "-i" in cmd2
     assert cmd2[cmd2.index("-i") + 1] == "/tmp/id_ed25519"
 
+    cfg_with_known_hosts = TunnelConfig(
+        host="h",
+        known_hosts_path=str(tmp_path / "known_hosts"),
+    )
+    m3 = TunnelManager(cfg_with_known_hosts, log_dir=tmp_path)
+    cmd3 = m3._build_cmd()
+    opts3 = [cmd3[i + 1] for i, tok in enumerate(cmd3) if tok == "-o"]
+    assert f"UserKnownHostsFile={tmp_path / 'known_hosts'}" in opts3
+
 
 # ---------------------------------------------------------------------------
 # 4. Fast-death (rc=255) → RECONNECTING
@@ -197,6 +206,10 @@ def test_stderr_error_classification() -> None:
     # timeout
     msg5 = _classify_stderr("ssh: connect to host x port 22: Connection timed out")
     assert msg5 is not None and "timeout" in msg5.lower()
+    msg5b = _classify_stderr("Host key verification failed.")
+    assert msg5b == "ssh host key verification failed"
+    msg5c = _classify_stderr("@@@ REMOTE HOST IDENTIFICATION HAS CHANGED! @@@")
+    assert msg5c == "ssh host key mismatch"
     # empty
     assert _classify_stderr("") is None
     assert _classify_stderr(None) is None  # type: ignore[arg-type]

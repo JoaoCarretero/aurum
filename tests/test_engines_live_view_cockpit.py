@@ -210,6 +210,31 @@ def test_shadow_active_slugs_uses_dynamic_engine_attr():
         tunnel_registry.reset_for_tests()
 
 
+def test_tunnel_error_hint_uses_boot_error_when_manager_missing():
+    import launcher_support.engines_live_view as evv
+    from launcher_support import tunnel_registry
+
+    try:
+        tunnel_registry.set_tunnel_boot_error("ssh host key verification failed")
+        assert evv._get_tunnel_error_hint() == "ssh host key verification failed"
+    finally:
+        tunnel_registry.reset_for_tests()
+
+
+def test_tunnel_error_hint_uses_manager_last_error():
+    import launcher_support.engines_live_view as evv
+    from launcher_support import tunnel_registry
+
+    class FakeManager:
+        last_error = "ssh auth failed (missing or wrong key)"
+
+    try:
+        tunnel_registry.set_tunnel_manager(FakeManager())
+        assert evv._get_tunnel_error_hint() == "ssh auth failed (missing or wrong key)"
+    finally:
+        tunnel_registry.reset_for_tests()
+
+
 def test_shadow_active_slugs_falls_back_to_cockpit_latest_run():
     from launcher_support import engines_live_view as evv
     from launcher_support import tunnel_registry

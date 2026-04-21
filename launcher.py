@@ -1159,6 +1159,7 @@ def _boot_tunnel_manager():
             _reg_set_err(reason)
             return None
         from launcher_support.ssh_tunnel import TunnelConfig, TunnelManager
+        from pathlib import Path as _Path
         cfg = TunnelConfig(
             host=block["host"],
             user=block.get("user", "root"),
@@ -1167,6 +1168,9 @@ def _boot_tunnel_manager():
             remote_host=block.get("remote_host", "localhost"),
             remote_port=int(block.get("remote_port", 8787)),
             key_path=block.get("key_path"),
+            # Cockpit tunnel uses a dedicated known_hosts file so a stale
+            # global ~/.ssh/known_hosts entry doesn't black-hole the UI.
+            known_hosts_path=str((_Path("data/.cockpit_cache/known_hosts")).resolve()),
         )
         manager = TunnelManager(cfg, log_dir=_Path("data/.cockpit_cache"))
         _reg_set(manager)

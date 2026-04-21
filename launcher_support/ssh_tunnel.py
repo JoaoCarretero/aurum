@@ -46,6 +46,7 @@ class TunnelConfig:
     remote_host: str = "localhost"
     remote_port: int = 8787
     key_path: str | None = None      # optional -i /path/to/key
+    known_hosts_path: str | None = None
 
 
 _MAX_LOG_BYTES = 1 * 1024 * 1024  # 1MB rotate threshold
@@ -156,6 +157,10 @@ def _classify_stderr(text: str) -> str | None:
         return "VPS refused connection"
     if "connection timed out" in lower or "operation timed out" in lower:
         return "VPS unreachable (timeout)"
+    if "host key verification failed" in lower:
+        return "ssh host key verification failed"
+    if "remote host identification has changed" in lower:
+        return "ssh host key mismatch"
     # Fallback: last nonempty line, truncated
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
@@ -244,6 +249,8 @@ class TunnelManager:
             "-o", "ConnectTimeout=10",
             "-p", str(cfg.ssh_port),
         ]
+        if cfg.known_hosts_path:
+            cmd.extend(["-o", f"UserKnownHostsFile={cfg.known_hosts_path}"])
         if cfg.key_path:
             cmd.extend(["-i", cfg.key_path])
         cmd.extend([
@@ -278,6 +285,10 @@ class TunnelManager:
             # Prepare log dir + rotate
             try:
                 self._log_dir.mkdir(parents=True, exist_ok=True)
+                if self._config is not None and self._config.known_hosts_path:
+                    kh = Path(self._config.known_hosts_path).expanduser()
+                    kh.parent.mkdir(parents=True, exist_ok=True)
+                    kh.touch(exist_ok=True)
                 self._rotate_log_if_needed()
                 log_path = self._log_dir / "tunnel.log"
                 # Touch the file so it exists even if nothing is written yet

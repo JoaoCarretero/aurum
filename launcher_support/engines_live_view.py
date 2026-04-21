@@ -1664,6 +1664,25 @@ def _get_tunnel_status_label() -> tuple[str, str]:
     return (val, color_map.get(val, DIM2))
 
 
+def _get_tunnel_error_hint() -> str | None:
+    """Short diagnostic shown in empty-state cards when VPS data is missing."""
+    try:
+        from launcher_support.tunnel_registry import (
+            get_tunnel_manager, get_tunnel_boot_error,
+        )
+        tm = get_tunnel_manager()
+        boot_err = get_tunnel_boot_error()
+    except Exception:
+        tm = None
+        boot_err = None
+    if tm is None:
+        return boot_err
+    err = getattr(tm, "last_error", None)
+    if err:
+        return str(err)
+    return None
+
+
 def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     """Return (run_dir, heartbeat_payload) for the most recent shadow run.
 
@@ -2263,11 +2282,15 @@ def _render_hl2_empty(parent, *, title: str, blurb: str,
 
 def _render_shadow_no_run(parent, launcher, state=None):
     """Shadow selected but poller has no cached heartbeat."""
+    diag = _get_tunnel_error_hint()
+    blurb = ("Nenhum shadow run detectado via cockpit API.\n"
+             "Pode ser: tunnel caiu, VPS runner parou, ou primeira vez.")
+    if diag:
+        blurb += f"\n\nDiagnostico do tunnel: {diag}"
     _render_hl2_empty(
         parent,
         title="NO SHADOW RUN VISIBLE",
-        blurb=("Nenhum shadow run detectado via cockpit API.\n"
-               "Pode ser: tunnel caiu, VPS runner parou, ou primeira vez."),
+        blurb=blurb,
         actions=[("▶ START SHADOW ON VPS", GREEN,
                   lambda: _start_shadow_via_cockpit(launcher, state or {}))],
         hint="Ou manual via SSH:\n  sudo systemctl start millennium_shadow.service",
@@ -2519,6 +2542,11 @@ def _render_paper_empty_state(parent, launcher, state):
 
 def _render_paper_no_run(parent, launcher, state):
     """Paper slug selected but cockpit shows no paper run."""
+    diag = _get_tunnel_error_hint()
+    blurb = ("Nenhum paper run detectado via cockpit API.\n"
+             "Tunnel offline, runner parado, ou ainda nÃ£o iniciado.")
+    if diag:
+        blurb += f"\n\nDiagnostico do tunnel: {diag}"
     _render_hl2_empty(
         parent,
         title="NO PAPER RUN VISIBLE",
