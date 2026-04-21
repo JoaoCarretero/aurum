@@ -5,11 +5,18 @@ __pycache__/
 *.pyd
 
 # Data outputs (grandes, nao versionar)
-data/
+data/*
 data/.cockpit_cache/
 # EXCEPTION: refactor baselines (small, must be versioned for regression tests)
 !data/refactor_baseline/
 !data/refactor_baseline/**
+# EXCEPTION: archived validation artifacts remain versioned as audit evidence
+!data/_archive/
+data/_archive/*
+!data/_archive/research/
+data/_archive/research/*
+!data/_archive/research/validation/
+!data/_archive/research/validation/**
 # EXCEPTION: core/data/ is a Python subpackage, not a data output dir
 !core/data/
 !core/data/**
