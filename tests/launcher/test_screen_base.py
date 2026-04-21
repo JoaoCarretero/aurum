@@ -28,7 +28,10 @@ class _FakeScreen(Screen):
 
 @pytest.fixture(scope="module")
 def tk_root():
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("tk unavailable")
     root.withdraw()
     yield root
     try:

@@ -17,6 +17,8 @@ def register_default_screens(
     from launcher_support.screens.connections import ConnectionsScreen
     from launcher_support.screens.data_center import DataCenterScreen
     from launcher_support.screens.data_reports import DataReportsScreen
+    from launcher_support.screens.deploy_pipeline import DeployPipelineScreen
+    from launcher_support.screens.engine_logs import EngineLogsScreen
     from launcher_support.screens.engines_live import EnginesLiveScreen
     from launcher_support.screens.live_runs import LiveRunsScreen
     from launcher_support.screens.macro_brain import MacroBrainScreen
@@ -54,6 +56,10 @@ def register_default_screens(
         lambda parent: TerminalScreen(parent=parent, app=app),
     )
     manager.register(
+        "deploy_pipeline",
+        lambda parent: DeployPipelineScreen(parent=parent, app=app),
+    )
+    manager.register(
         "engines_live",
         lambda parent: EnginesLiveScreen(parent=parent, app=app, conn=conn),
     )
@@ -64,6 +70,10 @@ def register_default_screens(
     manager.register(
         "data_reports",
         lambda parent: DataReportsScreen(parent=parent, app=app, root_path=root_path),
+    )
+    manager.register(
+        "engine_logs",
+        lambda parent: EngineLogsScreen(parent=parent, app=app),
     )
     manager.register(
         "settings",

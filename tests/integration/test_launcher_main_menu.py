@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import tkinter as tk
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
@@ -34,7 +35,10 @@ def _shared_app(mod):
     sidesteps the limit. Tests must not rely on a pristine widget tree
     between calls — they should call the method under test fresh.
     """
-    app = mod.App()
+    try:
+        app = mod.App()
+    except tk.TclError:
+        pytest.skip("tk unavailable")
     app.withdraw()
     yield app
     try:
@@ -279,6 +283,12 @@ def test_data_center_reentry_reuses_cached_screen(app):
     second = app.screens._cache.get("data_center")
     assert first is not None
     assert first is second
+
+
+def test_engine_logs_routes_via_screen_manager(app):
+    app._data_engines()
+    assert app.screens.current_name() == "engine_logs"
+    assert app.main.winfo_manager() == ""
 
 
 def test_settings_routes_via_screen_manager(app):
@@ -552,6 +562,12 @@ def test_terminal_reentry_reuses_cached_screen(app):
     second = app.screens._cache.get("terminal")
     assert first is not None
     assert first is second
+
+
+def test_deploy_pipeline_routes_via_screen_manager(app):
+    app._deploy_pipeline()
+    assert app.screens.current_name() == "deploy_pipeline"
+    assert app.main.winfo_manager() == ""
 
 
 def test_data_reports_routes_via_screen_manager(app):

@@ -7326,6 +7326,19 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _deploy_pipeline(self):
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("deploy_pipeline")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
     # --- DATA CENTER (hub) ---------------------------------
     def _data_center(self):
         """Unified entry point for everything data: backtest metrics,
@@ -8167,247 +8180,15 @@ class App(tk.Tk):
 
     # --- ENGINE LOGS (live proc list + log tail) --------------
     def _data_engines(self):
-        """Live engine control & log tail view.
-
-        Implements part of Fase 2 from the professional-fund-readiness plan:
-        two-column layout with a proc list on the left (auto-refresh 2s) and
-        a live log tail stream on the right for the currently selected proc.
-
-        Backed by core.proc.list_procs (identity-aware, safe against PID
-        recycling) and stop_proc (raises PidRecycledError on mismatch rather
-        than taskkilling the wrong process).
-        """
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA > ENGINES")
-        self.h_stat.configure(text="LIVE", fg=GREEN)
-        self.f_lbl.configure(text="ESC voltar  |  click proc to tail  |  STOP / PURGE")
-        self._kb("<Escape>", lambda: self._data_center())
-
-        # State for this screen — held as instance attrs so the worker thread
-        # and the UI poll can reach them. Cleaned up on screen exit.
-        self._eng_selected_pid: int | None = None
-        self._eng_tail_stop: threading.Event = threading.Event()
-        self._eng_tail_thread: threading.Thread | None = None
-        self._eng_log_queue: queue.Queue = queue.Queue()
-        self._eng_after_id: str | None = None
-        self._eng_selected_key: str | None = None
-        self._eng_mode_filter: str = getattr(self, "_eng_mode_filter", "all")
-        self._eng_filter_tabs: dict[str, tk.Label] = {}
-        self._eng_historical_cache: list[dict] | None = None
-        self._eng_historical_cache_ts: float = 0.0
-
-        _outer, outer = self._ui_page_shell(
-            "ENGINE LOGS",
-            "Running and recent engines with live log tail and verified stop control",
-        )
-
-        split = tk.Frame(outer, bg=BG)
-        split.pack(fill="both", expand=True)
-
-        # -- LEFT: proc list ----------------------------------
-        left = tk.Frame(split, bg=BG, width=420,
-                        highlightbackground=BORDER, highlightthickness=1)
-        left.pack(side="left", fill="y", padx=(0, 8))
-        left.pack_propagate(False)
-
-        tk.Label(left, text="PROCS", font=(FONT, 7, "bold"),
-                 fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", pady=(0, 4))
-
-        hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
-        for label, width in [("STATE", 6), ("ENGINE", 9), ("MODE", 6),
-                             ("SRC", 5), ("STARTED", 12), ("UP", 6),
-                             ("SIG", 4)]:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG,
-                     width=width, anchor="w").pack(side="left")
-        tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
-
-        filter_row = tk.Frame(left, bg=BG)
-        filter_row.pack(fill="x", pady=(2, 6))
-        tk.Label(filter_row, text="FILTER", font=(FONT, 6, "bold"),
-                 fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
-        for idx, (tab_label, filter_name) in enumerate([
-            ("ALL", "all"),
-            ("SHADOW", "shadow"),
-            ("PAPER", "paper"),
-            ("DEMO", "demo"),
-            ("TESTNET", "testnet"),
-            ("LIVE", "live"),
-        ], start=1):
-            tab = tk.Label(
-                filter_row,
-                text=f" {idx}:{tab_label} ",
-                font=(FONT, 6, "bold"),
-                fg=AMBER_D if self._eng_mode_filter == filter_name else DIM,
-                bg=BG3 if self._eng_mode_filter == filter_name else BG,
-                cursor="hand2",
-                padx=5,
-                pady=2,
-            )
-            tab.pack(side="left", padx=(0, 3))
-            tab.bind("<Button-1>", lambda _e, f=filter_name: self._eng_set_mode_filter(f))
-            self._eng_filter_tabs[filter_name] = tab
-            self._kb(f"<Key-{idx}>", lambda f=filter_name: self._eng_set_mode_filter(f))
-
-        list_wrap = tk.Frame(left, bg=BG)
-        list_wrap.pack(fill="both", expand=True)
-        self._eng_list_wrap = list_wrap
-
-        # Bottom action bar for the list
-        actions_l = tk.Frame(left, bg=BG); actions_l.pack(fill="x", pady=(6, 0))
-
-        def _do_stop():
-            pid = self._eng_selected_pid
-            if pid is None:
-                self.h_stat.configure(text="NO PROC SELECTED", fg=RED)
-                self.after(1200, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-                return
+        if hasattr(self, "screens") and getattr(self, "screens", None) is not None:
+            if not self.screens_container.winfo_manager():
+                self.screens_container.pack(fill="both", expand=True)
+            self.screens.show("engine_logs")
             try:
-                from core.ops.proc import stop_proc, PidRecycledError
-                ok = stop_proc(pid)
-                msg = f"STOPPED {pid}" if ok else f"{pid} NOT RUNNING"
-                self.h_stat.configure(text=msg, fg=GREEN if ok else AMBER_D)
-            except PidRecycledError as e:
-                self.h_stat.configure(text=f"REFUSED: PID REUSE", fg=RED)
-                messagebox.showerror("PID recycling detected",
-                                     f"stop_proc refused:\n\n{e}")
-            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-            self._eng_refresh()
-
-        def _do_purge():
-            try:
-                from core.ops.proc import purge_finished
-                n = purge_finished()
-                self.h_stat.configure(text=f"PURGED {n}", fg=AMBER)
-            except Exception as e:
-                self.h_stat.configure(text=f"PURGE FAILED: {str(e)[:30]}", fg=RED)
-            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-            self._eng_refresh()
-
-        # SPAWN dropdown — needs a popup menu rather than a simple onclick
-        # because the user picks an engine from a list. Attaches a Tk.Menu
-        # populated from core.proc.ENGINES at click time.
-        def _do_spawn(engine_name: str):
-            try:
-                from core.ops.proc import spawn
-                info = spawn(engine_name)
-            except Exception as e:
-                self.h_stat.configure(
-                    text=f"SPAWN ERR: {str(e)[:30]}", fg=RED)
-                info = None
-            if info:
-                self.h_stat.configure(
-                    text=f"SPAWNED {engine_name} pid={info['pid']}",
-                    fg=GREEN)
-                # Auto-select the newly-spawned proc so its log tail
-                # immediately starts streaming.
-                self.after(300, lambda p=info: self._eng_select(p))
-            else:
-                self.h_stat.configure(
-                    text=f"SPAWN FAILED: {engine_name}", fg=RED)
-            self.after(2000,
-                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-            self._eng_refresh()
-
-        try:
-            from core.ops.proc import ENGINES as _ENGINES
-        except Exception:
-            _ENGINES = {}
-        spawn_menu = tk.Menu(actions_l, tearoff=0,
-                             bg=BG3, fg=AMBER,
-                             activebackground=AMBER, activeforeground=BG,
-                             font=(FONT, 8))
-        try:
-            from config.params import FROZEN_ENGINES as _FROZEN
-        except Exception:
-            _FROZEN = []
-        for eng_name in sorted(_ENGINES.keys()):
-            _frozen = eng_name.upper() in [f.upper() for f in _FROZEN]
-            _label  = f"{eng_name.upper()} [FROZEN]" if _frozen else eng_name.upper()
-            _fg     = DIM if _frozen else AMBER
-            spawn_menu.add_command(
-                label=_label,
-                foreground=_fg,
-                command=lambda n=eng_name: _do_spawn(n))
-
-        def _popup_spawn(event, m=spawn_menu):
-            try:
-                m.tk_popup(event.x_root, event.y_root)
-            finally:
-                m.grab_release()
-
-        spawn_btn = tk.Label(actions_l, text="  SPAWN ▸  ",
-                             font=(FONT, 7, "bold"),
-                             fg=GREEN, bg=BG3, cursor="hand2",
-                             padx=6, pady=3)
-        spawn_btn.pack(side="left", padx=(0, 6))
-        spawn_btn.bind("<Button-1>", _popup_spawn)
-        spawn_btn.bind("<Enter>", lambda e: spawn_btn.configure(bg=GREEN, fg=BG))
-        spawn_btn.bind("<Leave>", lambda e: spawn_btn.configure(bg=BG3, fg=GREEN))
-
-        for label, cmd, color in [
-                ("STOP",  _do_stop,  RED),
-                ("PURGE", _do_purge, AMBER_D),
-                ("REFRESH", lambda: self._eng_refresh(), AMBER)]:
-            b = tk.Label(actions_l, text=f"  {label}  ", font=(FONT, 7, "bold"),
-                         fg=color, bg=BG3, cursor="hand2", padx=6, pady=3)
-            b.pack(side="left", padx=2)
-            b.bind("<Button-1>", lambda e, c=cmd: c())
-
-        # -- RIGHT: log tail viewer (top) + entries table (bottom) --
-        right = tk.Frame(split, bg=PANEL,
-                         highlightbackground=BORDER, highlightthickness=1)
-        right.pack(side="right", fill="both", expand=True)
-
-        # TOP — log tail (fixed at 55% height via a weighted split)
-        log_section = tk.Frame(right, bg=PANEL)
-        log_section.pack(fill="both", expand=True, padx=8, pady=(8, 0))
-
-        tk.Label(log_section, text="LOG TAIL", font=(FONT, 7, "bold"),
-                 fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw")
-        tk.Frame(log_section, bg=DIM2, height=1).pack(fill="x", pady=(1, 4))
-
-        self._eng_log_header = tk.Label(
-            log_section, text=" — select a proc to stream its log — ",
-            font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w")
-        self._eng_log_header.pack(fill="x")
-
-        self._eng_log_text = tk.Text(
-            log_section, wrap="word", bg=BG, fg=WHITE, font=(FONT, 8),
-            insertbackground=WHITE, padx=6, pady=6,
-            borderwidth=0, highlightthickness=0, height=14)
-        self._eng_log_text.pack(fill="both", expand=True, pady=(2, 4))
-        self._eng_log_text.config(state="disabled")
-
-        # BOTTOM — entries table (signals/trades)
-        tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=8, pady=(2, 0))
-        entries_section = tk.Frame(right, bg=PANEL)
-        entries_section.pack(fill="both", expand=False, padx=8, pady=(4, 8))
-
-        header_row = tk.Frame(entries_section, bg=PANEL)
-        header_row.pack(fill="x")
-        self._eng_entries_header = tk.Label(
-            header_row, text="ENTRIES", font=(FONT, 7, "bold"),
-            fg=AMBER_D, bg=PANEL, anchor="w")
-        self._eng_entries_header.pack(side="left")
-        self._eng_entries_status = tk.Label(
-            header_row, text="", font=(FONT, 7),
-            fg=DIM, bg=PANEL, anchor="e")
-        self._eng_entries_status.pack(side="right")
-        tk.Frame(entries_section, bg=DIM2, height=1).pack(fill="x", pady=(1, 4))
-
-        self._eng_entries_text = tk.Text(
-            entries_section, wrap="none", bg=BG, fg=WHITE,
-            font=(FONT, 7), padx=6, pady=4,
-            borderwidth=0, highlightthickness=0, height=10)
-        self._eng_entries_text.pack(fill="both", expand=True)
-        self._eng_entries_text.config(state="disabled")
-
-        self._eng_entries_stop: threading.Event = threading.Event()
-        self._eng_entries_thread: threading.Thread | None = None
-
-        # Initial list render + auto-refresh tick
-        self._eng_refresh()
-        self._eng_poll_logs()
+                self.focus_set()
+            except Exception:
+                pass
+            return
 
     @timed_legacy_switch("eng_refresh")
     def _eng_refresh(self):
@@ -8562,101 +8343,14 @@ class App(tk.Tk):
         return f"{hours}h{mins:02d}m" if hours < 24 else f"{hours // 24}d{hours % 24}h"
 
     def _eng_select(self, proc: dict):
-        """Stop old log tail, start a new one for the selected proc."""
-        pid = proc.get("pid")
-        self._eng_selected_pid = pid
-        self._eng_selected_key = self._eng_row_key(proc)
+        from launcher_support import engine_logs_view
 
-        # Stop old tail worker if any
-        if self._eng_tail_thread is not None:
-            self._eng_tail_stop.set()
-            self._eng_tail_thread = None
-        self._eng_tail_stop = threading.Event()
-
-        # Stop old entries worker too, and refresh entries for new proc
-        if getattr(self, "_eng_entries_thread", None) is not None:
-            self._eng_entries_stop.set()
-            self._eng_entries_thread = None
-        self._eng_entries_stop = threading.Event()
-        self._eng_load_entries(proc)
-
-        # Clear the text widget and reset header
-        try:
-            self._eng_log_text.config(state="normal")
-            self._eng_log_text.delete("1.0", "end")
-            self._eng_log_text.config(state="disabled")
-        except tk.TclError:
-            return
-
-        # Three proc shapes coexist: live-local sets `log_file`; historical
-        # local scan and VPS scan set `log`. Prefer log_file then fall back.
-        from core.ops import run_catalog
-
-        log_file = proc.get("log_file") or proc.get("log") or ""
-        self._eng_log_header.configure(
-            text=run_catalog.engine_log_header(proc), fg=AMBER_D)
-
-        if not log_file:
-            try:
-                self._eng_log_text.config(state="normal")
-                self._eng_log_text.insert(
-                    "end", "(no log file available for this run)\n")
-                self._eng_log_text.config(state="disabled")
-            except tk.TclError:
-                pass
-            return
-
-        if proc.get("_remote") or str(log_file).startswith("remote:"):
-            run_id = proc.get("_run_id") or str(log_file).split(":", 1)[-1]
-            t = threading.Thread(
-                target=self._eng_tail_remote_worker,
-                args=(run_id, self._eng_tail_stop),
-                daemon=True)
-        else:
-            log_path = ROOT / log_file if not Path(log_file).is_absolute() else Path(log_file)
-            t = threading.Thread(
-                target=self._eng_tail_worker,
-                args=(log_path, self._eng_tail_stop),
-                daemon=True)
-        t.start()
-        self._eng_tail_thread = t
-        # Trigger list re-render so the new selection highlights
-        self._eng_refresh()
+        engine_logs_view.select_proc(self, proc)
 
     def _eng_load_entries(self, proc: dict) -> None:
-        """Populate the ENTRIES pane with signals/trades for this proc.
+        from launcher_support import engine_logs_view
 
-        VPS: GET /v1/runs/<id>/trades (and fall back to signals.jsonl).
-        Local: reads reports/trades.jsonl + reports/signals.jsonl from
-        the run_dir. Runs the HTTP portion in a daemon thread so the UI
-        never blocks on a slow tunnel.
-        """
-        # Clear viewer + header immediately so the user sees the selection
-        # landed, even before the async fetch finishes.
-        try:
-            self._eng_entries_text.config(state="normal")
-            self._eng_entries_text.delete("1.0", "end")
-            self._eng_entries_text.config(state="disabled")
-        except tk.TclError:
-            return
-        engine = proc.get("engine", "?")
-        rid = self._eng_run_id_of(proc) or "?"
-        try:
-            self._eng_entries_header.configure(
-                text=f"ENTRIES  ·  {engine}  ·  {rid}")
-            self._eng_entries_status.configure(text="loading...", fg=DIM)
-        except tk.TclError:
-            pass
-
-        def worker(p=proc, stop=self._eng_entries_stop):
-            lines, summary = self._eng_fetch_entries(p, stop)
-            if stop.is_set():
-                return
-            self.after(0, lambda: self._eng_apply_entries(lines, summary))
-
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
-        self._eng_entries_thread = t
+        engine_logs_view.load_entries(self, proc)
 
     def _eng_fetch_entries(self, proc: dict,
                            stop: threading.Event) -> tuple[list[str], str]:
@@ -8690,131 +8384,25 @@ class App(tk.Tk):
         return lines, summary
 
     def _eng_apply_entries(self, lines: list[str], summary: str) -> None:
-        """UI-thread sink for worker results — repaints the entries text."""
-        try:
-            self._eng_entries_text.config(state="normal")
-            self._eng_entries_text.delete("1.0", "end")
-            if lines:
-                self._eng_entries_text.insert("end", "\n".join(lines) + "\n")
-            else:
-                self._eng_entries_text.insert("end", f"   — {summary} —\n")
-            self._eng_entries_text.config(state="disabled")
-            self._eng_entries_status.configure(
-                text=summary, fg=AMBER_D if lines else DIM2)
-        except tk.TclError:
-            pass
+        from launcher_support import engine_logs_view
+
+        engine_logs_view.apply_entries(self, lines, summary)
 
     def _eng_tail_remote_worker(self, run_id: str,
-                                 stop_event: threading.Event):
-        """Poll cockpit /v1/runs/<id>/log every 2s, pushing new lines.
+                                stop_event: threading.Event):
+        from launcher_support import engine_logs_view
 
-        Cockpit API only exposes tail-of-file today, so we keep a cursor
-        (the last line we emitted) and deduplicate by suffix match on the
-        next poll. Crude but sufficient for a 15-min-tick engine.
-        """
-        try:
-            from launcher_support.engines_live_view import _get_cockpit_client
-            from core.ops import run_catalog
-            client = _get_cockpit_client()
-        except Exception as exc:
-            self._eng_log_queue.put((
-                "SYSTEM", f"(cockpit client unavailable: {exc})"))
-            return
-
-        seen_last: str | None = None
-        while not stop_event.is_set():
-            lines, error = run_catalog.fetch_remote_log_tail(
-                client,
-                run_id,
-                tail=500,
-            )
-            if error:
-                self._eng_log_queue.put(("SYSTEM", error))
-                if stop_event.wait(5.0):
-                    return
-                continue
-            if lines:
-                # Skip lines we already emitted: find the overlap with
-                # seen_last (last line we pushed).
-                if seen_last is not None and seen_last in lines:
-                    idx = len(lines) - 1 - lines[::-1].index(seen_last)
-                    lines = lines[idx + 1:]
-                for ln in lines:
-                    self._eng_log_queue.put(("LINE", ln))
-                if lines:
-                    seen_last = lines[-1]
-            if stop_event.wait(2.0):
-                return
+        engine_logs_view.tail_remote_worker(self, run_id, stop_event)
 
     def _eng_tail_worker(self, log_path: Path, stop_event: threading.Event):
-        """Read the log file tail-f style, push new lines into the queue.
+        from launcher_support import engine_logs_view
 
-        Starts by reading the LAST ~500 lines so the viewer isn't empty on
-        open, then follows appends. The queue is consumed by the UI thread
-        in _eng_poll_logs.
-        """
-        from core.ops import run_catalog
-
-        seed_lines, error = run_catalog.read_log_seed_lines(log_path, limit=500)
-        if error:
-            self._eng_log_queue.put(("SYSTEM", error))
-            return
-        try:
-            with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
-                for line in seed_lines:
-                    self._eng_log_queue.put(("LINE", line))
-                fh.seek(0, 2)  # EOF
-
-                while not stop_event.is_set():
-                    line = fh.readline()
-                    if not line:
-                        if stop_event.wait(0.25):
-                            break
-                        continue
-                    self._eng_log_queue.put(("LINE", line.rstrip("\n")))
-        except OSError as e:
-            self._eng_log_queue.put(("SYSTEM", f"(log read error: {e})"))
+        engine_logs_view.tail_worker(self, log_path, stop_event)
 
     def _eng_poll_logs(self):
-        """UI-thread poll: drain the queue, append to the Text widget,
-        cap at 1000 lines to keep memory bounded, reschedule tick."""
-        try:
-            if not hasattr(self, "_eng_log_text"):
-                return
-            if not self._eng_log_text.winfo_exists():
-                return
-        except Exception:
-            return
+        from launcher_support import engine_logs_view
 
-        drained = 0
-        max_drain = 200  # don't block the UI if logs burst
-        new_lines: list[str] = []
-        try:
-            while drained < max_drain:
-                kind, line = self._eng_log_queue.get_nowait()
-                new_lines.append(line)
-                drained += 1
-        except queue.Empty:
-            pass
-
-        if new_lines:
-            try:
-                self._eng_log_text.config(state="normal")
-                self._eng_log_text.insert("end", "\n".join(new_lines) + "\n")
-                # Cap to 1000 lines — delete oldest
-                total_lines = int(self._eng_log_text.index("end-1c").split(".")[0])
-                if total_lines > 1000:
-                    self._eng_log_text.delete("1.0",
-                                              f"{total_lines - 1000}.0")
-                self._eng_log_text.see("end")
-                self._eng_log_text.config(state="disabled")
-            except tk.TclError:
-                return
-
-        try:
-            self.after(200, self._eng_poll_logs)
-        except Exception:
-            pass
+        engine_logs_view.poll_logs(self)
 
     # --- STRATEGIES (Layer 2) -----------------------------
     def _strategies(self, filter_group: str | None = None):

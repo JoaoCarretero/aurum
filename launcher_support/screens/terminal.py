@@ -55,6 +55,20 @@ class TerminalScreen(Screen):
             "Available and planned market intelligence modules",
         )
 
+        pipeline = app._ui_section(panel, "EXECUTION PIPELINE")
+        app._ui_action_row(
+            pipeline,
+            "Y",
+            "Deploy Pipeline",
+            "backtest -> validated DB -> paper candidate -> cockpit",
+            command=app._deploy_pipeline,
+            available=True,
+            tag="recommended",
+            tag_fg=AMBER_D,
+            tag_bg=BG2,
+            title_width=22,
+        )
+
         sections = [
             ("MARKET DATA", [
                 ("1", "Price Monitor", "Watchlist ao vivo com multiplos TFs", False),
@@ -75,7 +89,7 @@ class TerminalScreen(Screen):
             ]),
             ("LOCAL DATA", [
                 ("D", "Reports & Logs", "Browse backtest reports", True),
-                ("P", "Processes", "Manage running engines", True),
+                ("X", "Processes", "Manage running engines", True),
             ]),
         ]
 
@@ -111,13 +125,14 @@ class TerminalScreen(Screen):
         app = self.app
         app.h_path.configure(text="> TERMINAL")
         app.h_stat.configure(text="DATA", fg=AMBER_D)
-        app.f_lbl.configure(text="ESC voltar  |  H hub  |  S strategies")
+        app.f_lbl.configure(text="ESC voltar  |  Y deploy  |  D data  |  X procs")
         app._kb("<Escape>", lambda: app._menu("main"))
         app._kb("<Key-0>", lambda: app._menu("main"))
         app._bind_global_nav()
 
         for key_label, cmd in {
+            "y": app._deploy_pipeline,
             "d": app._data,
-            "p": app._procs,
+            "x": app._procs,
         }.items():
             app._kb(f"<Key-{key_label}>", cmd)
