@@ -1467,12 +1467,19 @@ def _get_tunnel_status_label() -> tuple[str, str]:
     O registry em launcher_support é sempre a mesma instancia.
     """
     try:
-        from launcher_support.tunnel_registry import get_tunnel_manager
+        from launcher_support.tunnel_registry import (
+            get_tunnel_manager, get_tunnel_boot_error,
+        )
         tm = get_tunnel_manager()
+        boot_err = get_tunnel_boot_error()
     except Exception:
         tm = None
+        boot_err = None
     if tm is None:
-        return ("—", DIM2)
+        # Manager never booted — surface the specific reason if any.
+        # "CFG ERR" > generic "—" because user sees it's actionable,
+        # not just a missing optional dependency.
+        return ("CFG ERR" if boot_err else "—", RED if boot_err else DIM2)
     status = getattr(tm, "status", None)
     if status is None:
         return ("—", DIM2)

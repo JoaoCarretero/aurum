@@ -1117,10 +1117,12 @@ def _boot_tunnel_manager():
     from launcher_support.tunnel_registry import (
         get_tunnel_manager as _reg_get,
         set_tunnel_manager as _reg_set,
+        set_tunnel_boot_error as _reg_set_err,
     )
     current = _reg_get()
     if current is not None:
         return current
+    _reg_set_err(None)  # clear any prior boot error
     try:
         # Encrypted-aware: fail-closed quando enc ativo. Fallback
         # manual pro plaintext so em ImportError (cryptography ausente).
@@ -1145,6 +1147,17 @@ def _boot_tunnel_manager():
         block = (data or {}).get("vps_ssh")
         if not block or not block.get("host"):
             return None
+        # Reject obvious placeholders from the 2026-04-19 keys wipe template.
+        # Without this check, TunnelManager spawns ssh with "cole_aqui_o_host"
+        # and floods data/.cockpit_cache/tunnel.log with hundreds of dead
+        # reconnect attempts while the cockpit UI silently shows no data.
+        if _vps_block_has_placeholders(block):
+            import logging as _log
+            reason = ("vps_ssh config com placeholders (COLE_AQUI_*). "
+                      "Edit config/keys.json + restart launcher.")
+            _log.getLogger("aurum.launcher").error("tunnel: %s", reason)
+            _reg_set_err(reason)
+            return None
         from launcher_support.ssh_tunnel import TunnelConfig, TunnelManager
         cfg = TunnelConfig(
             host=block["host"],
@@ -1160,6 +1173,26 @@ def _boot_tunnel_manager():
         return manager
     except Exception:
         return None
+
+
+def _vps_block_has_placeholders(block: dict) -> bool:
+    """True se qualquer campo critico contem template-placeholder string.
+
+    O wipe 2026-04-19 substituiu segredos por COLE_AQUI_*; sem rejeitar
+    aqui, o launcher spawna ssh com hostname invalido e o watchdog gasta
+    retries eternos. Checagem case-insensitive — placeholder pode vir com
+    variantes de capitalizacao.
+    """
+    markers = ("cole_aqui", "COLE_AQUI", "<paste", "<your")
+    critical = (block.get("host"), block.get("key_path"), block.get("user"))
+    for v in critical:
+        if v is None:
+            continue
+        vs = str(v)
+        for m in markers:
+            if m.lower() in vs.lower():
+                return True
+    return False
 
 
 def get_tunnel_manager():

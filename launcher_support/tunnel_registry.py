@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 _CURRENT: "TunnelManager | None" = None
 _SHADOW_POLLER: object | None = None
+_BOOT_ERROR: str | None = None
 
 
 def get_tunnel_manager() -> "TunnelManager | None":
@@ -29,6 +30,21 @@ def set_tunnel_manager(manager: "TunnelManager | None") -> None:
     """Registra o TunnelManager no singleton. Chamado pelo launcher boot."""
     global _CURRENT
     _CURRENT = manager
+
+
+def get_tunnel_boot_error() -> str | None:
+    """Erro do boot do TunnelManager (ex: placeholder em config/keys.json).
+
+    None quando nao ha erro ou quando o manager subiu normalmente. UI le
+    esse valor pra mostrar badge especifico em vez de "TUNNEL —" opaco.
+    """
+    return _BOOT_ERROR
+
+
+def set_tunnel_boot_error(reason: str | None) -> None:
+    """Registra motivo do boot falho. Launcher seta quando rejeita config."""
+    global _BOOT_ERROR
+    _BOOT_ERROR = reason
 
 
 def get_shadow_poller() -> object | None:
@@ -44,6 +60,7 @@ def set_shadow_poller(poller: object | None) -> None:
 
 def reset_for_tests() -> None:
     """Helper pra tests limparem estado entre runs."""
-    global _CURRENT, _SHADOW_POLLER
+    global _CURRENT, _SHADOW_POLLER, _BOOT_ERROR
     _CURRENT = None
     _SHADOW_POLLER = None
+    _BOOT_ERROR = None
