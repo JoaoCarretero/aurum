@@ -32,9 +32,12 @@ class SplashScreen(Screen):
     _RULE_X2 = 872
     _WORDMARK_DIVIDER_HALF = 124
     _SUBTITLE_DIVIDER_HALF = 196
+    _INTRO_Y = 254
+    _INTRO_LINE_H = 18
+    _INTRO_BLOCK_GAP = 28
     _SESSION_PANEL_W = 640
     _SESSION_PANEL_H = 138
-    _SESSION_PANEL_Y1 = 296
+    _SESSION_PANEL_Y1 = 330
     _SESSION_PANEL_Y2 = _SESSION_PANEL_Y1 + _SESSION_PANEL_H
     _SESSION_GUTTER = 24
     _SESSION_COLUMN_GAP = 20
@@ -160,7 +163,6 @@ class SplashScreen(Screen):
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
         logo_cx, logo_cy = self._CENTER_X, 114
-        intro_y = 286
         canvas.create_rectangle(
             352,
             70,
@@ -210,7 +212,7 @@ class SplashScreen(Screen):
         )
         canvas.create_text(
             logo_cx,
-            242,
+            244,
             anchor="center",
             text=self.tagline,
             font=(FONT, 8, "bold"),
@@ -219,29 +221,38 @@ class SplashScreen(Screen):
         )
         canvas.create_line(
             logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            268,
+            266,
             logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            268,
+            266,
             fill=BORDER,
             width=1,
             tags="subtitle",
         )
         canvas.create_text(
             self._CENTER_X,
-            intro_y,
+            self._INTRO_Y,
             anchor="center",
-            text="Institutional operating shell for live monitoring, execution routing,",
+            text="Institutional operating shell for live monitoring, execution routing",
             font=(FONT, 8),
             fill=WHITE,
             tags="subtitle",
         )
         canvas.create_text(
             self._CENTER_X,
-            intro_y + 16,
+            self._INTRO_Y + self._INTRO_LINE_H,
             anchor="center",
-            text="risk control and multi-engine supervision.",
+            text="risk control, and multi-engine supervision.",
             font=(FONT, 8),
             fill=DIM,
+            tags="subtitle",
+        )
+        canvas.create_line(
+            logo_cx - self._SUBTITLE_DIVIDER_HALF,
+            self._INTRO_Y + self._INTRO_LINE_H + self._INTRO_BLOCK_GAP,
+            logo_cx + self._SUBTITLE_DIVIDER_HALF,
+            self._INTRO_Y + self._INTRO_LINE_H + self._INTRO_BLOCK_GAP,
+            fill=BORDER,
+            width=1,
             tags="subtitle",
         )
 
