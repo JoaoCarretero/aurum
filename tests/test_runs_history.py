@@ -466,7 +466,7 @@ def test_engine_log_identity_helpers_cover_run_id_row_key_and_header():
 
     assert run_catalog.engine_log_run_id_of(row) == "RID1"
     assert run_catalog.engine_log_row_key(row) == "run:RID1"
-    assert run_catalog.engine_log_header(row) == "  MILLENNIUM (paper) · pid - · remote:RID1"
+    assert run_catalog.engine_log_header(row) == "  MILLENNIUM (paper) | pid - | remote:RID1"
 
 
 def test_engine_log_run_id_of_falls_back_to_windows_path():

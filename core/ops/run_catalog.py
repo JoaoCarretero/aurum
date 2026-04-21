@@ -319,7 +319,7 @@ def engine_log_recency_key(row: dict) -> float:
     return 0.0
 
 
-def engine_log_header(row: dict) -> str:
+def _legacy_engine_log_header_unused(row: dict) -> str:
     engine = row.get("engine", "?")
     pid = row.get("pid")
     log_file = row.get("log_file") or row.get("log") or ""
@@ -411,6 +411,13 @@ def list_engine_log_sections(
     running.sort(key=engine_log_recency_key, reverse=True)
     stopped.sort(key=engine_log_recency_key, reverse=True)
     return running, stopped, error
+
+
+def engine_log_header(row: dict) -> str:
+    engine = row.get("engine", "?")
+    pid = row.get("pid")
+    log_file = row.get("log_file") or row.get("log") or ""
+    return f"  {engine} | pid {pid} | {log_file}"
 
 
 def collect_engine_log_vps_rows(client, *, limit: int = 20) -> list[dict]:

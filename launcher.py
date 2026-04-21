@@ -8404,80 +8404,9 @@ class App(tk.Tk):
     def _eng_refresh(self):
         """Rebuild the proc list with RUNNING + STOPPED sections, always
         visible. Each section sorted by recency DESC. Reschedules 2s tick."""
-        if not hasattr(self, "_eng_list_wrap"):
-            return
-        try:
-            if not self._eng_list_wrap.winfo_exists():
-                return
-        except Exception:
-            return
+        from launcher_support import engine_logs_view
 
-        for w in self._eng_list_wrap.winfo_children():
-            try: w.destroy()
-            except Exception: pass
-
-        try:
-            from launcher_support.engines_live_view import _get_cockpit_client
-            from core.ops import run_catalog
-            client = _get_cockpit_client()
-        except Exception:
-            client = None
-        running, stopped, error_text = run_catalog.list_engine_log_sections(
-            client=client,
-            mode_filter=self._eng_mode_filter,
-            vps_limit=20,
-            historical_limit=30,
-            historical_hours=72,
-        )
-        if error_text:
-            tk.Label(self._eng_list_wrap,
-                     text=f"  {error_text}",
-                     font=(FONT, 7), fg=RED, bg=BG,
-                     anchor="w").pack(fill="x")
-        self._eng_refresh_filter_tabs()
-        filt_label = (self._eng_mode_filter.upper()
-                      if self._eng_mode_filter != "all" else "ALL ENGINES")
-
-        # --- RUNNING section ---------------------------------
-        tk.Label(self._eng_list_wrap,
-                 text=f"  ●  RUNNING  ·  {filt_label}  ({len(running)})",
-                 font=(FONT, 7, "bold"), fg=GREEN, bg=BG,
-                 anchor="w").pack(fill="x", pady=(2, 2))
-        if running:
-            for p in running:
-                self._eng_render_row(p)
-        else:
-            tk.Label(self._eng_list_wrap,
-                     text="   — nenhum engine ativo no filtro selecionado —",
-                     font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
-                     anchor="w").pack(fill="x", pady=2)
-
-        # --- STOPPED section (last 72h) ----------------------
-        tk.Frame(self._eng_list_wrap, bg=DIM2,
-                 height=1).pack(fill="x", pady=(6, 4), padx=8)
-        tk.Label(self._eng_list_wrap,
-                 text=f"  ○  STOPPED (últimas 72h)  ·  {filt_label}  ({len(stopped)})",
-                 font=(FONT, 7, "bold"), fg=DIM, bg=BG,
-                 anchor="w").pack(fill="x", pady=(2, 2))
-        if stopped:
-            for h in stopped[:30]:
-                self._eng_render_row(h)
-        else:
-            tk.Label(self._eng_list_wrap,
-                     text="   — sem runs recentes no filtro selecionado —",
-                     font=(FONT, 7, "italic"), fg=DIM2, bg=BG,
-                     anchor="w").pack(fill="x", pady=2)
-
-        # Reschedule
-        try:
-            if getattr(self, "_eng_after_id", None):
-                self.after_cancel(self._eng_after_id)
-        except Exception:
-            pass
-        try:
-            self._eng_after_id = self.after(2000, self._eng_refresh)
-        except Exception:
-            pass
+        engine_logs_view.refresh_list(self)
 
     def _eng_normalize_local_proc(self, proc: dict) -> dict:
         from core.ops import run_catalog
@@ -8537,15 +8466,9 @@ class App(tk.Tk):
         self._eng_refresh()
 
     def _eng_refresh_filter_tabs(self) -> None:
-        for filter_name, tab in getattr(self, "_eng_filter_tabs", {}).items():
-            active = filter_name == getattr(self, "_eng_mode_filter", "all")
-            try:
-                tab.configure(
-                    fg=AMBER_D if active else DIM,
-                    bg=BG3 if active else BG,
-                )
-            except Exception:
-                pass
+        from launcher_support import engine_logs_view
+
+        engine_logs_view.refresh_filter_tabs(self)
 
     def _eng_run_id_of(self, row: dict) -> str | None:
         from core.ops import run_catalog
@@ -8592,70 +8515,9 @@ class App(tk.Tk):
         return result[:limit]
 
     def _eng_render_row(self, proc: dict):
-        alive = bool(proc.get("alive"))
-        pid = proc.get("pid")
-        row_key = self._eng_row_key(proc)
-        engine_full = str(proc.get("engine", "?"))
-        # engine "MILLENNIUM (paper)" → split label + mode for column
-        if "(" in engine_full and engine_full.endswith(")"):
-            base, mode = engine_full.split("(", 1)
-            engine = base.strip()[:9]
-            mode = mode.rstrip(")").strip()[:6]
-        else:
-            engine = engine_full[:9]
-            mode = str(proc.get("mode") or "live")[:6]
-        started_raw = str(proc.get("started", "") or "")
-        started = started_raw[:16].replace("T", " ")
-        src = "VPS" if proc.get("_remote") else "local"
-        state = "●LIVE" if alive else "○done"
-        state_color = GREEN if alive else DIM
-        hb = proc.get("_heartbeat") or {}
-        up_text = self._eng_uptime_of(proc, hb)
-        sig_n = hb.get("novel_since_prime")
-        if sig_n is None:
-            sig_n = hb.get("novel_total")
-        sig_text = "—" if sig_n is None else str(sig_n)
+        from launcher_support import engine_logs_view
 
-        row = tk.Frame(self._eng_list_wrap, bg=BG, cursor="hand2")
-        row.pack(fill="x", pady=0)
-
-        cells = [
-            (state,    6, state_color, "bold"),
-            (engine,   9, WHITE,       "bold"),
-            (mode,     6, AMBER,       "normal"),
-            (src,      5, (GREEN if src == "VPS" else DIM2), "normal"),
-            (started, 12, DIM,         "normal"),
-            (up_text,  6, WHITE,       "normal"),
-            (sig_text, 4, AMBER_B if (sig_n or 0) > 0 else DIM2, "bold"),
-        ]
-        labels = []
-        for text, width, color, weight in cells:
-            lbl = tk.Label(row, text=text, font=(FONT, 7, weight),
-                           fg=color, bg=BG, width=width, anchor="w")
-            lbl.pack(side="left")
-            labels.append(lbl)
-
-        def _select(_e=None, p=proc):
-            self._eng_select(p)
-        def _hover_on(_e=None, labels=labels):
-            for l in labels:
-                try: l.configure(bg=BG3)
-                except Exception: pass
-        def _hover_off(_e=None, labels=labels, p=proc):
-            bg = BG3 if self._eng_selected_key == self._eng_row_key(p) else BG
-            for l in labels:
-                try: l.configure(bg=bg)
-                except Exception: pass
-
-        for w in (row, *labels):
-            w.bind("<Button-1>", _select)
-            w.bind("<Enter>", _hover_on)
-            w.bind("<Leave>", _hover_off)
-
-        if self._eng_selected_key == row_key:
-            for l in labels:
-                try: l.configure(bg=BG3)
-                except Exception: pass
+        engine_logs_view.render_row(self, proc)
 
     def _eng_uptime_of(self, proc: dict, hb: dict) -> str:
         """Short uptime string (e.g. '2h15m', '45m'). Empty if unknown."""
