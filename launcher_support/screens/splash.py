@@ -30,8 +30,8 @@ class SplashScreen(Screen):
     _BOTTOM_RULE_Y = 596
     _RULE_X1 = 48
     _RULE_X2 = 872
-    _WORDMARK_DIVIDER_HALF = 140
-    _SUBTITLE_DIVIDER_HALF = 180
+    _WORDMARK_DIVIDER_HALF = 124
+    _SUBTITLE_DIVIDER_HALF = 196
     _SESSION_PANEL_W = 640
     _SESSION_PANEL_H = 138
     _SESSION_PANEL_Y1 = 296
@@ -159,38 +159,58 @@ class SplashScreen(Screen):
         self._after(500, self._pulse_tick)
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
-        logo_cx, logo_cy = self._CENTER_X, 108
-        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=40, tag="splash-logo")
+        logo_cx, logo_cy = self._CENTER_X, 114
+        intro_y = 286
+        canvas.create_rectangle(
+            352,
+            70,
+            568,
+            90,
+            outline=AMBER_D,
+            fill=BG,
+            width=1,
+            tags="wordmark",
+        )
+        canvas.create_text(
+            self._CENTER_X,
+            80,
+            anchor="center",
+            text="AURUM FINANCE  ·  OPERATOR DESK",
+            font=(FONT, 7, "bold"),
+            fill=AMBER,
+            tags="wordmark",
+        )
+        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=34, tag="splash-logo")
         canvas.create_text(
             logo_cx,
-            180,
+            172,
             anchor="center",
             text="A U R U M",
-            font=(FONT, 22, "bold"),
+            font=(FONT, 24, "bold"),
             fill=WHITE,
             tags="wordmark",
         )
         canvas.create_text(
             logo_cx,
-            210,
+            202,
             anchor="center",
             text="F I N A N C E",
-            font=(FONT, 12),
+            font=(FONT, 11, "bold"),
             fill=AMBER_D,
             tags="wordmark",
         )
         canvas.create_line(
             logo_cx - self._WORDMARK_DIVIDER_HALF,
-            230,
+            224,
             logo_cx + self._WORDMARK_DIVIDER_HALF,
-            230,
+            224,
             fill=AMBER_D,
             width=1,
             tags="wordmark",
         )
         canvas.create_text(
             logo_cx,
-            246,
+            242,
             anchor="center",
             text=self.tagline,
             font=(FONT, 8, "bold"),
@@ -204,6 +224,24 @@ class SplashScreen(Screen):
             268,
             fill=BORDER,
             width=1,
+            tags="subtitle",
+        )
+        canvas.create_text(
+            self._CENTER_X,
+            intro_y,
+            anchor="center",
+            text="Institutional operating shell for live monitoring, execution routing,",
+            font=(FONT, 8),
+            fill=WHITE,
+            tags="subtitle",
+        )
+        canvas.create_text(
+            self._CENTER_X,
+            intro_y + 16,
+            anchor="center",
+            text="risk control and multi-engine supervision.",
+            font=(FONT, 8),
+            fill=DIM,
             tags="subtitle",
         )
 
