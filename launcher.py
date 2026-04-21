@@ -7887,7 +7887,7 @@ class App(tk.Tk):
         except (OSError, json.JSONDecodeError, TypeError):
             pass
 
-    # --- RUNS HISTORY (unified database of every run) ------------
+    # --- LIVE RUNS (historico de runs live/paper/shadow/demo/testnet) ----
     def _data_live_runs(self):
         """LIVE RUNS screen — histórico de runs em modos live/paper/shadow/demo/testnet."""
         self._clr(); self._clear_kb()
@@ -7896,7 +7896,12 @@ class App(tk.Tk):
         if not self.screens_container.winfo_manager():
             self.screens_container.pack(fill="both", expand=True)
         self.screens.show("live_runs")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
+    # --- RUNS HISTORY (unified database of every run) ------------
     def _data_runs_history(self):
         """Tela institucional de todas as runs via ScreenManager."""
         self._clr()

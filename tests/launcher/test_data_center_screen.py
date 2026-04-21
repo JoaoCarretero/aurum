@@ -64,6 +64,7 @@ def test_get_counts_cached_within_ttl(gui_root, fake_app, monkeypatch):
         return "216 files | 192 MB"
 
     monkeypatch.setattr(s, "_cache_tag", fake_cache_tag)
+    monkeypatch.setattr(s, "_count_live_runs", lambda: 0)
     s._get_counts()
     s._get_counts()
     s._get_counts()
@@ -77,6 +78,7 @@ def test_get_counts_cached_within_ttl(gui_root, fake_app, monkeypatch):
 def test_get_counts_refetches_after_ttl(gui_root, fake_app, monkeypatch):
     s = DataCenterScreen(parent=gui_root, app=fake_app)
     monkeypatch.setattr(s, "_cache_tag", lambda: "216 files | 192 MB")
+    monkeypatch.setattr(s, "_count_live_runs", lambda: 0)
     s._get_counts()
     # Force cache stale.
     ts, data = s._counts_cache
