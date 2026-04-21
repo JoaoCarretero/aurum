@@ -30,19 +30,18 @@ class SplashScreen(Screen):
     _BOTTOM_RULE_Y = 596
     _RULE_X1 = 48
     _RULE_X2 = 872
-    _TOP_BAND_Y = 84
-    _TOP_BAND_W = 264
+    _TOP_BAND_Y = 82
     _LOGO_Y = 128
-    _TITLE_Y = 170
-    _BRAND_Y = 196
-    _WORDMARK_DIVIDER_HALF = 92
-    _SUBTITLE_DIVIDER_HALF = 164
-    _INTRO_Y = 248
-    _INTRO_BLOCK_GAP = 16
+    _TITLE_Y = 168
+    _BRAND_Y = 192
+    _WORDMARK_DIVIDER_HALF = 84
+    _SUBTITLE_DIVIDER_HALF = 152
+    _INTRO_Y = 238
+    _INTRO_BLOCK_GAP = 14
 
     _SESSION_PANEL_W = 640
     _SESSION_PANEL_H = 146
-    _SESSION_PANEL_Y1 = 320
+    _SESSION_PANEL_Y1 = 308
     _SESSION_PANEL_Y2 = _SESSION_PANEL_Y1 + _SESSION_PANEL_H
     _SESSION_GUTTER = 24
     _SESSION_COLUMN_GAP = 28
@@ -82,7 +81,7 @@ class SplashScreen(Screen):
         self._draw_wordmark(canvas)
         canvas.create_text(
             self._CENTER_X,
-            516,
+            504,
             anchor="center",
             text="[ ENTER TO ACCESS DESK ]_",
             font=(FONT, 11, "bold"),
@@ -168,19 +167,8 @@ class SplashScreen(Screen):
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
         logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
-        band_x1 = self._CENTER_X - (self._TOP_BAND_W // 2)
-        band_x2 = self._CENTER_X + (self._TOP_BAND_W // 2)
         canvas.create_line(
             self._RULE_X1,
-            self._TOP_BAND_Y,
-            band_x1 - 14,
-            self._TOP_BAND_Y,
-            fill=AMBER_D,
-            width=1,
-            tags="wordmark",
-        )
-        canvas.create_line(
-            band_x2 + 14,
             self._TOP_BAND_Y,
             self._RULE_X2,
             self._TOP_BAND_Y,
@@ -188,26 +176,16 @@ class SplashScreen(Screen):
             width=1,
             tags="wordmark",
         )
-        canvas.create_rectangle(
-            band_x1,
-            self._TOP_BAND_Y - 10,
-            band_x2,
-            self._TOP_BAND_Y + 10,
-            outline=AMBER_D,
-            fill=BG,
-            width=1,
-            tags="wordmark",
-        )
         canvas.create_text(
             self._CENTER_X,
             self._TOP_BAND_Y,
             anchor="center",
-            text="QUANT OPERATIONS CONSOLE",
+            text="AURUM FINANCE  ·  QUANT OPERATIONS CONSOLE",
             font=(FONT, 7, "bold"),
             fill=AMBER,
             tags="wordmark",
         )
-        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=28, tag="splash-logo")
+        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=26, tag="splash-logo")
         canvas.create_text(
             logo_cx,
             self._TITLE_Y,
@@ -257,7 +235,7 @@ class SplashScreen(Screen):
             self._CENTER_X,
             self._INTRO_Y,
             anchor="center",
-            text="Live supervision, routing, and risk control for coordinated multi-engine execution.",
+            text="Live supervision, routing and risk control for multi-engine execution.",
             font=(FONT, 8),
             fill=WHITE,
             tags="subtitle",
