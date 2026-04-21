@@ -370,6 +370,13 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--python", default=sys.executable, help="Python interpreter used to run the engine CLIs")
     ap.add_argument("--out", default=None, help="Optional output root")
     ap.add_argument("--limit", type=int, default=None, help="Run only the first N variants from the locked grid")
+    ap.add_argument("--offset", type=int, default=0, help="Skip the first N variants before applying --limit")
+    ap.add_argument(
+        "--variant",
+        action="append",
+        default=None,
+        help="Run only the named variant(s). May be passed multiple times.",
+    )
     return ap.parse_args()
 
 
@@ -391,6 +398,29 @@ def build_windows(spec: EngineSpec, phase: str = "all") -> list[WindowSpec]:
     if phase == "all":
         return [windows["train"], windows["test"], windows["holdout"]]
     return [windows[phase]]
+
+
+def select_variants(
+    spec: EngineSpec,
+    *,
+    variant_names: list[str] | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    variants = list(spec.variants.items())
+    if variant_names:
+        wanted = set(variant_names)
+        missing = [name for name in variant_names if name not in spec.variants]
+        if missing:
+            raise ValueError(
+                f"Unknown variant(s) for {spec.key}: {', '.join(missing)}"
+            )
+        variants = [item for item in variants if item[0] in wanted]
+    if offset > 0:
+        variants = variants[offset:]
+    if limit is not None:
+        variants = variants[:max(0, limit)]
+    return variants
 
 
 def build_command(spec: EngineSpec, python_exe: str, window: WindowSpec, overrides: dict[str, Any]) -> list[str]:
@@ -763,16 +793,38 @@ def write_artifacts(spec: EngineSpec, out_root: Path, results: dict[str, dict[st
     (ROOT / spec.checklist_path).write_text(checklist, encoding="utf-8")
 
 
+def load_existing_results(out_root: Path) -> dict[str, dict[str, dict[str, Any]]]:
+    manifest_path = out_root / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    payload = _load_json(manifest_path, {}) or {}
+    results = payload.get("results", {})
+    if not isinstance(results, dict):
+        return {}
+    return {
+        str(variant): dict(stages)
+        for variant, stages in results.items()
+        if isinstance(stages, dict)
+    }
+
+
 def main() -> int:
     args = _parse_args()
     spec = ENGINE_SPECS[args.engine]
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     out_root = Path(args.out) if args.out else ROOT / "data" / "anti_overfit" / spec.key / ts
-    variants = list(spec.variants.items())
-    if args.limit is not None:
-        variants = variants[:max(0, args.limit)]
+    variants = select_variants(
+        spec,
+        variant_names=args.variant,
+        offset=max(0, args.offset),
+        limit=args.limit,
+    )
+    if not variants:
+        raise SystemExit("No variants selected.")
 
-    results: dict[str, dict[str, dict[str, Any]]] = {name: {} for name, _ in variants}
+    results = load_existing_results(out_root)
+    for name, _ in variants:
+        results.setdefault(name, {})
     for variant, overrides in variants:
         for window in build_windows(spec, args.phase):
             print(f"[{spec.display}] {variant} / {window.name} ...")

@@ -1,16 +1,4 @@
-"""SplashScreen - pilot migration of launcher._splash.
-
-Original function: launcher.py:_splash.
-This class encapsulates the same visual output but with:
-  - widgets built once in build(); subsequent visits only refresh data
-  - pulse timer + click/key bindings auto-cancelled in on_exit
-
-SYSTEM_TAGLINE and the connection manager are module-level in launcher.py,
-so they are passed through the factory lambda at register() time. The
-screen receives the launcher Terminal `app` to reuse drawing helpers
-(_draw_panel, _draw_kv_rows, etc.) and header labels (h_stat, h_path,
-f_lbl).
-"""
+"""SplashScreen - pilot migration of launcher._splash."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -30,18 +18,19 @@ class SplashScreen(Screen):
     _BOTTOM_RULE_Y = 596
     _RULE_X1 = 48
     _RULE_X2 = 872
+
     _TOP_BAND_Y = 82
-    _LOGO_Y = 128
-    _TITLE_Y = 168
-    _BRAND_Y = 192
-    _WORDMARK_DIVIDER_HALF = 84
-    _SUBTITLE_DIVIDER_HALF = 152
-    _INTRO_Y = 238
-    _INTRO_BLOCK_GAP = 14
+    _LOGO_Y = 124
+    _TITLE_Y = 164
+    _BRAND_Y = 190
+    _WORDMARK_DIVIDER_HALF = 96
+    _SUBTITLE_DIVIDER_HALF = 170
+    _INTRO_Y = 230
+    _INTRO_BLOCK_GAP = 18
 
     _SESSION_PANEL_W = 640
-    _SESSION_PANEL_H = 146
-    _SESSION_PANEL_Y1 = 308
+    _SESSION_PANEL_H = 138
+    _SESSION_PANEL_Y1 = 292
     _SESSION_PANEL_Y2 = _SESSION_PANEL_Y1 + _SESSION_PANEL_H
     _SESSION_GUTTER = 24
     _SESSION_COLUMN_GAP = 28
@@ -81,7 +70,7 @@ class SplashScreen(Screen):
         self._draw_wordmark(canvas)
         canvas.create_text(
             self._CENTER_X,
-            504,
+            486,
             anchor="center",
             text="[ ENTER TO ACCESS DESK ]_",
             font=(FONT, 11, "bold"),
@@ -90,6 +79,7 @@ class SplashScreen(Screen):
         )
 
     def on_enter(self, **kwargs: Any) -> None:
+        del kwargs
         app = self.app
         app.h_path.configure(text="")
         app.h_stat.configure(text="READY", fg=AMBER_B)
@@ -180,18 +170,18 @@ class SplashScreen(Screen):
             self._CENTER_X,
             self._TOP_BAND_Y,
             anchor="center",
-            text="AURUM FINANCE  ·  QUANT OPERATIONS CONSOLE",
+            text="AURUM FINANCE",
             font=(FONT, 7, "bold"),
             fill=AMBER,
             tags="wordmark",
         )
-        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=26, tag="splash-logo")
+        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=22, tag="splash-logo")
         canvas.create_text(
             logo_cx,
             self._TITLE_Y,
             anchor="center",
             text="OPERATOR DESK",
-            font=(FONT, 24, "bold"),
+            font=(FONT, 22, "bold"),
             fill=WHITE,
             tags="wordmark",
         )
@@ -199,34 +189,34 @@ class SplashScreen(Screen):
             logo_cx,
             self._BRAND_Y,
             anchor="center",
-            text="AURUM FINANCE",
-            font=(FONT, 10, "bold"),
-            fill=AMBER,
+            text="Quant operations console",
+            font=(FONT, 9),
+            fill=DIM2,
             tags="wordmark",
         )
         canvas.create_line(
             logo_cx - self._WORDMARK_DIVIDER_HALF,
-            self._BRAND_Y + 18,
+            self._BRAND_Y + 16,
             logo_cx + self._WORDMARK_DIVIDER_HALF,
-            self._BRAND_Y + 18,
+            self._BRAND_Y + 16,
             fill=AMBER_D,
             width=1,
             tags="wordmark",
         )
         canvas.create_text(
             logo_cx,
-            self._BRAND_Y + 36,
+            self._BRAND_Y + 34,
             anchor="center",
             text=self.tagline,
-            font=(FONT, 8, "bold"),
+            font=(FONT, 8),
             fill=DIM,
             tags="subtitle",
         )
         canvas.create_line(
             logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            self._BRAND_Y + 48,
+            self._BRAND_Y + 46,
             logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            self._BRAND_Y + 48,
+            self._BRAND_Y + 46,
             fill=BORDER,
             width=1,
             tags="subtitle",
@@ -235,7 +225,7 @@ class SplashScreen(Screen):
             self._CENTER_X,
             self._INTRO_Y,
             anchor="center",
-            text="Live supervision, routing and risk control for multi-engine execution.",
+            text="Live supervision, routing, and risk control for coordinated multi-engine execution.",
             font=(FONT, 8),
             fill=WHITE,
             tags="subtitle",
@@ -245,7 +235,7 @@ class SplashScreen(Screen):
             self._INTRO_Y + self._INTRO_BLOCK_GAP,
             logo_cx + self._SUBTITLE_DIVIDER_HALF,
             self._INTRO_Y + self._INTRO_BLOCK_GAP,
-            fill=BORDER,
+            fill=DIM2,
             width=1,
             tags="subtitle",
         )
@@ -266,8 +256,8 @@ class SplashScreen(Screen):
         left_col_x = inner_x1 + 12
         right_col_x = inner_x1 + col_w + self._SESSION_COLUMN_GAP + 12
         divider_x = self._CENTER_X
-        header_y = self._SESSION_PANEL_Y1 + 32
-        row_y = self._SESSION_PANEL_Y1 + 48
+        header_y = self._SESSION_PANEL_Y1 + 28
+        row_y = self._SESSION_PANEL_Y1 + 44
 
         self.app._draw_panel(
             canvas,
@@ -281,15 +271,15 @@ class SplashScreen(Screen):
         )
         canvas.create_line(
             divider_x,
-            self._SESSION_PANEL_Y1 + 28,
+            self._SESSION_PANEL_Y1 + 24,
             divider_x,
-            self._SESSION_PANEL_Y2 - 18,
+            self._SESSION_PANEL_Y2 - 16,
             fill=BORDER,
             width=1,
             tags="splash",
         )
         self._draw_overview_column_header(canvas, x=left_col_x, y=header_y, title="DESK")
-        self._draw_overview_column_header(canvas, x=right_col_x, y=header_y, title="LINKS")
+        self._draw_overview_column_header(canvas, x=right_col_x, y=header_y, title="STATUS")
         self.app._draw_kv_rows(
             canvas,
             left_col_x,

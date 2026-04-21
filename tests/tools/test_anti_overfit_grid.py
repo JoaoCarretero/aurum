@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import tools.anti_overfit_grid as grid
@@ -8,6 +9,8 @@ from tools.anti_overfit_grid import (
     build_windows,
     execute_run,
     render_checklist,
+    load_existing_results,
+    select_variants,
     summarize_results,
 )
 
@@ -166,3 +169,62 @@ def test_execute_run_treats_soft_exit_message_in_stderr_as_zero_trade(tmp_path, 
     assert result["n_trades"] == 0
     assert result["sharpe"] is None
     assert result["stage_note"] == "no_closed_trades"
+
+
+def test_select_variants_honors_offset_and_limit():
+    spec = ENGINE_SPECS["medallion"]
+
+    selected = select_variants(spec, offset=2, limit=3)
+
+    assert [name for name, _ in selected] == [
+        "MED02_entry_looser",
+        "MED03_threshold_tighter",
+        "MED04_threshold_looser",
+    ]
+
+
+def test_select_variants_can_target_explicit_names_in_grid_order():
+    spec = ENGINE_SPECS["deshaw"]
+
+    selected = select_variants(
+        spec,
+        variant_names=["DSH05_chop_only_no_grace", "DSH01_chop_only"],
+    )
+
+    assert [name for name, _ in selected] == [
+        "DSH01_chop_only",
+        "DSH05_chop_only_no_grace",
+    ]
+
+
+def test_select_variants_rejects_unknown_name():
+    spec = ENGINE_SPECS["kepos"]
+
+    try:
+        select_variants(spec, variant_names=["KEP99_missing"])
+    except ValueError as exc:
+        assert "KEP99_missing" in str(exc)
+    else:
+        raise AssertionError("expected select_variants to reject unknown variant")
+
+
+def test_load_existing_results_reads_manifest_payload(tmp_path):
+    out_root = tmp_path / "anti_overfit"
+    out_root.mkdir()
+    (out_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "engine": "medallion",
+                "results": {
+                    "MED00_baseline": {
+                        "train": {"sharpe": 1.2},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = load_existing_results(out_root)
+
+    assert results == {"MED00_baseline": {"train": {"sharpe": 1.2}}}

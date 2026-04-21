@@ -11,14 +11,19 @@ import pytest
 from config.params import ACCOUNT_SIZE
 from engines.graham import (
     GrahamParams,
+    TEST_END,
+    TRAIN_END,
     compute_features,
+    deflated_sharpe_ratio,
     count_higher_highs,
     count_lower_lows,
     calc_levels,
     decide_direction,
     graham_size,
     run_backtest,
+    run_backtest_window,
     scan_symbol,
+    scan_symbol_window,
     update_trailing_stop,
 )
 
@@ -339,6 +344,71 @@ def test_run_backtest_with_bypass_gives_different_result():
 # ════════════════════════════════════════════════════════════════════
 # Contract
 # ════════════════════════════════════════════════════════════════════
+
+def test_scan_symbol_window_blocks_pre_window_entries():
+    n = 260
+    df = _df_with_columns(
+        n,
+        time=pd.date_range("2025-01-01", periods=n, freq="4h"),
+        open=np.linspace(100.0, 120.0, n),
+        high=np.linspace(101.0, 121.0, n),
+        low=np.linspace(99.0, 119.0, n),
+        close=np.linspace(100.5, 120.5, n),
+        atr=np.full(n, 1.0),
+        graham_ema_fast=np.full(n, 101.0),
+        graham_ema_slow=np.full(n, 100.0),
+        graham_slope=np.full(n, 0.002),
+        graham_hh_count=np.full(n, 3, dtype=int),
+        graham_ll_count=np.zeros(n, dtype=int),
+        eta_smooth=np.full(n, 0.7),
+    )
+    params = GrahamParams(
+        hawkes_window_bars=5,
+        ema_fast=3,
+        ema_slow=5,
+        structure_lookback=5,
+        bypass_eta_gate=True,
+        max_bars_in_trade=1,
+    )
+    start_time = df["time"].iloc[215]
+    trades, vetos = scan_symbol_window(
+        df, "SYNTH", params, ACCOUNT_SIZE,
+        start_time=start_time, end_time=df["time"].iloc[-1],
+    )
+    assert trades
+    assert all(pd.Timestamp(t["entry_time"]) >= start_time for t in trades)
+    assert "empty_window" not in vetos
+
+
+def test_run_backtest_window_keeps_stage_specific_trades():
+    df = _make_ohlcv(3500, seed=11, drift=0.0004)
+    params = GrahamParams(
+        hawkes_window_bars=1000,
+        hawkes_refit_every=200,
+        hawkes_min_events=15,
+        hawkes_vol_lookback=80,
+        structure_lookback=10,
+        slope_min_abs=0.0002,
+        eta_lower=0.60,
+        eta_upper=0.90,
+    )
+    train_trades, _, _ = run_backtest_window(
+        {"SYN": df}, params, ACCOUNT_SIZE, end_time=TRAIN_END,
+    )
+    test_trades, _, _ = run_backtest_window(
+        {"SYN": df}, params, ACCOUNT_SIZE, start_time=TRAIN_END, end_time=TEST_END,
+    )
+    assert all(pd.Timestamp(t["entry_time"]) < pd.Timestamp(TRAIN_END) for t in train_trades)
+    assert all(pd.Timestamp(t["entry_time"]) >= pd.Timestamp(TRAIN_END) for t in test_trades)
+
+
+def test_deflated_sharpe_ratio_rewards_higher_signal():
+    low = deflated_sharpe_ratio(0.5, n_trials=8, sharpe_std=0.2)
+    high = deflated_sharpe_ratio(2.0, n_trials=8, sharpe_std=0.2)
+    assert 0.0 <= low <= 1.0
+    assert 0.0 <= high <= 1.0
+    assert high > low
+
 
 def test_graham_registered_in_engines_dict():
     from config.engines import ENGINES

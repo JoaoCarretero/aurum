@@ -66,13 +66,13 @@ def test_splash_draws_logo_panel_rows(gui_root, fake_app, fake_conn):
     s.on_enter()
     assert fake_app._draw_panel.call_count >= 1
     panel_call = fake_app._draw_panel.call_args
-    assert panel_call.args[1:5] == (140, 308, 780, 454)
+    assert panel_call.args[1:5] == (140, 292, 780, 430)
 
     assert fake_app._draw_kv_rows.call_count >= 2
     left_call = fake_app._draw_kv_rows.call_args_list[0]
     right_call = fake_app._draw_kv_rows.call_args_list[1]
-    assert left_call.args[1:3] == (176, 356)
-    assert right_call.args[1:3] == (486, 356)
+    assert left_call.args[1:3] == (176, 336)
+    assert right_call.args[1:3] == (486, 336)
     assert left_call.kwargs["value_x"] == 288
     assert right_call.kwargs["value_x"] == 598
     assert fake_app._draw_aurum_logo.call_count >= 1

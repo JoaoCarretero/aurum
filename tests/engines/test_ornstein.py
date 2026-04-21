@@ -24,6 +24,7 @@ from engines.ornstein import (
     align_htfs_to_base,
     compute_features,
     compute_omega,
+    derive_entry_direction,
     ornstein_size,
 )
 
@@ -243,6 +244,18 @@ def test_compute_omega_respects_ablation_flags():
     assert no_ou["subscores"]["ou"] == 0.0
     assert no_ou["weighted"]["ou"] == 0.0
     assert no_ou["omega_final"] < full["omega_final"]
+
+
+def test_derive_entry_direction_uses_divergence_by_default():
+    row = pd.Series({"div_direction": 1, "deviation": 3.0})
+    assert derive_entry_direction(row, OrnsteinParams()) == 1
+
+
+def test_derive_entry_direction_falls_back_to_signed_deviation():
+    params = OrnsteinParams(disable_divergence=True)
+    assert derive_entry_direction(pd.Series({"deviation": -1.5}), params) == 1
+    assert derive_entry_direction(pd.Series({"deviation": 2.0}), params) == -1
+    assert derive_entry_direction(pd.Series({"deviation": 0.0}), params) == 0
 
 
 # ── Sizing ──────────────────────────────────────────────────────

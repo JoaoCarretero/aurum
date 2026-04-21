@@ -86,45 +86,44 @@ class MainMenuScreen(Screen):
 
         canvas.create_rectangle(24, 18, 896, 522, outline=AMBER_D, width=2, tags="frame")
         canvas.create_rectangle(28, 22, 892, 518, outline=BORDER, width=1, tags="frame")
-        canvas.create_rectangle(32, 24, 888, 40, outline="", fill=BG2, tags="frame")
-        canvas.create_line(32, 40, 888, 40, fill=AMBER, width=1, tags="frame")
+        canvas.create_rectangle(32, 24, 888, 42, outline="", fill=BG2, tags="frame")
+        canvas.create_line(32, 42, 888, 42, fill=AMBER, width=1, tags="frame")
         canvas.create_text(
             42,
-            32,
+            33,
             anchor="w",
             text="AURUM FINANCE",
             font=(FONT, 8, "bold"),
             fill=WHITE,
             tags="frame",
         )
-        canvas.create_rectangle(170, 26, 260, 38, outline=AMBER, fill=BG, width=1, tags="frame")
         canvas.create_text(
-            215,
-            32,
+            460,
+            33,
             anchor="center",
-            text="MAIN MENU",
+            text="DESK ROUTER",
             font=(FONT, 8, "bold"),
             fill=AMBER,
             tags="frame",
         )
         canvas.create_text(
             876,
-            32,
+            33,
             anchor="e",
-            text="DESK ROUTER / BLOOMBERG MODE",
+            text="MARKETS  |  EXECUTE  |  RESEARCH  |  CONTROL",
             font=(FONT, 7),
             fill=DIM,
             tags="frame",
         )
-        canvas.create_line(32, 510, 888, 510, fill=AMBER_D, width=1, tags="frame")
+        canvas.create_line(32, 504, 888, 504, fill=AMBER_D, width=1, tags="frame")
 
         app._draw_panel(
             canvas,
             52,
             58,
             868,
-            108,
-            title="  ROUTING HEADER  ",
+            104,
+            title="  DESK OVERVIEW  ",
             accent=AMBER,
             tag="menu",
         )
@@ -155,34 +154,34 @@ class MainMenuScreen(Screen):
                 tags="menu",
             )
 
-        _col(66, "DESK", 110, "AURUM ROUTER", AMBER)
+        _col(66, "DESK", 118, "AURUM ROUTER", AMBER)
         canvas.create_text(
             66,
-            96,
+            94,
             anchor="w",
-            text="markets | execute | research | control",
+            text="select a command surface and route into the active workspace",
             font=(FONT, 7),
             fill=DIM,
             tags="menu",
         )
-        canvas.create_line(296, 68, 296, 100, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
-        _col(310, "PROFILE", 364, "PAPER | LOCAL", GREEN)
+        canvas.create_line(312, 68, 312, 98, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
+        _col(328, "PROFILE", 388, "PAPER | LOCAL", GREEN)
         canvas.create_text(
-            310,
-            96,
+            328,
+            94,
             anchor="w",
             text="operator mode | kill-switch armed",
             font=(FONT, 7),
             fill=DIM,
             tags="menu",
         )
-        canvas.create_line(556, 68, 556, 100, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
-        _col(570, "NAV", 604, "1-4 | ENTER | ESC", WHITE)
+        canvas.create_line(592, 68, 592, 98, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
+        _col(608, "NAV", 648, "1-4 | ENTER | ESC", WHITE)
         canvas.create_text(
-            570,
-            96,
+            608,
+            94,
             anchor="w",
-            text="click tile | number key | esc to landing",
+            text="click a tile, use arrows, or jump by number",
             font=(FONT, 7),
             fill=DIM,
             tags="menu",
@@ -198,7 +197,7 @@ class MainMenuScreen(Screen):
             412,
             868,
             504,
-            title="  SYSTEM CONTEXT  ",
+            title="  ACTIVE CONTEXT  ",
             accent=AMBER,
             tag="menu",
         )

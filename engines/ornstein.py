@@ -72,6 +72,11 @@ from analysis.stats import calc_ratios, equity_stats
 log = logging.getLogger("ORNSTEIN")
 _tl = logging.getLogger("ORNSTEIN.trades")
 
+TRAIN_END = "2025-10-21"
+TEST_END = "2026-01-19"
+HOLDOUT_END = "2026-04-21"
+VALIDATION_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+
 
 # ════════════════════════════════════════════════════════════════════
 # Parameters
@@ -761,6 +766,20 @@ def _atr_gate(row, params: OrnsteinParams) -> tuple[bool, float]:
     return True, 0.0
 
 
+def derive_entry_direction(row, params: OrnsteinParams) -> int:
+    """Resolve trade direction from consensus or signed deviation."""
+    if params.disable_divergence or params.disable_multi_tf:
+        dev = row.get("deviation", np.nan)
+        if pd.isna(dev):
+            return 0
+        if dev < 0:
+            return +1
+        if dev > 0:
+            return -1
+        return 0
+    return int(row.get("div_direction", 0))
+
+
 def compute_omega(row, direction: int, params: OrnsteinParams) -> dict:
     """Aggregate Ω score with transparent per-component accounting.
 
@@ -1060,9 +1079,12 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
             vetos["kill_switch"] += 1
             continue
 
-        direction = int(row.get("div_direction", 0))
+        direction = derive_entry_direction(row, params)
         if direction == 0:
-            vetos["no_divergence"] += 1
+            veto_key = "no_direction" if (
+                params.disable_divergence or params.disable_multi_tf
+            ) else "no_divergence"
+            vetos[veto_key] += 1
             continue
 
         # RSI confirmation at exec TF
@@ -1531,6 +1553,12 @@ def main() -> int:
     ap.add_argument("--adf-pvalue", type=float, default=None)
     ap.add_argument("--halflife-min", type=float, default=None)
     ap.add_argument("--halflife-max", type=float, default=None)
+    ap.add_argument("--rsi-long-max", type=float, default=None)
+    ap.add_argument("--rsi-short-min", type=float, default=None)
+    ap.add_argument("--htfs-min-consensus", type=int, default=None)
+    ap.add_argument("--disable-divergence", action="store_true")
+    ap.add_argument("--disable-hurst", action="store_true")
+    ap.add_argument("--disable-multi-tf", action="store_true")
     ap.add_argument("--ablation", action="store_true",
                     help="Run full ablation suite after main backtest")
     ap.add_argument("--ablation-only", action="store_true",
@@ -1565,6 +1593,18 @@ def main() -> int:
         params.halflife_min = args.halflife_min
     if args.halflife_max is not None:
         params.halflife_max = args.halflife_max
+    if args.rsi_long_max is not None:
+        params.rsi_long_max = args.rsi_long_max
+    if args.rsi_short_min is not None:
+        params.rsi_short_min = args.rsi_short_min
+    if args.htfs_min_consensus is not None:
+        params.htfs_min_consensus = args.htfs_min_consensus
+    if args.disable_divergence:
+        params.disable_divergence = True
+    if args.disable_hurst:
+        params.disable_hurst = True
+    if args.disable_multi_tf:
+        params.disable_multi_tf = True
     if args.no_kill_switch:
         params.kill_daily = 1.0
         params.kill_weekly = 1.0
