@@ -190,9 +190,7 @@ class MainMenuScreen(Screen):
 
         app._draw_cd_center(canvas, r=52)
         canvas.create_line(60, 118, 860, 118, fill=app._dim_color(AMBER, 0.3), width=1, tags="menu")
-        app._draw_spokes(canvas, app._menu_focused_tile)
-        for idx in range(4):
-            app._draw_isometric_tile(canvas, idx, idx == app._menu_focused_tile)
+        self.redraw_tiles()
 
         app._draw_panel(
             canvas,
@@ -269,6 +267,20 @@ class MainMenuScreen(Screen):
         app._menu_live_after_id = None
         app._menu_canvas = None
         app._menu_expanded_tile = None
+
+    def redraw_tiles(self) -> None:
+        app = self.app
+        canvas = self.canvas
+        if canvas is None or app._menu_canvas is not canvas:
+            return
+        if getattr(app, "_menu_expanded_tile", None) is not None:
+            return
+        canvas.delete("spokes")
+        for idx in range(4):
+            canvas.delete(f"tile{idx}")
+        app._draw_spokes(canvas, app._menu_focused_tile)
+        for idx in range(4):
+            app._draw_isometric_tile(canvas, idx, idx == app._menu_focused_tile)
 
     def _canvas_click(self, event: tk.Event) -> str:
         app = self.app

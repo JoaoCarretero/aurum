@@ -2340,7 +2340,16 @@ class App(tk.Tk):
     def _menu_tiles_repaint_text(self) -> None:
         if self._menu_canvas is None:
             return
-        self._menu_main_bloomberg()
+        try:
+            screen = getattr(self, "screens", None)._cache.get("main_menu")
+        except Exception:
+            screen = None
+        if screen is not None and hasattr(screen, "redraw_tiles"):
+            try:
+                screen.redraw_tiles()
+                return
+            except Exception:
+                pass
 
     def _menu_tile_focus(self, idx: int) -> None:
         if not (0 <= idx <= 3):
@@ -2349,7 +2358,7 @@ class App(tk.Tk):
         if self._menu_canvas is None:
             return
         if getattr(self, "_menu_expanded_tile", None) is None:
-            self._menu_main_bloomberg()
+            self._menu_tiles_repaint_text()
             return
         self._draw_spokes(self._menu_canvas, idx)
 

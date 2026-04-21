@@ -188,6 +188,18 @@ def test_focus_numeric_jump(app):
     assert app._menu_focused_tile == 3
 
 
+def test_focus_does_not_reenter_main_menu_screen(app, monkeypatch):
+    app._menu_main_bloomberg()
+    calls = []
+
+    monkeypatch.setattr(app, "_menu_main_bloomberg", lambda: calls.append("reenter"))
+
+    app._menu_tile_focus(1)
+
+    assert app._menu_focused_tile == 1
+    assert calls == []
+
+
 def test_expand_and_collapse_state(app):
     app._menu_main_bloomberg()
     app._menu_tile_expand(0)
