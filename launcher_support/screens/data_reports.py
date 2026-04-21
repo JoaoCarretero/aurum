@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from launcher_support.screens.base import Screen
 
 
 class DataReportsScreen(Screen):
+    _REPORTS_TTL_SEC = 10.0
+
     def __init__(self, parent: tk.Misc, app: Any, root_path: Path):
         super().__init__(parent)
         self.app = app
@@ -18,6 +21,7 @@ class DataReportsScreen(Screen):
         self._total_label: tk.Label | None = None
         self._count_labels: dict[str, tk.Label] = {}
         self._rows_host: tk.Frame | None = None
+        self._reports_cache: tuple[float, list[tuple[Path, Any, str]]] | None = None
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -231,6 +235,11 @@ class DataReportsScreen(Screen):
                 widget.bind("<Button-1>", lambda _e, p=report_path: app._open_file(p))
 
     def _collect_reports(self) -> list[tuple[Path, Any, str]]:
+        cache = self._reports_cache
+        now = time.monotonic()
+        if cache is not None and (now - cache[0]) < self._REPORTS_TTL_SEC:
+            return list(cache[1])
+
         reports: list[tuple[Path, Any, str]] = []
         data_dir = self.root_path / "data"
 
@@ -253,4 +262,5 @@ class DataReportsScreen(Screen):
                 if dated.is_dir() and dated.name[:4].isdigit() and (dated / "reports").exists():
                     _collect(dated / "reports", "LEGACY")
             reports.sort(key=lambda entry: entry[1].st_mtime, reverse=True)
+        self._reports_cache = (now, list(reports))
         return reports

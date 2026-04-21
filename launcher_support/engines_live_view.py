@@ -730,11 +730,84 @@ def _shadow_active_slugs() -> set[str]:
     except Exception:
         return set()
     if cached is None:
-        return set()
+        client = _get_cockpit_client()
+        if client is None:
+            return set()
+        try:
+            run = client.latest_run(engine="millennium", mode="shadow")
+        except TypeError:
+            try:
+                run = client.latest_run(engine="millennium")
+            except Exception:
+                return set()
+        except Exception:
+            return set()
+        if not isinstance(run, dict) or run.get("status") != "running":
+            return set()
+        engine = str(run.get("engine") or "millennium").strip()
+        return {engine} if engine else set()
     engine = getattr(poller, "engine", None)
     if not isinstance(engine, str) or not engine:
         return set()
     return {engine}
+
+
+def _fetch_shadow_snapshot() -> tuple[Path | None, dict | None, list[dict]]:
+    """Return latest shadow snapshot from poller cache or cockpit API."""
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        poller = None
+    if poller is not None:
+        try:
+            cached = poller.get_cached()
+        except Exception:
+            cached = None
+        if cached is not None:
+            run_dir, hb = cached
+            try:
+                trades = poller.get_trades_cached()
+            except Exception:
+                trades = []
+            return run_dir, hb, trades
+
+    client = _get_cockpit_client()
+    if client is None:
+        return None, None, []
+    try:
+        run = client.latest_run(engine="millennium", mode="shadow")
+    except TypeError:
+        try:
+            run = client.latest_run(engine="millennium")
+        except Exception:
+            return None, None, []
+    except Exception:
+        return None, None, []
+    if not isinstance(run, dict) or not run.get("run_id"):
+        return None, None, []
+    run_id = str(run["run_id"])
+    run_dir = Path(f"remote://{run_id}")
+    try:
+        hb = client.get_heartbeat(run_id)
+    except Exception:
+        hb = {
+            "run_id": run_id,
+            "status": run.get("status", "unknown"),
+            "ticks_ok": 0,
+            "ticks_fail": 0,
+            "novel_total": run.get("novel_total", 0),
+            "last_tick_at": run.get("last_tick_at"),
+            "last_error": "heartbeat fetch failed",
+            "tick_sec": 0,
+        }
+    try:
+        trades_payload = client.get_trades(run_id, limit=20)
+        raw_trades = (trades_payload or {}).get("trades") or []
+        trades = [trade for trade in raw_trades if isinstance(trade, dict)]
+    except Exception:
+        trades = []
+    return run_dir, hb, trades
 
 
 def _render_master_list(state, launcher):
@@ -1126,16 +1199,9 @@ def _render_detail(state, launcher):
     # marca engines com PID ativo no _PROCS_CACHE como "active".
     heartbeats: dict[str, dict] = {}
     if mode == "shadow":
-        try:
-            from launcher_support.tunnel_registry import get_shadow_poller
-            poller = get_shadow_poller()
-            cached = poller.get_cached() if poller is not None else None
-        except Exception:
-            cached = None
-        if cached is not None and slug:
-            _, hb = cached
-            if hb is not None:
-                heartbeats[slug] = hb
+        _run_dir, hb, _trades = _fetch_shadow_snapshot()
+        if hb is not None and slug:
+            heartbeats[slug] = hb
     else:
         # Non-shadow modes nao tem poller com contadores — so marcamos
         # o engine como active (sidebar renderiza ✓ sem numeros).
@@ -1288,22 +1354,59 @@ def _view_code(launcher, script_path):
 
 
 _LEVERAGE_OPTS = [("1x", "1.0"), ("2x", "2.0"), ("3x", "3.0"), ("5x", "5.0")]
+_LIVE_FS_CACHE_TTL_S = 1.0
+_LATEST_RUN_DIR_CACHE: dict[str, tuple[float, Path | None]] = {}
+_POSITIONS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_LOG_TAIL_CACHE: dict[tuple[str, int], tuple[float, list[str]]] = {}
+_SHADOW_LATEST_CACHE: dict[str, tuple[float, tuple[Path, dict] | None]] = {}
+
+
+def _cache_get(cache: dict, key):
+    entry = cache.get(key)
+    if entry is None:
+        return None
+    stamp, value = entry
+    if (time.monotonic() - stamp) > _LIVE_FS_CACHE_TTL_S:
+        cache.pop(key, None)
+        return None
+    return value
+
+
+def _cache_put(cache: dict, key, value) -> None:
+    cache[key] = (time.monotonic(), value)
+
+
+def _clear_live_fs_caches() -> None:
+    _LATEST_RUN_DIR_CACHE.clear()
+    _POSITIONS_CACHE.clear()
+    _LOG_TAIL_CACHE.clear()
+    _SHADOW_LATEST_CACHE.clear()
 
 
 def _latest_run_dir(slug: str) -> Path | None:
+    cached = _cache_get(_LATEST_RUN_DIR_CACHE, slug)
+    if cached is not None or slug in _LATEST_RUN_DIR_CACHE:
+        return cached
     root = Path(__file__).resolve().parent.parent / "data"
     eng_dir = root / _ENGINE_DIR_MAP.get(slug, slug)
     if not eng_dir.is_dir():
+        _cache_put(_LATEST_RUN_DIR_CACHE, slug, None)
         return None
     try:
         runs = sorted([d for d in eng_dir.iterdir() if d.is_dir()],
                       key=lambda d: d.stat().st_mtime, reverse=True)
     except OSError:
+        _cache_put(_LATEST_RUN_DIR_CACHE, slug, None)
         return None
-    return runs[0] if runs else None
+    latest = runs[0] if runs else None
+    _cache_put(_LATEST_RUN_DIR_CACHE, slug, latest)
+    return latest
 
 
 def _load_positions_for_slug(slug: str) -> list[dict]:
+    cached = _cache_get(_POSITIONS_CACHE, slug)
+    if cached is not None:
+        return [dict(item) for item in cached]
     run_dir = _latest_run_dir(slug)
     if run_dir is None:
         return []
@@ -1315,9 +1418,13 @@ def _load_positions_for_slug(slug: str) -> list[dict]:
     except (OSError, json.JSONDecodeError):
         return []
     if isinstance(data, list):
-        return data
+        rows = [dict(item) if isinstance(item, dict) else {"value": item} for item in data]
+        _cache_put(_POSITIONS_CACHE, slug, rows)
+        return [dict(item) for item in rows]
     if isinstance(data, dict):
-        return [{"symbol": k, **(v if isinstance(v, dict) else {"value": v})} for k, v in data.items()]
+        rows = [{"symbol": k, **(v if isinstance(v, dict) else {"value": v})} for k, v in data.items()]
+        _cache_put(_POSITIONS_CACHE, slug, rows)
+        return [dict(item) for item in rows]
     return []
 
 
@@ -1340,8 +1447,14 @@ def _resolve_log_path(slug: str, proc: dict) -> Path | None:
 def _read_log_tail(path: Path | None, n: int = 18) -> list[str]:
     if path is None:
         return []
+    cache_key = (str(path), int(n))
+    cached = _cache_get(_LOG_TAIL_CACHE, cache_key)
+    if cached is not None:
+        return list(cached)
     try:
-        return path.read_text(encoding="utf-8", errors="ignore").splitlines()[-n:]
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()[-n:]
+        _cache_put(_LOG_TAIL_CACHE, cache_key, list(lines))
+        return lines
     except OSError:
         return []
 
@@ -1561,19 +1674,18 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     """
     # Remote path via poller cache (nunca bloqueia)
     if _use_remote_shadow_cache():
-        try:
-            from launcher_support.tunnel_registry import get_shadow_poller
-            poller = get_shadow_poller()
-        except Exception:
-            poller = None
-        if poller is not None:
-            cached = poller.get_cached()
-            if cached is not None:
-                return cached  # (virtual_dir, heartbeat)
+        run_dir, hb, _trades = _fetch_shadow_snapshot()
+        if run_dir is not None and hb is not None:
+            return (run_dir, hb)
 
     # Local disk fallback (layout existente)
     root = Path("data/millennium_shadow")
+    cache_key = str(root.resolve()) if root.exists() else str(root)
+    cached = _cache_get(_SHADOW_LATEST_CACHE, cache_key)
+    if cached is not None or cache_key in _SHADOW_LATEST_CACHE:
+        return cached
     if not root.exists():
+        _cache_put(_SHADOW_LATEST_CACHE, cache_key, None)
         return None
     candidates: list[tuple[float, Path, dict]] = []
     for sub in root.iterdir():
@@ -1589,10 +1701,13 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
             continue
         candidates.append((mtime, sub, payload))
     if not candidates:
+        _cache_put(_SHADOW_LATEST_CACHE, cache_key, None)
         return None
     candidates.sort(key=lambda row: row[0], reverse=True)
     _, run_dir, payload = candidates[0]
-    return run_dir, payload
+    result = (run_dir, payload)
+    _cache_put(_SHADOW_LATEST_CACHE, cache_key, result)
+    return result
 
 
 def _drop_shadow_kill(run_dir: Path, launcher, state) -> None:
@@ -1849,23 +1964,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     """
     name = meta.get("display", slug.upper())
 
-    # Le cache do poller.
-    try:
-        from launcher_support.tunnel_registry import get_shadow_poller
-        poller = get_shadow_poller()
-    except Exception:
-        poller = None
-    cached = poller.get_cached() if poller is not None else None
-    try:
-        trades = (poller.get_trades_cached()
-                  if poller is not None else [])
-    except Exception:
-        trades = []
-
-    run_dir = None
-    hb = None
-    if cached is not None:
-        run_dir, hb = cached
+    run_dir, hb, trades = _fetch_shadow_snapshot()
 
     # Detail pane
     if hb is None:
@@ -1978,21 +2077,9 @@ def _shadow_content_sig(state) -> tuple:
     """Assinatura barata do conteudo que o shadow detail renderiza —
     usada pra pular re-render quando nada mudou, cortando o destroy+
     rebuild de ~150ms/ciclo que causava flicker visível."""
-    try:
-        from launcher_support.tunnel_registry import get_shadow_poller
-        poller = get_shadow_poller()
-    except Exception:
+    run_dir, hb, trades = _fetch_shadow_snapshot()
+    if hb is None:
         return (None,)
-    if poller is None:
-        return (None,)
-    try:
-        cached = poller.get_cached()
-        trades = poller.get_trades_cached()
-    except Exception:
-        return (None,)
-    hb = None
-    if cached is not None:
-        _, hb = cached
     hb_sig = None
     if hb is not None:
         hb_sig = (
@@ -2018,7 +2105,8 @@ def _shadow_content_sig(state) -> tuple:
     if selected is not None:
         selected_sig = (selected.get("strategy"), selected.get("symbol"),
                         selected.get("timestamp"))
-    return (state.get("selected_slug"), hb_sig, trades_sig, selected_sig)
+    return (state.get("selected_slug"), str(run_dir or ""), hb_sig, trades_sig,
+            selected_sig)
 
 
 def _refresh_shadow_detail(launcher, state) -> None:

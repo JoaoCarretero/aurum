@@ -12,6 +12,15 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clear_live_view_fs_caches():
+    import launcher_support.engines_live_view as evv
+
+    evv._clear_live_fs_caches()
+    yield
+    evv._clear_live_fs_caches()
+
+
 def test_is_remote_run_detects_prefix():
     from launcher_support.engines_live_view import _is_remote_run
     assert _is_remote_run(Path("remote://2026-04-18_0229")) is True
@@ -201,6 +210,76 @@ def test_shadow_active_slugs_uses_dynamic_engine_attr():
         tunnel_registry.reset_for_tests()
 
 
+def test_shadow_active_slugs_falls_back_to_cockpit_latest_run():
+    from launcher_support import engines_live_view as evv
+    from launcher_support import tunnel_registry
+
+    class FakePoller:
+        engine = "millennium"
+
+        def get_cached(self):
+            return None
+
+    class FakeClient:
+        def latest_run(self, engine, mode=None):
+            assert engine == "millennium"
+            assert mode == "shadow"
+            return {"run_id": "r1", "engine": "millennium", "mode": "shadow",
+                    "status": "running"}
+
+    try:
+        tunnel_registry.set_shadow_poller(FakePoller())
+        evv._COCKPIT_CLIENT_SINGLETON = FakeClient()
+        assert evv._shadow_active_slugs() == {"millennium"}
+    finally:
+        evv._COCKPIT_CLIENT_SINGLETON = None
+        tunnel_registry.reset_for_tests()
+
+
+def test_fetch_shadow_snapshot_falls_back_to_cockpit_when_poller_empty():
+    from launcher_support import engines_live_view as evv
+    from launcher_support import tunnel_registry
+
+    class FakePoller:
+        engine = "millennium"
+
+        def get_cached(self):
+            return None
+
+    class FakeClient:
+        def latest_run(self, engine, mode=None):
+            assert engine == "millennium"
+            assert mode == "shadow"
+            return {
+                "run_id": "r1",
+                "engine": "millennium",
+                "mode": "shadow",
+                "status": "running",
+                "novel_total": 2,
+                "last_tick_at": "2026-04-21T13:20:10+00:00",
+            }
+
+        def get_heartbeat(self, run_id):
+            assert run_id == "r1"
+            return {"run_id": "r1", "status": "running", "ticks_ok": 3}
+
+        def get_trades(self, run_id, limit=20):
+            assert run_id == "r1"
+            assert limit == 20
+            return {"trades": [{"strategy": "JUMP", "symbol": "BTCUSDT"}]}
+
+    try:
+        tunnel_registry.set_shadow_poller(FakePoller())
+        evv._COCKPIT_CLIENT_SINGLETON = FakeClient()
+        run_dir, hb, trades = evv._fetch_shadow_snapshot()
+        assert str(run_dir).replace("\\", "/") == "remote:/r1"
+        assert hb["ticks_ok"] == 3
+        assert trades[0]["strategy"] == "JUMP"
+    finally:
+        evv._COCKPIT_CLIENT_SINGLETON = None
+        tunnel_registry.reset_for_tests()
+
+
 def test_engine_registry_for_sidebar_paper_mode_forces_millennium():
     from launcher_support.engines_live_view import _engine_registry_for_sidebar
 
@@ -214,3 +293,81 @@ def test_engine_registry_for_sidebar_paper_mode_forces_millennium():
     })
 
     assert registry == [{"slug": "millennium", "display": "MILLENNIUM"}]
+
+
+def test_latest_run_dir_uses_ttl_cache(tmp_path, monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    data_root = tmp_path / "data"
+    run1 = data_root / "millennium_live" / "r1"
+    run1.mkdir(parents=True)
+    monkeypatch.setattr(evv, "__file__", str(tmp_path / "launcher_support" / "engines_live_view.py"))
+
+    first = evv._latest_run_dir("millennium_live")
+    assert first is not None
+    assert first.name == "r1"
+
+    run2 = data_root / "millennium_live" / "r2"
+    run2.mkdir(parents=True)
+    run2.touch()
+    second = evv._latest_run_dir("millennium_live")
+    assert second is not None
+    assert second.name == "r1"
+
+
+def test_load_positions_for_slug_uses_ttl_cache(tmp_path, monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    data_root = tmp_path / "data"
+    run_dir = data_root / "millennium_live" / "r1" / "state"
+    run_dir.mkdir(parents=True)
+    positions_path = run_dir / "positions.json"
+    positions_path.write_text(json.dumps([{"symbol": "BTCUSDT", "pnl": 1.0}]), encoding="utf-8")
+    monkeypatch.setattr(evv, "__file__", str(tmp_path / "launcher_support" / "engines_live_view.py"))
+
+    first = evv._load_positions_for_slug("millennium_live")
+    positions_path.write_text(json.dumps([{"symbol": "ETHUSDT", "pnl": 2.0}]), encoding="utf-8")
+    second = evv._load_positions_for_slug("millennium_live")
+
+    assert first[0]["symbol"] == "BTCUSDT"
+    assert second[0]["symbol"] == "BTCUSDT"
+
+
+def test_read_log_tail_uses_ttl_cache(tmp_path):
+    import launcher_support.engines_live_view as evv
+
+    log_path = tmp_path / "engine.log"
+    log_path.write_text("a\nb\n", encoding="utf-8")
+
+    first = evv._read_log_tail(log_path, n=2)
+    log_path.write_text("x\ny\n", encoding="utf-8")
+    second = evv._read_log_tail(log_path, n=2)
+
+    assert first == ["a", "b"]
+    assert second == ["a", "b"]
+
+
+def test_find_latest_shadow_run_local_fallback_uses_ttl_cache(tmp_path, monkeypatch):
+    import launcher_support.engines_live_view as evv
+    from launcher_support import tunnel_registry
+
+    tunnel_registry.reset_for_tests()
+    run1 = tmp_path / "data" / "millennium_shadow" / "r1" / "state"
+    run1.mkdir(parents=True)
+    (run1 / "heartbeat.json").write_text(json.dumps({"run_id": "r1"}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    evv._COCKPIT_CLIENT_SINGLETON = False
+    try:
+        first = evv._find_latest_shadow_run()
+        run2 = tmp_path / "data" / "millennium_shadow" / "r2" / "state"
+        run2.mkdir(parents=True)
+        (run2 / "heartbeat.json").write_text(json.dumps({"run_id": "r2"}), encoding="utf-8")
+        second = evv._find_latest_shadow_run()
+
+        assert first is not None
+        assert second is not None
+        assert first[1]["run_id"] == "r1"
+        assert second[1]["run_id"] == "r1"
+    finally:
+        evv._COCKPIT_CLIENT_SINGLETON = None
+        tunnel_registry.reset_for_tests()
