@@ -88,6 +88,8 @@ def _register_window_run(
     summary_path = window_dir / "summary.json"
     config_path = window_dir / "config.json"
     report_html = window_dir / "report.html"
+    interval_minutes = int(config.get("interval_minutes") or 15)
+    report_json = window_dir / _report_json_name(days, interval_minutes)
 
     append_to_index(
         window_dir,
@@ -105,14 +107,85 @@ def _register_window_run(
             "roi_pct": summary.get("roi_pct"),
             "sharpe": summary.get("sharpe"),
             "sortino": summary.get("sortino"),
+            "calmar": summary.get("calmar"),
             "max_dd_pct": summary.get("max_dd_pct"),
             "run_dir": str(window_dir),
             "summary_path": str(summary_path),
             "config_path": str(config_path),
             "report_html_path": str(report_html) if report_html.exists() else "",
+            "report_json_path": str(report_json) if report_json.exists() else "",
             "source": "millennium_battery",
         },
     )
+
+
+def _report_json_name(days: int, interval_minutes: int) -> str:
+    return f"millennium_{interval_minutes}m_{days}d.json"
+
+
+def _write_report_json(
+    *,
+    window_dir: Path,
+    days: int,
+    interval_minutes: int,
+    account_size: float,
+    trades: list[dict],
+    summary: dict,
+    per_strat: dict,
+    config_payload: dict,
+) -> Path:
+    """Emit canonical report JSON consumed by the launcher METRICS tab.
+
+    Schema matches what ``_show_results`` / ``_normalize_summary`` expect:
+    flat ``summary`` block, ``trades`` list, ``equity`` curve, empty
+    ``monte_carlo`` / ``bear_market`` placeholders, plus the battery-specific
+    ``per_strategy`` and ``config`` for reference.
+    """
+    closed = [t for t in trades if t.get("result") in ("WIN", "LOSS")]
+    ordered = sorted(closed, key=lambda t: t.get("timestamp", ""))
+    equity = [account_size]
+    acct = account_size
+    for t in ordered:
+        acct += float(t.get("pnl", 0.0) or 0.0)
+        equity.append(round(acct, 2))
+
+    payload = {
+        "version": "millennium_battery_v1",
+        "run_id": f"millennium_battery_w{days}d",
+        "engine": "MILLENNIUM",
+        "config": config_payload,
+        "summary": summary,
+        "per_strategy": per_strat,
+        "monte_carlo": {},
+        "bear_market": {},
+        "hmm_regime_analysis": {},
+        "trades": [
+            {k: (str(v) if k == "timestamp" else v) for k, v in t.items()}
+            for t in trades
+        ],
+        "equity": equity,
+        "account_size": account_size,
+        "final_equity": equity[-1] if equity else account_size,
+        # Top-level aliases for launcher `_normalize_summary` (it scans
+        # data[src] at top level, not inside data["summary"]).
+        "total_pnl": summary.get("total_pnl"),
+        "pnl": summary.get("total_pnl"),
+        "roi_pct": summary.get("roi_pct"),
+        "ret": summary.get("roi_pct"),
+        "sharpe": summary.get("sharpe"),
+        "sortino": summary.get("sortino"),
+        "calmar": summary.get("calmar"),
+        "max_dd_pct": summary.get("max_dd_pct"),
+        "n_trades": summary.get("n_trades"),
+        "win_rate": summary.get("win_rate_pct"),
+    }
+
+    path = window_dir / _report_json_name(days, interval_minutes)
+    path.write_text(
+        json.dumps(payload, indent=2, default=str, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _write_trades(trades: list[dict], run_id: str, window_days: int,
@@ -209,6 +282,82 @@ def _portfolio_summary(trades: list[dict], days: int, account_size: float) -> di
     }
 
 
+def _fmt_metric(v, fmt: str = "{:.2f}", dash: str = "—") -> str:
+    if v is None:
+        return dash
+    try:
+        return fmt.format(v)
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _print_window_metrics(days: int, summary: dict, per_strat: dict, dt: float) -> None:
+    """Print all portfolio metrics + per-engine breakdown to stdout."""
+    print(f"\n  {'─'*70}")
+    print(f"  [w{days}d] PORTFOLIO  ·  {summary['n_trades']} trades  ·  {dt:.1f}s")
+    print(f"  {'─'*70}")
+    print(
+        f"    WR        {_fmt_metric(summary.get('win_rate_pct'), '{:.2f}%'):>10}"
+        f"    ROI       {_fmt_metric(summary.get('roi_pct'), '{:.2f}%'):>10}"
+        f"    PnL       ${_fmt_metric(summary.get('total_pnl'), '{:,.2f}'):>10}"
+    )
+    print(
+        f"    Sharpe    {_fmt_metric(summary.get('sharpe')):>10}"
+        f"    Sortino   {_fmt_metric(summary.get('sortino')):>10}"
+        f"    Calmar    {_fmt_metric(summary.get('calmar')):>10}"
+    )
+    print(
+        f"    MaxDD     {_fmt_metric(summary.get('max_dd_pct'), '{:.2f}%'):>10}"
+        f"    SharpeD   {_fmt_metric(summary.get('sharpe_daily')):>10}"
+        f"    MaxStreak {str(summary.get('max_consec_losses', '—')):>10}"
+    )
+    if per_strat:
+        print(f"\n    Per-engine:")
+        print(
+            f"      {'Engine':<14} {'n':>5} {'WR%':>7} {'L/S':>10} "
+            f"{'PnL':>10} {'AvgR':>7} {'Streak':>7}"
+        )
+        print(f"      {'-'*62}")
+        for eng, s in per_strat.items():
+            ls = f"{s.get('longs', 0)}L/{s.get('shorts', 0)}S"
+            print(
+                f"      {eng:<14} {s.get('n', 0):>5} "
+                f"{_fmt_metric(s.get('win_rate_pct'), '{:.2f}'):>7} {ls:>10} "
+                f"${_fmt_metric(s.get('total_pnl'), '{:,.0f}'):>9} "
+                f"{_fmt_metric(s.get('avg_r_multiple'), '{:.3f}'):>7} "
+                f"{s.get('max_consec_losses', 0):>7}"
+            )
+    print()
+
+
+def _print_battery_summary(results: list[dict]) -> None:
+    """Reprint markdown summary table to stdout at end of battery."""
+    print(f"\n{'#'*72}")
+    print(f"#  MILLENNIUM BATTERY — CONSOLIDATED METRICS")
+    print(f"{'#'*72}")
+    print(
+        f"  {'Window':>8} {'Trades':>7} {'WR%':>7} {'ROI%':>8} "
+        f"{'Sharpe':>8} {'Sortino':>8} {'Calmar':>8} {'MaxDD%':>8} {'PnL':>12}"
+    )
+    print(f"  {'-'*85}")
+    for r in results:
+        if r.get("n_trades", 0) == 0:
+            print(f"  {r['window_days']:>7}d  (sem trades)")
+            continue
+        print(
+            f"  {r['window_days']:>7}d "
+            f"{r.get('n_trades', 0):>7} "
+            f"{_fmt_metric(r.get('win_rate_pct'), '{:.2f}'):>7} "
+            f"{_fmt_metric(r.get('roi_pct'), '{:.2f}'):>8} "
+            f"{_fmt_metric(r.get('sharpe')):>8} "
+            f"{_fmt_metric(r.get('sortino')):>8} "
+            f"{_fmt_metric(r.get('calmar')):>8} "
+            f"{_fmt_metric(r.get('max_dd_pct'), '{:.2f}'):>8} "
+            f"${_fmt_metric(r.get('total_pnl'), '{:,.0f}'):>11}"
+        )
+    print()
+
+
 def _write_html_report(trades: list[dict], summary: dict, by_strategy: dict,
                        window_dir: Path, engine_label: str,
                        account_size: float) -> None:
@@ -231,7 +380,10 @@ def _write_html_report(trades: list[dict], summary: dict, by_strategy: dict,
     ratios = {
         "ret": summary.get("roi_pct", 0.0) or 0.0,
         "sharpe": summary.get("sharpe"),
+        "sharpe_daily": summary.get("sharpe_daily"),
         "sortino": summary.get("sortino"),
+        "calmar": summary.get("calmar"),
+        "max_consec_losses": summary.get("max_consec_losses"),
     }
     mdd_pct = summary.get("max_dd_pct", 0.0) or 0.0
 
@@ -336,6 +488,20 @@ def _run_window(days: int, battery_root: Path, account_size: float,
 
         _write_trades(portfolio_trades, ms.RUN_ID, days, window_dir)
 
+        # Canonical engine report JSON — picked up by launcher METRICS button.
+        # Schema mirrors CITADEL (config/summary/trades/equity/monte_carlo/...) so
+        # _show_results can render the overview tab without format branching.
+        _write_report_json(
+            window_dir=window_dir,
+            days=days,
+            interval_minutes=interval_minutes,
+            account_size=account_size,
+            trades=portfolio_trades,
+            summary=summary,
+            per_strat=per_strat,
+            config_payload=config_payload,
+        )
+
         try:
             _write_html_report(
                 portfolio_trades, summary, per_strat,
@@ -354,9 +520,7 @@ def _run_window(days: int, battery_root: Path, account_size: float,
         )
 
         dt = time.time() - t0
-        print(f"\n  [w{days}d] {summary['n_trades']} trades  "
-              f"Sharpe={summary.get('sharpe')}  ROI={summary.get('roi_pct')}%  "
-              f"DD={summary.get('max_dd_pct')}%  ({dt:.1f}s)")
+        _print_window_metrics(days, summary, per_strat, dt)
 
         return {"window_days": days, **summary, "per_strategy": per_strat}
     finally:
@@ -501,7 +665,9 @@ def main() -> int:
     _write_battery_summary(results, battery_root, account_size)
     _write_all_trades_csv(battery_root)
 
-    print(f"\n{'#'*72}")
+    _print_battery_summary(results)
+
+    print(f"{'#'*72}")
     print(f"#  BATTERY COMPLETE")
     print(f"#  summary: {battery_root / 'battery_summary.md'}")
     print(f"{'#'*72}\n")

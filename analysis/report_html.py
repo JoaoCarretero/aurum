@@ -527,6 +527,18 @@ def _build_result_box(all_trades: list[dict], eq: list[float],
     roi = ratios.get("ret", 0.0) or 0.0
     sharpe = ratios.get("sharpe")
     sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "N/A"
+    sortino = ratios.get("sortino")
+    sortino_str = f"{sortino:.2f}" if sortino is not None else "N/A"
+    calmar = ratios.get("calmar")
+    calmar_str = f"{calmar:.2f}" if calmar is not None else "N/A"
+
+    # Avg R-multiple (portfolio-level) computed from closed trades when available
+    rms = [t.get("r_multiple") for t in closed if t.get("r_multiple") is not None]
+    avg_r = (sum(rms) / len(rms)) if rms else None
+    avg_r_str = f"{avg_r:.2f}" if avg_r is not None else "N/A"
+
+    max_streak = ratios.get("max_consec_losses")
+    streak_str = str(max_streak) if max_streak is not None else "N/A"
 
     # Edge verdict
     has_edge = wr > 50 and roi > 0 and (sharpe or 0) > 0.5
@@ -534,6 +546,10 @@ def _build_result_box(all_trades: list[dict], eq: list[float],
     v_color = _GREEN if has_edge else _RED
 
     pnl_color = _GREEN if pnl >= 0 else _RED
+    sortino_color = _GREEN if (sortino or 0) > 1 else _WHITE
+    calmar_color = _GREEN if (calmar or 0) > 3 else _WHITE
+    avg_r_color = _GREEN if (avg_r or 0) > 0 else _RED
+    streak_color = _RED if (max_streak or 0) >= 6 else _WHITE
 
     return f'''<section class="summary-shell">
   <div class="summary-card">
@@ -550,7 +566,11 @@ def _build_result_box(all_trades: list[dict], eq: list[float],
       {_metric_card("Trades", str(n_trades), _WHITE)}
       {_metric_card("Win Rate", f"{wr:.1f}%", _GREEN if wr > 50 else _RED)}
       {_metric_card("Sharpe", sharpe_str, _WHITE)}
+      {_metric_card("Sortino", sortino_str, sortino_color)}
+      {_metric_card("Calmar", calmar_str, calmar_color)}
       {_metric_card("Max DD", f"-{mdd_pct:.1f}%", _RED)}
+      {_metric_card("Avg R", avg_r_str, avg_r_color)}
+      {_metric_card("Max Streak", streak_str, streak_color)}
       {_metric_card("PnL", _fmt_money(pnl), pnl_color)}
     </div>
     <div class="verdict-row">

@@ -47,7 +47,7 @@ from launcher_support.execution import (
 from launcher_support import cockpit_tab as cockpit_tab_mod
 from launcher_support import command_center as command_center_mod
 from launcher_support import dashboard_controls as dashboard_controls_mod
-from launcher_support.screens._metrics import timed_legacy_switch
+from launcher_support.screens._metrics import emit_timing_metric, timed_legacy_switch
 from launcher_support.screens._persistence import (
     configure_screen_logging as _configure_screen_logging,
     dump_screen_metrics as _dump_screen_metrics,
@@ -1208,6 +1208,7 @@ class App(tk.Tk):
     _MENU_DESIGN_H = 540
 
     def __init__(self):
+        boot_t0 = time.perf_counter()
         super().__init__()
         try:
             _configure_screen_logging()
@@ -1275,16 +1276,23 @@ class App(tk.Tk):
         self._splash_cursor_on = True
         self._splash_pulse_after_id = None
         self._splash_canvas = None
+        self._timing_starts: dict[str, float] = {}
 
+        chrome_t0 = time.perf_counter()
         threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
+        emit_timing_metric("boot.chrome", ms=(time.perf_counter() - chrome_t0) * 1000.0)
         self._ui_schedule_drain()
+        splash_t0 = time.perf_counter()
         self._splash()
+        emit_timing_metric("boot.enter_splash", ms=(time.perf_counter() - splash_t0) * 1000.0)
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self._quit)
+        emit_timing_metric("boot.until_shell_ready", ms=(time.perf_counter() - boot_t0) * 1000.0)
 
         # SSH tunnel pro cockpit API — lifecycle amarrado no launcher.
         # Nao bloqueia o boot: o watchdog sobe em thread separada.
+        tunnel_t0 = time.perf_counter()
         try:
             tunnel = _boot_tunnel_manager()
             if tunnel is not None:
@@ -1293,10 +1301,12 @@ class App(tk.Tk):
         except Exception:
             # Tunnel falhou -> launcher segue em local-mode.
             self._aurum_tunnel = None
+        emit_timing_metric("boot.tunnel_start", ms=(time.perf_counter() - tunnel_t0) * 1000.0)
 
         # ShadowPoller: le cockpit API em thread separada e cacheia.
         # UI thread nunca faz HTTP sync (evita freeze da mainloop).
         self._aurum_shadow_poller = None
+        poller_t0 = time.perf_counter()
         try:
             from launcher_support.shadow_poller import ShadowPoller
             from launcher_support.tunnel_registry import set_shadow_poller
@@ -1311,6 +1321,7 @@ class App(tk.Tk):
             self._aurum_shadow_poller = poller
         except Exception:
             pass
+        emit_timing_metric("boot.shadow_poller_start", ms=(time.perf_counter() - poller_t0) * 1000.0)
 
     def _configure_windows_dpi(self) -> None:
         """Prefer per-monitor DPI awareness on Windows laptops with scaling."""
@@ -1376,7 +1387,8 @@ class App(tk.Tk):
         # self.main in legacy path. Sibling survives across switches.
         self.screens_container = tk.Frame(self, bg=BG)
         # Packed lazily on first screens.show(); pack_forget-ed when legacy path active.
-        from launcher_support.screens import ScreenManager, register_default_screens
+        from launcher_support.screens.manager import ScreenManager
+        from launcher_support.screens.registry import register_default_screens
         self.screens = ScreenManager(parent=self.screens_container)
         register_default_screens(
             self.screens,
@@ -1824,8 +1836,9 @@ class App(tk.Tk):
         scale = max(min(live_w / design_w, live_h / design_h), 1.0)
         ratio = scale / max(previous_scale, 0.001)
         if canvas.find_all():
-            canvas.scale("all", 0, 0, ratio, ratio)
-            self._scale_canvas_text_fonts(canvas, ratio)
+            if abs(scale - previous_scale) >= 0.01:
+                canvas.scale("all", 0, 0, ratio, ratio)
+                self._scale_canvas_text_fonts(canvas, ratio)
             scaled_w = int(round(design_w * scale))
             scaled_h = int(round(design_h * scale))
             x0 = max((live_w - scaled_w) // 2, 0)
@@ -1836,6 +1849,23 @@ class App(tk.Tk):
             return (x0, y0, x0 + scaled_w, y0 + scaled_h), scale
         viewport = self._calc_centered_viewport(live_w, live_h, design_w, design_h)
         return viewport, scale
+
+    def _schedule_first_paint_metric(self, name: str) -> None:
+        self._timing_starts[name] = time.perf_counter()
+
+        def _emit() -> None:
+            started = self._timing_starts.pop(name, None)
+            if started is None:
+                return
+            emit_timing_metric(
+                f"paint.{name}",
+                ms=(time.perf_counter() - started) * 1000.0,
+            )
+
+        try:
+            self.after_idle(_emit)
+        except Exception:
+            self._timing_starts.pop(name, None)
 
     def _tile_rect(self, idx: int) -> tuple:
         slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
@@ -2376,6 +2406,7 @@ class App(tk.Tk):
         # Registered here because _clear_kb wipes them on every switch.
         self._kb("<Return>", self._splash_on_click)
         self._kb("<space>", self._splash_on_click)
+        self._schedule_first_paint_metric("splash")
         screen = self.screens.show("splash")
         # Expose canvas handle for legacy callers (_splash_pulse_tick, etc).
         self._splash_canvas = screen.canvas
@@ -2422,6 +2453,7 @@ class App(tk.Tk):
             self.main.pack_forget()
         if not self.screens_container.winfo_manager():
             self.screens_container.pack(fill="both", expand=True)
+        self._schedule_first_paint_metric("main_menu")
         self.screens.show("main_menu")
         try:
             self.focus_set()
@@ -3902,23 +3934,114 @@ class App(tk.Tk):
         pad = 24
 
         # -- KEY METRICS --
-        met_f = tk.Frame(sf, bg=BG); met_f.pack(fill="x", padx=pad, pady=(12, 8))
+        # Two rows: performance (top) + risk (bottom) — previously only 6 cards
+        # crammed into one row, so Calmar / Max DD / Avg R / MaxStreak weren't
+        # visible. Summary payloads now include them; surface them here.
         pnl = s.get("total_pnl", 0) or 0
         roi = s.get("ret", 0) or 0
         pnl_color = GREEN if pnl >= 0 else RED
-        metrics = [
+        calmar = s.get("calmar", data.get("calmar")) or 0
+        mdd = s.get("max_dd_pct", data.get("max_dd_pct")) or 0
+        # Max consec losses + avg R-multiple: pull from summary block first,
+        # then computed-from-trades fallback so legacy reports still render.
+        summary_block = data.get("summary") or {}
+        max_streak = summary_block.get("max_consec_losses")
+        if max_streak is None:
+            cur = 0; _ms = 0
+            for t in sorted(self._results_trades,
+                            key=lambda x: x.get("timestamp", "")):
+                if t.get("result") == "LOSS":
+                    cur += 1; _ms = max(_ms, cur)
+                else:
+                    cur = 0
+            max_streak = _ms
+        rms = [t.get("r_multiple") for t in self._results_trades
+               if t.get("r_multiple") is not None]
+        avg_r = sum(rms) / len(rms) if rms else 0.0
+
+        perf_row = [
             (f"+${pnl:,.0f}" if pnl >= 0 else f"-${abs(pnl):,.0f}", "PnL TOTAL", pnl_color),
-            (f"{roi:+.1f}%", "ROI", pnl_color),
-            (f"{s.get('sharpe', 0) or 0:.2f}",  "SHARPE",    AMBER),
-            (f"{s.get('sortino', 0) or 0:.2f}", "SORTINO",   AMBER),
-            (f"{s.get('win_rate', 0) or 0:.1f}%","TX ACERTO", WHITE),
-            (f"{s.get('total_trades', 0) or 0}", "TRADES",    WHITE),
+            (f"{roi:+.1f}%",                       "ROI",       pnl_color),
+            (f"{s.get('sharpe', 0) or 0:.2f}",     "SHARPE",    AMBER),
+            (f"{s.get('sortino', 0) or 0:.2f}",    "SORTINO",   AMBER),
+            (f"{calmar:.2f}",                      "CALMAR",    AMBER),
+            (f"{s.get('win_rate', 0) or 0:.1f}%",  "TX ACERTO", WHITE),
         ]
-        for val, label, color in metrics:
-            mf = tk.Frame(met_f, bg=BG3, padx=12, pady=8)
-            mf.pack(side="left", padx=2, fill="x", expand=True)
-            tk.Label(mf, text=val, font=(FONT, 16, "bold"), fg=color, bg=BG3).pack()
-            tk.Label(mf, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG3).pack()
+        risk_row = [
+            (f"{s.get('total_trades', 0) or 0}",   "TRADES",        WHITE),
+            (f"-{mdd:.2f}%" if mdd else "—",       "MAX DD",        RED),
+            (f"{avg_r:+.2f}",                      "AVG R",
+             GREEN if avg_r > 0 else RED),
+            (f"{max_streak}",                      "MAX STREAK",
+             RED if max_streak >= 6 else WHITE),
+            (f"${(s.get('final_equity') or data.get('final_equity') or 0):,.0f}",
+             "FINAL EQUITY", WHITE),
+        ]
+
+        def _render_metric_row(row_items):
+            row_f = tk.Frame(sf, bg=BG)
+            row_f.pack(fill="x", padx=pad, pady=(4, 4))
+            for val, label, color in row_items:
+                mf = tk.Frame(row_f, bg=BG3, padx=12, pady=8)
+                mf.pack(side="left", padx=2, fill="x", expand=True)
+                tk.Label(mf, text=val, font=(FONT, 14, "bold"),
+                         fg=color, bg=BG3).pack()
+                tk.Label(mf, text=label, font=(FONT, 7, "bold"),
+                         fg=DIM, bg=BG3).pack()
+
+        tk.Frame(sf, bg=BG, height=4).pack(fill="x", padx=pad, pady=(8, 0))
+        _render_metric_row(perf_row)
+        _render_metric_row(risk_row)
+
+        # -- PER-STRATEGY BREAKDOWN --
+        # Multi-engine runs (MILLENNIUM) carry per-strategy aggregates.
+        # Render as a compact table so the user can see which sub-engine
+        # contributed what (CITADEL / RENAISSANCE / JUMP).
+        per_strat = data.get("per_strategy") or {}
+        if isinstance(per_strat, dict) and per_strat:
+            tk.Label(sf, text="BREAKDOWN POR ENGINE",
+                     font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG
+                     ).pack(anchor="w", padx=pad, pady=(10, 4))
+            table = tk.Frame(sf, bg=BG3)
+            table.pack(fill="x", padx=pad, pady=(0, 8))
+            hdr = tk.Frame(table, bg=BG2)
+            hdr.pack(fill="x")
+            for col, w_ in [("ENGINE", 14), ("N", 6), ("WR%", 7),
+                            ("L/S", 10), ("PnL", 12), ("AvgR", 7),
+                            ("STREAK", 8)]:
+                tk.Label(hdr, text=col, font=(FONT, 7, "bold"),
+                         fg=DIM, bg=BG2, width=w_, anchor="w",
+                         padx=4, pady=4).pack(side="left")
+            for eng, stats in per_strat.items():
+                r = tk.Frame(table, bg=BG3)
+                r.pack(fill="x")
+                eng_pnl = float(stats.get("total_pnl", 0) or 0)
+                eng_col = GREEN if eng_pnl >= 0 else RED
+                tk.Label(r, text=eng, font=(FONT, 8, "bold"),
+                         fg=AMBER, bg=BG3, width=14, anchor="w",
+                         padx=4, pady=3).pack(side="left")
+                tk.Label(r, text=str(stats.get("n", 0)),
+                         font=(FONT, 8), fg=WHITE, bg=BG3,
+                         width=6, anchor="w", padx=4).pack(side="left")
+                tk.Label(r, text=f"{stats.get('win_rate_pct', 0) or 0:.2f}",
+                         font=(FONT, 8), fg=WHITE, bg=BG3,
+                         width=7, anchor="w", padx=4).pack(side="left")
+                tk.Label(r,
+                         text=f"{stats.get('longs', 0)}L/{stats.get('shorts', 0)}S",
+                         font=(FONT, 8), fg=DIM, bg=BG3,
+                         width=10, anchor="w", padx=4).pack(side="left")
+                tk.Label(r,
+                         text=(f"+${eng_pnl:,.0f}" if eng_pnl >= 0
+                               else f"-${abs(eng_pnl):,.0f}"),
+                         font=(FONT, 8, "bold"), fg=eng_col, bg=BG3,
+                         width=12, anchor="w", padx=4).pack(side="left")
+                tk.Label(r,
+                         text=f"{stats.get('avg_r_multiple', 0) or 0:.3f}",
+                         font=(FONT, 8), fg=WHITE, bg=BG3,
+                         width=7, anchor="w", padx=4).pack(side="left")
+                tk.Label(r, text=str(stats.get("max_consec_losses", 0)),
+                         font=(FONT, 8), fg=WHITE, bg=BG3,
+                         width=8, anchor="w", padx=4).pack(side="left")
 
         def _fit_points(series, width, height, pad_x=10, pad_y=10, mn=None, mx=None):
             if not series or len(series) < 2:
