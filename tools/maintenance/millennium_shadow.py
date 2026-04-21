@@ -23,16 +23,19 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.ops import db_live_runs  # noqa: E402
 from core.ops.fs import atomic_write  # noqa: E402
 from core.risk.key_store import KeyStoreError, load_runtime_keys  # noqa: E402
 from tools.operations.millennium_signal_gate import (  # noqa: E402
@@ -191,6 +194,60 @@ def _write_manifest(run_dir: Path, run_id: str, engine: str, mode: str,
 def _write_heartbeat(state: dict) -> None:
     payload = json.dumps(state, indent=2, ensure_ascii=True, default=str)
     atomic_write(HEARTBEAT_PATH, payload)
+
+
+def _upsert_live_run(
+    *,
+    first_tick_state: dict[str, Any],
+    run_id: str,
+    tick_count: int,
+    novel_count: int,
+    last_tick_at: str,
+    status: str = "running",
+) -> None:
+    """Best-effort upsert to aurum.db live_runs. Never raises.
+
+    first_tick_state is a dict toggled by the caller to track whether the
+    initial INSERT has been attempted this process. Pattern matches paper
+    runner: check-then-split on first call (handles restart on same RUN_ID),
+    then mutable-only on subsequent.
+    """
+    try:
+        if not first_tick_state.get("initialized", False):
+            existing = db_live_runs.get_live_run(run_id)
+            if existing is None:
+                db_live_runs.upsert(
+                    run_id=run_id,
+                    engine="millennium",
+                    mode="shadow",
+                    started_at=first_tick_state["started_at"],
+                    run_dir=first_tick_state["run_dir"],
+                    host=socket.gethostname(),
+                    label=first_tick_state.get("label"),
+                    status=status,
+                    tick_count=tick_count,
+                    novel_count=novel_count,
+                    last_tick_at=last_tick_at,
+                )
+            else:
+                db_live_runs.upsert(
+                    run_id=run_id,
+                    status=status,
+                    tick_count=tick_count,
+                    novel_count=novel_count,
+                    last_tick_at=last_tick_at,
+                )
+            first_tick_state["initialized"] = True
+        else:
+            db_live_runs.upsert(
+                run_id=run_id,
+                status=status,
+                tick_count=tick_count,
+                novel_count=novel_count,
+                last_tick_at=last_tick_at,
+            )
+    except Exception:
+        log.exception("db_live_runs upsert failed (shadow continues)")
 
 
 def _append_trade(trade: dict) -> None:
@@ -464,6 +521,13 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     with contextlib.suppress(AttributeError, ValueError):
         signal.signal(signal.SIGTERM, _handle_signal)
 
+    _live_runs_ctx: dict[str, Any] = {
+        "started_at": RUN_TS.isoformat(),
+        "run_dir": str(RUN_DIR.relative_to(ROOT)),
+        "label": LABEL,
+        "initialized": False,
+    }
+
     _write_manifest(RUN_DIR, run_id=RUN_ID, engine="millennium", mode="shadow",
                     label=LABEL)
 
@@ -489,6 +553,13 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         "last_tick_at": None,
         "last_error": None,
     })
+    _upsert_live_run(
+        first_tick_state=_live_runs_ctx,
+        run_id=RUN_ID,
+        tick_count=0,
+        novel_count=0,
+        last_tick_at=RUN_TS.isoformat(),
+    )
 
     while True:
         tick_start = time.time()
@@ -520,6 +591,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 ticks_ok, novel, scanned, engines_ok, len(seen_keys),
                 "yes" if was_first else "no",
             )
+            now_iso_ok = datetime.now(timezone.utc).isoformat()
             _write_heartbeat({
                 "run_id": RUN_ID,
                 "status": "running",
@@ -532,9 +604,16 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 "novel_total": novel_total,
                 "novel_since_prime": novel_since_prime,
                 "last_novel_at": last_novel_at,
-                "last_tick_at": datetime.now(timezone.utc).isoformat(),
+                "last_tick_at": now_iso_ok,
                 "last_error": None,
             })
+            _upsert_live_run(
+                first_tick_state=_live_runs_ctx,
+                run_id=RUN_ID,
+                tick_count=ticks_ok,
+                novel_count=novel_total,
+                last_tick_at=now_iso_ok,
+            )
         except Exception as exc:  # noqa: BLE001
             ticks_fail += 1
             err = f"{type(exc).__name__}: {exc}"
@@ -546,6 +625,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 f"fails: {ticks_fail}\n"
                 f"err: <code>{err[:200]}</code>"
             )
+            now_iso_fail = datetime.now(timezone.utc).isoformat()
             _write_heartbeat({
                 "run_id": RUN_ID,
                 "status": "running",
@@ -558,9 +638,16 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 "novel_total": novel_total,
                 "novel_since_prime": novel_since_prime,
                 "last_novel_at": last_novel_at,
-                "last_tick_at": datetime.now(timezone.utc).isoformat(),
+                "last_tick_at": now_iso_fail,
                 "last_error": err,
             })
+            _upsert_live_run(
+                first_tick_state=_live_runs_ctx,
+                run_id=RUN_ID,
+                tick_count=ticks_ok,
+                novel_count=novel_total,
+                last_tick_at=now_iso_fail,
+            )
 
         elapsed = time.time() - tick_start
         sleep_for = max(0.0, tick_sec - elapsed)
@@ -589,6 +676,14 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         "novel_since_prime": novel_since_prime,
         "last_novel_at": last_novel_at,
     })
+    _upsert_live_run(
+        first_tick_state=_live_runs_ctx,
+        run_id=RUN_ID,
+        tick_count=ticks_ok,
+        novel_count=novel_total,
+        last_tick_at=stopped_at_str,
+        status="stopped",
+    )
     # Backtest-style metrics: ler todos os records do JSONL, filtrar primed
     # (universo historico), computar Sharpe/Sortino/WR/PF/MaxDD/ROI sobre
     # os novel_since_prime e escrever em reports/summary.json.
@@ -605,6 +700,14 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         ticks_fail=ticks_fail,
         stopped_reason=stop_requested["reason"] or "deadline",
     )
+    try:
+        db_live_runs.upsert(
+            run_id=RUN_ID,
+            ended_at=datetime.now(timezone.utc).isoformat(),
+            status="stopped",
+        )
+    except Exception:
+        log.exception("db_live_runs final upsert failed")
     log.info(
         "SHADOW END ok=%d fail=%d novel=%d reason=%s",
         ticks_ok, ticks_fail, novel_total,
