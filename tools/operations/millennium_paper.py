@@ -689,7 +689,18 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
             except Exception as exc:  # noqa: BLE001
                 state.ticks_fail += 1
                 log.exception("tick %d failed: %s", tick_idx, exc)
-            time.sleep(tick_sec)
+            # Sleep in small slices so STOP buttons (drop_kill via cockpit) +
+            # SIGINT/SIGTERM are responsive. Mirrors shadow's pattern. Without
+            # this, user clicking STOP waits up to tick_sec (15min default)
+            # for the runner to notice the .kill flag — feels like the button
+            # is broken even though the flag is dropped immediately.
+            sliced = 0.0
+            while sliced < tick_sec:
+                if KILL_FLAG.exists() or stop["flag"]:
+                    break
+                chunk = min(2.0, tick_sec - sliced)
+                time.sleep(chunk)
+                sliced += chunk
     finally:
         if state.ws_feed is not None:
             try:
