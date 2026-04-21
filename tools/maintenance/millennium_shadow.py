@@ -392,15 +392,19 @@ def _run_tick(
     """
     # Import inside the tick so config reloads pick up changes between ticks
     # if someone edits params.py while the loop runs.
+    # Use the *live* collector: it scans the tail bars that the backtest
+    # collector skips (needs forward bars for outcome labeling). Without
+    # the live path, the last ~50h of bars never produce signals — shadow
+    # would miss every brand-new setup. See engines/citadel.py live_mode.
     from engines.millennium import (  # noqa: E402
         _load_dados,
-        _collect_operational_trades,
+        _collect_live_signals,
     )
 
     # Silence verbose engine stdout — the shadow.log is the canonical channel.
     with contextlib.redirect_stdout(io.StringIO()):
         all_dfs, htf_stack, macro_series, corr = _load_dados(False)
-        engine_trades, all_trades = _collect_operational_trades(
+        engine_trades, all_trades = _collect_live_signals(
             all_dfs, htf_stack, macro_series, corr,
         )
 

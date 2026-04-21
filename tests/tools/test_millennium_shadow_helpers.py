@@ -47,9 +47,10 @@ def test_run_tick_skips_stale_signals_after_prime(monkeypatch):
     notified: list[dict] = []
 
     monkeypatch.setattr(mm, "_load_dados", lambda _: (None, None, None, None))
+    # Shadow now calls _collect_live_signals (tail-only). Patch that.
     monkeypatch.setattr(
         mm,
-        "_collect_operational_trades",
+        "_collect_live_signals",
         lambda *_args, **_kwargs: (
             {"CITADEL": [{"symbol": "BTCUSDT"}]},
             [{

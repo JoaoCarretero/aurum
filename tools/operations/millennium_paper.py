@@ -236,11 +236,15 @@ def _scan_new_signals(notify: bool = True) -> list[dict]:
     This is the paper equivalent of shadow's _run_tick signal extraction.
     De-dup keys use (engine, symbol, open_ts) — same as shadow.
     """
-    from engines.millennium import _load_dados, _collect_operational_trades
+    # Live collector scans the *tail* bars that _collect_operational_trades
+    # skips (needs forward bars for WIN/LOSS labeling). Without this,
+    # the last ~50h of bars NEVER produce signals and paper never opens
+    # — see engines/citadel.py live_mode docstring for the mechanism.
+    from engines.millennium import _load_dados, _collect_live_signals
     with contextlib.redirect_stdout(io.StringIO()):
         all_dfs, htf_stack, macro_series, corr = _load_dados(False)
-        _, all_trades = _collect_operational_trades(all_dfs, htf_stack,
-                                                    macro_series, corr)
+        _, all_trades = _collect_live_signals(all_dfs, htf_stack,
+                                              macro_series, corr)
     return list(all_trades)
 
 

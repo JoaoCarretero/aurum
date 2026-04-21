@@ -1861,6 +1861,84 @@ def _collect_operational_trades(all_dfs=None, htf_stack_by_sym=None, macro_serie
     all_trades.sort(key=lambda t: t["timestamp"])
     return engine_trades, all_trades
 
+
+def _collect_live_signals(all_dfs=None, htf_stack_by_sym=None,
+                          macro_series=None, corr=None):
+    """Live-only scan: runs each operational engine with live_mode=True.
+
+    Unlike :func:`_collect_operational_trades` (backtest-oriented, scans
+    the labelable region and skips the tail), this function scans the
+    tail bars — exactly where signals fire on new candles arriving in
+    real time. Each engine emits trades with ``result="LIVE"`` and no
+    path-dependent labeling; paper/shadow runtime handles the outcome.
+
+    Returns ``(engine_trades, all_trades_sorted_by_ts)``.
+    """
+    engine_trades: dict[str, list] = {}
+    shared_ctx = {
+        "all_dfs": all_dfs or {},
+        "htf_stack_by_sym": htf_stack_by_sym or {},
+        "macro_series": macro_series,
+        "corr": corr or {},
+    }
+
+    # CITADEL
+    azoth_live = []
+    for sym, df in shared_ctx["all_dfs"].items():
+        if sym not in SYMBOLS:
+            continue
+        trades, _ = azoth_scan(
+            df, sym, shared_ctx["macro_series"], shared_ctx["corr"],
+            shared_ctx["htf_stack_by_sym"].get(sym) if MTF_ENABLED else None,
+            live_mode=True,
+        )
+        for t in trades:
+            t["strategy"] = "CITADEL"
+            t.setdefault("confirmed", False)
+        azoth_live.extend(trades)
+    engine_trades["CITADEL"] = azoth_live
+
+    # RENAISSANCE
+    hermes_live = []
+    for sym, df in shared_ctx["all_dfs"].items():
+        if sym not in SYMBOLS:
+            continue
+        trades, _ = scan_hermes(
+            df, sym, shared_ctx["macro_series"], shared_ctx["corr"],
+            shared_ctx["htf_stack_by_sym"].get(sym) if MTF_ENABLED else None,
+            live_mode=True,
+        )
+        for t in trades:
+            t["strategy"] = "RENAISSANCE"
+        hermes_live.extend(trades)
+    engine_trades["RENAISSANCE"] = hermes_live
+
+    # JUMP
+    from engines.jump import scan_mercurio
+    mercurio_live = []
+    for sym, df in shared_ctx["all_dfs"].items():
+        if sym not in SYMBOLS:
+            continue
+        trades, _ = scan_mercurio(
+            df.copy(), sym,
+            shared_ctx["macro_series"], shared_ctx["corr"],
+            live_mode=True,
+        )
+        for t in trades:
+            t["strategy"] = "JUMP"
+        mercurio_live.extend(trades)
+    engine_trades["JUMP"] = mercurio_live
+
+    all_trades = []
+    for eng, trades in engine_trades.items():
+        for t in trades:
+            tt = t.copy()
+            tt.setdefault("strategy", eng)
+            all_trades.append(tt)
+    all_trades.sort(key=lambda t: t["timestamp"])
+    return engine_trades, all_trades
+
+
 def _menu():
     W = 50
     print(f"\n  {'─'*W}")

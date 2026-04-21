@@ -117,7 +117,20 @@ SEP = "─" * 80
 # ══════════════════════════════════════════════════════════════
 def scan_symbol(df: pd.DataFrame, symbol: str,
                 macro_bias_series, corr: dict,
-                htf_stack_dfs: dict | None = None) -> tuple[list, dict]:
+                htf_stack_dfs: dict | None = None,
+                live_mode: bool = False) -> tuple[list, dict]:
+    """Scan CITADEL signals on ``df``.
+
+    ``live_mode`` controls the tail-bar handling. In backtest (default),
+    the loop stops at ``len(df)-MAX_HOLD-2`` because ``label_trade``
+    needs MAX_HOLD+ forward bars to resolve WIN/LOSS. In live mode the
+    loop spans only the previously-skipped tail (``len(df)-MAX_HOLD-2``
+    to ``len(df)-1``), and each hit emits ``result="LIVE"`` without
+    calling ``label_trade`` — paper/shadow runners handle labeling at
+    runtime. All vetoes and the decision gates (``decide_direction``,
+    ``score_omega``, ``calc_levels``) are preserved bit-identical so
+    signal generation stays in sync with backtest calibration.
+    """
     df = indicators(df)
     df = swing_structure(df)
     df = omega(df)
@@ -172,7 +185,16 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
     _tl.info(f"\n{'═'*72}\n  {symbol}  [{df['time'].iloc[0].date()} → {df['time'].iloc[-1].date()}]\n{'═'*72}")
 
-    for idx in range(min_idx, len(df)-MAX_HOLD-2):
+    # Loop range: backtest scans the labelable region (bars with MAX_HOLD
+    # forward for trade outcome); live scans the tail (bars backtest would
+    # skip for lack of forward room). See function docstring.
+    if live_mode:
+        _loop_start = max(min_idx, len(df) - MAX_HOLD - 2)
+        _loop_end = len(df) - 1  # calc_levels needs idx+1 for entry ref
+    else:
+        _loop_start = min_idx
+        _loop_end = len(df) - MAX_HOLD - 2
+    for idx in range(_loop_start, _loop_end):
         # build row from pre-extracted arrays (no Series overhead)
         row = {"trend_struct":_str[idx],"struct_strength":_stre[idx],
                "slope21":_sl21[idx],"slope200":_sl200[idx],
@@ -312,21 +334,32 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
         entry, stop, target, rr = levels
 
-        if is_chop_trade:
-            result, duration, exit_p, exit_reason = label_trade_chop(
-                df, idx+1, direction, entry, stop, target)
+        if live_mode:
+            # Live: no forward bars to resolve outcome — runtime layer
+            # (paper_executor + position_manager) labels the trade as it
+            # plays out. Mirror a shape compatible with the trade dict
+            # assembled below.
+            result = "LIVE"
+            duration = 0
+            exit_p = entry
+            exit_reason = "live"
+            forced_mtm = False
         else:
-            result, duration, exit_p, exit_reason = label_trade(
-                df, idx+1, direction, entry, stop, target)
+            if is_chop_trade:
+                result, duration, exit_p, exit_reason = label_trade_chop(
+                    df, idx+1, direction, entry, stop, target)
+            else:
+                result, duration, exit_p, exit_reason = label_trade(
+                    df, idx+1, direction, entry, stop, target)
 
-        # Mark-to-market: force-close at last bar's close rather than
-        # silently discarding the trade. label_trade already returns the
-        # last-bar close as exit_p and MAX_HOLD as duration for OPEN.
-        forced_mtm = False
-        if result == "OPEN":
-            forced_mtm = True
-            raw_pnl = (float(exit_p) - entry) if direction == "BULLISH" else (entry - float(exit_p))
-            result   = "WIN" if raw_pnl > 0 else "LOSS"
+            # Mark-to-market: force-close at last bar's close rather than
+            # silently discarding the trade. label_trade already returns the
+            # last-bar close as exit_p and MAX_HOLD as duration for OPEN.
+            forced_mtm = False
+            if result == "OPEN":
+                forced_mtm = True
+                raw_pnl = (float(exit_p) - entry) if direction == "BULLISH" else (entry - float(exit_p))
+                result   = "WIN" if raw_pnl > 0 else "LOSS"
 
         vol_r = str(row.get("vol_regime", "NORMAL"))
         size  = position_size(account, entry, stop, score,
@@ -348,37 +381,43 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
                 vetos[motivo_agg] += 1
                 continue
 
-        ep = float(exit_p)
-        slip_exit = SLIPPAGE + SPREAD          # C2: slippage na saída (market order)
-        _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
-        if direction == "BULLISH":
-            entry_cost = entry * (1 + COMMISSION)              # C1: comissão entrada
-            ep_net     = ep * (1 - COMMISSION - slip_exit)     # C2: comissão + slip saída
-            funding    = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
-            pnl        = size * (ep_net - entry_cost) + funding
+        if live_mode:
+            # Live: runtime layer tracks PnL as trade plays out. Emit
+            # placeholder pnl/account; skip cooldown + self-tracking of
+            # open_pos (runtime has its own portfolio).
+            pnl = 0.0
         else:
-            entry_cost = entry * (1 - COMMISSION)              # C1: comissão entrada
-            ep_net     = ep * (1 + COMMISSION + slip_exit)     # C2: comissão + slip saída
-            funding    = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
-            pnl        = size * (entry_cost - ep_net) + funding
-        pnl     = round(pnl * LEVERAGE, 2)          # alavancagem escala PnL linearmente
-        # [L7] Post-hoc 90%/95% clamp removed — liquidation is now enforced
-        # inside label_trade at the path level (see core.signals._liq_prices).
-        # The floor at 0 stays: account cannot go negative, but any genuine
-        # liquidation has already been reflected in `pnl` via the liq exit price.
-        account = max(account + pnl, 0.0)
+            ep = float(exit_p)
+            slip_exit = SLIPPAGE + SPREAD          # C2: slippage na saída (market order)
+            _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
+            if direction == "BULLISH":
+                entry_cost = entry * (1 + COMMISSION)              # C1: comissão entrada
+                ep_net     = ep * (1 - COMMISSION - slip_exit)     # C2: comissão + slip saída
+                funding    = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
+                pnl        = size * (ep_net - entry_cost) + funding
+            else:
+                entry_cost = entry * (1 - COMMISSION)              # C1: comissão entrada
+                ep_net     = ep * (1 + COMMISSION + slip_exit)     # C2: comissão + slip saída
+                funding    = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
+                pnl        = size * (entry_cost - ep_net) + funding
+            pnl     = round(pnl * LEVERAGE, 2)          # alavancagem escala PnL linearmente
+            # [L7] Post-hoc 90%/95% clamp removed — liquidation is now enforced
+            # inside label_trade at the path level (see core.signals._liq_prices).
+            # The floor at 0 stays: account cannot go negative, but any genuine
+            # liquidation has already been reflected in `pnl` via the liq exit price.
+            account = max(account + pnl, 0.0)
 
-        if result == "LOSS":
-            consecutive_losses += 1
-            for n_losses in sorted(STREAK_COOLDOWN.keys(), reverse=True):
-                if consecutive_losses >= n_losses:
-                    cooldown_until = idx + STREAK_COOLDOWN[n_losses]
-                    break
-            sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
-        else:
-            consecutive_losses = 0
+            if result == "LOSS":
+                consecutive_losses += 1
+                for n_losses in sorted(STREAK_COOLDOWN.keys(), reverse=True):
+                    if consecutive_losses >= n_losses:
+                        cooldown_until = idx + STREAK_COOLDOWN[n_losses]
+                        break
+                sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
+            else:
+                consecutive_losses = 0
 
-        open_pos.append((idx + 1 + duration, symbol, size, entry))
+            open_pos.append((idx + 1 + duration, symbol, size, entry))
 
         ts = df["time"].iloc[idx].strftime("%d/%m %Hh")
         trade_type = "CHOP-MR" if is_chop_trade else direction
