@@ -12,6 +12,35 @@ os.chdir(ROOT)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _configure_windows_tk() -> None:
+    """Prefer the Tcl/Tk bundled with the active Python installation."""
+    if sys.platform != "win32":
+        return
+    py_root = Path(sys.executable).resolve().parent
+    tcl_root = py_root / "tcl"
+    tcl_lib = tcl_root / "tcl8.6"
+    tk_lib = tcl_root / "tk8.6"
+    if (tcl_lib / "init.tcl").exists():
+        os.environ["TCL_LIBRARY"] = str(tcl_lib)
+    if (tk_lib / "tk.tcl").exists():
+        os.environ["TK_LIBRARY"] = str(tk_lib)
+
+
+def _boot_workers_enabled() -> bool:
+    return os.getenv("AURUM_DISABLE_BOOT_WORKERS", "").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _test_mode_enabled() -> bool:
+    return os.getenv("AURUM_TEST_MODE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+_configure_windows_tk()
+
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox
@@ -1213,6 +1242,7 @@ class App(tk.Tk):
 
     def __init__(self):
         boot_t0 = time.perf_counter()
+        self._shutdown_done = False
         super().__init__()
         try:
             _configure_screen_logging()
@@ -1283,7 +1313,8 @@ class App(tk.Tk):
         self._timing_starts: dict[str, float] = {}
 
         chrome_t0 = time.perf_counter()
-        threading.Thread(target=_fetch, daemon=True).start()
+        if _boot_workers_enabled():
+            threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
         emit_timing_metric("boot.chrome", ms=(time.perf_counter() - chrome_t0) * 1000.0)
         self._ui_schedule_drain()
@@ -1299,34 +1330,36 @@ class App(tk.Tk):
         # para nao deixar a janela branca enquanto o ssh handshaking roda.
         tunnel_t0 = time.perf_counter()
         self._aurum_tunnel = None
-        try:
-            tunnel = _boot_tunnel_manager()
-            if tunnel is not None:
-                self._aurum_tunnel = tunnel
-                self.after(25, self._start_tunnel_async)
-        except Exception:
-            # Tunnel falhou -> launcher segue em local-mode.
-            self._aurum_tunnel = None
+        if _boot_workers_enabled():
+            try:
+                tunnel = _boot_tunnel_manager()
+                if tunnel is not None:
+                    self._aurum_tunnel = tunnel
+                    self.after(25, self._start_tunnel_async)
+            except Exception:
+                # Tunnel falhou -> launcher segue em local-mode.
+                self._aurum_tunnel = None
         emit_timing_metric("boot.tunnel_start", ms=(time.perf_counter() - tunnel_t0) * 1000.0)
 
         # ShadowPoller: le cockpit API em thread separada e cacheia.
         # UI thread nunca faz HTTP sync (evita freeze da mainloop).
         self._aurum_shadow_poller = None
         poller_t0 = time.perf_counter()
-        try:
-            from launcher_support.shadow_poller import ShadowPoller
-            from launcher_support.tunnel_registry import set_shadow_poller
-            from launcher_support.engines_live_view import _get_cockpit_client
-            poller = ShadowPoller(
-                client_factory=_get_cockpit_client,
-                engine="millennium",
-                poll_sec=5.0,
-            )
-            poller.start()
-            set_shadow_poller(poller)
-            self._aurum_shadow_poller = poller
-        except Exception:
-            pass
+        if _boot_workers_enabled():
+            try:
+                from launcher_support.shadow_poller import ShadowPoller
+                from launcher_support.tunnel_registry import set_shadow_poller
+                from launcher_support.engines_live_view import _get_cockpit_client
+                poller = ShadowPoller(
+                    client_factory=_get_cockpit_client,
+                    engine="millennium",
+                    poll_sec=5.0,
+                )
+                poller.start()
+                set_shadow_poller(poller)
+                self._aurum_shadow_poller = poller
+            except Exception:
+                pass
         emit_timing_metric("boot.shadow_poller_start", ms=(time.perf_counter() - poller_t0) * 1000.0)
 
     def _start_tunnel_async(self) -> None:
@@ -1351,6 +1384,56 @@ class App(tk.Tk):
             name="aurum-tunnel-start",
             daemon=True,
         ).start()
+
+    def _shutdown_runtime(self) -> None:
+        """Stop background services idempotently for WM_DELETE and tests."""
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+        self._ui_alive = False
+        try:
+            aid = getattr(self, "_ui_task_after_id", None)
+            if aid:
+                try:
+                    self.after_cancel(aid)
+                except Exception:
+                    pass
+                self._ui_task_after_id = None
+        except Exception:
+            pass
+        try:
+            from launcher_support.tunnel_registry import set_shadow_poller, set_tunnel_manager
+        except Exception:
+            set_shadow_poller = None
+            set_tunnel_manager = None
+        poller = getattr(self, "_aurum_shadow_poller", None)
+        if poller is not None:
+            try:
+                poller.stop(timeout_sec=1.0)
+            except Exception:
+                pass
+            self._aurum_shadow_poller = None
+            if set_shadow_poller is not None:
+                try:
+                    set_shadow_poller(None)
+                except Exception:
+                    pass
+        tunnel = getattr(self, "_aurum_tunnel", None)
+        if tunnel is not None:
+            try:
+                tunnel.stop(timeout_sec=3.0)
+            except Exception:
+                pass
+            self._aurum_tunnel = None
+            if set_tunnel_manager is not None:
+                try:
+                    set_tunnel_manager(None)
+                except Exception:
+                    pass
+
+    def destroy(self):
+        self._shutdown_runtime()
+        return super().destroy()
 
     def _configure_windows_dpi(self) -> None:
         """Prefer per-monitor DPI awareness on Windows laptops with scaling."""
@@ -6364,6 +6447,11 @@ class App(tk.Tk):
         data via whichever ``_arb_*_repaint`` callback is registered.
         """
         import threading
+        if _test_mode_enabled():
+            self._ui_call_soon(lambda: self._arb_hub_telem_update(
+                {"dex_online": 0, "cex_online": 0, "total": 0},
+                None, [], [], [], [], [], []))
+            return
         try:
             from core.ui.funding_scanner import FundingScanner
         except Exception as e:
@@ -8453,12 +8541,9 @@ class App(tk.Tk):
         return str(row.get("mode") or "").strip().lower() == current
 
     def _eng_row_key(self, row: dict) -> str:
-        rid = row.get("_run_id")
-        if rid:
-            return f"run:{rid}"
-        pid = row.get("pid")
-        log_file = row.get("log_file") or row.get("log") or ""
-        return f"pid:{pid}|log:{log_file}"
+        from core.ops import run_catalog
+
+        return run_catalog.engine_log_row_key(row)
 
     def _eng_set_mode_filter(self, mode_name: str) -> None:
         self._eng_mode_filter = mode_name
@@ -8488,201 +8573,45 @@ class App(tk.Tk):
                 pass
 
     def _eng_run_id_of(self, row: dict) -> str | None:
-        rid = row.get("_run_id")
-        if rid:
-            return rid
-        rd = row.get("run_dir")
-        if rd:
-            return str(rd).rstrip("/").rsplit("/", 1)[-1]
-        return None
+        from core.ops import run_catalog
+
+        return run_catalog.engine_log_run_id_of(row)
 
     def _eng_recency_key(self, row: dict) -> float:
-        """Higher = more recent. Uses last_tick_at > started_at > 0."""
-        from datetime import datetime, timezone
-        for key in ("last_tick_at", "started_at", "started"):
-            v = row.get(key) or row.get("_heartbeat", {}).get(key)
-            if not v:
-                continue
-            try:
-                ts = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                return ts.timestamp()
-            except Exception:
-                continue
-        return 0.0
+        """Higher = more recent. Delegated to shared run-catalog helpers."""
+        from core.ops import run_catalog
+
+        return run_catalog.engine_log_recency_key(row)
 
     def _eng_scan_vps_runs(self, limit: int = 10) -> list[dict]:
-        """Query cockpit API /v1/runs and produce pseudo-proc rows for VPS
-        shadow/paper runs. Makes VPS runs visible in ENGINE LOGS screen same
-        way local spawns are — so user can audit 'what's running/ran' without
-        leaving the launcher.
-
-        Silent fail on any error (tunnel down, cockpit unreachable): returns
-        empty. Caller falls back to local-only scan.
-
-        Important: do not fetch per-run heartbeat here. This list is rebuilt
-        often and synchronous heartbeat fan-out can freeze Tk for seconds when
-        the tunnel is cold or flaky. The detail pane still fetches heartbeat
-        on demand after selection.
-
-        Also keep this list to active VPS runs only. Historical remote runs
-        belong in the cockpit itself; pulling stopped rows here creates noise
-        after a local cleanup and makes the screen look "uncleared".
-        """
+        """Resolve VPS engine-log rows via the shared run catalog."""
         try:
             from launcher_support.engines_live_view import _get_cockpit_client
+            from core.ops import run_catalog
             client = _get_cockpit_client()
         except Exception:
             return []
-        if client is None:
-            return []
-        runs: list[dict] = []
         try:
-            raw_runs = client._get("/v1/runs")
+            return run_catalog.collect_engine_log_vps_rows(client, limit=limit)
         except Exception:
             return []
-        if not isinstance(raw_runs, list):
-            return []
-        runs = [
-            r for r in raw_runs
-            if (
-                isinstance(r, dict)
-                and str(r.get("status") or "").lower() == "running"
-                and str(r.get("mode") or "").lower() in {"shadow", "paper"}
-            )
-        ]
-
-        runs.sort(key=lambda r: str(r.get("started_at") or r.get("last_tick_at") or ""), reverse=True)
-        rows: list[dict] = []
-        for r in runs[:limit]:
-            engine_name = str(r.get("engine") or "?").upper()
-            mode = str(r.get("mode") or "?")
-            label = f"{engine_name} ({mode})"
-            status = str(r.get("status") or "unknown").lower()
-            alive = status == "running"
-            started = r.get("started_at") or r.get("last_tick_at") or ""
-            started_str = str(started)[:16].replace("T", " ") if started else ""
-            hb = {
-                "started_at": r.get("started_at"),
-                "last_tick_at": r.get("last_tick_at"),
-                "status": r.get("status"),
-                "novel_total": r.get("novel_total"),
-            }
-            rows.append({
-                "engine": label,
-                "mode": mode,
-                "pid": "VPS" if alive else "-",
-                "started": started_str,
-                "started_at": r.get("started_at"),
-                "alive": alive,
-                "log": f"remote:{r.get('run_id')}",
-                "run_dir": f"remote://{r.get('run_id')}",
-                "_remote": True,
-                "_run_id": r.get("run_id"),
-                "_heartbeat": hb,
-            })
-        return rows
 
     def _eng_scan_historical_runs(self, *, limit: int = 15,
                                    hours: int = 48) -> list[dict]:
-        """Scan data/<engine>/<run_id>/ for recent runs, return pseudo-proc rows.
-
-        Covers local runs (data/<engine>/), shadow (data/<engine>_shadow/),
-        and paper (data/<engine>_paper/) layouts. Each row has shape
-        compatible with _eng_render_row: engine, pid='-', started, alive=False,
-        log (best-effort path to logs/<name>.log or logs/shadow.log).
-        """
-        from pathlib import Path as _Path
-        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        """Resolve recent local historical rows via the shared run catalog."""
         now_ts = time.time()
         cached = getattr(self, "_eng_historical_cache", None)
         cached_ts = float(getattr(self, "_eng_historical_cache_ts", 0.0) or 0.0)
         if cached is not None and (now_ts - cached_ts) < 30.0:
             return list(cached[:limit])
-
-        data_root = _Path("data")
-        if not data_root.exists():
-            return []
-        cutoff = _dt.now(_tz.utc) - _td(hours=hours)
-
-        rows: list[tuple[float, dict]] = []
-        for engine_dir in data_root.iterdir():
-            if not engine_dir.is_dir():
-                continue
-            name = engine_dir.name
-            if name.startswith(".") or name in ("audit", "db_backups",
-                                                 "exports", "funding_scanner",
-                                                 "macro"):
-                continue
-            base_slug = (
-                name.removesuffix("_shadow").removesuffix("_paper").lower()
-                if name.endswith(("_shadow", "_paper"))
-                else name.lower()
+        try:
+            from core.ops import run_catalog
+            result = run_catalog.collect_engine_log_local_rows(
+                limit=limit,
+                hours=hours,
             )
-            if base_slug not in self._eng_known_slugs():
-                continue
-            # Derive display engine slug from dir name
-            if name.endswith("_shadow"):
-                engine_slug = name.removesuffix("_shadow") + " (shadow)"
-            elif name.endswith("_paper"):
-                engine_slug = name.removesuffix("_paper") + " (paper)"
-            else:
-                engine_slug = name
-            try:
-                run_dirs = [d for d in engine_dir.iterdir() if d.is_dir()]
-            except OSError:
-                continue
-            for run_dir in run_dirs:
-                try:
-                    mtime = run_dir.stat().st_mtime
-                except OSError:
-                    continue
-                run_dt = _dt.fromtimestamp(mtime, tz=_tz.utc)
-                if run_dt < cutoff:
-                    continue
-                # Pick most plausible log file
-                candidates = [
-                    run_dir / "logs" / "shadow.log",
-                    run_dir / "logs" / "paper.log",
-                    run_dir / "logs" / "live.log",
-                    run_dir / "logs" / "engine.log",
-                ]
-                log_path = next((str(p) for p in candidates if p.exists()), "")
-                if not log_path:
-                    # Try any *.log in logs/
-                    logs_dir = run_dir / "logs"
-                    if logs_dir.exists():
-                        logs = list(logs_dir.glob("*.log"))
-                        if logs:
-                            log_path = str(logs[0])
-                # Best-effort heartbeat read for uptime + signal count
-                hb: dict = {}
-                hb_path = run_dir / "state" / "heartbeat.json"
-                if hb_path.exists():
-                    try:
-                        import json as _json
-                        hb = _json.loads(hb_path.read_text(encoding="utf-8"))
-                    except Exception:
-                        hb = {}
-                # Derive mode from dir name (millennium_paper -> paper)
-                _mode = "paper" if name.endswith("_paper") else (
-                    "shadow" if name.endswith("_shadow") else "live")
-                rows.append((mtime, {
-                    "engine": engine_slug,
-                    "mode": _mode,
-                    "pid": "-",
-                    "started": run_dt.strftime("%m-%d %H:%M"),
-                    "started_at": hb.get("started_at"),
-                    "alive": False,
-                    "log": log_path,
-                    "run_dir": str(run_dir),
-                    "_remote": False,
-                    "_run_id": run_dir.name,
-                    "_heartbeat": hb,
-                }))
-        rows.sort(key=lambda t: t[0], reverse=True)
-        result = [r for _, r in rows]
+        except Exception:
+            result = []
         self._eng_historical_cache = result
         self._eng_historical_cache_ts = now_ts
         return result[:limit]
@@ -8815,10 +8744,11 @@ class App(tk.Tk):
 
         # Three proc shapes coexist: live-local sets `log_file`; historical
         # local scan and VPS scan set `log`. Prefer log_file then fall back.
+        from core.ops import run_catalog
+
         log_file = proc.get("log_file") or proc.get("log") or ""
-        engine = proc.get("engine", "?")
         self._eng_log_header.configure(
-            text=f"  {engine} · pid {pid} · {log_file}", fg=AMBER_D)
+            text=run_catalog.engine_log_header(proc), fg=AMBER_D)
 
         if not log_file:
             try:
@@ -8885,7 +8815,8 @@ class App(tk.Tk):
     def _eng_fetch_entries(self, proc: dict,
                            stop: threading.Event) -> tuple[list[str], str]:
         """Blocking fetch of entries. Returns (formatted_lines, summary)."""
-        lines: list[str] = []
+        from core.ops import run_catalog
+
         if proc.get("_remote"):
             rid = proc.get("_run_id")
             if not rid:
@@ -8895,81 +8826,22 @@ class App(tk.Tk):
                 client = _get_cockpit_client()
             except Exception:
                 return [], "cockpit client unavailable"
-            if client is None:
-                return [], "cockpit not configured"
-            # For paper runs, signals are more interesting than trades
-            # (trades.jsonl only grows on close). Shadow uses trades.
-            mode = str(proc.get("mode") or "").lower()
-            try:
-                if mode == "paper":
-                    payload = client._get(
-                        f"/v1/runs/{rid}/trades?limit=50") or {}
-                else:
-                    payload = client._get(
-                        f"/v1/runs/{rid}/trades?limit=50") or {}
-                records = payload.get("trades") or []
-            except Exception as exc:
-                return [], f"fetch failed: {type(exc).__name__}"
-            if not records:
-                return [], "sem entries"
-            for rec in records:
-                if stop.is_set():
-                    break
-                lines.append(self._eng_fmt_entry(rec))
-            return lines, f"{len(records)} entries"
+            lines, summary = run_catalog.fetch_remote_entries(
+                client,
+                rid,
+                mode=str(proc.get("mode") or "").lower(),
+                limit=50,
+            )
+            if stop.is_set():
+                return [], summary
+            return lines, summary
 
         # Local
         rd = proc.get("run_dir")
-        if not rd:
-            return [], "sem run_dir"
-        from pathlib import Path as _P
-        run_dir = _P(rd)
-        for candidate in ("reports/trades.jsonl", "reports/signals.jsonl"):
-            f = run_dir / candidate
-            if not f.exists():
-                continue
-            import json as _json
-            try:
-                raw = f.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            records = []
-            for ln in raw.splitlines()[-50:]:
-                ln = ln.strip()
-                if not ln:
-                    continue
-                try:
-                    records.append(_json.loads(ln))
-                except Exception:
-                    continue
-            if not records:
-                continue
-            for rec in records:
-                if stop.is_set():
-                    break
-                lines.append(self._eng_fmt_entry(rec))
-            return lines, f"{len(records)} from {candidate}"
-        return [], "sem entries no run_dir"
-
-    def _eng_fmt_entry(self, rec: dict) -> str:
-        """Compact one-line formatter for a signal/trade record."""
-        ts = (rec.get("ts") or rec.get("timestamp")
-              or rec.get("shadow_observed_at") or "")
-        ts_s = str(ts)[:19].replace("T", " ")
-        strat = str(rec.get("strategy") or rec.get("engine") or "?")[:11]
-        sym = str(rec.get("symbol") or "?")[:9]
-        direction = str(rec.get("direction") or rec.get("trade_type")
-                        or "")[:4]
-        entry = rec.get("entry") or rec.get("entry_price")
-        decision = rec.get("decision") or rec.get("exit_reason") or ""
-        pnl = rec.get("pnl") or rec.get("pnl_after_fees")
-        tail = ""
-        if pnl is not None:
-            tail = f"  pnl={pnl:+.2f}"
-        elif decision:
-            tail = f"  [{decision}]"
-        entry_s = f"  entry={entry:.5g}" if isinstance(entry, (int, float)) else ""
-        return f"{ts_s}  {strat:<11} {sym:<9} {direction:<4}{entry_s}{tail}"
+        lines, summary = run_catalog.read_local_entries(rd, limit=50)
+        if stop.is_set():
+            return [], summary
+        return lines, summary
 
     def _eng_apply_entries(self, lines: list[str], summary: str) -> None:
         """UI-thread sink for worker results — repaints the entries text."""
@@ -8996,29 +8868,25 @@ class App(tk.Tk):
         """
         try:
             from launcher_support.engines_live_view import _get_cockpit_client
+            from core.ops import run_catalog
             client = _get_cockpit_client()
         except Exception as exc:
             self._eng_log_queue.put((
                 "SYSTEM", f"(cockpit client unavailable: {exc})"))
             return
-        if client is None:
-            self._eng_log_queue.put((
-                "SYSTEM", "(cockpit_api not configured — VPS logs "
-                "unavailable)"))
-            return
 
         seen_last: str | None = None
         while not stop_event.is_set():
-            try:
-                payload = client._get(f"/v1/runs/{run_id}/log?tail=500")
-            except Exception as exc:
-                self._eng_log_queue.put((
-                    "SYSTEM", f"(cockpit log fetch failed: "
-                              f"{type(exc).__name__})"))
+            lines, error = run_catalog.fetch_remote_log_tail(
+                client,
+                run_id,
+                tail=500,
+            )
+            if error:
+                self._eng_log_queue.put(("SYSTEM", error))
                 if stop_event.wait(5.0):
                     return
                 continue
-            lines = payload.get("lines") if isinstance(payload, dict) else None
             if lines:
                 # Skip lines we already emitted: find the overlap with
                 # seen_last (last line we pushed).
@@ -9039,16 +8907,16 @@ class App(tk.Tk):
         open, then follows appends. The queue is consumed by the UI thread
         in _eng_poll_logs.
         """
-        if not log_path.exists():
-            self._eng_log_queue.put(("SYSTEM",
-                                     f"(log file not found: {log_path})"))
+        from core.ops import run_catalog
+
+        seed_lines, error = run_catalog.read_log_seed_lines(log_path, limit=500)
+        if error:
+            self._eng_log_queue.put(("SYSTEM", error))
             return
         try:
-            # Seed with last ~500 lines for context
             with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
-                lines = fh.readlines()
-                for line in lines[-500:]:
-                    self._eng_log_queue.put(("LINE", line.rstrip("\n")))
+                for line in seed_lines:
+                    self._eng_log_queue.put(("LINE", line))
                 fh.seek(0, 2)  # EOF
 
                 while not stop_event.is_set():

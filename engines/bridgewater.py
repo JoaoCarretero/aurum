@@ -365,6 +365,22 @@ def _trade_sentiment_diagnostics(closed: list[dict]) -> dict:
     }
 
 
+def _runtime_sentiment_view(
+    sentiment_data: dict[str, dict],
+    *,
+    disable_oi: bool,
+) -> dict[str, dict]:
+    if not disable_oi:
+        return sentiment_data
+    out: dict[str, dict] = {}
+    for sym, rec in sentiment_data.items():
+        item = dict(rec)
+        item["oi_df"] = None
+        item["oi_ready"] = True
+        out[sym] = item
+    return out
+
+
 def _resolve_runtime_preset(
     preset: str,
     *,
@@ -1175,13 +1191,17 @@ if __name__ == "__main__":
         end_time_ms=END_TIME_MS,
         window_days=SCAN_DAYS,
     )
+    runtime_sentiment_data = _runtime_sentiment_view(
+        sentiment_data,
+        disable_oi=RUNTIME_DISABLE_OI,
+    )
     eligible_symbols = [
         s for s in SYMBOLS
         if s in all_dfs
-        and s in sentiment_data
-        and sentiment_data[s].get("funding_z") is not None
-        and sentiment_data[s].get("oi_ready", sentiment_data[s].get("oi_df") is not None)
-        and sentiment_data[s].get("ls_ready", sentiment_data[s].get("ls_signal") is not None)
+        and s in runtime_sentiment_data
+        and runtime_sentiment_data[s].get("funding_z") is not None
+        and runtime_sentiment_data[s].get("oi_ready", runtime_sentiment_data[s].get("oi_df") is not None)
+        and runtime_sentiment_data[s].get("ls_ready", runtime_sentiment_data[s].get("ls_signal") is not None)
     ]
     skipped_sentiment = sorted([s for s in SYMBOLS if s in all_dfs and s not in eligible_symbols])
     if skipped_sentiment:
@@ -1191,6 +1211,7 @@ if __name__ == "__main__":
         print("  sem simbolos com sentiment completo"); sys.exit(1)
     all_dfs = {sym: all_dfs[sym] for sym in eligible_symbols}
     SYMBOLS = eligible_symbols
+    runtime_sentiment_data = {sym: runtime_sentiment_data[sym] for sym in eligible_symbols}
 
     if not _scan_window_can_close_trades(N_CANDLES):
         print(f"\n  insufficient sample: {N_CANDLES} candles <= MAX_HOLD {MAX_HOLD}")
@@ -1209,7 +1230,7 @@ if __name__ == "__main__":
     for sym, df in all_dfs.items():
         coverage = _coverage_eligibility(
             df,
-            sentiment_data.get(sym),
+            runtime_sentiment_data.get(sym),
             max(0, len(df) - N_CANDLES),
             min_fraction=RUNTIME_MIN_COVERAGE_FRACTION,
         )
@@ -1232,7 +1253,7 @@ if __name__ == "__main__":
             )
             continue
         trades, vetos = scan_thoth(df, sym, macro_bias, corr,
-                                   sentiment_data=sentiment_data,
+                                   sentiment_data=runtime_sentiment_data,
                                    scan_start_idx=symbol_scan_start_idx,
                                    disable_oi=RUNTIME_DISABLE_OI,
                                    allowed_macro_regimes=RUNTIME_ALLOWED_MACRO_REGIMES,

@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -7,6 +8,25 @@ import _pytest.pathlib as pytest_pathlib
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+
+def _configure_windows_tk() -> None:
+    """Set deterministic Tcl/Tk paths before any tkinter import on Windows."""
+    if sys.platform != "win32":
+        return
+    py_root = Path(sys.executable).resolve().parent
+    tcl_root = py_root / "tcl"
+    tcl_lib = tcl_root / "tcl8.6"
+    tk_lib = tcl_root / "tk8.6"
+    if (tcl_lib / "init.tcl").exists():
+        os.environ["TCL_LIBRARY"] = str(tcl_lib)
+    if (tk_lib / "tk.tcl").exists():
+        os.environ["TK_LIBRARY"] = str(tk_lib)
+
+
+_configure_windows_tk()
+os.environ.setdefault("AURUM_DISABLE_BOOT_WORKERS", "1")
+os.environ.setdefault("AURUM_TEST_MODE", "1")
 
 # Windows + synced/sandboxed filesystems can deny pytest's dead-symlink
 # cleanup scan on basetemp. Disable that best-effort cleanup so the suite

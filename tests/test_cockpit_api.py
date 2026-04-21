@@ -21,7 +21,8 @@ def api_app(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(api_app):
-    return TestClient(api_app)
+    with TestClient(api_app) as client:
+        yield client
 
 
 def _make_run(data_root: Path, engine_subdir: str, run_id: str,

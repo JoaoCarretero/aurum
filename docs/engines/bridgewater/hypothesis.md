@@ -42,10 +42,10 @@ Arquivar ou manter em quarentena se qualquer uma destas condicoes aparecer:
 ## Split hardcoded desta rodada
 
 ```python
-TRAIN_END = "2026-03-31"
-TEST_END = "2026-04-10"
-HOLDOUT_START = "2026-04-10"
-HOLDOUT_END = "2026-04-20"
+TRAIN_END = "2026-04-01T19:00:00"
+TEST_END = "2026-04-10T19:00:00"
+HOLDOUT_START = "2026-04-10T19:00:00"
+HOLDOUT_END = "2026-04-20T19:00:00"
 ```
 
 Observacao:
@@ -58,6 +58,8 @@ Observacao:
 - Engine: `bridgewater`
 - Familia: sentiment contrarian cross-sectional
 - Universo: `bluechip`
+- Universo efetivo desta rodada: subconjunto `coverage-stable` de 16 simbolos
+- Simbolos: `BTC, ETH, ADA, AVAX, LINK, DOT, ATOM, NEAR, INJ, ARB, OP, SUI, RENDER, FET, SAND, AAVE`
 - Timeframe: `1h`
 - Preset base: `robust`
 - Canais promotaveis nesta rodada: `funding + LS`

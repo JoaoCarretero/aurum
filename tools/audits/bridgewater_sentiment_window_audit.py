@@ -58,10 +58,17 @@ def earliest_contiguous_ts(kind: str, symbol: str, period: str) -> pd.Timestamp 
     return pd.Timestamp(last_block["time"].min())
 
 
-def joint_contiguous_start(symbol: str, period: str) -> tuple[pd.Timestamp | None, dict[str, str | None]]:
+def joint_contiguous_start(
+    symbol: str,
+    period: str,
+    *,
+    disable_oi: bool = False,
+) -> tuple[pd.Timestamp | None, dict[str, str | None]]:
     oi = earliest_contiguous_ts("open_interest", symbol, period)
     ls = earliest_contiguous_ts("long_short_ratio", symbol, period)
-    starts = [ts for ts in (oi, ls) if ts is not None]
+    starts = [ts for ts in (() if disable_oi else (oi,)) if ts is not None]
+    if ls is not None:
+        starts.append(ls)
     joint = max(starts) if starts else None
     return joint, {
         "open_interest": oi.isoformat() if oi is not None else None,
@@ -104,8 +111,9 @@ def audit_symbol(
     end: pd.Timestamp,
     min_fraction: float,
     max_hold: int,
+    disable_oi: bool = False,
 ) -> dict[str, object]:
-    joint_start, channel_starts = joint_contiguous_start(symbol, period)
+    joint_start, channel_starts = joint_contiguous_start(symbol, period, disable_oi=disable_oi)
     available = available_scan_candles(joint_start, end, interval)
     return {
         "symbol": symbol,
@@ -124,6 +132,7 @@ def audit_symbol(
 def build_report(args: argparse.Namespace) -> dict[str, object]:
     basket_name, symbols = _resolve_symbols(args.engine, args.basket, args.symbols)
     end = pd.Timestamp(args.end) if args.end else pd.Timestamp.utcnow().tz_localize(None)
+    disable_oi = bool(getattr(args, "disable_oi", False))
     rows = [
         audit_symbol(
             sym,
@@ -132,6 +141,7 @@ def build_report(args: argparse.Namespace) -> dict[str, object]:
             end=end,
             min_fraction=args.min_fraction,
             max_hold=args.max_hold,
+            disable_oi=disable_oi,
         )
         for sym in symbols
     ]
@@ -143,16 +153,29 @@ def build_report(args: argparse.Namespace) -> dict[str, object]:
             (row for row in rows if row["max_eligible_days"] > 0),
             key=lambda row: row["max_eligible_days"],
         )["symbol"]
+    stable_symbols = [
+        row["symbol"]
+        for row in rows
+        if row["max_eligible_days"] >= 30.0
+    ]
+    stable_cap = min(
+        (row["max_eligible_days"] for row in rows if row["symbol"] in stable_symbols),
+        default=0.0,
+    )
     return {
         "engine": args.engine.upper() if args.engine else None,
         "basket": basket_name,
         "interval": args.interval,
         "period": args.period,
         "end": end.isoformat(),
+        "disable_oi": disable_oi,
         "min_fraction": args.min_fraction,
         "max_hold": args.max_hold,
         "basket_max_eligible_days": basket_cap,
         "basket_blocker": blocker,
+        "stable_symbols_30d": stable_symbols,
+        "stable_symbols_30d_count": len(stable_symbols),
+        "stable_symbols_30d_cap": stable_cap,
         "symbols": rows,
     }
 
@@ -160,11 +183,15 @@ def build_report(args: argparse.Namespace) -> dict[str, object]:
 def _print_text(report: dict[str, object]) -> None:
     print(
         f"engine={report['engine']} basket={report['basket']} interval={report['interval']} "
-        f"period={report['period']} end={report['end']}"
+        f"period={report['period']} end={report['end']} disable_oi={report['disable_oi']}"
     )
     print(
         f"basket_max_eligible_days={report['basket_max_eligible_days']} "
         f"basket_blocker={report['basket_blocker']}"
+    )
+    print(
+        f"stable_symbols_30d_count={report['stable_symbols_30d_count']} "
+        f"stable_symbols_30d_cap={report['stable_symbols_30d_cap']}"
     )
     for row in report["symbols"]:
         print(
@@ -184,6 +211,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--interval", default="1h")
     ap.add_argument("--period", default="15m")
     ap.add_argument("--end", default=None)
+    ap.add_argument("--disable-oi", action="store_true")
     ap.add_argument("--min-fraction", type=float, default=0.70)
     ap.add_argument("--max-hold", type=int, default=MAX_HOLD)
     ap.add_argument("--json", action="store_true")

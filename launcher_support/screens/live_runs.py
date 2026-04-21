@@ -16,6 +16,7 @@ from config.paths import DATA_DIR
 from core.ui.ui_palette import AMBER, AMBER_D, BG, BG3, BORDER, DIM, DIM2, FONT, PANEL, WHITE
 from launcher_support.screens.base import Screen
 from core import db_live_runs
+from core.ops import run_catalog
 
 
 _LIST_COLS: list[tuple[str, int]] = [
@@ -67,6 +68,7 @@ class LiveRunsScreen(Screen):
         self._list_canvas: tk.Canvas | None = None
         self._detail_frame: tk.Frame | None = None
         self._filter_tabs: dict[str, tk.Label] = {}
+        self._current_rows: list[run_catalog.RunSummary] = []
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -199,14 +201,14 @@ class LiveRunsScreen(Screen):
         self._selected_run_id = None  # reset so auto-select picks newest in new mode
         self._render()
 
-    def _fetch_runs(self) -> list[dict]:
+    def _fetch_runs(self) -> list[run_catalog.RunSummary]:
         now = time.monotonic()
         cache = self._list_cache
         if cache is not None and cache[1] == self._mode_filter and \
                 (now - cache[0]) < self._TTL_SEC:
             return cache[2]
         mode = None if self._mode_filter == "all" else self._mode_filter
-        runs = db_live_runs.list_live_runs(mode=mode, limit=200)
+        runs = run_catalog.list_runs_catalog(mode=mode, client=None, limit_db=500)
         self._list_cache = (now, self._mode_filter, runs)
         return runs
 
@@ -222,39 +224,40 @@ class LiveRunsScreen(Screen):
                      font=(FONT, 9), fg=DIM, bg=BG,
                      anchor="w").pack(fill="x", pady=8)
             return
+        self._current_rows = list(runs)
         for run in runs:
             self._render_row(run)
         # auto-select newest if nothing selected
         # TODO(task-10): clear _selected_run_id if it no longer appears in list
         # (e.g., after ARCHIVE). For now, detail panel falls back to "run not found".
         if self._selected_run_id is None and runs:
-            self._select(runs[0]["run_id"])
+            self._select(runs[0].run_id)
 
-    def _render_row(self, run: dict) -> None:
+    def _render_row(self, run: run_catalog.RunSummary) -> None:
         if self._list_frame is None:
             return
         state_color = {
             "running": AMBER, "stopped": DIM, "crashed": DIM,
-        }.get(run.get("status") or "", DIM)
+        }.get(run.status or "", DIM)
         row = tk.Frame(self._list_frame, bg=BG, cursor="hand2")
         row.pack(fill="x", padx=2, pady=1)
         row.bind("<Button-1>",
-                 lambda _e, rid=run["run_id"]: self._select(rid))
+                 lambda _e, rid=run.run_id: self._select(rid))
         cols = [
-            (run.get("status", "?")[:6].upper(), state_color, _LIST_COLS[0][1]),
-            (run.get("engine", "?")[:10], AMBER, _LIST_COLS[1][1]),
-            (run.get("mode", "?")[:5].upper(), AMBER_D, _LIST_COLS[2][1]),
-            ((run.get("started_at") or "")[:16], DIM, _LIST_COLS[3][1]),
-            (str(run.get("tick_count") or 0), DIM, _LIST_COLS[4][1]),
-            (str(run.get("novel_count") or 0), DIM, _LIST_COLS[5][1]),
-            (f"{run.get('equity') or 0:.0f}", DIM, _LIST_COLS[6][1]),
+            ((run.status or "?")[:6].upper(), state_color, _LIST_COLS[0][1]),
+            (run.engine[:10], AMBER, _LIST_COLS[1][1]),
+            ((run.mode or "?")[:5].upper(), AMBER_D, _LIST_COLS[2][1]),
+            ((run.started_at or "")[:16], DIM, _LIST_COLS[3][1]),
+            (str(run.ticks_ok or 0), DIM, _LIST_COLS[4][1]),
+            (str(run.novel or 0), DIM, _LIST_COLS[5][1]),
+            (f"{run.equity or 0:.0f}", DIM, _LIST_COLS[6][1]),
         ]
         for text, color, width in cols:
             lbl = tk.Label(row, text=text, font=(FONT, 8),
                            fg=color, bg=BG, width=width, anchor="w")
             lbl.pack(side="left")
             lbl.bind("<Button-1>",
-                     lambda _e, rid=run["run_id"]: self._select(rid))
+                     lambda _e, rid=run.run_id: self._select(rid))
 
     def _select(self, run_id: str) -> None:
         self._selected_run_id = run_id
@@ -265,7 +268,7 @@ class LiveRunsScreen(Screen):
             return
         for w in self._detail_frame.winfo_children():
             w.destroy()
-        run = db_live_runs.get_live_run(run_id)
+        run = next((row for row in self._current_rows if row.run_id == run_id), None)
         if run is None:
             tk.Label(self._detail_frame, text="run not found",
                      font=(FONT, 9), fg=DIM, bg=PANEL).pack(anchor="w")
@@ -273,40 +276,40 @@ class LiveRunsScreen(Screen):
 
         tk.Label(
             self._detail_frame,
-            text=f"{run['engine']} / {run['mode']}",
+            text=f"{run.engine} / {run.mode}",
             font=(FONT, 10, "bold"), fg=AMBER, bg=PANEL, anchor="w",
         ).pack(anchor="w")
         tk.Label(
-            self._detail_frame, text=run["run_id"],
+            self._detail_frame, text=run.run_id,
             font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w",
         ).pack(anchor="w", pady=(0, 8))
 
         self._detail_section("IDENTITY", [
-            ("engine", run.get("engine", "?")),
-            ("mode", run.get("mode", "?")),
-            ("host", run.get("host") or "?"),
-            ("label", run.get("label") or "-"),
-            ("run_dir", run.get("run_dir") or "?"),
+            ("engine", run.engine or "?"),
+            ("mode", run.mode or "?"),
+            ("host", run.host or "?"),
+            ("label", run.label or "-"),
+            ("run_dir", str(run.run_dir) if run.run_dir is not None else "?"),
         ])
         self._detail_section("TIMELINE", [
-            ("started", (run.get("started_at") or "?")[:19]),
-            ("ended", (run.get("ended_at") or "-")[:19]),
-            ("last tick", (run.get("last_tick_at") or "-")[:19]),
-            ("status", run.get("status") or "unknown"),
+            ("started", (run.started_at or "?")[:19]),
+            ("ended", (run.stopped_at or "-")[:19]),
+            ("last tick", (run.last_tick_at or "-")[:19]),
+            ("status", run.status or "unknown"),
         ])
         self._detail_section("PERFORMANCE", [
-            ("equity", f"{run.get('equity') or 0:.2f}"),
-            ("open positions", str(run.get("open_count") or 0)),
+            ("equity", f"{run.equity or 0:.2f}"),
+            ("open positions", str(run.open_count or 0)),
         ])
         self._detail_section("ACTIVITY", [
-            ("ticks", str(run.get("tick_count") or 0)),
-            ("novel signals", str(run.get("novel_count") or 0)),
+            ("ticks", str(run.ticks_ok or 0)),
+            ("novel signals", str(run.novel or 0)),
         ])
 
         actions = tk.Frame(self._detail_frame, bg=PANEL)
         actions.pack(fill="x", pady=(10, 0))
         for label, cmd, color in [
-            ("OPEN DIR", lambda rd=run.get("run_dir"): _open_dir(rd), AMBER),
+            ("OPEN DIR", lambda rd=(str(run.run_dir) if run.run_dir is not None else None): _open_dir(rd), AMBER),
             ("ARCHIVE", self._archive_selected, AMBER_D),
         ]:
             b = tk.Label(

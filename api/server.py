@@ -5,6 +5,7 @@ FastAPI app with CORS, rate limiting, and all route groups.
 import os
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +48,12 @@ RATE_WINDOW = 60  # seconds
 
 def create_app(*, expose_docs: bool | None = None) -> FastAPI:
     docs_enabled = _env_flag("AURUM_API_EXPOSE_DOCS", default=False) if expose_docs is None else expose_docs
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        init_db()
+        yield
+
     app = FastAPI(
         title="AURUM Finance API",
         version="1.0.0",
@@ -54,6 +61,7 @@ def create_app(*, expose_docs: bool | None = None) -> FastAPI:
         docs_url="/docs" if docs_enabled else None,
         redoc_url="/redoc" if docs_enabled else None,
         openapi_url="/openapi.json" if docs_enabled else None,
+        lifespan=lifespan,
     )
 
     app.add_middleware(
@@ -87,10 +95,6 @@ def create_app(*, expose_docs: bool | None = None) -> FastAPI:
     app.include_router(trading_router)
     app.include_router(analytics_router)
     app.websocket("/api/live/ws")(live_ws)
-
-    @app.on_event("startup")
-    async def on_startup():
-        init_db()
 
     @app.get("/", tags=["health"])
     async def root():

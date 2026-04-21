@@ -1,6 +1,23 @@
 """Tests pros helpers puros do sidebar. Render Tk eh smoke-only."""
 from __future__ import annotations
+
+import tkinter as tk
+
 import pytest
+
+
+@pytest.fixture(scope="module")
+def gui_root():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display available")
+    root.withdraw()
+    yield root
+    try:
+        root.destroy()
+    except Exception:
+        pass
 
 
 def test_engine_row_dataclass():
@@ -186,21 +203,13 @@ def test_last_sig_age_empty_returns_dash():
     assert text == "—"
 
 
-def test_render_detail_paper_smoke_no_exception():
+def test_render_detail_paper_smoke_no_exception(gui_root):
     """Paper mode renders EQUITY/DD/NET + OPEN POSITIONS + EQUITY CURVE +
     METRICS sections without crashing when all paper params are passed."""
-    try:
-        import tkinter as tk
-    except ImportError:
-        pytest.skip("tkinter not available")
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display available")
-    root.withdraw()
+    parent = None
     try:
         from launcher_support.engines_sidebar import render_detail
-        parent = tk.Frame(root)
+        parent = tk.Frame(gui_root)
         heartbeat = {
             "run_id": "R", "status": "running", "ticks_ok": 3,
             "ticks_fail": 0, "novel_total": 1, "last_tick_at": None,
@@ -232,22 +241,15 @@ def test_render_detail_paper_smoke_no_exception():
         )
         assert frame is not None
     finally:
-        root.destroy()
+        if parent is not None:
+            parent.destroy()
 
 
-def test_render_detail_paper_with_no_positions_renders_empty_state():
-    try:
-        import tkinter as tk
-    except ImportError:
-        pytest.skip("tkinter not available")
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display available")
-    root.withdraw()
+def test_render_detail_paper_with_no_positions_renders_empty_state(gui_root):
+    parent = None
     try:
         from launcher_support.engines_sidebar import render_detail
-        parent = tk.Frame(root)
+        parent = tk.Frame(gui_root)
         heartbeat = {
             "run_id": "R", "status": "running", "ticks_ok": 1,
             "ticks_fail": 0, "novel_total": 0,
@@ -264,23 +266,16 @@ def test_render_detail_paper_with_no_positions_renders_empty_state():
         )
         assert frame is not None
     finally:
-        root.destroy()
+        if parent is not None:
+            parent.destroy()
 
 
-def test_render_detail_shadow_still_works_without_paper_params():
+def test_render_detail_shadow_still_works_without_paper_params(gui_root):
     """Backward compat: shadow mode renders without any paper kwargs."""
-    try:
-        import tkinter as tk
-    except ImportError:
-        pytest.skip("tkinter not available")
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display available")
-    root.withdraw()
+    parent = None
     try:
         from launcher_support.engines_sidebar import render_detail
-        parent = tk.Frame(root)
+        parent = tk.Frame(gui_root)
         heartbeat = {"run_id": "R", "status": "running", "ticks_ok": 5,
                      "ticks_fail": 0, "novel_total": 2}
         frame = render_detail(
@@ -290,4 +285,5 @@ def test_render_detail_shadow_still_works_without_paper_params():
         )
         assert frame is not None
     finally:
-        root.destroy()
+        if parent is not None:
+            parent.destroy()

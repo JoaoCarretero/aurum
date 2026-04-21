@@ -11,6 +11,20 @@ from core.ops import db_live_runs
 from tools.maintenance.migrations import migration_001_live_runs as mig
 
 
+@pytest.fixture(scope="module")
+def gui_root():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("tk unavailable")
+    root.withdraw()
+    yield root
+    try:
+        root.destroy()
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def fake_live_db(tmp_path, monkeypatch):
     db = tmp_path / "a.db"
@@ -31,19 +45,15 @@ def fake_live_db(tmp_path, monkeypatch):
 
 
 @pytest.mark.gui
-def test_live_runs_screen_shows_via_screen_manager(fake_live_db):
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("tk unavailable")
-    root.withdraw()
+def test_live_runs_screen_shows_via_screen_manager(fake_live_db, gui_root):
+    parent = None
     try:
         from launcher_support.screens.manager import ScreenManager
         from launcher_support.screens.live_runs import LiveRunsScreen
         from unittest.mock import MagicMock
 
         app = MagicMock()
-        parent = tk.Frame(root)
+        parent = tk.Frame(gui_root)
         mgr = ScreenManager(parent=parent)
         mgr.register(
             "live_runs",
@@ -53,4 +63,5 @@ def test_live_runs_screen_shows_via_screen_manager(fake_live_db):
         assert s is not None
         assert mgr.current_name() == "live_runs"
     finally:
-        root.destroy()
+        if parent is not None:
+            parent.destroy()

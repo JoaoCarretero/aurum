@@ -22,6 +22,23 @@ def test_joint_contiguous_start_uses_latest_channel_start(monkeypatch):
     assert channels["long_short_ratio"] == "2026-03-18T14:30:00"
 
 
+def test_joint_contiguous_start_ignores_oi_when_disabled(monkeypatch):
+    monkeypatch.setattr(
+        audit,
+        "earliest_contiguous_ts",
+        lambda kind, symbol, period: {
+            "open_interest": pd.Timestamp("2026-04-09 12:15:00"),
+            "long_short_ratio": pd.Timestamp("2026-03-21 21:30:00"),
+        }[kind],
+    )
+
+    joint, channels = audit.joint_contiguous_start("BTCUSDT", "15m", disable_oi=True)
+
+    assert joint == pd.Timestamp("2026-03-21 21:30:00")
+    assert channels["open_interest"] == "2026-04-09T12:15:00"
+    assert channels["long_short_ratio"] == "2026-03-21T21:30:00"
+
+
 def test_available_scan_candles_returns_zero_without_joint_start():
     assert audit.available_scan_candles(None, pd.Timestamp("2026-04-20"), "1h") == 0
 
@@ -58,6 +75,7 @@ def test_build_report_uses_basket_blocker(monkeypatch):
             interval="1h",
             period="15m",
             end="2026-04-20",
+            disable_oi=False,
             min_fraction=0.70,
             max_hold=48,
         )
@@ -66,3 +84,5 @@ def test_build_report_uses_basket_blocker(monkeypatch):
     assert report["basket"] == "bluechip"
     assert report["basket_max_eligible_days"] == 41.67
     assert report["basket_blocker"] == "ETHUSDT"
+    assert report["stable_symbols_30d"] == ["BTCUSDT", "ETHUSDT"]
+    assert report["stable_symbols_30d_count"] == 2

@@ -1,6 +1,6 @@
 # Engine Validation Checklist - BRIDGEWATER
 
-Atualizado automaticamente em 2026-04-21 18:05:48.
+Atualizado automaticamente em 2026-04-21 19:18:23.
 
 ## Passo 1 - Hipotese mecanica
 
@@ -10,9 +10,9 @@ Atualizado automaticamente em 2026-04-21 18:05:48.
 ## Passo 2 - Split hardcoded
 
 ```python
-TRAIN_END = "2026-03-31"
+TRAIN_END = "2026-04-01T19:00:00"
 TEST_END = "2026-04-10"
-HOLDOUT = "2026-04-10" ate "2026-04-20"
+HOLDOUT = "2026-04-10" ate "2026-04-20T19:00:00"
 ```
 
 - [ ] Datas commitadas no runner da rodada
@@ -27,30 +27,30 @@ HOLDOUT = "2026-04-10" ate "2026-04-20"
 
 | # | Sharpe | Sortino | MDD | Trades |
 |---|---|---|---|---|
-| BW04_health_on | 10.569 | 15.192 | 1.69 | 60 |
-| BW07_thresh_035_health_on | 10.569 | 15.192 | 1.69 | 60 |
-| BW00_baseline | 10.425 | 14.653 | 1.89 | 60 |
-| BW01_thresh_035 | 10.425 | 14.653 | 1.89 | 60 |
-| BW02_thresh_040 | 10.425 | 14.653 | 1.89 | 60 |
-| BW03_components_3 | 10.425 | 14.653 | 1.89 | 60 |
-| BW06_thresh_035_components_3 | 10.425 | 14.653 | 1.89 | 60 |
-| BW05_cooldown_4 | 1.967 | 2.667 | 2.04 | 41 |
+| BW05_cooldown_4 | -5.756 | -6.135 | 0.380 | 5 |
+| BW00_baseline | -1.033 | -1.402 | 0.380 | 7 |
+| BW01_thresh_035 | -1.033 | -1.402 | 0.380 | 7 |
+| BW02_thresh_040 | -1.033 | -1.402 | 0.380 | 7 |
+| BW03_components_3 | -1.033 | -1.402 | 0.380 | 7 |
+| BW04_health_on | -1.033 | -1.402 | 0.380 | 7 |
+| BW06_thresh_035_components_3 | -1.033 | -1.402 | 0.380 | 7 |
+| BW07_thresh_035_health_on | -1.033 | -1.402 | 0.380 | 7 |
 
 ## Passo 5 - DSR
 
 - n_trials: 8
-- sharpe_best: 10.569
-- sharpe_std: 3.006
-- DSR p-value: 1.000
-- Passou (> 0.95)? SIM
+- sharpe_best: -5.756
+- sharpe_std: 1.670
+- DSR p-value: 0.000
+- Passou (> 0.95)? NAO
 
 ## Passo 6 - Top-3 em test
 
 | rank | config | sharpe_train | sharpe_test | sortino_test |
 |---|---|---|---|---|
-| 1 | BW04_health_on | 10.569 |  |  |
-| 2 | BW07_thresh_035_health_on | 10.569 |  |  |
-| 3 | BW00_baseline | 10.425 |  |  |
+| 1 | BW05_cooldown_4 | -5.756 |  |  |
+| 2 | BW00_baseline | -1.033 |  |  |
+| 3 | BW01_thresh_035 | -1.033 |  |  |
 
 - Pior Sharpe do top-3: 
 - Passou (> 1.0)? PENDENTE

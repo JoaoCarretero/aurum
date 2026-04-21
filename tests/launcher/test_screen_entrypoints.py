@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tk_root():
     root = tk.Tk()
     root.withdraw()
@@ -122,4 +122,3 @@ def test_macro_brain_screen_defers_first_cycle_and_marks_first_paint(tk_root, mo
     assert app.nav_bound == 1
     assert len(render_calls) == 1
     assert scheduled == [10_000, 30_000]
-

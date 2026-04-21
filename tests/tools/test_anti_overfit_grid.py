@@ -27,9 +27,10 @@ def test_bridgewater_uses_recent_coverage_limited_split():
     windows = build_windows(spec)
 
     assert [w.name for w in windows] == ["train", "test", "holdout"]
-    assert windows[0].days == 20
-    assert windows[1].days == 10
+    assert windows[0].days == 10
+    assert windows[1].days == 9
     assert windows[2].days == 10
+    assert "BTCUSDT" in (spec.symbols or "")
 
 
 def test_summarize_results_ranks_by_train_dsr_and_picks_conservative_variant():

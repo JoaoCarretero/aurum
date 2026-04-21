@@ -274,6 +274,33 @@ def test_collect_sentiment_uses_partial_cached_history_for_oos(monkeypatch):
     assert out["BTCUSDT"]["ls_ready"] is True
 
 
+def test_runtime_sentiment_view_ignores_oi_when_disabled():
+    sentiment = {
+        "BTCUSDT": {
+            "funding_z": pd.Series([0.1]),
+            "oi_df": pd.DataFrame({"time": pd.to_datetime(["2026-04-01"]), "oi": [1.0]}),
+            "oi_ready": False,
+            "ls_signal": pd.Series([0.2]),
+            "ls_ready": True,
+        }
+    }
+
+    out = bridgewater._runtime_sentiment_view(sentiment, disable_oi=True)
+
+    assert out["BTCUSDT"]["funding_z"] is sentiment["BTCUSDT"]["funding_z"]
+    assert out["BTCUSDT"]["oi_df"] is None
+    assert out["BTCUSDT"]["oi_ready"] is True
+    assert out["BTCUSDT"]["ls_signal"] is sentiment["BTCUSDT"]["ls_signal"]
+
+
+def test_runtime_sentiment_view_passthrough_when_oi_enabled():
+    sentiment = {"BTCUSDT": {"oi_ready": False}}
+
+    out = bridgewater._runtime_sentiment_view(sentiment, disable_oi=False)
+
+    assert out is sentiment
+
+
 def test_parse_symbols_override_normalizes_symbols():
     assert bridgewater._parse_symbols_override("btc, ETHUSDT ,sol") == [
         "BTCUSDT",

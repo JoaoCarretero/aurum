@@ -449,6 +449,16 @@ def _as_float(v) -> float | None:
         return None
 
 
+from core.ops.run_catalog import (  # noqa: E402
+    RunSummary,
+    clear_collect_caches,
+    collect_db_runs,
+    collect_local_runs,
+    collect_vps_runs,
+    merge_runs,
+)
+
+
 # ─── Formatters ───────────────────────────────────────────────────
 
 def fmt_duration(started: str | None, stopped: str | None,

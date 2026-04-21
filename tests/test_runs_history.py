@@ -24,6 +24,21 @@ from launcher_support.runs_history import (
 )
 
 
+@pytest.fixture(scope="module")
+def gui_root():
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception:
+        pytest.skip("tk unavailable")
+    root.withdraw()
+    yield root
+    try:
+        root.destroy()
+    except Exception:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _clear_runs_history_caches():
     clear_collect_caches()
@@ -118,7 +133,7 @@ def test_collect_local_runs_falls_back_to_novel_total(tmp_path):
 
 def test_collect_db_runs_reads_live_runs_index(monkeypatch):
     monkeypatch.setattr(
-        "launcher_support.runs_history.db_live_runs.list_live_runs",
+        "core.ops.run_catalog.db_live_runs.list_live_runs",
         lambda **kw: [{
             "run_id": "db1",
             "engine": "millennium",
@@ -315,6 +330,168 @@ def test_merge_runs_prefers_vps_then_db_then_local(tmp_path):
     assert row.open_count == 3
 
 
+def test_collect_engine_log_local_rows_uses_catalog_runs(tmp_path, monkeypatch):
+    from core.ops import run_catalog
+
+    run_dir = _write_run(tmp_path, engine_dir_name="millennium_live",
+                         run_id="LIVE1", mode="live")
+    logs_dir = run_dir / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    (logs_dir / "live.log").write_text("hello\n", encoding="utf-8")
+    monkeypatch.setattr(run_catalog, "DATA_ROOT", tmp_path / "data")
+    run_catalog.clear_collect_caches()
+
+    rows = run_catalog.collect_engine_log_local_rows(limit=10, hours=72)
+    assert len(rows) == 1
+    assert rows[0]["_run_id"] == "LIVE1"
+    assert rows[0]["mode"] == "live"
+    assert rows[0]["log"].endswith("live.log")
+
+
+def test_collect_engine_log_vps_rows_builds_remote_rows():
+    from core.ops import run_catalog
+
+    client = _FakeClient(
+        runs=[{
+            "run_id": "RID1",
+            "engine": "millennium",
+            "mode": "paper",
+            "status": "running",
+            "started_at": "2026-04-20T12:00:00Z",
+            "last_tick_at": "2026-04-20T12:05:00Z",
+        }],
+        heartbeats={"RID1": {"status": "running", "ticks_ok": 2}},
+        accounts={"RID1": {"equity": 10100.0, "initial_balance": 10000.0}},
+    )
+    rows = run_catalog.collect_engine_log_vps_rows(client, limit=10)
+    assert len(rows) == 1
+    assert rows[0]["_remote"] is True
+    assert rows[0]["_run_id"] == "RID1"
+    assert rows[0]["log"] == "remote:RID1"
+
+
+def test_read_local_entries_formats_recent_jsonl(tmp_path):
+    from core.ops import run_catalog
+
+    run_dir = _write_run(tmp_path, engine_dir_name="millennium_paper",
+                         run_id="P1", mode="paper")
+    trades_path = run_dir / "reports" / "trades.jsonl"
+    trades_path.write_text(
+        "\n".join([
+            json.dumps({
+                "timestamp": "2026-04-20T12:00:00Z",
+                "strategy": "millennium",
+                "symbol": "BTCUSDT",
+                "direction": "LONG",
+                "entry_price": 101.25,
+                "pnl_after_fees": 12.5,
+            }),
+            json.dumps({
+                "timestamp": "2026-04-20T12:15:00Z",
+                "strategy": "millennium",
+                "symbol": "ETHUSDT",
+                "direction": "SHORT",
+                "entry_price": 99.5,
+                "exit_reason": "tp",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    lines, summary = run_catalog.read_local_entries(run_dir, limit=10)
+
+    assert summary == "2 from reports/trades.jsonl"
+    assert len(lines) == 2
+    assert "BTCUSDT" in lines[0]
+    assert "pnl=+12.50" in lines[0]
+    assert "ETHUSDT" in lines[1]
+
+
+def test_fetch_remote_entries_formats_records():
+    from core.ops import run_catalog
+
+    class _EntriesClient(_FakeClient):
+        def _get(self, path):
+            if path == "/v1/runs/RID1/trades?limit=50":
+                return {
+                    "trades": [{
+                        "timestamp": "2026-04-20T12:00:00Z",
+                        "engine": "millennium",
+                        "symbol": "BTCUSDT",
+                        "trade_type": "BUY",
+                        "entry_price": 100.0,
+                        "pnl": 5.0,
+                    }]
+                }
+            return super()._get(path)
+
+    lines, summary = run_catalog.fetch_remote_entries(
+        _EntriesClient(),
+        "RID1",
+        mode="paper",
+        limit=50,
+    )
+
+    assert summary == "1 entries"
+    assert lines == [
+        "2026-04-20 12:00:00  millennium  BTCUSDT   BUY   entry=100  pnl=+5.00"
+    ]
+
+
+def test_read_log_seed_lines_returns_last_lines_only(tmp_path):
+    from core.ops import run_catalog
+
+    log_path = tmp_path / "engine.log"
+    log_path.write_text(
+        "\n".join(f"line-{idx}" for idx in range(8)) + "\n",
+        encoding="utf-8",
+    )
+
+    lines, error = run_catalog.read_log_seed_lines(log_path, limit=3)
+
+    assert error is None
+    assert lines == ["line-5", "line-6", "line-7"]
+
+
+def test_engine_log_identity_helpers_cover_run_id_row_key_and_header():
+    from core.ops import run_catalog
+
+    row = {
+        "engine": "MILLENNIUM (paper)",
+        "pid": "-",
+        "log": "remote:RID1",
+        "_run_id": "RID1",
+        "started_at": "2026-04-20T12:00:00Z",
+    }
+
+    assert run_catalog.engine_log_run_id_of(row) == "RID1"
+    assert run_catalog.engine_log_row_key(row) == "run:RID1"
+    assert run_catalog.engine_log_header(row) == "  MILLENNIUM (paper) · pid - · remote:RID1"
+
+
+def test_engine_log_run_id_of_falls_back_to_windows_path():
+    from core.ops import run_catalog
+
+    row = {"run_dir": r"C:\aurum\data\millennium_paper\2026-04-21_120000"}
+
+    assert run_catalog.engine_log_run_id_of(row) == "2026-04-21_120000"
+
+
+def test_engine_log_recency_key_prefers_last_tick():
+    from core.ops import run_catalog
+
+    older = {
+        "started_at": "2026-04-20T10:00:00Z",
+        "last_tick_at": "2026-04-20T10:05:00Z",
+    }
+    newer = {
+        "started_at": "2026-04-20T10:00:00Z",
+        "_heartbeat": {"last_tick_at": "2026-04-20T10:10:00Z"},
+    }
+
+    assert run_catalog.engine_log_recency_key(newer) > run_catalog.engine_log_recency_key(older)
+
+
 # ─── Formatters ────────────────────────────────────────────────────
 
 def test_fmt_duration_running_counts_toward_now():
@@ -359,9 +536,8 @@ def test_fmt_started_iso():
 
 # ─── Smoke (Tk) ────────────────────────────────────────────────────
 
-def test_render_runs_history_smoke(tmp_path, monkeypatch):
+def test_render_runs_history_smoke(tmp_path, monkeypatch, gui_root):
     """Smoke test — render with one fake local run, no crash."""
-    import tkinter as tk
     from launcher_support import runs_history as rh
 
     _write_run(tmp_path, engine_dir_name="millennium_paper",
@@ -370,12 +546,6 @@ def test_render_runs_history_smoke(tmp_path, monkeypatch):
                         "trades_closed": 1})
     monkeypatch.setattr(rh, "DATA_ROOT", tmp_path / "data")
 
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        frame = rh.render_runs_history(root, root,
-                                       client_factory=lambda: None)
-        root.update_idletasks()
-        assert frame is not None
-    finally:
-        root.destroy()
+    frame = rh.render_runs_history(gui_root, gui_root, client_factory=lambda: None)
+    gui_root.update_idletasks()
+    assert frame is not None

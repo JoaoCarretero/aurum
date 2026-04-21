@@ -220,17 +220,13 @@ def test_global_operational_routes_require_admin(fn, param_name):
 
 def test_create_app_hides_docs_by_default(monkeypatch):
     monkeypatch.setattr("api.server.init_db", lambda: None)
-    client = TestClient(create_app(expose_docs=False))
-
-    response = client.get("/docs")
-
-    assert response.status_code == 404
+    with TestClient(create_app(expose_docs=False)) as client:
+        response = client.get("/docs")
+        assert response.status_code == 404
 
 
 def test_create_app_can_opt_in_docs_for_tests(monkeypatch):
     monkeypatch.setattr("api.server.init_db", lambda: None)
-    client = TestClient(create_app(expose_docs=True))
-
-    response = client.get("/docs")
-
-    assert response.status_code == 200
+    with TestClient(create_app(expose_docs=True)) as client:
+        response = client.get("/docs")
+        assert response.status_code == 200

@@ -34,6 +34,7 @@ class EngineSpec:
     data_dir: str
     checklist_path: str
     basket: str
+    symbols: str | None
     interval: str
     train_days: int
     train_end: str
@@ -50,11 +51,12 @@ ENGINE_SPECS: dict[str, EngineSpec] = {
         data_dir="data/bridgewater",
         checklist_path="docs/engines/bridgewater/checklist.md",
         basket="bluechip",
+        symbols="BTCUSDT,ETHUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT,ATOMUSDT,NEARUSDT,INJUSDT,ARBUSDT,OPUSDT,SUIUSDT,RENDERUSDT,FETUSDT,SANDUSDT,AAVEUSDT",
         interval="1h",
-        train_days=20,
-        train_end="2026-03-31",
-        test_end="2026-04-10",
-        holdout_end="2026-04-20",
+        train_days=10,
+        train_end="2026-04-01T19:00:00",
+        test_end="2026-04-10T19:00:00",
+        holdout_end="2026-04-20T19:00:00",
         variants={
             "BW00_baseline": {
                 "preset": "robust",
@@ -124,6 +126,7 @@ ENGINE_SPECS: dict[str, EngineSpec] = {
         data_dir="data/deshaw",
         checklist_path="docs/engines/deshaw/checklist.md",
         basket="bluechip",
+        symbols=None,
         interval="1h",
         train_days=1095,
         train_end="2024-01-01",
@@ -187,6 +190,7 @@ ENGINE_SPECS: dict[str, EngineSpec] = {
         data_dir="data/kepos",
         checklist_path="docs/engines/kepos/checklist.md",
         basket="bluechip",
+        symbols=None,
         interval="15m",
         train_days=1095,
         train_end="2024-01-01",
@@ -258,6 +262,7 @@ ENGINE_SPECS: dict[str, EngineSpec] = {
         data_dir="data/medallion",
         checklist_path="docs/engines/medallion/checklist.md",
         basket="bluechip",
+        symbols=None,
         interval="15m",
         train_days=1095,
         train_end="2024-01-01",
@@ -369,13 +374,19 @@ def _parse_args() -> argparse.Namespace:
 
 
 def build_windows(spec: EngineSpec, phase: str = "all") -> list[WindowSpec]:
-    train_end = date.fromisoformat(spec.train_end)
-    test_end = date.fromisoformat(spec.test_end)
-    holdout_end = date.fromisoformat(spec.holdout_end)
+    def _parse_boundary(raw: str) -> datetime:
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return datetime.combine(date.fromisoformat(raw), datetime.min.time())
+
+    train_end = _parse_boundary(spec.train_end)
+    test_end = _parse_boundary(spec.test_end)
+    holdout_end = _parse_boundary(spec.holdout_end)
     windows = {
         "train": WindowSpec("train", spec.train_days, spec.train_end),
-        "test": WindowSpec("test", (test_end - train_end).days, spec.test_end),
-        "holdout": WindowSpec("holdout", (holdout_end - test_end).days, spec.holdout_end),
+        "test": WindowSpec("test", max(1, (test_end - train_end).days), spec.test_end),
+        "holdout": WindowSpec("holdout", max(1, (holdout_end - test_end).days), spec.holdout_end),
     }
     if phase == "all":
         return [windows["train"], windows["test"], windows["holdout"]]
@@ -396,6 +407,8 @@ def build_command(spec: EngineSpec, python_exe: str, window: WindowSpec, overrid
         "--end",
         window.end,
     ]
+    if spec.symbols:
+        cmd.extend(["--symbols", spec.symbols])
     for key, value in overrides.items():
         flag = FLAG_MAP[spec.key][key]
         if isinstance(value, bool):
@@ -598,12 +611,16 @@ def summarize_results(spec: EngineSpec, results: dict[str, dict[str, dict[str, A
         })
     train_rows.sort(key=lambda row: (_safe_float(row["dsr"], -1.0), _safe_float(row["sharpe"], -1e9)), reverse=True)
 
-    sharpe_values = [row["sharpe"] for row in train_rows]
+    sharpe_values = [float(row["sharpe"]) for row in train_rows if row["sharpe"] is not None]
     sharpe_std = float(np.std(sharpe_values, ddof=1)) if len(sharpe_values) > 1 else 0.0
     best_train = train_rows[0] if train_rows else None
     best_train_stage = results.get(best_train["variant"], {}).get("train") if best_train else None
 
-    top3_variants = [row["variant"] for row in train_rows[:3]]
+    promotable_rows = [
+        row for row in train_rows
+        if _safe_float(row["sharpe"], -1e9) > 0.0
+    ]
+    top3_variants = [row["variant"] for row in promotable_rows[:3]]
     top3_test_rows = []
     for rank, variant in enumerate(top3_variants, start=1):
         test = results.get(variant, {}).get("test", {})
@@ -645,11 +662,11 @@ def summarize_results(spec: EngineSpec, results: dict[str, dict[str, dict[str, A
 
 def render_checklist(spec: EngineSpec, aggregate: dict[str, Any]) -> str:
     train_lines = "\n".join(
-        f"| {row['variant']} | {row['sharpe']:.3f} | {row['sortino']:.3f} | {row['max_dd_pct']:.2f} | {row['n_trades']} |"
+        f"| {row['variant']} | {_fmt_metric(row['sharpe'])} | {_fmt_metric(row['sortino'])} | {_fmt_metric(row['max_dd_pct'])} | {row['n_trades']} |"
         for row in aggregate["train_rows"]
     ) or "|  |  |  |  |  |"
     top3_lines = "\n".join(
-        f"| {row['rank']} | {row['variant']} | {row['sharpe_train']:.3f} | {_fmt_metric(row['sharpe_test'])} | {_fmt_metric(row['sortino_test'])} |"
+        f"| {row['rank']} | {row['variant']} | {_fmt_metric(row['sharpe_train'])} | {_fmt_metric(row['sharpe_test'])} | {_fmt_metric(row['sortino_test'])} |"
         for row in aggregate["top3_test_rows"]
     ) or "|  |  |  |  |  |"
     return (

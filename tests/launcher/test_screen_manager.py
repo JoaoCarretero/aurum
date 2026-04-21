@@ -25,7 +25,7 @@ class _Recording(Screen):
         self.events.append(("exit", {}))
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tk_root():
     root = tk.Tk()
     root.withdraw()
