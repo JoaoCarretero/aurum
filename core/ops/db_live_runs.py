@@ -39,7 +39,7 @@ def upsert(*, run_id: str, **fields: Any) -> None:
     """
     if not run_id:
         raise ValueError("run_id required")
-    unknown = set(fields) - (_UPSERT_IMMUTABLE | _UPSERT_MUTABLE) - {"run_id"}
+    unknown = set(fields) - (_UPSERT_IMMUTABLE | _UPSERT_MUTABLE)
     if unknown:
         raise ValueError(f"unknown field(s): {sorted(unknown)}")
     with _connect() as conn:
@@ -60,6 +60,14 @@ def upsert(*, run_id: str, **fields: Any) -> None:
                 vals,
             )
         else:
+            immutable_passed = {
+                k for k in fields if k in _UPSERT_IMMUTABLE
+            }
+            if immutable_passed:
+                raise ValueError(
+                    f"upsert({run_id!r}): cannot change immutable field(s) "
+                    f"on existing row: {sorted(immutable_passed)}"
+                )
             mutable = {k: v for k, v in fields.items() if k in _UPSERT_MUTABLE}
             if not mutable:
                 return

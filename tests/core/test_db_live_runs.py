@@ -88,3 +88,24 @@ def test_upsert_rejects_new_row_without_required(fake_db: Path) -> None:
     # Can't upsert a fresh row missing engine/mode/started_at/run_dir.
     with pytest.raises(ValueError):
         m.upsert(run_id="incomplete", tick_count=1)
+
+
+def test_upsert_update_rejects_immutable_fields(fake_db: Path) -> None:
+    m.upsert(run_id="r1", engine="citadel", mode="paper",
+             started_at="2026-04-20T12:00:00Z", run_dir="d/r1")
+    with pytest.raises(ValueError, match="immutable"):
+        m.upsert(run_id="r1", engine="WRONG", tick_count=5)
+    # Row must be unchanged: no partial UPDATE
+    row = m.get_live_run("r1")
+    assert row["engine"] == "citadel"
+    assert row["tick_count"] == 0
+
+
+def test_list_filters_by_since(fake_db: Path) -> None:
+    m.upsert(run_id="old", engine="citadel", mode="paper",
+             started_at="2026-04-18T00:00:00Z", run_dir="d/old")
+    m.upsert(run_id="new", engine="citadel", mode="paper",
+             started_at="2026-04-20T12:00:00Z", run_dir="d/new")
+    rows = m.list_live_runs(since="2026-04-19T00:00:00Z")
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == "new"
