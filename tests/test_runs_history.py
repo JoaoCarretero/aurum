@@ -13,6 +13,7 @@ import pytest
 from launcher_support.runs_history import (
     RunSummary,
     clear_collect_caches,
+    collect_db_runs,
     collect_local_runs,
     collect_vps_runs,
     fmt_duration,
@@ -113,6 +114,37 @@ def test_collect_local_runs_falls_back_to_novel_total(tmp_path):
     hb_path.write_text(json.dumps(hb))
     runs = collect_local_runs(tmp_path / "data")
     assert runs[0].novel == 42
+
+
+def test_collect_db_runs_reads_live_runs_index(monkeypatch):
+    monkeypatch.setattr(
+        "launcher_support.runs_history.db_live_runs.list_live_runs",
+        lambda **kw: [{
+            "run_id": "db1",
+            "engine": "millennium",
+            "mode": "paper",
+            "started_at": "2026-04-20T12:00:00+00:00",
+            "ended_at": None,
+            "last_tick_at": "2026-04-20T12:05:00+00:00",
+            "status": "running",
+            "tick_count": 12,
+            "novel_count": 4,
+            "open_count": 2,
+            "equity": 10123.45,
+            "host": "vps",
+            "label": "desk-a",
+            "run_dir": "data/millennium_paper/db1",
+            "notes": "tracked",
+        }],
+    )
+    rows = collect_db_runs(limit=100)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.source == "db"
+    assert row.engine == "MILLENNIUM"
+    assert row.open_count == 2
+    assert row.host == "vps"
+    assert row.label == "desk-a"
 
 
 # ─── collect_vps_runs ──────────────────────────────────────────────
@@ -247,6 +279,40 @@ def test_merge_runs_sorts_by_recency(tmp_path):
     )
     merged = merge_runs([], [older, newer])
     assert [r.run_id for r in merged] == ["B", "A"]
+
+
+def test_merge_runs_prefers_vps_then_db_then_local(tmp_path):
+    run_dir = _write_run(tmp_path, engine_dir_name="millennium_paper",
+                         run_id="SHARED", mode="paper")
+    local = collect_local_runs(tmp_path / "data")
+    db_row = RunSummary(
+        run_id="SHARED", engine="MILLENNIUM", mode="paper",
+        status="running", started_at="2026-04-20T11:00:00Z",
+        stopped_at=None, last_tick_at="2026-04-20T11:45:00Z",
+        ticks_ok=9, ticks_fail=None, novel=5,
+        equity=10100.0, initial_balance=None, roi_pct=None,
+        trades_closed=None, source="db", run_dir=None,
+        heartbeat=None, host="ops-host", label="desk-1",
+        open_count=3,
+    )
+    vps_row = RunSummary(
+        run_id="SHARED", engine="MILLENNIUM", mode="paper",
+        status="running", started_at="2026-04-20T11:00:00Z",
+        stopped_at=None, last_tick_at="2026-04-20T11:50:00Z",
+        ticks_ok=10, ticks_fail=0, novel=6,
+        equity=10200.0, initial_balance=10000.0, roi_pct=2.0,
+        trades_closed=1, source="vps", run_dir=None,
+        heartbeat={}, host=None, label=None,
+        open_count=None,
+    )
+    merged = merge_runs(local, [vps_row], [db_row])
+    assert len(merged) == 1
+    row = merged[0]
+    assert row.source == "vps"
+    assert row.run_dir == run_dir
+    assert row.host == "ops-host"
+    assert row.label == "desk-1"
+    assert row.open_count == 3
 
 
 # ─── Formatters ────────────────────────────────────────────────────

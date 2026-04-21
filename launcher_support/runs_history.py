@@ -13,11 +13,13 @@ curve, metrics, tail of fills/trades, tail of the log.
 Data sources
     * Local disk: `data/<engine>_{shadow,paper}/<run_id>/state/
       heartbeat.json` + `reports/*.jsonl`
+    * SQLite ops index: `aurum.db.live_runs` for live/demo/testnet and
+      DB-tracked paper/shadow metadata
     * VPS: cockpit API `/v1/runs` → `/v1/runs/<id>/{heartbeat,account,
       equity,trades,log}`
-    * Dedup: when a run_id shows up both local and VPS, prefer the VPS
-      row (live heartbeat) and attach the local reports directory for
-      deeper reads (`fills`, log tail)
+    * Dedup: when a run_id shows up across sources, prefer VPS telemetry,
+      then DB metadata, then local disk; attach local run_dir whenever
+      available for deeper reads (`fills`, log tail)
 
 The pane is 100% read-only; no systemctl actions here (those live on
 the engines live cockpit). This is the log, not the console.
@@ -40,12 +42,14 @@ from core.ui.ui_palette import (
     AMBER, AMBER_B, AMBER_D, BG, BG2, BG3, BORDER, CYAN, DIM, DIM2,
     FONT, GREEN, PANEL, RED, WHITE,
 )
+from core import db_live_runs
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_ROOT = ROOT / "data"
 _LOCAL_RUNS_CACHE: dict[str, tuple[float, list[RunSummary]]] = {}
 _VPS_RUNS_CACHE: dict[int, tuple[float, list[RunSummary]]] = {}
+_DB_RUNS_CACHE: dict[str, tuple[float, list[RunSummary]]] = {}
 _RUNS_CACHE_TTL_S = 2.0
 
 
@@ -70,6 +74,10 @@ class RunSummary:
     source: str              # "vps" | "local"
     run_dir: Path | None
     heartbeat: dict | None
+    host: str | None = None
+    label: str | None = None
+    open_count: int | None = None
+    notes: str | None = None
     _raw: dict = field(default_factory=dict)
 
 
@@ -174,6 +182,7 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str,
         source="local",
         run_dir=run_dir,
         heartbeat=hb,
+        open_count=None,
     )
 
 
@@ -266,8 +275,61 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
         source="vps",
         run_dir=None,
         heartbeat=hb,
+        host=str(payload.get("host") or hb.get("host") or "") or None,
+        label=str(payload.get("label") or hb.get("label") or "") or None,
+        open_count=_as_int(account.get("open_count") if isinstance(account, dict) else None),
         _raw=payload,
     )
+
+
+def collect_db_runs(*, mode: str | None = None, limit: int = 500) -> list[RunSummary]:
+    cache_key = f"{mode or 'all'}:{int(limit)}"
+    cached = _cached_rows(_DB_RUNS_CACHE, cache_key)
+    if cached is not None:
+        return cached
+    try:
+        rows = db_live_runs.list_live_runs(mode=mode, limit=limit)
+    except Exception:
+        rows = []
+    out: list[RunSummary] = []
+    for row in rows:
+        run_dir_raw = row.get("run_dir")
+        run_dir = Path(run_dir_raw) if run_dir_raw else None
+        if run_dir is not None and not run_dir.is_absolute():
+            run_dir = ROOT / run_dir
+        started_at = row.get("started_at")
+        stopped_at = row.get("ended_at")
+        last_tick_at = row.get("last_tick_at")
+        equity = _as_float(row.get("equity"))
+        open_count = _as_int(row.get("open_count"))
+        out.append(
+            RunSummary(
+                run_id=str(row.get("run_id") or ""),
+                engine=str(row.get("engine") or "?").upper(),
+                mode=str(row.get("mode") or "?"),
+                status=str(row.get("status") or "unknown"),
+                started_at=started_at,
+                stopped_at=stopped_at,
+                last_tick_at=last_tick_at,
+                ticks_ok=_as_int(row.get("tick_count")),
+                ticks_fail=None,
+                novel=_as_int(row.get("novel_count")),
+                equity=equity,
+                initial_balance=None,
+                roi_pct=None,
+                trades_closed=None,
+                source="db",
+                run_dir=run_dir,
+                heartbeat=None,
+                host=str(row.get("host") or "") or None,
+                label=str(row.get("label") or "") or None,
+                open_count=open_count,
+                notes=str(row.get("notes") or "") or None,
+                _raw=dict(row),
+            )
+        )
+    _store_cached_rows(_DB_RUNS_CACHE, cache_key, out)
+    return out
 
 
 def _clone_rows(rows: list[RunSummary]) -> list[RunSummary]:
@@ -292,21 +354,62 @@ def _store_cached_rows(cache: dict, key, rows: list[RunSummary]) -> None:
 def clear_collect_caches() -> None:
     _LOCAL_RUNS_CACHE.clear()
     _VPS_RUNS_CACHE.clear()
+    _DB_RUNS_CACHE.clear()
 
 
 def merge_runs(local: list[RunSummary],
-               vps: list[RunSummary]) -> list[RunSummary]:
-    """Prefer VPS row when the same run_id appears on both sides; attach
-    the matching local run_dir to the VPS row so file-based readers still
-    work (log tail, trades.jsonl)."""
+               vps: list[RunSummary],
+               db_rows: list[RunSummary] | None = None) -> list[RunSummary]:
+    """Merge runs across local disk, live_runs DB, and VPS.
+
+    Priority:
+      1. VPS heartbeat/account when present
+      2. DB live_runs index for operational metadata
+      3. Local disk fallback
+    """
+    db_rows = db_rows or []
     local_by_id = {r.run_id: r for r in local}
+    db_by_id = {r.run_id: r for r in db_rows}
     out: list[RunSummary] = []
     seen: set[str] = set()
+
     for v in vps:
-        if v.run_id in local_by_id:
-            v.run_dir = local_by_id[v.run_id].run_dir
+        local_match = local_by_id.get(v.run_id)
+        db_match = db_by_id.get(v.run_id)
+        if local_match is not None and v.run_dir is None:
+            v.run_dir = local_match.run_dir
+        if db_match is not None:
+            if v.run_dir is None:
+                v.run_dir = db_match.run_dir
+            if not v.host:
+                v.host = db_match.host
+            if not v.label:
+                v.label = db_match.label
+            if v.open_count is None:
+                v.open_count = db_match.open_count
+            if not v.notes:
+                v.notes = db_match.notes
         out.append(v)
         seen.add(v.run_id)
+
+    for d in db_rows:
+        if d.run_id in seen:
+            continue
+        local_match = local_by_id.get(d.run_id)
+        if local_match is not None:
+            if d.run_dir is None:
+                d.run_dir = local_match.run_dir
+            if d.heartbeat is None:
+                d.heartbeat = local_match.heartbeat
+            if d.initial_balance is None:
+                d.initial_balance = local_match.initial_balance
+            if d.roi_pct is None:
+                d.roi_pct = local_match.roi_pct
+            if d.trades_closed is None:
+                d.trades_closed = local_match.trades_closed
+        out.append(d)
+        seen.add(d.run_id)
+
     for l in local:
         if l.run_id not in seen:
             out.append(l)
@@ -333,6 +436,15 @@ def _as_int(v) -> int | None:
         return None
     try:
         return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
     except (TypeError, ValueError):
         return None
 
@@ -541,16 +653,23 @@ def _refresh_runs(state: dict, launcher,
         except Exception:
             pass
 
-    # Local is cheap (sync). VPS is HTTP — kick a daemon thread for it.
+    # Local disk + DB index are cheap enough to paint sync. VPS is HTTP —
+    # kick a daemon thread for it so the table appears immediately.
     local = collect_local_runs()
+    db_rows = collect_db_runs(limit=500)
 
     def _fetch_vps():
         try:
             client = client_factory()
         except Exception:
             client = None
-        vps = collect_vps_runs(client)
-        merged = merge_runs(local, vps)
+        try:
+            vps = collect_vps_runs(client)
+        except RuntimeError:
+            return
+        except Exception:
+            vps = []
+        merged = merge_runs(local, vps, db_rows)
         def _apply_vps_rows():
             state["rows"] = merged
             _paint_rows(state)
@@ -562,12 +681,15 @@ def _refresh_runs(state: dict, launcher,
         except Exception:
             pass
 
-    t = threading.Thread(target=_fetch_vps, daemon=True)
-    t.start()
+    if hasattr(launcher, "_ui_call_soon"):
+        t = threading.Thread(target=_fetch_vps, daemon=True)
+        t.start()
+    else:
+        _fetch_vps()
 
     # Paint the local-only view immediately so user sees something while
     # the VPS call is in flight.
-    state["rows"] = merge_runs(local, [])
+    state["rows"] = merge_runs(local, [], db_rows)
     _paint_rows(state)
 
 
@@ -619,7 +741,7 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     roi_txt = fmt_roi(r.roi_pct)
     roi_color = (GREEN if (r.roi_pct or 0) > 0 else
                  (RED if (r.roi_pct or 0) < 0 else DIM))
-    src_color = GREEN if r.source == "vps" else CYAN
+    src_color = GREEN if r.source == "vps" else (AMBER_D if r.source == "db" else CYAN)
     mode_color = AMBER if r.mode == "paper" else (
         CYAN if r.mode == "shadow" else DIM)
 
@@ -718,7 +840,7 @@ def _render_detail_header(parent: tk.Widget, r: RunSummary) -> None:
     tk.Label(inner, text=f"  ·  run {r.run_id}", fg=DIM, bg=BG,
              font=(FONT, 7)).pack(side="left")
     tk.Label(inner, text=f"  ·  {r.source.upper()}",
-             fg=(GREEN if r.source == "vps" else CYAN), bg=BG,
+             fg=(GREEN if r.source == "vps" else (AMBER_D if r.source == "db" else CYAN)), bg=BG,
              font=(FONT, 7, "bold")).pack(side="left")
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -66,6 +67,17 @@ _STAGE_STYLE: dict[str, tuple[str, str]] = {
     "quarantined": ("QUARANTINED", HAZARD),
 }
 _PROCS_CACHE: dict[str, object] = {"ts": 0.0, "rows": []}
+_COCKPIT_RUNS_CACHE_TTL_S = 2.0
+_PAPER_SNAPSHOT_CACHE_TTL_S = 2.0
+_SHADOW_SNAPSHOT_CACHE_TTL_S = 2.0
+_COCKPIT_RUNS_CACHE: dict[str, object] = {"ts": 0.0, "runs": None, "loading": False}
+_COCKPIT_RUNS_LOCK = threading.Lock()
+_PAPER_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[dict | None, list[dict], list[float], dict | None]]] = {}
+_PAPER_SNAPSHOT_LOADING: set[str] = set()
+_PAPER_SNAPSHOT_LOCK = threading.Lock()
+_SHADOW_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
+_SHADOW_SNAPSHOT_LOADING = False
+_SHADOW_SNAPSHOT_LOCK = threading.Lock()
 
 
 def _stage_badge(meta: dict | None) -> tuple[str, str]:
@@ -395,23 +407,19 @@ def _show_new_instance_dialog(launcher, state) -> None:
     label_entry.focus_set()
 
 
-def _vps_running_slugs(*, mode: str) -> set[str]:
+def _vps_running_slugs(*, mode: str, launcher=None, state=None,
+                       allow_sync: bool = False) -> set[str]:
     """Query cockpit /v1/runs and return distinct engine slugs currently running.
 
     Shadow/paper modes dont run processes locally — the RUNNING counter
     must reflect VPS state. Returns empty set on cockpit failure (caller
     falls back to local-proc count, so no hard dependency on the VPS).
     """
-    client = _get_cockpit_client()
-    if client is None:
-        return set()
-    try:
-        runs = client.list_runs() if hasattr(client, "list_runs") else \
-            client._get("/v1/runs")
-    except Exception:
-        return set()
-    if not isinstance(runs, list):
-        return set()
+    runs = _load_cockpit_runs_cached(
+        launcher=launcher,
+        state=state,
+        allow_sync=allow_sync,
+    )
     slugs: set[str] = set()
     for r in runs:
         if r.get("status") != "running":
@@ -438,6 +446,85 @@ def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict
     _PROCS_CACHE["ts"] = now
     _PROCS_CACHE["rows"] = list(rows)
     return rows
+
+
+def _schedule_state_refresh(launcher, state) -> None:
+    refresh = (state or {}).get("refresh") if isinstance(state, dict) else None
+    if not callable(refresh):
+        return
+    try:
+        launcher.after(1, refresh)
+    except Exception:
+        pass
+
+
+def _load_cockpit_runs_sync() -> list[dict]:
+    client = _get_cockpit_client()
+    if client is None:
+        return []
+    try:
+        runs = client.list_runs() if hasattr(client, "list_runs") else \
+            client._get("/v1/runs")
+    except Exception:
+        return []
+    return list(runs) if isinstance(runs, list) else []
+
+
+def _load_cockpit_runs_cached(*, launcher=None, state=None,
+                              allow_sync: bool = False,
+                              ttl_s: float = _COCKPIT_RUNS_CACHE_TTL_S) -> list[dict]:
+    now = time.monotonic()
+    with _COCKPIT_RUNS_LOCK:
+        cached_runs = _COCKPIT_RUNS_CACHE.get("runs")
+        cached_ts = float(_COCKPIT_RUNS_CACHE.get("ts") or 0.0)
+        if cached_runs is not None and (now - cached_ts) <= ttl_s:
+            return list(cached_runs)
+        if allow_sync:
+            _COCKPIT_RUNS_CACHE["loading"] = True
+        elif _COCKPIT_RUNS_CACHE.get("loading"):
+            return list(cached_runs or [])
+        else:
+            _COCKPIT_RUNS_CACHE["loading"] = True
+
+            def _worker() -> None:
+                rows = _load_cockpit_runs_sync()
+                with _COCKPIT_RUNS_LOCK:
+                    _COCKPIT_RUNS_CACHE["ts"] = time.monotonic()
+                    _COCKPIT_RUNS_CACHE["runs"] = list(rows)
+                    _COCKPIT_RUNS_CACHE["loading"] = False
+                _schedule_state_refresh(launcher, state)
+
+            threading.Thread(
+                target=_worker,
+                name="engines-live-runs-cache",
+                daemon=True,
+            ).start()
+            return list(cached_runs or [])
+    rows = _load_cockpit_runs_sync()
+    with _COCKPIT_RUNS_LOCK:
+        _COCKPIT_RUNS_CACHE["ts"] = time.monotonic()
+        _COCKPIT_RUNS_CACHE["runs"] = list(rows)
+        _COCKPIT_RUNS_CACHE["loading"] = False
+    return rows
+
+
+def _clear_cockpit_view_caches() -> None:
+    global _SHADOW_SNAPSHOT_LOADING
+    with _COCKPIT_RUNS_LOCK:
+        _COCKPIT_RUNS_CACHE["ts"] = 0.0
+        _COCKPIT_RUNS_CACHE["runs"] = None
+        _COCKPIT_RUNS_CACHE["loading"] = False
+    with _PAPER_SNAPSHOT_LOCK:
+        _PAPER_SNAPSHOT_CACHE.clear()
+        _PAPER_SNAPSHOT_LOADING.clear()
+    with _SHADOW_SNAPSHOT_LOCK:
+        _SHADOW_SNAPSHOT_CACHE.clear()
+        _SHADOW_SNAPSHOT_LOADING = False
+
+
+def _cockpit_runs_loading() -> bool:
+    with _COCKPIT_RUNS_LOCK:
+        return bool(_COCKPIT_RUNS_CACHE.get("loading"))
 
 
 # ════════════════════════════════════════════════════════════════
@@ -711,67 +798,7 @@ def _refresh_footer(state):
     state["footer_warn_lbl"].configure(text=warn)
 
 
-def _shadow_active_slugs() -> set[str]:
-    """Return the set of engine slugs with an active shadow run visible.
-
-    Le o slug diretamente de poller.engine — se cache tem payload, slug
-    esta ativo. Quando houver mais de um poller, isto evolui pra iterar
-    uma lista registrada no tunnel_registry.
-    """
-    try:
-        from launcher_support.tunnel_registry import get_shadow_poller
-        poller = get_shadow_poller()
-    except Exception:
-        return set()
-    if poller is None:
-        return set()
-    try:
-        cached = poller.get_cached()
-    except Exception:
-        return set()
-    if cached is None:
-        client = _get_cockpit_client()
-        if client is None:
-            return set()
-        try:
-            run = client.latest_run(engine="millennium", mode="shadow")
-        except TypeError:
-            try:
-                run = client.latest_run(engine="millennium")
-            except Exception:
-                return set()
-        except Exception:
-            return set()
-        if not isinstance(run, dict) or run.get("status") != "running":
-            return set()
-        engine = str(run.get("engine") or "millennium").strip()
-        return {engine} if engine else set()
-    engine = getattr(poller, "engine", None)
-    if not isinstance(engine, str) or not engine:
-        return set()
-    return {engine}
-
-
-def _fetch_shadow_snapshot() -> tuple[Path | None, dict | None, list[dict]]:
-    """Return latest shadow snapshot from poller cache or cockpit API."""
-    try:
-        from launcher_support.tunnel_registry import get_shadow_poller
-        poller = get_shadow_poller()
-    except Exception:
-        poller = None
-    if poller is not None:
-        try:
-            cached = poller.get_cached()
-        except Exception:
-            cached = None
-        if cached is not None:
-            run_dir, hb = cached
-            try:
-                trades = poller.get_trades_cached()
-            except Exception:
-                trades = []
-            return run_dir, hb, trades
-
+def _load_shadow_snapshot_sync() -> tuple[Path | None, dict | None, list[dict]]:
     client = _get_cockpit_client()
     if client is None:
         return None, None, []
@@ -810,6 +837,105 @@ def _fetch_shadow_snapshot() -> tuple[Path | None, dict | None, list[dict]]:
     return run_dir, hb, trades
 
 
+def _load_shadow_snapshot_cached(*, launcher=None, state=None,
+                                 allow_sync: bool = False) -> tuple[Path | None, dict | None, list[dict]]:
+    global _SHADOW_SNAPSHOT_LOADING
+    cache_key = "latest"
+    now = time.monotonic()
+    with _SHADOW_SNAPSHOT_LOCK:
+        cached = _SHADOW_SNAPSHOT_CACHE.get(cache_key)
+        if cached is not None and (now - cached[0]) <= _SHADOW_SNAPSHOT_CACHE_TTL_S:
+            return cached[1]
+        if allow_sync:
+            _SHADOW_SNAPSHOT_LOADING = True
+        elif _SHADOW_SNAPSHOT_LOADING:
+            return cached[1] if cached is not None else (None, None, [])
+        else:
+            _SHADOW_SNAPSHOT_LOADING = True
+
+            def _worker() -> None:
+                global _SHADOW_SNAPSHOT_LOADING
+                payload = _load_shadow_snapshot_sync()
+                with _SHADOW_SNAPSHOT_LOCK:
+                    _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
+                    _SHADOW_SNAPSHOT_LOADING = False
+                _schedule_state_refresh(launcher, state)
+
+            threading.Thread(
+                target=_worker,
+                name="engines-live-shadow",
+                daemon=True,
+            ).start()
+            return cached[1] if cached is not None else (None, None, [])
+    payload = _load_shadow_snapshot_sync()
+    with _SHADOW_SNAPSHOT_LOCK:
+        _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
+        _SHADOW_SNAPSHOT_LOADING = False
+    return payload
+
+
+def _shadow_active_slugs(*, launcher=None, state=None) -> set[str]:
+    """Return the set of engine slugs with an active shadow run visible.
+
+    Le o slug diretamente de poller.engine — se cache tem payload, slug
+    esta ativo. Quando houver mais de um poller, isto evolui pra iterar
+    uma lista registrada no tunnel_registry.
+    """
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        return set()
+    if poller is None:
+        return set()
+    try:
+        cached = poller.get_cached()
+    except Exception:
+        return set()
+    if cached is None:
+        run_dir, hb, _trades = _load_shadow_snapshot_cached(
+            launcher=launcher,
+            state=state,
+            allow_sync=(launcher is None and state is None),
+        )
+        if run_dir is None or hb is None:
+            return set()
+        if hb.get("status") != "running":
+            return set()
+        engine = str(hb.get("engine") or "millennium").strip()
+        return {engine} if engine else set()
+    engine = getattr(poller, "engine", None)
+    if not isinstance(engine, str) or not engine:
+        return set()
+    return {engine}
+
+
+def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, dict | None, list[dict]]:
+    """Return latest shadow snapshot from poller cache or cockpit API."""
+    try:
+        from launcher_support.tunnel_registry import get_shadow_poller
+        poller = get_shadow_poller()
+    except Exception:
+        poller = None
+    if poller is not None:
+        try:
+            cached = poller.get_cached()
+        except Exception:
+            cached = None
+        if cached is not None:
+            run_dir, hb = cached
+            try:
+                trades = poller.get_trades_cached()
+            except Exception:
+                trades = []
+            return run_dir, hb, trades
+    return _load_shadow_snapshot_cached(
+        launcher=launcher,
+        state=state,
+        allow_sync=(launcher is None and state is None),
+    )
+
+
 def _render_master_list(state, launcher):
     """Mount the 3-bucket master list on state['master_host']."""
     host = state["master_host"]
@@ -826,7 +952,7 @@ def _render_master_list(state, launcher):
     # aparecem. Quando nao ha nenhum, todos os buckets ficam vazios e
     # a detail pane renderiza seu empty-state dedicado.
     is_shadow_mode = state.get("mode") == "shadow"
-    shadow_slugs = _shadow_active_slugs() if is_shadow_mode else set()
+    shadow_slugs = _shadow_active_slugs(launcher=launcher, state=state) if is_shadow_mode else set()
 
     # VPS-backed modes (shadow, paper) — merge running set with cockpit
     # runs so the RUNNING counter up top reflects real state of the
@@ -834,7 +960,11 @@ def _render_master_list(state, launcher):
     # modes). Query is best-effort; failures keep the local-proc count.
     current_mode = state.get("mode")
     if current_mode in ("shadow", "paper"):
-        vps_running = _vps_running_slugs(mode=current_mode)
+        vps_running = _vps_running_slugs(
+            mode=current_mode,
+            launcher=launcher,
+            state=state,
+        )
         if vps_running:
             running = {**running, **{slug: {"status": "running", "alive": True,
                                             "source": "vps"}
@@ -1199,7 +1329,7 @@ def _render_detail(state, launcher):
     # marca engines com PID ativo no _PROCS_CACHE como "active".
     heartbeats: dict[str, dict] = {}
     if mode == "shadow":
-        _run_dir, hb, _trades = _fetch_shadow_snapshot()
+        _run_dir, hb, _trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
         if hb is not None and slug:
             heartbeats[slug] = hb
     else:
@@ -1693,7 +1823,7 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     """
     # Remote path via poller cache (nunca bloqueia)
     if _use_remote_shadow_cache():
-        run_dir, hb, _trades = _fetch_shadow_snapshot()
+        run_dir, hb, _trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
         if run_dir is not None and hb is not None:
             return (run_dir, hb)
 
@@ -1983,7 +2113,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     """
     name = meta.get("display", slug.upper())
 
-    run_dir, hb, trades = _fetch_shadow_snapshot()
+    run_dir, hb, trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
 
     # Detail pane
     if hb is None:
@@ -2070,7 +2200,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
 
     # Cada render completa (scheduled OU click-triggered) atualiza o sig
     # pra que o proximo ciclo de refresh compare corretamente.
-    state["shadow_last_render_sig"] = _shadow_content_sig(state)
+    state["shadow_last_render_sig"] = _shadow_content_sig(state, launcher)
     _schedule_shadow_refresh(launcher, state)
 
 
@@ -2092,11 +2222,11 @@ def _schedule_shadow_refresh(launcher, state) -> None:
         pass
 
 
-def _shadow_content_sig(state) -> tuple:
+def _shadow_content_sig(state, launcher=None) -> tuple:
     """Assinatura barata do conteudo que o shadow detail renderiza —
     usada pra pular re-render quando nada mudou, cortando o destroy+
     rebuild de ~150ms/ciclo que causava flicker visível."""
-    run_dir, hb, trades = _fetch_shadow_snapshot()
+    run_dir, hb, trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
     if hb is None:
         return (None,)
     hb_sig = None
@@ -2145,7 +2275,7 @@ def _refresh_shadow_detail(launcher, state) -> None:
             return
     except Exception:
         return
-    sig = _shadow_content_sig(state)
+    sig = _shadow_content_sig(state, launcher)
     last_sig = state.get("shadow_last_render_sig")
     if sig == last_sig and last_sig is not None:
         # Nada mudou — so reagenda o proximo ciclo.
@@ -2362,22 +2492,7 @@ def _active_paper_runs(launcher) -> list[dict]:
     is kept on the launcher to power the multi-instance picker above the
     detail pane — one entry per concurrent paper run.
     """
-    client = _get_cockpit_client()
-    if client is None:
-        return []
-    if hasattr(client, "active_runs_for"):
-        try:
-            return client.active_runs_for("millennium", mode="paper")
-        except Exception:
-            return []
-    # Legacy fallback for tests that stub list_runs only
-    try:
-        runs = client.list_runs() if hasattr(client, "list_runs") else \
-            client._get("/v1/runs")
-    except Exception:
-        return []
-    if not isinstance(runs, list):
-        return []
+    runs = _load_cockpit_runs_cached(launcher=launcher)
     matches = [r for r in runs
                if r.get("mode") == "paper"
                and r.get("status") == "running"]
@@ -2397,16 +2512,7 @@ def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
          runs still surface when nothing else is alive).
       4. ``None`` — cockpit unreachable or no paper runs at all.
     """
-    client = _get_cockpit_client()
-    if client is None:
-        return None
-    try:
-        runs = client.list_runs() if hasattr(client, "list_runs") else \
-            client._get("/v1/runs")
-    except Exception:
-        return None
-    if not isinstance(runs, list):
-        return None
+    runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
     paper_runs = [r for r in runs if r.get("mode") == "paper"]
     if not paper_runs:
         return None
@@ -2420,7 +2526,7 @@ def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
     return paper_runs[0].get("run_id")
 
 
-def _fetch_paper_extras(run_id: str) -> tuple[dict | None, list[dict], list[float], dict | None]:
+def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list[float], dict | None]:
     """Fetch heartbeat + account + positions + equity via cockpit API.
     Returns (heartbeat, positions, equity_series, account_snapshot)."""
     client = _get_cockpit_client()
@@ -2472,6 +2578,85 @@ def _fetch_paper_extras(run_id: str) -> tuple[dict | None, list[dict], list[floa
     return hb, positions, series, account
 
 
+def _fetch_paper_extras(run_id: str, *, launcher=None, state=None,
+                        allow_sync: bool = False) -> tuple[dict | None, list[dict], list[float], dict | None]:
+    now = time.monotonic()
+    with _PAPER_SNAPSHOT_LOCK:
+        cached = _PAPER_SNAPSHOT_CACHE.get(run_id)
+        if cached is not None and (now - cached[0]) <= _PAPER_SNAPSHOT_CACHE_TTL_S:
+            return cached[1]
+        if allow_sync:
+            _PAPER_SNAPSHOT_LOADING.add(run_id)
+        elif run_id in _PAPER_SNAPSHOT_LOADING:
+            return cached[1] if cached is not None else (None, [], [], None)
+        else:
+            _PAPER_SNAPSHOT_LOADING.add(run_id)
+
+            def _worker() -> None:
+                payload = _fetch_paper_extras_sync(run_id)
+                with _PAPER_SNAPSHOT_LOCK:
+                    _PAPER_SNAPSHOT_CACHE[run_id] = (time.monotonic(), payload)
+                    _PAPER_SNAPSHOT_LOADING.discard(run_id)
+                _schedule_state_refresh(launcher, state)
+
+            threading.Thread(
+                target=_worker,
+                name=f"engines-live-paper-{run_id}",
+                daemon=True,
+            ).start()
+            return cached[1] if cached is not None else (None, [], [], None)
+    payload = _fetch_paper_extras_sync(run_id)
+    with _PAPER_SNAPSHOT_LOCK:
+        _PAPER_SNAPSHOT_CACHE[run_id] = (time.monotonic(), payload)
+        _PAPER_SNAPSHOT_LOADING.discard(run_id)
+    return payload
+
+
+def _paper_content_sig(state, launcher=None) -> tuple:
+    run_id = _fetch_paper_run_id(launcher, state)
+    if run_id is None:
+        return ("no-run", bool(_cockpit_runs_loading()))
+    hb, positions, series, account = _fetch_paper_extras(
+        run_id,
+        launcher=launcher,
+        state=state,
+    )
+    if hb is None:
+        return ("loading", run_id)
+    last_equity = series[-1] if series else None
+    account_sig = None
+    if isinstance(account, dict):
+        account_sig = (
+            account.get("equity"),
+            account.get("drawdown_pct"),
+            account.get("available"),
+            account.get("ks_state"),
+        )
+    positions_sig = (
+        len(positions),
+        tuple(
+            (p.get("symbol"), p.get("side"), p.get("qty"), p.get("pnl", p.get("unrealized_pnl")))
+            for p in positions[:8]
+        ),
+    )
+    hb_sig = (
+        hb.get("status"),
+        hb.get("last_tick_at"),
+        hb.get("equity"),
+        hb.get("drawdown_pct"),
+        hb.get("novel_total"),
+    )
+    return (
+        run_id,
+        hb_sig,
+        positions_sig,
+        len(series),
+        last_equity,
+        account_sig,
+        state.get("selected_run_id"),
+    )
+
+
 def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     """Render PAPER mode detail pane with full trading dashboard.
     Reuses render_detail (mode='paper') extended kwargs: account_snapshot,
@@ -2489,12 +2674,34 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     # Discover which paper run_id the detail pane should render
     run_id = _fetch_paper_run_id(launcher, state)
     if run_id is None:
-        _render_paper_no_run(parent, launcher, state)
+        if _cockpit_runs_loading():
+            _render_hl2_empty(
+                parent,
+                title="LOADING PAPER RUNS",
+                blurb=("Consultando o cockpit sem travar a abertura da tela.\n"
+                       "As instancias paper aparecem assim que /v1/runs responder."),
+                actions=[],
+            )
+            _schedule_paper_refresh(launcher, state)
+        else:
+            _render_paper_no_run(parent, launcher, state)
         return
 
-    hb, positions, series, account = _fetch_paper_extras(run_id)
+    hb, positions, series, account = _fetch_paper_extras(
+        run_id,
+        launcher=launcher,
+        state=state,
+    )
     if hb is None:
-        _render_paper_no_run(parent, launcher, state)
+        _render_hl2_empty(
+            parent,
+            title="LOADING PAPER TELEMETRY",
+            blurb=("Abrindo o cockpit sem bloquear a UI.\n"
+                   "Heartbeat, positions e equity vao hidratar em seguida."),
+            actions=[],
+            hint="Se o tunnel/VPS estiver lento, os dados entram no proximo refresh.",
+        )
+        _schedule_paper_refresh(launcher, state)
         return
 
     tun_text, tun_color = _get_tunnel_status_label()
@@ -2519,6 +2726,8 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
         equity_series=series,
         on_stop_paper=_on_stop if status == "RUNNING" else None,
     )
+
+    state["paper_last_render_sig"] = _paper_content_sig(state, launcher)
 
     # Re-render every 5s to keep dashboard live
     _schedule_paper_refresh(launcher, state)
@@ -2629,6 +2838,12 @@ def _refresh_paper_detail(launcher, state) -> None:
             return
     except Exception:
         return
+    sig = _paper_content_sig(state, launcher)
+    last_sig = state.get("paper_last_render_sig")
+    if sig == last_sig and last_sig is not None:
+        _schedule_paper_refresh(launcher, state)
+        return
+    state["paper_last_render_sig"] = sig
     _render_detail(state, launcher)
 
 
@@ -2666,22 +2881,17 @@ def _render_vps_control_bar(parent, launcher, state) -> None:
     # Resolve service states from cockpit
     services_state = {"millennium_shadow": "unknown",
                       "millennium_paper": "unknown"}
-    client = _get_cockpit_client()
-    if client is not None:
-        try:
-            runs = client._get("/v1/runs")
-            if isinstance(runs, list):
-                for r in runs:
-                    mode = r.get("mode")
-                    status = r.get("status")
-                    svc = f"millennium_{mode}" if mode in ("shadow", "paper") else None
-                    if svc and status == "running":
-                        services_state[svc] = "running"
-                for svc in list(services_state):
-                    if services_state[svc] == "unknown":
-                        services_state[svc] = "stopped"
-        except Exception:
-            pass
+    runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
+    if runs:
+        for r in runs:
+            mode = r.get("mode")
+            status = r.get("status")
+            svc = f"millennium_{mode}" if mode in ("shadow", "paper") else None
+            if svc and status == "running":
+                services_state[svc] = "running"
+        for svc in list(services_state):
+            if services_state[svc] == "unknown":
+                services_state[svc] = "stopped"
 
     # Rows — institutional grid (fixed-width columns so pair aligns)
     for svc, svc_state in services_state.items():

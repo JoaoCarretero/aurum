@@ -78,7 +78,7 @@ class LiveRunsScreen(Screen):
             fg=AMBER, bg=BG, anchor="w",
         ).pack(anchor="w")
         tk.Label(
-            head, text="Historico live / paper / shadow / demo / testnet",
+            head, text="Ops snapshot do live_runs DB. Use RUNS HISTORY para timeline unificada local + VPS.",
             font=(FONT, 8), fg=DIM, bg=BG, anchor="w",
         ).pack(anchor="w", pady=(3, 8))
         tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
@@ -166,10 +166,12 @@ class LiveRunsScreen(Screen):
             app.h_stat.configure(text="BROWSE", fg=AMBER_D)
         if hasattr(app, "f_lbl"):
             app.f_lbl.configure(
-                text="ESC voltar  |  1-6 filter  |  click row for details",
+                text="ESC voltar  |  1-6 filter  |  R runs history  |  click row for details",
             )
         if hasattr(app, "_kb"):
             app._kb("<Escape>", lambda: app._data_center())
+            app._kb("<Key-r>", lambda: app._data_runs_history())
+            app._kb("<Key-R>", lambda: app._data_runs_history())
             for idx, mode in enumerate(self._MODES, start=1):
                 app._kb(f"<Key-{idx}>",
                         lambda m=mode: self.set_filter(m))

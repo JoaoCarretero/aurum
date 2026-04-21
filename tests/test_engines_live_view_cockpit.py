@@ -17,8 +17,10 @@ def _clear_live_view_fs_caches():
     import launcher_support.engines_live_view as evv
 
     evv._clear_live_fs_caches()
+    evv._clear_cockpit_view_caches()
     yield
     evv._clear_live_fs_caches()
+    evv._clear_cockpit_view_caches()
 
 
 def test_is_remote_run_detects_prefix():
@@ -305,6 +307,37 @@ def test_fetch_shadow_snapshot_falls_back_to_cockpit_when_poller_empty():
         tunnel_registry.reset_for_tests()
 
 
+def test_load_shadow_snapshot_cached_uses_ttl_cache(monkeypatch):
+    from pathlib import Path
+    import launcher_support.engines_live_view as evv
+
+    monkeypatch.setattr(
+        evv,
+        "_load_shadow_snapshot_sync",
+        lambda: (
+            Path("remote://r1"),
+            {"run_id": "r1", "status": "running"},
+            [{"strategy": "JUMP"}],
+        ),
+    )
+    first = evv._load_shadow_snapshot_cached(allow_sync=True)
+
+    monkeypatch.setattr(
+        evv,
+        "_load_shadow_snapshot_sync",
+        lambda: (
+            Path("remote://r2"),
+            {"run_id": "r2", "status": "stopped"},
+            [{"strategy": "CITADEL"}],
+        ),
+    )
+    second = evv._load_shadow_snapshot_cached()
+
+    assert str(first[0]).replace("\\", "/") == "remote:/r1"
+    assert first[1]["run_id"] == "r1"
+    assert second[1]["run_id"] == "r1"
+
+
 def test_engine_registry_for_sidebar_paper_mode_forces_millennium():
     from launcher_support.engines_live_view import _engine_registry_for_sidebar
 
@@ -396,3 +429,119 @@ def test_find_latest_shadow_run_local_fallback_uses_ttl_cache(tmp_path, monkeypa
     finally:
         evv._COCKPIT_CLIENT_SINGLETON = None
         tunnel_registry.reset_for_tests()
+
+
+def test_load_cockpit_runs_cached_uses_ttl_cache(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    monkeypatch.setattr(
+        evv,
+        "_load_cockpit_runs_sync",
+        lambda: [{"run_id": "r1", "mode": "paper", "status": "running"}],
+    )
+    first = evv._load_cockpit_runs_cached(allow_sync=True)
+
+    monkeypatch.setattr(
+        evv,
+        "_load_cockpit_runs_sync",
+        lambda: [{"run_id": "r2", "mode": "paper", "status": "running"}],
+    )
+    second = evv._load_cockpit_runs_cached()
+
+    assert [row["run_id"] for row in first] == ["r1"]
+    assert [row["run_id"] for row in second] == ["r1"]
+
+
+def test_fetch_paper_extras_uses_ttl_cache(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    monkeypatch.setattr(
+        evv,
+        "_fetch_paper_extras_sync",
+        lambda run_id: (
+            {"run_id": run_id, "status": "running"},
+            [{"symbol": "BTCUSDT"}],
+            [10100.0],
+            {"available": 10000.0},
+        ),
+    )
+    first = evv._fetch_paper_extras("paper_1", allow_sync=True)
+
+    monkeypatch.setattr(
+        evv,
+        "_fetch_paper_extras_sync",
+        lambda run_id: (
+            {"run_id": run_id, "status": "stopped"},
+            [{"symbol": "ETHUSDT"}],
+            [9900.0],
+            {"available": 9000.0},
+        ),
+    )
+    second = evv._fetch_paper_extras("paper_1")
+
+    assert first[0]["status"] == "running"
+    assert first[1][0]["symbol"] == "BTCUSDT"
+    assert second[0]["status"] == "running"
+    assert second[1][0]["symbol"] == "BTCUSDT"
+
+
+def test_refresh_paper_detail_skips_rerender_when_signature_unchanged(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    calls: list[str] = []
+
+    class _Host:
+        def winfo_exists(self):
+            return True
+
+    class _Launcher:
+        def after(self, _delay, fn):
+            calls.append("after")
+            return "aid"
+
+        def after_cancel(self, _aid):
+            return None
+
+    monkeypatch.setattr(evv, "_paper_content_sig", lambda state, launcher=None: ("same",))
+    monkeypatch.setattr(evv, "_render_detail", lambda state, launcher: calls.append("render"))
+
+    state = {
+        "mode": "paper",
+        "detail_host": _Host(),
+        "paper_last_render_sig": ("same",),
+    }
+    evv._refresh_paper_detail(_Launcher(), state)
+
+    assert "render" not in calls
+    assert "after" in calls
+
+
+def test_refresh_shadow_detail_skips_rerender_when_signature_unchanged(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    calls: list[str] = []
+
+    class _Host:
+        def winfo_exists(self):
+            return True
+
+    class _Launcher:
+        def after(self, _delay, fn):
+            calls.append("after")
+            return "aid"
+
+        def after_cancel(self, _aid):
+            return None
+
+    monkeypatch.setattr(evv, "_shadow_content_sig", lambda state, launcher=None: ("same",))
+    monkeypatch.setattr(evv, "_render_detail", lambda state, launcher: calls.append("render"))
+
+    state = {
+        "mode": "shadow",
+        "detail_host": _Host(),
+        "shadow_last_render_sig": ("same",),
+    }
+    evv._refresh_shadow_detail(_Launcher(), state)
+
+    assert "render" not in calls
+    assert "after" in calls
