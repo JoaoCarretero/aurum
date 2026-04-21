@@ -288,6 +288,140 @@ def running_slugs_from_procs(procs: list[dict]) -> dict[str, dict]:
     return out
 
 
+def _show_new_instance_dialog(launcher, state) -> None:
+    """Toplevel dialog pra startar uma nova MILLENNIUM instance com label.
+
+    Spawn local subprocess (paper ou shadow conforme mode atual).
+    Corrida em processo separado, terminal novo no Windows pra output
+    visivel. Run grava em data/millennium_{mode}/<run_id>/ normalmente
+    e aparece em Runs History (le disco) apos o primeiro tick.
+
+    Nao-bloqueante — dialog fecha imediatamente apos spawn. Multi-instance
+    na VPS requer systemd template unit (Fase 6), nao coberto aqui.
+    """
+    import subprocess
+    import sys
+
+    mode = state.get("mode") or "paper"
+    if mode not in ("paper", "shadow"):
+        _toast(launcher,
+               f"NEW INSTANCE suporta paper/shadow, mode atual: {mode}",
+               error=True)
+        return
+
+    dlg = tk.Toplevel(launcher)
+    dlg.title("NEW INSTANCE")
+    dlg.configure(bg=PANEL)
+    dlg.transient(launcher)
+    dlg.grab_set()
+    try:
+        dlg.geometry(f"360x220+{launcher.winfo_rootx() + 100}+"
+                     f"{launcher.winfo_rooty() + 100}")
+    except Exception:
+        dlg.geometry("360x220")
+
+    tk.Label(dlg, text=f"NEW  MILLENNIUM  {mode.upper()}",
+             fg=AMBER, bg=PANEL, font=(FONT, 9, "bold")).pack(
+             anchor="w", padx=14, pady=(12, 2))
+    tk.Frame(dlg, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(2, 10))
+
+    # Label input
+    tk.Label(dlg, text="LABEL (a-z, 0-9, -, max 40)", fg=DIM, bg=PANEL,
+             font=(FONT, 6)).pack(anchor="w", padx=14)
+    label_var = tk.StringVar()
+    label_entry = tk.Entry(dlg, textvariable=label_var, bg=BG, fg=WHITE,
+                           insertbackground=WHITE,
+                           highlightbackground=BORDER, highlightthickness=1,
+                           relief="flat", font=(FONT, 8))
+    label_entry.pack(fill="x", padx=14, pady=(2, 8))
+
+    # Account size (paper only)
+    size_var = tk.StringVar(value="10000")
+    if mode == "paper":
+        tk.Label(dlg, text="ACCOUNT SIZE (USD)", fg=DIM, bg=PANEL,
+                 font=(FONT, 6)).pack(anchor="w", padx=14)
+        size_entry = tk.Entry(dlg, textvariable=size_var, bg=BG, fg=WHITE,
+                              insertbackground=WHITE,
+                              highlightbackground=BORDER, highlightthickness=1,
+                              relief="flat", font=(FONT, 8))
+        size_entry.pack(fill="x", padx=14, pady=(2, 8))
+
+    # Warning strip — clarifies local spawn semantics
+    tk.Label(dlg,
+             text="⚠ runs LOCALLY — cockpit VPS nao ve.\nVer data/millennium_"
+                  f"{mode}/ ou Runs History.",
+             fg=AMBER, bg=PANEL, font=(FONT, 6),
+             wraplength=320, justify="left").pack(anchor="w", padx=14,
+                                                   pady=(4, 6))
+
+    def _start():
+        label = label_var.get().strip()
+        if not label:
+            _toast(launcher, "label obrigatorio", error=True)
+            return
+        args = [sys.executable, "-m",
+                f"tools.{'operations' if mode == 'paper' else 'maintenance'}"
+                f".millennium_{mode}",
+                "--label", label]
+        if mode == "paper":
+            try:
+                size = float(size_var.get().strip() or "10000")
+            except ValueError:
+                _toast(launcher, "account size invalido", error=True)
+                return
+            args += ["--account-size", str(size)]
+        try:
+            creation = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            subprocess.Popen(args, creationflags=creation)
+        except Exception as exc:
+            _toast(launcher, f"spawn falhou: {exc}", error=True)
+            return
+        _toast(launcher, f"new {mode} instance '{label}' spawned locally")
+        dlg.destroy()
+
+    btn_row = tk.Frame(dlg, bg=PANEL)
+    btn_row.pack(fill="x", padx=14, pady=(6, 10))
+    start = tk.Label(btn_row, text=" ▶ START ", fg=BG, bg=GREEN,
+                     font=(FONT, 7, "bold"), cursor="hand2", padx=6, pady=2)
+    start.pack(side="left")
+    start.bind("<Button-1>", lambda _e: _start())
+    cancel = tk.Label(btn_row, text=" CANCEL ", fg=WHITE, bg=BG2,
+                      font=(FONT, 7, "bold"), cursor="hand2", padx=6, pady=2)
+    cancel.pack(side="right")
+    cancel.bind("<Button-1>", lambda _e: dlg.destroy())
+
+    label_entry.focus_set()
+
+
+def _vps_running_slugs(*, mode: str) -> set[str]:
+    """Query cockpit /v1/runs and return distinct engine slugs currently running.
+
+    Shadow/paper modes dont run processes locally — the RUNNING counter
+    must reflect VPS state. Returns empty set on cockpit failure (caller
+    falls back to local-proc count, so no hard dependency on the VPS).
+    """
+    client = _get_cockpit_client()
+    if client is None:
+        return set()
+    try:
+        runs = client.list_runs() if hasattr(client, "list_runs") else \
+            client._get("/v1/runs")
+    except Exception:
+        return set()
+    if not isinstance(runs, list):
+        return set()
+    slugs: set[str] = set()
+    for r in runs:
+        if r.get("status") != "running":
+            continue
+        if mode and r.get("mode") != mode:
+            continue
+        engine = r.get("engine")
+        if engine:
+            slugs.add(engine)
+    return slugs
+
+
 def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict]:
     now = time.monotonic()
     cached_rows = _PROCS_CACHE.get("rows")
@@ -566,6 +700,18 @@ def _render_master_list(state, launcher):
     # a detail pane renderiza seu empty-state dedicado.
     is_shadow_mode = state.get("mode") == "shadow"
     shadow_slugs = _shadow_active_slugs() if is_shadow_mode else set()
+
+    # VPS-backed modes (shadow, paper) — merge running set with cockpit
+    # runs so the RUNNING counter up top reflects real state of the
+    # VPS, not just local processes (which are usually 0 for these
+    # modes). Query is best-effort; failures keep the local-proc count.
+    current_mode = state.get("mode")
+    if current_mode in ("shadow", "paper"):
+        vps_running = _vps_running_slugs(mode=current_mode)
+        if vps_running:
+            running = {**running, **{slug: {"status": "running", "alive": True,
+                                            "source": "vps"}
+                                     for slug in vps_running}}
 
     live_items: list[tuple[str, dict, dict]] = []
     ready_items: list[tuple[str, dict]] = []
@@ -956,9 +1102,13 @@ def _render_detail(state, launcher):
         state["sidebar_collapsed"] = not state.get("sidebar_collapsed", False)
         _render_detail(state, launcher)
 
+    def _open_new_instance():
+        _show_new_instance_dialog(launcher, state)
+
     render_sidebar(layout, rows, selected_slug=slug, on_select=_on_engine_select,
                    collapsed=state.get("sidebar_collapsed", False),
-                   on_toggle=_toggle_sidebar)
+                   on_toggle=_toggle_sidebar,
+                   on_new_instance=_open_new_instance)
 
     detail_inner = tk.Frame(layout, bg=PANEL)
     detail_inner.pack(side="left", fill="both", expand=True)

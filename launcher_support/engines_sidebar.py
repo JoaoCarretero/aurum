@@ -198,6 +198,7 @@ def render_sidebar(
     *,
     collapsed: bool = False,
     on_toggle: Callable[[], None] | None = None,
+    on_new_instance: Callable[[], None] | None = None,
 ) -> tk.Frame:
     """Institutional engine sidebar — 150px rail left of detail pane.
 
@@ -249,6 +250,14 @@ def render_sidebar(
                         font=(FONT, 7, "bold"), cursor="hand2")
         chev.pack(side="right")
         chev.bind("<Button-1>", lambda _e: on_toggle())
+    if on_new_instance is not None:
+        # + opens the NEW INSTANCE dialog. Placed on the right of the
+        # chevron, before it, so both are accessible in the top row.
+        plus = tk.Label(hdr, text="+", fg=GREEN, bg=PANEL,
+                        font=(FONT, 8, "bold"), cursor="hand2",
+                        padx=4)
+        plus.pack(side="right", padx=(0, 2))
+        plus.bind("<Button-1>", lambda _e: on_new_instance())
     tk.Frame(frame, bg=BORDER, height=1).pack(fill="x", padx=8, pady=(2, 4))
 
     for row in engines:
