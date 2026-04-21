@@ -5,10 +5,14 @@ Reads from aurum.db live_runs table — not the filesystem.
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 import time
 import tkinter as tk
+from pathlib import Path
 from typing import Any
 
+from config.paths import DATA_DIR
 from core.ui.ui_palette import AMBER, AMBER_D, BG, BG3, BORDER, DIM, DIM2, FONT, PANEL, WHITE
 from launcher_support.screens.base import Screen
 from core import db_live_runs
@@ -18,6 +22,34 @@ _LIST_COLS: list[tuple[str, int]] = [
     ("STATE", 7), ("ENGINE", 11), ("MODE", 7), ("STARTED", 16),
     ("TICKS", 6), ("SIG", 5), ("EQUITY", 10),
 ]
+
+
+def _archive_run(run_id: str) -> bool:
+    """Soft-delete: mv run_dir into data/_archive/live/. Returns True on success."""
+    from core import db_live_runs as _db
+    run = _db.get_live_run(run_id)
+    if run is None:
+        return False
+    src = Path(run["run_dir"])
+    if not src.is_absolute():
+        src = DATA_DIR.parent / src
+    if not src.exists():
+        return False
+    dst = DATA_DIR / "_archive" / "live" / src.parent.name / src.name
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        return False
+    shutil.move(str(src), str(dst))
+    return True
+
+
+def _open_dir(run_dir: str) -> None:
+    p = Path(run_dir)
+    if not p.is_absolute():
+        p = DATA_DIR.parent / p
+    if not p.exists():
+        return
+    subprocess.Popen(["explorer", str(p)])
 
 
 class LiveRunsScreen(Screen):
@@ -267,6 +299,28 @@ class LiveRunsScreen(Screen):
             ("ticks", str(run.get("tick_count") or 0)),
             ("novel signals", str(run.get("novel_count") or 0)),
         ])
+
+        actions = tk.Frame(self._detail_frame, bg=PANEL)
+        actions.pack(fill="x", pady=(10, 0))
+        for label, cmd, color in [
+            ("OPEN DIR", lambda rd=run.get("run_dir"): _open_dir(rd or ""), AMBER),
+            ("ARCHIVE", self._archive_selected, AMBER_D),
+        ]:
+            b = tk.Label(
+                actions, text=f"  {label}  ", font=(FONT, 8, "bold"),
+                fg=color, bg=BG3, cursor="hand2", padx=8, pady=3,
+            )
+            b.pack(side="left", padx=(0, 6))
+            b.bind("<Button-1>", lambda _e, c=cmd: c())
+
+    def _archive_selected(self) -> None:
+        if not self._selected_run_id:
+            return
+        ok = _archive_run(self._selected_run_id)
+        if ok:
+            self._list_cache = None
+            self._selected_run_id = None
+            self._render()
 
     def _detail_section(self, title: str, rows: list[tuple[str, str]]) -> None:
         if self._detail_frame is None:

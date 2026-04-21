@@ -158,3 +158,27 @@ def test_detail_panel_renders_sections(
     assert "TIMELINE" in blob
     assert "PERFORMANCE" in blob
     assert "ACTIVITY" in blob
+
+
+@pytest.mark.gui
+def test_archive_action_calls_archiver(
+    gui_root, fake_app, fake_runs, monkeypatch,
+):
+    monkeypatch.setattr(
+        "launcher_support.screens.live_runs.db_live_runs.list_live_runs",
+        lambda **kw: fake_runs,
+    )
+    monkeypatch.setattr(
+        "launcher_support.screens.live_runs.db_live_runs.get_live_run",
+        lambda rid: next(r for r in fake_runs if r["run_id"] == rid),
+    )
+    calls = []
+    monkeypatch.setattr(
+        "launcher_support.screens.live_runs._archive_run",
+        lambda rid: calls.append(rid) or True,
+    )
+    s = LiveRunsScreen(parent=gui_root, app=fake_app)
+    s.mount()
+    s.on_enter()
+    s._archive_selected()
+    assert calls == ["r1"]
