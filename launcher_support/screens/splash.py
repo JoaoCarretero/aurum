@@ -30,22 +30,19 @@ class SplashScreen(Screen):
     _BOTTOM_RULE_Y = 596
     _RULE_X1 = 48
     _RULE_X2 = 872
-
-    _HERO_X1 = 188
-    _HERO_X2 = 732
-    _HERO_Y1 = 78
-    _HERO_Y2 = 286
-    _LOGO_Y = 126
+    _TOP_BAND_Y = 84
+    _TOP_BAND_W = 264
+    _LOGO_Y = 128
     _TITLE_Y = 170
     _BRAND_Y = 196
-    _WORDMARK_DIVIDER_HALF = 108
-    _SUBTITLE_DIVIDER_HALF = 178
-    _INTRO_Y = 254
-    _INTRO_BLOCK_GAP = 18
+    _WORDMARK_DIVIDER_HALF = 92
+    _SUBTITLE_DIVIDER_HALF = 164
+    _INTRO_Y = 248
+    _INTRO_BLOCK_GAP = 16
 
     _SESSION_PANEL_W = 640
     _SESSION_PANEL_H = 146
-    _SESSION_PANEL_Y1 = 332
+    _SESSION_PANEL_Y1 = 320
     _SESSION_PANEL_Y2 = _SESSION_PANEL_Y1 + _SESSION_PANEL_H
     _SESSION_GUTTER = 24
     _SESSION_COLUMN_GAP = 28
@@ -85,7 +82,7 @@ class SplashScreen(Screen):
         self._draw_wordmark(canvas)
         canvas.create_text(
             self._CENTER_X,
-            526,
+            516,
             anchor="center",
             text="[ ENTER TO ACCESS DESK ]_",
             font=(FONT, 11, "bold"),
@@ -171,28 +168,39 @@ class SplashScreen(Screen):
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
         logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
-        canvas.create_rectangle(
-            self._HERO_X1,
-            self._HERO_Y1,
-            self._HERO_X2,
-            self._HERO_Y2,
-            outline=BORDER,
-            fill=BG,
+        band_x1 = self._CENTER_X - (self._TOP_BAND_W // 2)
+        band_x2 = self._CENTER_X + (self._TOP_BAND_W // 2)
+        canvas.create_line(
+            self._RULE_X1,
+            self._TOP_BAND_Y,
+            band_x1 - 14,
+            self._TOP_BAND_Y,
+            fill=AMBER_D,
             width=1,
             tags="wordmark",
         )
         canvas.create_line(
-            self._HERO_X1,
-            self._HERO_Y1,
-            self._HERO_X2,
-            self._HERO_Y1,
+            band_x2 + 14,
+            self._TOP_BAND_Y,
+            self._RULE_X2,
+            self._TOP_BAND_Y,
             fill=AMBER_D,
+            width=1,
+            tags="wordmark",
+        )
+        canvas.create_rectangle(
+            band_x1,
+            self._TOP_BAND_Y - 10,
+            band_x2,
+            self._TOP_BAND_Y + 10,
+            outline=AMBER_D,
+            fill=BG,
             width=1,
             tags="wordmark",
         )
         canvas.create_text(
             self._CENTER_X,
-            self._HERO_Y1 + 18,
+            self._TOP_BAND_Y,
             anchor="center",
             text="QUANT OPERATIONS CONSOLE",
             font=(FONT, 7, "bold"),
@@ -280,8 +288,8 @@ class SplashScreen(Screen):
         left_col_x = inner_x1 + 12
         right_col_x = inner_x1 + col_w + self._SESSION_COLUMN_GAP + 12
         divider_x = self._CENTER_X
-        header_y = self._SESSION_PANEL_Y1 + 34
-        row_y = self._SESSION_PANEL_Y1 + 50
+        header_y = self._SESSION_PANEL_Y1 + 32
+        row_y = self._SESSION_PANEL_Y1 + 48
 
         self.app._draw_panel(
             canvas,
