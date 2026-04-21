@@ -326,6 +326,93 @@ def engine_log_header(row: dict) -> str:
     return f"  {engine} · pid {pid} · {log_file}"
 
 
+def normalize_engine_log_local_proc(proc: dict) -> dict:
+    out = dict(proc)
+    out.setdefault("alive", bool(proc.get("alive")))
+    out["_remote"] = False
+    out["src"] = "local"
+    out.setdefault("mode", str(proc.get("mode") or "live"))
+    return out
+
+
+def engine_known_slugs(proc_engines: dict | None = None) -> set[str]:
+    known = {str(name).lower() for name in (proc_engines or {}).keys()}
+    known.update({
+        "aqr", "arbitrage", "backtest", "bridgewater", "citadel",
+        "darwin", "deshaw", "graham", "harmonics", "janestreet",
+        "jump", "kepos", "live", "mercurio", "millennium",
+        "multistrategy", "newton", "prometeu", "renaissance",
+        "thoth", "twosigma", "winton",
+    })
+    return known
+
+
+def engine_base_slug(row: dict) -> str:
+    raw = str(row.get("engine") or "").strip().lower()
+    if "(" in raw:
+        raw = raw.split("(", 1)[0].strip()
+    return raw
+
+
+def is_engine_log_row(row: dict, *, known_slugs: set[str] | None = None) -> bool:
+    if row.get("_remote"):
+        return True
+    base = engine_base_slug(row)
+    if base in {"prefetch"}:
+        return False
+    return base in (known_slugs or engine_known_slugs())
+
+
+def matches_engine_mode_filter(row: dict, mode_filter: str = "all") -> bool:
+    current = str(mode_filter or "all").strip().lower()
+    if current == "all":
+        return True
+    return str(row.get("mode") or "").strip().lower() == current
+
+
+def list_engine_log_sections(
+    *,
+    client=None,
+    mode_filter: str = "all",
+    vps_limit: int = 20,
+    historical_limit: int = 30,
+    historical_hours: int = 72,
+) -> tuple[list[dict], list[dict], str | None]:
+    try:
+        from core.ops.proc import ENGINES as proc_engines
+        from core.ops.proc import list_procs
+        local_procs = [normalize_engine_log_local_proc(p) for p in (list_procs() or [])]
+    except Exception as exc:
+        proc_engines = {}
+        local_procs = []
+        error = f"list_procs failed: {exc}"
+    else:
+        error = None
+
+    known_slugs = engine_known_slugs(proc_engines)
+    local_procs = [p for p in local_procs if is_engine_log_row(p, known_slugs=known_slugs)]
+    vps_rows = collect_engine_log_vps_rows(client, limit=vps_limit)
+    historical = collect_engine_log_local_rows(limit=historical_limit, hours=historical_hours)
+    vps_ids = {engine_log_run_id_of(r) for r in vps_rows if engine_log_run_id_of(r)}
+    historical = [
+        row for row in historical
+        if engine_log_run_id_of(row) not in vps_ids and is_engine_log_row(row, known_slugs=known_slugs)
+    ]
+
+    running: list[dict] = []
+    stopped: list[dict] = []
+    for row in local_procs + vps_rows + historical:
+        if not matches_engine_mode_filter(row, mode_filter):
+            continue
+        if row.get("alive"):
+            running.append(row)
+        else:
+            stopped.append(row)
+    running.sort(key=engine_log_recency_key, reverse=True)
+    stopped.sort(key=engine_log_recency_key, reverse=True)
+    return running, stopped, error
+
+
 def collect_engine_log_vps_rows(client, *, limit: int = 20) -> list[dict]:
     if client is None:
         return []

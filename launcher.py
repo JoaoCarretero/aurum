@@ -8417,38 +8417,23 @@ class App(tk.Tk):
             except Exception: pass
 
         try:
-            from core.ops.proc import list_procs
-            local_procs = [self._eng_normalize_local_proc(p)
-                           for p in (list_procs() or [])]
-        except Exception as e:
+            from launcher_support.engines_live_view import _get_cockpit_client
+            from core.ops import run_catalog
+            client = _get_cockpit_client()
+        except Exception:
+            client = None
+        running, stopped, error_text = run_catalog.list_engine_log_sections(
+            client=client,
+            mode_filter=self._eng_mode_filter,
+            vps_limit=20,
+            historical_limit=30,
+            historical_hours=72,
+        )
+        if error_text:
             tk.Label(self._eng_list_wrap,
-                     text=f"  list_procs failed: {e}",
+                     text=f"  {error_text}",
                      font=(FONT, 7), fg=RED, bg=BG,
                      anchor="w").pack(fill="x")
-            local_procs = []
-        local_procs = [p for p in local_procs if self._eng_is_engine_row(p)]
-
-        vps_rows = self._eng_scan_vps_runs(limit=20)
-        historical = self._eng_scan_historical_runs(limit=30, hours=72)
-
-        # Dedup: VPS runs are usually also on local disk via rsync/mount;
-        # when both show the same run_id, keep only the VPS row (it has
-        # live heartbeat). Same for historical vs VPS.
-        vps_ids = {r.get("_run_id") for r in vps_rows if r.get("_run_id")}
-        historical = [h for h in historical
-                      if self._eng_run_id_of(h) not in vps_ids]
-        historical = [h for h in historical if self._eng_is_engine_row(h)]
-
-        running, stopped = [], []
-        for row in local_procs + vps_rows + historical:
-            if not self._eng_matches_mode_filter(row):
-                continue
-            if row.get("alive"):
-                running.append(row)
-            else:
-                stopped.append(row)
-        running.sort(key=self._eng_recency_key, reverse=True)
-        stopped.sort(key=self._eng_recency_key, reverse=True)
         self._eng_refresh_filter_tabs()
         filt_label = (self._eng_mode_filter.upper()
                       if self._eng_mode_filter != "all" else "ALL ENGINES")
@@ -8495,50 +8480,40 @@ class App(tk.Tk):
             pass
 
     def _eng_normalize_local_proc(self, proc: dict) -> dict:
-        """Standardize shapes from core.ops.proc.list_procs into the same
-        schema used by VPS + historical rows."""
-        out = dict(proc)
-        out.setdefault("alive", bool(proc.get("alive")))
-        out["_remote"] = False
-        out["src"] = "local"
-        out.setdefault("mode", str(proc.get("mode") or "live"))
-        return out
+        from core.ops import run_catalog
+
+        return run_catalog.normalize_engine_log_local_proc(proc)
 
     def _eng_known_slugs(self) -> set[str]:
+        from core.ops import run_catalog
+
         try:
             from core.ops.proc import ENGINES as _ENGINES
-
-            known = {str(name).lower() for name in _ENGINES.keys()}
+            proc_engines = _ENGINES
         except Exception:
-            known = set()
-        known.update({
-            "aqr", "arbitrage", "backtest", "bridgewater", "citadel",
-            "darwin", "deshaw", "graham", "harmonics", "janestreet",
-            "jump", "kepos", "live", "mercurio", "millennium",
-            "multistrategy", "newton", "prometeu", "renaissance",
-            "thoth", "twosigma", "winton",
-        })
-        return known
+            proc_engines = {}
+        return run_catalog.engine_known_slugs(proc_engines)
 
     def _eng_base_slug(self, row: dict) -> str:
-        raw = str(row.get("engine") or "").strip().lower()
-        if "(" in raw:
-            raw = raw.split("(", 1)[0].strip()
-        return raw
+        from core.ops import run_catalog
+
+        return run_catalog.engine_base_slug(row)
 
     def _eng_is_engine_row(self, row: dict) -> bool:
-        if row.get("_remote"):
-            return True
-        base = self._eng_base_slug(row)
-        if base in {"prefetch"}:
-            return False
-        return base in self._eng_known_slugs()
+        from core.ops import run_catalog
+
+        return run_catalog.is_engine_log_row(
+            row,
+            known_slugs=self._eng_known_slugs(),
+        )
 
     def _eng_matches_mode_filter(self, row: dict) -> bool:
-        current = getattr(self, "_eng_mode_filter", "all")
-        if current == "all":
-            return True
-        return str(row.get("mode") or "").strip().lower() == current
+        from core.ops import run_catalog
+
+        return run_catalog.matches_engine_mode_filter(
+            row,
+            getattr(self, "_eng_mode_filter", "all"),
+        )
 
     def _eng_row_key(self, row: dict) -> str:
         from core.ops import run_catalog

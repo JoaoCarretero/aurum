@@ -492,6 +492,90 @@ def test_engine_log_recency_key_prefers_last_tick():
     assert run_catalog.engine_log_recency_key(newer) > run_catalog.engine_log_recency_key(older)
 
 
+def test_list_engine_log_sections_dedupes_vps_over_historical(monkeypatch):
+    from core.ops import run_catalog
+
+    monkeypatch.setattr(
+        "core.ops.proc.list_procs",
+        lambda: [{
+            "engine": "bridgewater",
+            "mode": "paper",
+            "alive": True,
+            "pid": 101,
+        }],
+    )
+    monkeypatch.setattr(
+        "core.ops.proc.ENGINES",
+        {"bridgewater": object()},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_catalog,
+        "collect_engine_log_vps_rows",
+        lambda client, limit=20: [{
+            "engine": "BRIDGEWATER (paper)",
+            "mode": "paper",
+            "alive": True,
+            "_remote": True,
+            "_run_id": "RID1",
+            "started_at": "2026-04-20T12:10:00Z",
+        }],
+    )
+    monkeypatch.setattr(
+        run_catalog,
+        "collect_engine_log_local_rows",
+        lambda limit=30, hours=72: [{
+            "engine": "BRIDGEWATER (paper)",
+            "mode": "paper",
+            "alive": False,
+            "_remote": False,
+            "_run_id": "RID1",
+            "started_at": "2026-04-20T12:00:00Z",
+        }, {
+            "engine": "BRIDGEWATER (paper)",
+            "mode": "paper",
+            "alive": False,
+            "_remote": False,
+            "_run_id": "RID2",
+            "started_at": "2026-04-20T11:00:00Z",
+        }],
+    )
+
+    running, stopped, error = run_catalog.list_engine_log_sections(
+        client=object(),
+        mode_filter="paper",
+    )
+
+    assert error is None
+    assert [row.get("_run_id") for row in running] == ["RID1", None]
+    assert [row.get("_run_id") for row in stopped] == ["RID2"]
+
+
+def test_list_engine_log_sections_reports_list_procs_error(monkeypatch):
+    from core.ops import run_catalog
+
+    def _boom():
+        raise RuntimeError("proc down")
+
+    monkeypatch.setattr("core.ops.proc.list_procs", _boom)
+    monkeypatch.setattr(
+        run_catalog,
+        "collect_engine_log_vps_rows",
+        lambda client, limit=20: [],
+    )
+    monkeypatch.setattr(
+        run_catalog,
+        "collect_engine_log_local_rows",
+        lambda limit=30, hours=72: [],
+    )
+
+    running, stopped, error = run_catalog.list_engine_log_sections(client=None)
+
+    assert running == []
+    assert stopped == []
+    assert "list_procs failed" in error
+
+
 # ─── Formatters ────────────────────────────────────────────────────
 
 def test_fmt_duration_running_counts_toward_now():
