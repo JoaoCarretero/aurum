@@ -444,6 +444,65 @@ def test_engine_logs_excludes_non_engine_rows(app):
     assert app._eng_is_engine_row({"engine": "MILLENNIUM (shadow)", "_remote": True}) is True
 
 
+def test_engine_logs_vps_scan_uses_run_summary_without_heartbeat_fanout(app, monkeypatch):
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str | None]] = []
+
+        def active_runs_for(self, engine: str, mode: str | None = None):
+            self.calls.append((engine, mode))
+            if mode == "shadow":
+                return [{
+                    "run_id": "r1",
+                    "engine": "millennium",
+                    "mode": "shadow",
+                    "status": "running",
+                    "started_at": "2026-04-21T13:20:10Z",
+                    "last_tick_at": "2026-04-21T20:50:24Z",
+                    "novel_total": 3,
+                }]
+            if mode == "paper":
+                return []
+            raise AssertionError(f"unexpected mode: {mode}")
+
+    client = FakeClient()
+    monkeypatch.setattr(
+        "launcher_support.engines_live_view._get_cockpit_client",
+        lambda: client,
+    )
+
+    rows = app._eng_scan_vps_runs(limit=5)
+
+    assert len(rows) == 1
+    assert rows[0]["_heartbeat"]["novel_total"] == 3
+    assert client.calls == [("millennium", "shadow"), ("millennium", "paper")]
+
+
+def test_start_tunnel_async_spawns_background_worker(app, monkeypatch):
+    started: list[str] = []
+    thread_calls: list[tuple[str, bool]] = []
+
+    class FakeTunnel:
+        def start(self):
+            started.append("start")
+
+    class FakeThread:
+        def __init__(self, *, target, name=None, daemon=None):
+            self._target = target
+            thread_calls.append((name, daemon))
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr("launcher.threading.Thread", FakeThread)
+    app._aurum_tunnel = FakeTunnel()
+
+    app._start_tunnel_async()
+
+    assert started == ["start"]
+    assert thread_calls == [("aurum-tunnel-start", True)]
+
+
 def test_migrated_screen_container_uses_dark_bg(app, mod):
     app._data()
     screen = app.screens._cache.get("data_reports")

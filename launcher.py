@@ -1294,14 +1294,16 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._quit)
         emit_timing_metric("boot.until_shell_ready", ms=(time.perf_counter() - boot_t0) * 1000.0)
 
-        # SSH tunnel pro cockpit API — lifecycle amarrado no launcher.
-        # Nao bloqueia o boot: o watchdog sobe em thread separada.
+        # SSH tunnel pro cockpit API.
+        # Boot sync so prepara o manager; o start real vai pro loop do Tk
+        # para nao deixar a janela branca enquanto o ssh handshaking roda.
         tunnel_t0 = time.perf_counter()
+        self._aurum_tunnel = None
         try:
             tunnel = _boot_tunnel_manager()
             if tunnel is not None:
-                tunnel.start()
                 self._aurum_tunnel = tunnel
+                self.after(25, self._start_tunnel_async)
         except Exception:
             # Tunnel falhou -> launcher segue em local-mode.
             self._aurum_tunnel = None
@@ -1326,6 +1328,29 @@ class App(tk.Tk):
         except Exception:
             pass
         emit_timing_metric("boot.shadow_poller_start", ms=(time.perf_counter() - poller_t0) * 1000.0)
+
+    def _start_tunnel_async(self) -> None:
+        """Start the cockpit tunnel off the critical paint path."""
+        tunnel = getattr(self, "_aurum_tunnel", None)
+        if tunnel is None:
+            return
+
+        def _worker():
+            t0 = time.perf_counter()
+            try:
+                tunnel.start()
+            except Exception:
+                pass
+            emit_timing_metric(
+                "boot.tunnel_start_async",
+                ms=(time.perf_counter() - t0) * 1000.0,
+            )
+
+        threading.Thread(
+            target=_worker,
+            name="aurum-tunnel-start",
+            daemon=True,
+        ).start()
 
     def _configure_windows_dpi(self) -> None:
         """Prefer per-monitor DPI awareness on Windows laptops with scaling."""
@@ -8071,6 +8096,8 @@ class App(tk.Tk):
         self._eng_selected_key: str | None = None
         self._eng_mode_filter: str = getattr(self, "_eng_mode_filter", "all")
         self._eng_filter_tabs: dict[str, tk.Label] = {}
+        self._eng_historical_cache: list[dict] | None = None
+        self._eng_historical_cache_ts: float = 0.0
 
         _outer, outer = self._ui_page_shell(
             "ENGINE LOGS",
@@ -8493,6 +8520,15 @@ class App(tk.Tk):
 
         Silent fail on any error (tunnel down, cockpit unreachable): returns
         empty. Caller falls back to local-only scan.
+
+        Important: do not fetch per-run heartbeat here. This list is rebuilt
+        often and synchronous heartbeat fan-out can freeze Tk for seconds when
+        the tunnel is cold or flaky. The detail pane still fetches heartbeat
+        on demand after selection.
+
+        Also keep this list to active VPS runs only. Historical remote runs
+        belong in the cockpit itself; pulling stopped rows here creates noise
+        after a local cleanup and makes the screen look "uncleared".
         """
         try:
             from launcher_support.engines_live_view import _get_cockpit_client
@@ -8501,12 +8537,29 @@ class App(tk.Tk):
             return []
         if client is None:
             return []
+        runs: list[dict] = []
         try:
-            runs = client._get("/v1/runs")
+            active_shadow = client.active_runs_for("millennium", mode="shadow")
+            active_paper = client.active_runs_for("millennium", mode="paper")
+            if isinstance(active_shadow, list):
+                runs.extend(active_shadow)
+            if isinstance(active_paper, list):
+                runs.extend(active_paper)
+        except AttributeError:
+            try:
+                raw_runs = client._get("/v1/runs")
+            except Exception:
+                return []
+            if not isinstance(raw_runs, list):
+                return []
+            runs = [
+                r for r in raw_runs
+                if isinstance(r, dict) and str(r.get("status") or "").lower() == "running"
+            ]
         except Exception:
             return []
-        if not isinstance(runs, list):
-            return []
+
+        runs.sort(key=lambda r: str(r.get("started_at") or r.get("last_tick_at") or ""), reverse=True)
         rows: list[dict] = []
         for r in runs[:limit]:
             engine_name = str(r.get("engine") or "?").upper()
@@ -8516,13 +8569,12 @@ class App(tk.Tk):
             alive = status == "running"
             started = r.get("started_at") or r.get("last_tick_at") or ""
             started_str = str(started)[:16].replace("T", " ") if started else ""
-            # Fetch heartbeat for uptime + signal count. Silent fail —
-            # the list-view still renders, just without metrics.
-            hb: dict = {}
-            try:
-                hb = client._get(f"/v1/runs/{r.get('run_id')}/heartbeat") or {}
-            except Exception:
-                hb = {}
+            hb = {
+                "started_at": r.get("started_at"),
+                "last_tick_at": r.get("last_tick_at"),
+                "status": r.get("status"),
+                "novel_total": r.get("novel_total"),
+            }
             rows.append({
                 "engine": label,
                 "mode": mode,
@@ -8549,6 +8601,12 @@ class App(tk.Tk):
         """
         from pathlib import Path as _Path
         from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        now_ts = time.time()
+        cached = getattr(self, "_eng_historical_cache", None)
+        cached_ts = float(getattr(self, "_eng_historical_cache_ts", 0.0) or 0.0)
+        if cached is not None and (now_ts - cached_ts) < 30.0:
+            return list(cached[:limit])
+
         data_root = _Path("data")
         if not data_root.exists():
             return []
@@ -8630,7 +8688,10 @@ class App(tk.Tk):
                     "_heartbeat": hb,
                 }))
         rows.sort(key=lambda t: t[0], reverse=True)
-        return [r for _, r in rows[:limit]]
+        result = [r for _, r in rows]
+        self._eng_historical_cache = result
+        self._eng_historical_cache_ts = now_ts
+        return result[:limit]
 
     def _eng_render_row(self, proc: dict):
         alive = bool(proc.get("alive"))
