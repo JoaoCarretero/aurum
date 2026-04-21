@@ -1306,8 +1306,6 @@ def _subtitle_for(slug, meta) -> str:
 
 def _render_detail(state, launcher):
     host = state["detail_host"]
-    for w in host.winfo_children():
-        w.destroy()
 
     slug = state.get("selected_slug")
     bucket = state.get("selected_bucket")
@@ -1319,11 +1317,41 @@ def _render_detail(state, launcher):
         state["selected_slug"] = slug
         state["selected_bucket"] = bucket
 
-    # Master-detail com sidebar universal: renderiza sidebar primeiro
-    # (todas as engines do registry) e depois dispatcha o detail pane
-    # especifico do modo/bucket dentro de detail_inner.
-    layout = tk.Frame(host, bg=PANEL)
-    layout.pack(fill="both", expand=True)
+    shell_mode = state.get("_detail_shell_mode")
+    layout = state.get("_detail_layout")
+    sidebar_host = state.get("_sidebar_host")
+    detail_inner = state.get("_detail_inner")
+    reuse_shell = (
+        shell_mode == mode
+        and layout is not None and getattr(layout, "winfo_exists", lambda: False)()
+        and sidebar_host is not None and getattr(sidebar_host, "winfo_exists", lambda: False)()
+        and detail_inner is not None and getattr(detail_inner, "winfo_exists", lambda: False)()
+    )
+
+    if not reuse_shell:
+        for w in host.winfo_children():
+            w.destroy()
+        # Master-detail com sidebar universal: renderiza sidebar primeiro
+        # (todas as engines do registry) e depois dispatcha o detail pane
+        # especifico do modo/bucket dentro de detail_inner.
+        layout = tk.Frame(host, bg=PANEL)
+        layout.pack(fill="both", expand=True)
+
+        sidebar_host = tk.Frame(layout, bg=PANEL)
+        sidebar_host.pack(side="left", fill="y")
+
+        detail_inner = tk.Frame(layout, bg=PANEL)
+        detail_inner.pack(side="left", fill="both", expand=True)
+
+        state["_detail_layout"] = layout
+        state["_sidebar_host"] = sidebar_host
+        state["_detail_inner"] = detail_inner
+        state["_detail_shell_mode"] = mode
+    else:
+        for w in sidebar_host.winfo_children():
+            w.destroy()
+        for w in detail_inner.winfo_children():
+            w.destroy()
 
     # Heartbeats: em SHADOW vem do poller remoto; em modos locais,
     # marca engines com PID ativo no _PROCS_CACHE como "active".
@@ -1355,13 +1383,10 @@ def _render_detail(state, launcher):
     def _open_new_instance():
         _show_new_instance_dialog(launcher, state)
 
-    render_sidebar(layout, rows, selected_slug=slug, on_select=_on_engine_select,
+    render_sidebar(sidebar_host, rows, selected_slug=slug, on_select=_on_engine_select,
                    collapsed=state.get("sidebar_collapsed", False),
                    on_toggle=_toggle_sidebar,
                    on_new_instance=_open_new_instance)
-
-    detail_inner = tk.Frame(layout, bg=PANEL)
-    detail_inner.pack(side="left", fill="both", expand=True)
 
     # SHADOW mode: path dedicado (telemetria do VPS cockpit API).
     if mode == "shadow":

@@ -6,6 +6,7 @@ test pure helpers, skip Tkinter runtime rendering.
 from __future__ import annotations
 
 import pytest
+import tkinter as tk
 
 
 class TestLiveReadySlugs:
@@ -319,3 +320,48 @@ class TestFindLatestShadowRun:
         bad.mkdir(parents=True)
         (bad / "heartbeat.json").write_text("{not json")
         assert elv._find_latest_shadow_run() is None
+
+
+@pytest.mark.gui
+def test_render_detail_reuses_shell_for_paper_refresh(monkeypatch):
+    from launcher_support import engines_live_view as elv
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("tk unavailable")
+    root.withdraw()
+    try:
+        host = tk.Frame(root)
+        host.pack()
+        state = {
+            "detail_host": host,
+            "mode": "paper",
+            "selected_slug": "millennium",
+            "selected_bucket": "LIVE",
+            "sidebar_collapsed": False,
+        }
+
+        monkeypatch.setattr(elv, "_fetch_paper_run_id", lambda launcher, state=None: "RID")
+        monkeypatch.setattr(elv, "_active_paper_runs", lambda launcher: [])
+        monkeypatch.setattr(elv, "_fetch_paper_extras", lambda *args, **kwargs: (
+            {"run_id": "RID", "status": "running", "last_tick_at": "2026-04-21T20:00:00Z"},
+            [],
+            [],
+            {"equity": 10000.0, "drawdown_pct": 0.0, "initial_balance": 10000.0, "metrics": {}},
+        ))
+        monkeypatch.setattr(elv, "_schedule_paper_refresh", lambda launcher, state: None)
+        monkeypatch.setattr(elv, "_render_vps_control_bar", lambda *args, **kwargs: None)
+
+        elv._render_detail(state, launcher=None)
+        first_layout = state["_detail_layout"]
+        first_sidebar = state["_sidebar_host"]
+        first_detail = state["_detail_inner"]
+
+        elv._render_detail(state, launcher=None)
+
+        assert state["_detail_layout"] is first_layout
+        assert state["_sidebar_host"] is first_sidebar
+        assert state["_detail_inner"] is first_detail
+    finally:
+        root.destroy()

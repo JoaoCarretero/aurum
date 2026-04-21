@@ -1,11 +1,4 @@
-"""Regression tests for SplashScreen (pilot migration).
-
-These tests check structural parity with the old _splash() function:
-- canvas is created with same design W/H
-- session overview panel has 4 kv rows on each column
-- prompt text "[ ENTER TO ACCESS DESK ]_" is present
-- logo is drawn
-"""
+"""Regression tests for SplashScreen (pilot migration)."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -32,7 +25,6 @@ def gui_root():
 
 @pytest.fixture
 def fake_app(gui_root):
-    """Stub of the launcher Terminal app exposing the methods SplashScreen uses."""
     app = MagicMock()
     app._SPLASH_DESIGN_W = 920
     app._SPLASH_DESIGN_H = 640
@@ -54,7 +46,6 @@ def fake_app(gui_root):
 
 @pytest.fixture
 def fake_conn():
-    """Stub of the connection manager — just enough for SplashScreen."""
     conn = MagicMock()
     conn.status_summary.return_value = {"market": "demo"}
     return conn
@@ -73,19 +64,17 @@ def test_splash_draws_logo_panel_rows(gui_root, fake_app, fake_conn):
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
     s.mount()
     s.on_enter()
-    # Session overview panel = 1 draw
     assert fake_app._draw_panel.call_count >= 1
     panel_call = fake_app._draw_panel.call_args
-    assert panel_call.args[1:5] == (140, 330, 780, 468)
-    # Two kv rows (left + right columns)
+    assert panel_call.args[1:5] == (140, 332, 780, 478)
+
     assert fake_app._draw_kv_rows.call_count >= 2
     left_call = fake_app._draw_kv_rows.call_args_list[0]
     right_call = fake_app._draw_kv_rows.call_args_list[1]
-    assert left_call.args[1:3] == (178, 380)
-    assert right_call.args[1:3] == (484, 380)
-    assert left_call.kwargs["value_x"] == 292
+    assert left_call.args[1:3] == (176, 382)
+    assert right_call.args[1:3] == (486, 382)
+    assert left_call.kwargs["value_x"] == 288
     assert right_call.kwargs["value_x"] == 598
-    # Logo drawn
     assert fake_app._draw_aurum_logo.call_count >= 1
 
 
@@ -94,7 +83,15 @@ def test_splash_intro_stays_above_session_panel(gui_root, fake_app, fake_conn):
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
     s.mount()
     s.on_enter()
-    assert s._INTRO_Y + s._INTRO_LINE_H + s._INTRO_BLOCK_GAP < s._SESSION_PANEL_Y1
+    assert s._INTRO_Y + s._INTRO_BLOCK_GAP < s._SESSION_PANEL_Y1
+
+
+@pytest.mark.gui
+def test_splash_hero_stays_above_session_panel(gui_root, fake_app, fake_conn):
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
+    s.mount()
+    s.on_enter()
+    assert s._HERO_Y2 < s._SESSION_PANEL_Y1
 
 
 @pytest.mark.gui

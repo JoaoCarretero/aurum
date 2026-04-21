@@ -30,18 +30,26 @@ class SplashScreen(Screen):
     _BOTTOM_RULE_Y = 596
     _RULE_X1 = 48
     _RULE_X2 = 872
-    _WORDMARK_DIVIDER_HALF = 124
-    _SUBTITLE_DIVIDER_HALF = 196
+
+    _HERO_X1 = 188
+    _HERO_X2 = 732
+    _HERO_Y1 = 78
+    _HERO_Y2 = 286
+    _LOGO_Y = 126
+    _TITLE_Y = 170
+    _BRAND_Y = 196
+    _WORDMARK_DIVIDER_HALF = 108
+    _SUBTITLE_DIVIDER_HALF = 178
     _INTRO_Y = 254
-    _INTRO_LINE_H = 18
-    _INTRO_BLOCK_GAP = 28
+    _INTRO_BLOCK_GAP = 18
+
     _SESSION_PANEL_W = 640
-    _SESSION_PANEL_H = 138
-    _SESSION_PANEL_Y1 = 330
+    _SESSION_PANEL_H = 146
+    _SESSION_PANEL_Y1 = 332
     _SESSION_PANEL_Y2 = _SESSION_PANEL_Y1 + _SESSION_PANEL_H
     _SESSION_GUTTER = 24
-    _SESSION_COLUMN_GAP = 20
-    _SESSION_LABEL_VALUE_GAP = 114
+    _SESSION_COLUMN_GAP = 28
+    _SESSION_LABEL_VALUE_GAP = 112
     _SESSION_LINE_H = 19
 
     def __init__(self, parent: tk.Misc, app: Any, conn: Any, tagline: str):
@@ -77,7 +85,7 @@ class SplashScreen(Screen):
         self._draw_wordmark(canvas)
         canvas.create_text(
             self._CENTER_X,
-            500,
+            526,
             anchor="center",
             text="[ ENTER TO ACCESS DESK ]_",
             font=(FONT, 11, "bold"),
@@ -123,7 +131,7 @@ class SplashScreen(Screen):
             left_rows=[
                 ("ENGINE", "AURUM CORE", WHITE),
                 ("MODE", "OPERATOR CONSOLE", AMBER_B),
-                ("ACCOUNT", "PAPER · MULTI", WHITE),
+                ("ACCOUNT", "PAPER / MULTI", WHITE),
                 ("ENVIRONMENT", "LOCAL", WHITE),
             ],
             right_rows=[
@@ -162,57 +170,66 @@ class SplashScreen(Screen):
         self._after(500, self._pulse_tick)
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
-        logo_cx, logo_cy = self._CENTER_X, 114
+        logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
         canvas.create_rectangle(
-            352,
-            70,
-            568,
-            90,
-            outline=AMBER_D,
+            self._HERO_X1,
+            self._HERO_Y1,
+            self._HERO_X2,
+            self._HERO_Y2,
+            outline=BORDER,
             fill=BG,
+            width=1,
+            tags="wordmark",
+        )
+        canvas.create_line(
+            self._HERO_X1,
+            self._HERO_Y1,
+            self._HERO_X2,
+            self._HERO_Y1,
+            fill=AMBER_D,
             width=1,
             tags="wordmark",
         )
         canvas.create_text(
             self._CENTER_X,
-            80,
+            self._HERO_Y1 + 18,
             anchor="center",
-            text="AURUM FINANCE  ·  OPERATOR DESK",
+            text="QUANT OPERATIONS CONSOLE",
             font=(FONT, 7, "bold"),
             fill=AMBER,
             tags="wordmark",
         )
-        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=34, tag="splash-logo")
+        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=28, tag="splash-logo")
         canvas.create_text(
             logo_cx,
-            172,
+            self._TITLE_Y,
             anchor="center",
-            text="A U R U M",
+            text="OPERATOR DESK",
             font=(FONT, 24, "bold"),
             fill=WHITE,
             tags="wordmark",
         )
         canvas.create_text(
             logo_cx,
-            202,
+            self._BRAND_Y,
             anchor="center",
-            text="F I N A N C E",
-            font=(FONT, 11, "bold"),
-            fill=AMBER_D,
+            text="AURUM FINANCE",
+            font=(FONT, 10, "bold"),
+            fill=AMBER,
             tags="wordmark",
         )
         canvas.create_line(
             logo_cx - self._WORDMARK_DIVIDER_HALF,
-            224,
+            self._BRAND_Y + 18,
             logo_cx + self._WORDMARK_DIVIDER_HALF,
-            224,
+            self._BRAND_Y + 18,
             fill=AMBER_D,
             width=1,
             tags="wordmark",
         )
         canvas.create_text(
             logo_cx,
-            244,
+            self._BRAND_Y + 36,
             anchor="center",
             text=self.tagline,
             font=(FONT, 8, "bold"),
@@ -221,9 +238,9 @@ class SplashScreen(Screen):
         )
         canvas.create_line(
             logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            266,
+            self._BRAND_Y + 48,
             logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            266,
+            self._BRAND_Y + 48,
             fill=BORDER,
             width=1,
             tags="subtitle",
@@ -232,25 +249,16 @@ class SplashScreen(Screen):
             self._CENTER_X,
             self._INTRO_Y,
             anchor="center",
-            text="Institutional operating shell for live monitoring, execution routing",
+            text="Live supervision, routing, and risk control for coordinated multi-engine execution.",
             font=(FONT, 8),
             fill=WHITE,
             tags="subtitle",
         )
-        canvas.create_text(
-            self._CENTER_X,
-            self._INTRO_Y + self._INTRO_LINE_H,
-            anchor="center",
-            text="risk control, and multi-engine supervision.",
-            font=(FONT, 8),
-            fill=DIM,
-            tags="subtitle",
-        )
         canvas.create_line(
             logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            self._INTRO_Y + self._INTRO_LINE_H + self._INTRO_BLOCK_GAP,
+            self._INTRO_Y + self._INTRO_BLOCK_GAP,
             logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            self._INTRO_Y + self._INTRO_LINE_H + self._INTRO_BLOCK_GAP,
+            self._INTRO_Y + self._INTRO_BLOCK_GAP,
             fill=BORDER,
             width=1,
             tags="subtitle",
@@ -269,13 +277,11 @@ class SplashScreen(Screen):
         inner_x2 = panel_x2 - self._SESSION_GUTTER
         usable_w = inner_x2 - inner_x1
         col_w = (usable_w - self._SESSION_COLUMN_GAP) // 2
-        left_card_x1 = inner_x1
-        left_card_x2 = left_card_x1 + col_w
-        right_card_x1 = left_card_x2 + self._SESSION_COLUMN_GAP
-        right_card_x2 = inner_x2
-        card_y1 = self._SESSION_PANEL_Y1 + 24
-        card_y2 = self._SESSION_PANEL_Y2 - 16
-        row_y = card_y1 + 26
+        left_col_x = inner_x1 + 12
+        right_col_x = inner_x1 + col_w + self._SESSION_COLUMN_GAP + 12
+        divider_x = self._CENTER_X
+        header_y = self._SESSION_PANEL_Y1 + 34
+        row_y = self._SESSION_PANEL_Y1 + 50
 
         self.app._draw_panel(
             canvas,
@@ -287,76 +293,47 @@ class SplashScreen(Screen):
             accent=AMBER,
             tag="splash",
         )
-        self._draw_overview_column(
-            canvas,
-            x1=left_card_x1,
-            x2=left_card_x2,
-            y1=card_y1,
-            y2=card_y2,
-            title="DESK",
-            rows=left_rows,
+        canvas.create_line(
+            divider_x,
+            self._SESSION_PANEL_Y1 + 28,
+            divider_x,
+            self._SESSION_PANEL_Y2 - 18,
+            fill=BORDER,
+            width=1,
+            tags="splash",
         )
-        self._draw_overview_column(
-            canvas,
-            x1=right_card_x1,
-            x2=right_card_x2,
-            y1=card_y1,
-            y2=card_y2,
-            title="LINKS",
-            rows=right_rows,
-        )
+        self._draw_overview_column_header(canvas, x=left_col_x, y=header_y, title="DESK")
+        self._draw_overview_column_header(canvas, x=right_col_x, y=header_y, title="LINKS")
         self.app._draw_kv_rows(
             canvas,
-            left_card_x1 + 14,
+            left_col_x,
             row_y,
             left_rows,
-            value_x=left_card_x1 + 14 + self._SESSION_LABEL_VALUE_GAP,
+            value_x=left_col_x + self._SESSION_LABEL_VALUE_GAP,
             line_h=self._SESSION_LINE_H,
             tag="splash",
         )
         self.app._draw_kv_rows(
             canvas,
-            right_card_x1 + 14,
+            right_col_x,
             row_y,
             right_rows,
-            value_x=right_card_x1 + 14 + self._SESSION_LABEL_VALUE_GAP,
+            value_x=right_col_x + self._SESSION_LABEL_VALUE_GAP,
             line_h=self._SESSION_LINE_H,
             tag="splash",
         )
 
-    def _draw_overview_column(
+    def _draw_overview_column_header(
         self,
         canvas: tk.Canvas,
         *,
-        x1: int,
-        x2: int,
-        y1: int,
-        y2: int,
+        x: int,
+        y: int,
         title: str,
-        rows: list[tuple[str, str, str]],
     ) -> None:
-        canvas.create_rectangle(
-            x1,
-            y1,
-            x2,
-            y2,
-            outline=BORDER,
-            fill=BG,
-            width=1,
-            tags="splash",
-        )
-        canvas.create_line(
-            x1,
-            y1,
-            x2,
-            y1,
-            fill=AMBER_D,
-            width=1,
-            tags="splash",
-        )
         canvas.create_text(
-            x1 + 14,
-            y1 + 12,
+            x,
+            y,
             anchor="w",
             text=title,
             font=(FONT, 7, "bold"),
@@ -364,22 +341,11 @@ class SplashScreen(Screen):
             tags="splash",
         )
         canvas.create_line(
-            x1 + 14,
-            y1 + 18,
-            x2 - 14,
-            y1 + 18,
+            x,
+            y + 8,
+            x + 244,
+            y + 8,
             fill=BORDER,
             width=1,
             tags="splash",
         )
-        for idx in range(1, len(rows)):
-            yy = y1 + 26 + (idx * self._SESSION_LINE_H) - 8
-            canvas.create_line(
-                x1 + 14,
-                yy,
-                x2 - 14,
-                yy,
-                fill=DIM2,
-                width=1,
-                tags="splash",
-            )
