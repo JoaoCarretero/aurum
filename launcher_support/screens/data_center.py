@@ -65,6 +65,7 @@ class DataCenterScreen(Screen):
                 "PRIMARY ROUTES",
                 [
                     ("H", "RUNS HISTORY", "unified cockpit: local + VPS runs, results, trades, logs", "runs", app._data_runs_history),
+                    ("L", "LIVE RUNS", "historico de runs live/paper/shadow/demo/testnet", "live", app._data_live_runs),
                     ("B", "BACKTESTS", "validated runs, metrics and run-level inspection", "backtests", app._data_backtests),
                     ("E", "ENGINE LOGS", "running and recent engines with live tail", "engines", app._data_engines),
                 ],
@@ -117,7 +118,7 @@ class DataCenterScreen(Screen):
         app.h_path.configure(text="> DATA")
         app.h_stat.configure(text="CENTER", fg=AMBER_D)
         app.f_lbl.configure(
-            text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P lake  |  X export"
+            text="ESC voltar  |  L live runs  |  B backtests  |  E engines  |  R reports  |  P lake  |  X export"
         )
         app._kb("<Escape>", lambda: app._menu("main"))
         app._kb("<Key-0>", lambda: app._menu("main"))
@@ -129,6 +130,7 @@ class DataCenterScreen(Screen):
         eng_total = counts["eng_total"]
         rep_count = counts["rep_count"]
         cache_tag = counts["cache_tag"]
+        live_count = counts.get("live_count", 0)
 
         if self._subtitle_label is not None:
             self._subtitle_label.configure(
@@ -138,6 +140,7 @@ class DataCenterScreen(Screen):
 
         stats = {
             "runs": "banco de dados",
+            "live": f"{live_count} runs on db",
             "backtests": f"{bt_count} runs on disk",
             "engines": f"{eng_running} running | {eng_total} total",
             "cache": cache_tag,
@@ -151,6 +154,7 @@ class DataCenterScreen(Screen):
 
         for key_label, cmd in {
             "h": app._data_runs_history,
+            "l": app._data_live_runs,
             "b": app._data_backtests,
             "e": app._data_engines,
             "p": app._data_lake,
@@ -172,9 +176,17 @@ class DataCenterScreen(Screen):
             "eng_total": eng_total,
             "rep_count": app._data_count_reports(),
             "cache_tag": self._cache_tag(),
+            "live_count": self._count_live_runs(),
         }
         self._counts_cache = (now, data)
         return data
+
+    def _count_live_runs(self) -> int:
+        try:
+            from core import db_live_runs as _db
+            return len(_db.list_live_runs(limit=500))
+        except Exception:
+            return 0
 
     def _cache_tag(self) -> str:
         try:

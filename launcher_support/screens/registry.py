@@ -13,6 +13,7 @@ from launcher_support.screens.macro_brain import MacroBrainScreen
 from launcher_support.screens.markets import MarketsScreen
 from launcher_support.screens.processes import ProcessesScreen
 from launcher_support.screens.risk import RiskScreen
+from launcher_support.screens.live_runs import LiveRunsScreen
 from launcher_support.screens.runs_history import RunsHistoryScreen
 from launcher_support.screens.settings import SettingsScreen
 from launcher_support.screens.splash import SplashScreen
@@ -75,6 +76,10 @@ def register_default_screens(
     manager.register(
         "risk",
         lambda parent: RiskScreen(parent=parent, app=app),
+    )
+    manager.register(
+        "live_runs",
+        lambda parent: LiveRunsScreen(parent=parent, app=app),
     )
     manager.register(
         "runs_history",

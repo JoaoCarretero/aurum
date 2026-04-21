@@ -41,12 +41,14 @@ def fake_app():
 def test_get_counts_first_call_hits_disk(gui_root, fake_app, monkeypatch):
     s = DataCenterScreen(parent=gui_root, app=fake_app)
     monkeypatch.setattr(s, "_cache_tag", lambda: "216 files | 192 MB")
+    monkeypatch.setattr(s, "_count_live_runs", lambda: 7)
     counts = s._get_counts()
     assert counts["bt_count"] == 10
     assert counts["eng_running"] == 1
     assert counts["eng_total"] == 3
     assert counts["rep_count"] == 28
     assert counts["cache_tag"] == "216 files | 192 MB"
+    assert counts["live_count"] == 7
     assert fake_app._data_count_backtests.call_count == 1
     assert fake_app._data_count_procs.call_count == 1
     assert fake_app._data_count_reports.call_count == 1

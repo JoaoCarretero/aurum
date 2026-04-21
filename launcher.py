@@ -7888,6 +7888,15 @@ class App(tk.Tk):
             pass
 
     # --- RUNS HISTORY (unified database of every run) ------------
+    def _data_live_runs(self):
+        """LIVE RUNS screen — histórico de runs em modos live/paper/shadow/demo/testnet."""
+        self._clr(); self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("live_runs")
+
     def _data_runs_history(self):
         """Tela institucional de todas as runs via ScreenManager."""
         self._clr()
