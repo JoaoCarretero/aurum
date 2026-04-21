@@ -20,6 +20,7 @@ class SplashScreen(Screen):
     _RULE_X2 = 872
 
     _TOP_BAND_Y = 82
+    _TOP_BAND_GAP = 78
     _LOGO_Y = 124
     _TITLE_Y = 164
     _BRAND_Y = 190
@@ -157,8 +158,18 @@ class SplashScreen(Screen):
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
         logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
+        band_gap = self._TOP_BAND_GAP
         canvas.create_line(
             self._RULE_X1,
+            self._TOP_BAND_Y,
+            self._CENTER_X - band_gap,
+            self._TOP_BAND_Y,
+            fill=AMBER_D,
+            width=1,
+            tags="wordmark",
+        )
+        canvas.create_line(
+            self._CENTER_X + band_gap,
             self._TOP_BAND_Y,
             self._RULE_X2,
             self._TOP_BAND_Y,
@@ -196,9 +207,9 @@ class SplashScreen(Screen):
         )
         canvas.create_line(
             logo_cx - self._WORDMARK_DIVIDER_HALF,
-            self._BRAND_Y + 16,
+            self._BRAND_Y + 18,
             logo_cx + self._WORDMARK_DIVIDER_HALF,
-            self._BRAND_Y + 16,
+            self._BRAND_Y + 18,
             fill=AMBER_D,
             width=1,
             tags="wordmark",
@@ -214,9 +225,9 @@ class SplashScreen(Screen):
         )
         canvas.create_line(
             logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            self._BRAND_Y + 46,
+            self._BRAND_Y + 50,
             logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            self._BRAND_Y + 46,
+            self._BRAND_Y + 50,
             fill=BORDER,
             width=1,
             tags="subtitle",
@@ -232,9 +243,9 @@ class SplashScreen(Screen):
         )
         canvas.create_line(
             logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            self._INTRO_Y + self._INTRO_BLOCK_GAP,
+            self._INTRO_Y + self._INTRO_BLOCK_GAP + 2,
             logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            self._INTRO_Y + self._INTRO_BLOCK_GAP,
+            self._INTRO_Y + self._INTRO_BLOCK_GAP + 2,
             fill=DIM2,
             width=1,
             tags="subtitle",
