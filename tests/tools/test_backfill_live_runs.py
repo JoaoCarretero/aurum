@@ -102,3 +102,22 @@ def test_backfill_idempotent(fake_data_root: Path) -> None:
     bf.run(dry_run=False)
     rows = db_live_runs.list_live_runs()
     assert len(rows) == 1
+
+
+def test_heartbeat_status_running_but_no_last_tick_forced_stopped(
+    fake_data_root: Path,
+) -> None:
+    """A heartbeat claiming running with no last_tick_at is a dead runner."""
+    _make_run(
+        fake_data_root, "millennium_paper", "2026-04-18_0900",
+        heartbeat={
+            "run_id": "paper_2026-04-18_0900",
+            "started_at": "2026-04-18T09:00:00+00:00",
+            "status": "running",
+            # no last_tick_at
+        },
+    )
+    bf.run(dry_run=False)
+    rows = db_live_runs.list_live_runs()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "stopped"

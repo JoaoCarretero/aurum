@@ -21,32 +21,20 @@ from core.ops import db_live_runs
 
 DATA_ROOT: Path = DATA_DIR
 
-_PARENT_TO_MODE = {
-    "millennium_live": "live",
-    "millennium_paper": "paper",
-    "millennium_shadow": "shadow",
-    "live": "live",
+_PARENT_TO_ENGINE_MODE: dict[str, tuple[str, str]] = {
+    "millennium_live":   ("millennium", "live"),
+    "millennium_paper":  ("millennium", "paper"),
+    "millennium_shadow": ("millennium", "shadow"),
+    "live":              ("unknown",    "live"),
 }
-
-
-def _parent_to_engine_mode(parent_name: str) -> tuple[str, str]:
-    """Map parent dir name to (engine, mode).
-
-    millennium_{paper,shadow,live} -> engine=millennium, mode=<suffix>
-    live/                          -> engine=unknown,    mode=live
-    """
-    if parent_name.startswith("millennium_"):
-        return "millennium", parent_name.split("_", 1)[1]
-    if parent_name == "live":
-        return "unknown", "live"
-    return "unknown", "unknown"
 
 
 def _parse_dir(run_dir: Path) -> dict[str, Any] | None:
     parent = run_dir.parent.name
-    if parent not in _PARENT_TO_MODE:
+    entry = _PARENT_TO_ENGINE_MODE.get(parent)
+    if entry is None:
         return None
-    engine, mode = _parent_to_engine_mode(parent)
+    engine, mode = entry
     heartbeat_path = run_dir / "state" / "heartbeat.json"
     hb: dict[str, Any] = {}
     if heartbeat_path.exists():
@@ -54,7 +42,10 @@ def _parse_dir(run_dir: Path) -> dict[str, Any] | None:
             hb = json.loads(heartbeat_path.read_text())
         except (json.JSONDecodeError, OSError):
             hb = {}
-    # run_id: prefer heartbeat's, else fallback to <parent>_<dirname>.
+    # status: prefer heartbeat's value; fall back to "stopped" if no
+    # heartbeat, or "unknown" if heartbeat exists but lacks status key.
+    # Final override: if we have a heartbeat but no last_tick_at, force
+    # "stopped" — a runner with status='running' but no last tick is dead.
     run_id = hb.get("run_id") or f"{parent}_{run_dir.name}"
     started_at = hb.get("started_at") or f"{run_dir.name}T00:00:00+00:00"
     last_tick_at = hb.get("last_tick_at")
@@ -80,7 +71,7 @@ def _parse_dir(run_dir: Path) -> dict[str, Any] | None:
 
 def _iter_run_dirs() -> list[Path]:
     dirs: list[Path] = []
-    for parent_name in _PARENT_TO_MODE:
+    for parent_name in _PARENT_TO_ENGINE_MODE:
         parent = DATA_ROOT / parent_name
         if not parent.exists():
             continue
