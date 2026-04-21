@@ -9,7 +9,7 @@ import time
 import tkinter as tk
 from typing import Any
 
-from core.ui.ui_palette import AMBER, AMBER_D, BG, BG3, BORDER, DIM, DIM2, FONT, PANEL
+from core.ui.ui_palette import AMBER, AMBER_D, BG, BG3, BORDER, DIM, DIM2, FONT, PANEL, WHITE
 from launcher_support.screens.base import Screen
 from core import db_live_runs
 
@@ -226,7 +226,6 @@ class LiveRunsScreen(Screen):
         self._render_detail(run_id)
 
     def _render_detail(self, run_id: str) -> None:
-        # Stubbed — expanded in Task 9.
         if self._detail_frame is None:
             return
         for w in self._detail_frame.winfo_children():
@@ -236,8 +235,51 @@ class LiveRunsScreen(Screen):
             tk.Label(self._detail_frame, text="run not found",
                      font=(FONT, 9), fg=DIM, bg=PANEL).pack(anchor="w")
             return
+
         tk.Label(
             self._detail_frame,
-            text=f"{run['engine']} / {run['mode']}  |  {run['run_id']}",
-            font=(FONT, 9, "bold"), fg=AMBER, bg=PANEL, anchor="w",
+            text=f"{run['engine']} / {run['mode']}",
+            font=(FONT, 10, "bold"), fg=AMBER, bg=PANEL, anchor="w",
         ).pack(anchor="w")
+        tk.Label(
+            self._detail_frame, text=run["run_id"],
+            font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w",
+        ).pack(anchor="w", pady=(0, 8))
+
+        self._detail_section("IDENTITY", [
+            ("engine", run.get("engine", "?")),
+            ("mode", run.get("mode", "?")),
+            ("host", run.get("host") or "?"),
+            ("label", run.get("label") or "-"),
+            ("run_dir", run.get("run_dir") or "?"),
+        ])
+        self._detail_section("TIMELINE", [
+            ("started", (run.get("started_at") or "?")[:19]),
+            ("ended", (run.get("ended_at") or "-")[:19]),
+            ("last tick", (run.get("last_tick_at") or "-")[:19]),
+            ("status", run.get("status") or "unknown"),
+        ])
+        self._detail_section("PERFORMANCE", [
+            ("equity", f"{run.get('equity') or 0:.2f}"),
+            ("open positions", str(run.get("open_count") or 0)),
+        ])
+        self._detail_section("ACTIVITY", [
+            ("ticks", str(run.get("tick_count") or 0)),
+            ("novel signals", str(run.get("novel_count") or 0)),
+        ])
+
+    def _detail_section(self, title: str, rows: list[tuple[str, str]]) -> None:
+        if self._detail_frame is None:
+            return
+        tk.Label(
+            self._detail_frame, text=title,
+            font=(FONT, 8, "bold"), fg=AMBER_D, bg=PANEL, anchor="w",
+        ).pack(anchor="w", pady=(6, 2))
+        tk.Frame(self._detail_frame, bg=DIM2, height=1).pack(fill="x")
+        for k, v in rows:
+            row = tk.Frame(self._detail_frame, bg=PANEL)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=f"  {k}", font=(FONT, 8),
+                     fg=DIM, bg=PANEL, anchor="w", width=18).pack(side="left")
+            tk.Label(row, text=str(v), font=(FONT, 8),
+                     fg=WHITE, bg=PANEL, anchor="w").pack(side="left")

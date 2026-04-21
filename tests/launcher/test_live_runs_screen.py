@@ -128,3 +128,33 @@ def test_ttl_cache_avoids_repeat_query(
     s.on_enter()  # within TTL
     s.on_enter()
     assert len(calls) == 1
+
+
+@pytest.mark.gui
+def test_detail_panel_renders_sections(
+    gui_root, fake_app, fake_runs, monkeypatch,
+):
+    monkeypatch.setattr(
+        "launcher_support.screens.live_runs.db_live_runs.list_live_runs",
+        lambda **kw: fake_runs,
+    )
+    monkeypatch.setattr(
+        "launcher_support.screens.live_runs.db_live_runs.get_live_run",
+        lambda rid: next(r for r in fake_runs if r["run_id"] == rid),
+    )
+    s = LiveRunsScreen(parent=gui_root, app=fake_app)
+    s.mount()
+    s.on_enter()
+    # Detail for first run (auto-select)
+    texts = []
+    def collect(w):
+        if isinstance(w, tk.Label):
+            texts.append(w.cget("text"))
+        for c in w.winfo_children():
+            collect(c)
+    collect(s._detail_frame)
+    blob = " ".join(texts)
+    assert "IDENTITY" in blob
+    assert "TIMELINE" in blob
+    assert "PERFORMANCE" in blob
+    assert "ACTIVITY" in blob
