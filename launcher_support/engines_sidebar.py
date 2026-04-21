@@ -195,19 +195,46 @@ def render_sidebar(
     engines: list[EngineRow],
     selected_slug: str | None,
     on_select: Callable[[str], None],
+    *,
+    collapsed: bool = False,
+    on_toggle: Callable[[], None] | None = None,
 ) -> tk.Frame:
-    """Institutional engine sidebar — fixed 150px rail left of detail pane.
+    """Institutional engine sidebar — 150px rail left of detail pane.
 
     Each engine is a two-line row: marker + name on top, ticks/signals
     meta on the bottom, hard-aligned with a left accent strip that
     reads at a glance — green when the engine is live, amber when
     selected, dim when idle. Picks up the HL2 palette via PANEL/BG.
+
+    When ``collapsed=True``, the rail shrinks to a 24px gutter with
+    only a ▶ chevron + active-count badge. Click the chevron to expand.
+    ``on_toggle`` is invoked (no args) on click — caller flips
+    ``collapsed`` state and re-renders.
     """
+    # Collapsed state: 24px gutter with expand chevron + active badge
+    if collapsed:
+        frame = tk.Frame(parent, bg=PANEL, width=24,
+                         highlightbackground=BORDER, highlightthickness=0)
+        frame.pack(side="left", fill="y")
+        frame.pack_propagate(False)
+        active_n = sum(1 for r in engines if r.active)
+        chev = tk.Label(frame, text="▶", fg=AMBER, bg=PANEL,
+                        font=(FONT, 9, "bold"), cursor="hand2")
+        chev.pack(pady=(10, 4))
+        badge = tk.Label(frame, text=str(active_n), fg=GREEN if active_n else DIM2,
+                         bg=PANEL, font=(FONT, 6, "bold"), cursor="hand2")
+        badge.pack()
+        if on_toggle is not None:
+            chev.bind("<Button-1>", lambda _e: on_toggle())
+            badge.bind("<Button-1>", lambda _e: on_toggle())
+            frame.bind("<Button-1>", lambda _e: on_toggle())
+        return frame
+
     frame = tk.Frame(parent, bg=PANEL, width=150)
     frame.pack(side="left", fill="y")
     frame.pack_propagate(False)
 
-    # Section header + thin underline
+    # Section header + collapse chevron + thin underline
     hdr = tk.Frame(frame, bg=PANEL)
     hdr.pack(fill="x", padx=10, pady=(10, 2))
     tk.Label(hdr, text="ENGINES", fg=AMBER, bg=PANEL,
@@ -215,6 +242,13 @@ def render_sidebar(
     active_n = sum(1 for r in engines if r.active)
     tk.Label(hdr, text=f"  {active_n}/{len(engines)}",
              fg=DIM2, bg=PANEL, font=(FONT, 6)).pack(side="left")
+    if on_toggle is not None:
+        # ◀ collapses the rail sideways. Mirrors chevron semantics used in
+        # the cockpit bucket collapser (READY / RESEARCH / EXPERIMENTAL).
+        chev = tk.Label(hdr, text="◀", fg=DIM, bg=PANEL,
+                        font=(FONT, 7, "bold"), cursor="hand2")
+        chev.pack(side="right")
+        chev.bind("<Button-1>", lambda _e: on_toggle())
     tk.Frame(frame, bg=BORDER, height=1).pack(fill="x", padx=8, pady=(2, 4))
 
     for row in engines:

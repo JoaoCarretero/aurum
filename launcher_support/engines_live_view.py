@@ -952,7 +952,13 @@ def _render_detail(state, launcher):
         state["selected_slug"] = new_slug
         _render_detail(state, launcher)
 
-    render_sidebar(layout, rows, selected_slug=slug, on_select=_on_engine_select)
+    def _toggle_sidebar():
+        state["sidebar_collapsed"] = not state.get("sidebar_collapsed", False)
+        _render_detail(state, launcher)
+
+    render_sidebar(layout, rows, selected_slug=slug, on_select=_on_engine_select,
+                   collapsed=state.get("sidebar_collapsed", False),
+                   on_toggle=_toggle_sidebar)
 
     detail_inner = tk.Frame(layout, bg=PANEL)
     detail_inner.pack(side="left", fill="both", expand=True)
