@@ -18,6 +18,7 @@ import json
 import os
 import time
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
 
@@ -36,6 +37,7 @@ from launcher_support.engines_sidebar import (
     render_sidebar,
     render_detail,
 )
+from launcher_support.screens._metrics import emit_timing_metric
 # signal_detail_popup.render_inline eh chamado via engines_sidebar.render_detail
 # (inline, sem Toplevel). show() legacy continua disponivel no modulo.
 
@@ -458,6 +460,9 @@ def render(launcher, parent, *, on_escape) -> dict:
         "selected_bucket": None,
         "after_handles":  [],
         "bound_keys":     [],
+        "initial_refresh_done": False,
+        "render_started_at": time.perf_counter(),
+        "detail_refresh_after_id": None,
     }
 
     root = tk.Frame(parent, bg=BG)
@@ -514,11 +519,43 @@ def render(launcher, parent, *, on_escape) -> dict:
         _kb("<KeyPress-b>", lambda _e=None: _open_selected_backtest(state, launcher))
         _kb("<KeyPress-B>", lambda _e=None: _open_selected_backtest(state, launcher))
 
-    def refresh():
-        _render_master_list(state, launcher)
+    def _cancel_pending_detail_refresh():
+        aid = state.pop("detail_refresh_after_id", None)
+        if aid is not None:
+            try:
+                root.after_cancel(aid)
+            except Exception:
+                pass
+
+    def _emit_initial_refresh_metric():
+        if state.get("initial_refresh_done"):
+            return
+        state["initial_refresh_done"] = True
+        emit_timing_metric(
+            "content.engines_live.full",
+            ms=(time.perf_counter() - state["render_started_at"]) * 1000.0,
+        )
+
+    def _render_detail_stage():
+        state["detail_refresh_after_id"] = None
+        if not getattr(root, "winfo_exists", lambda: False)():
+            return
         _render_detail(state, launcher)
+        _emit_initial_refresh_metric()
+
+    def refresh(*, stage_detail: bool = True):
+        _cancel_pending_detail_refresh()
+        _render_master_list(state, launcher)
         _refresh_header(state)
         _refresh_footer(state)
+        if not stage_detail:
+            _render_detail(state, launcher)
+            _emit_initial_refresh_metric()
+            return
+        try:
+            state["detail_refresh_after_id"] = root.after_idle(_render_detail_stage)
+        except Exception:
+            _render_detail_stage()
 
     def _cancel_refresh_timers():
         """Cancel every after() slot that schedules a mode-specific rerender.
@@ -543,6 +580,13 @@ def render(launcher, parent, *, on_escape) -> dict:
             except Exception:
                 pass
         state["after_handles"] = []
+        _cancel_pending_detail_refresh()
+        initial_aid = state.pop("initial_refresh_after_id", None)
+        if initial_aid is not None:
+            try:
+                root.after_cancel(initial_aid)
+            except Exception:
+                pass
         _cancel_refresh_timers()
 
     def set_mode(mode):
@@ -564,7 +608,17 @@ def render(launcher, parent, *, on_escape) -> dict:
     state["set_mode"] = set_mode
 
     _bind_keys()
-    refresh()
+    def _initial_refresh():
+        state["initial_refresh_after_id"] = None
+        if not getattr(root, "winfo_exists", lambda: False)():
+            return
+        refresh()
+
+    try:
+        state["initial_refresh_after_id"] = root.after_idle(_initial_refresh)
+    except Exception:
+        state["initial_refresh_after_id"] = None
+        refresh()
     return {
         "refresh": refresh,
         "cleanup": cleanup,
@@ -2261,32 +2315,38 @@ def _fetch_paper_extras(run_id: str) -> tuple[dict | None, list[dict], list[floa
     client = _get_cockpit_client()
     if client is None:
         return None, [], [], None
-    hb = None
+    hb: dict | None = None
     positions: list[dict] = []
     series: list[float] = []
     account: dict | None = None
-    try:
-        hb = client._get(f"/v1/runs/{run_id}/heartbeat")
-    except Exception:
-        pass
-    try:
-        pos = client._get(f"/v1/runs/{run_id}/positions")
-        if isinstance(pos, dict):
-            positions = list(pos.get("positions") or [])
-    except Exception:
-        pass
-    try:
-        eq = client._get(f"/v1/runs/{run_id}/equity?tail=200")
-        if isinstance(eq, dict):
-            series = [float(p.get("equity") or 0.0) for p in (eq.get("points") or [])]
-    except Exception:
-        pass
-    try:
-        acct = client._get(f"/v1/runs/{run_id}/account")
-        if isinstance(acct, dict) and acct.get("available"):
-            account = acct
-    except Exception:
-        pass
+    endpoints = {
+        "heartbeat": f"/v1/runs/{run_id}/heartbeat",
+        "positions": f"/v1/runs/{run_id}/positions",
+        "equity": f"/v1/runs/{run_id}/equity?tail=200",
+        "account": f"/v1/runs/{run_id}/account",
+    }
+    with ThreadPoolExecutor(max_workers=len(endpoints)) as pool:
+        futures = {
+            pool.submit(client._get, path): name
+            for name, path in endpoints.items()
+        }
+        for future in as_completed(futures):
+            try:
+                payload = future.result()
+            except Exception:
+                continue
+            name = futures[future]
+            if name == "heartbeat" and isinstance(payload, dict):
+                hb = payload
+            elif name == "positions" and isinstance(payload, dict):
+                positions = list(payload.get("positions") or [])
+            elif name == "equity" and isinstance(payload, dict):
+                series = [
+                    float(point.get("equity") or 0.0)
+                    for point in (payload.get("points") or [])
+                ]
+            elif name == "account" and isinstance(payload, dict) and payload.get("available"):
+                account = payload
     # Fallback: if /account endpoint missing (older cockpit), build minimal
     # snapshot from heartbeat fields (equity, drawdown_pct, ks_state, account_size).
     if account is None and hb is not None:

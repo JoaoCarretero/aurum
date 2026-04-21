@@ -35,6 +35,7 @@ class MacroBrainScreen(Screen):
         app.h_stat.configure(text="COCKPIT", fg=AMBER)
         app.f_lbl.configure(text="ESC main menu  |  R refresh  |  C run cycle  |  bg cycle 5m")
         app._bind_global_nav()
+        app._schedule_first_paint_metric("macro_brain")
 
         if not self._rendered:
             try:
@@ -90,18 +91,9 @@ class MacroBrainScreen(Screen):
 
             threading.Thread(target=work, daemon=True).start()
             app._macro_cycle_after = self._after(300_000, auto_cycle)
-
-        def kickoff() -> None:
-            try:
-                from macro_brain.brain import run_once
-
-                run_once(force=False)
-            except Exception:
-                pass
-
-        threading.Thread(target=kickoff, daemon=True).start()
         app._macro_render_after = self._after(10_000, auto_tick)
-        app._macro_cycle_after = self._after(300_000, auto_cycle)
+        # Defer the first background cycle so the first screen paint wins CPU.
+        app._macro_cycle_after = self._after(30_000, auto_cycle)
         try:
             app.focus_set()
         except Exception:

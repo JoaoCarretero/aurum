@@ -231,6 +231,39 @@ def latest_macro(metric: str, n: int = 1) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def latest_macro_many(
+    metrics: list[str] | tuple[str, ...], n: int = 1,
+) -> dict[str, list[dict]]:
+    """Fetch latest rows for multiple metrics, capped per metric."""
+    ordered_metrics = [str(metric) for metric in metrics if str(metric)]
+    if not ordered_metrics:
+        return {}
+    placeholders = ", ".join("?" for _ in ordered_metrics)
+    q = f"""
+        SELECT * FROM (
+            SELECT
+                macro_data.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY metric
+                    ORDER BY ts DESC
+                ) AS rn
+            FROM macro_data
+            WHERE metric IN ({placeholders})
+        )
+        WHERE rn <= ?
+        ORDER BY metric ASC, ts DESC
+    """
+    grouped: dict[str, list[dict]] = {metric: [] for metric in ordered_metrics}
+    with _conn() as c:
+        rows = c.execute(q, [*ordered_metrics, int(n)]).fetchall()
+    for row in rows:
+        payload = dict(row)
+        metric = str(payload["metric"])
+        payload.pop("rn", None)
+        grouped.setdefault(metric, []).append(payload)
+    return grouped
+
+
 # ── WHALE SNAPSHOTS (bot watchers) ───────────────────────────
 
 def insert_whale_snapshot(
@@ -269,6 +302,33 @@ def macro_series(metric: str, since: str | None = None) -> list[dict]:
     with _conn() as c:
         rows = c.execute(q, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def macro_series_many(
+    metrics: list[str] | tuple[str, ...], since: str | None = None,
+) -> dict[str, list[dict]]:
+    """Fetch multiple macro series in one query, grouped by metric."""
+    ordered_metrics = [str(metric) for metric in metrics if str(metric)]
+    if not ordered_metrics:
+        return {}
+    placeholders = ", ".join("?" for _ in ordered_metrics)
+    q = (
+        "SELECT metric, ts, value FROM macro_data "
+        f"WHERE metric IN ({placeholders})"
+    )
+    params: list[Any] = list(ordered_metrics)
+    if since:
+        q += " AND ts >= ?"
+        params.append(since)
+    q += " ORDER BY metric ASC, ts ASC"
+    grouped: dict[str, list[dict]] = {metric: [] for metric in ordered_metrics}
+    with _conn() as c:
+        rows = c.execute(q, params).fetchall()
+    for row in rows:
+        payload = dict(row)
+        metric = str(payload.pop("metric"))
+        grouped.setdefault(metric, []).append(payload)
+    return grouped
 
 
 # ── REGIME ───────────────────────────────────────────────────

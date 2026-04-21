@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +56,13 @@ PAD_TILE_INNER  = 4    # inner padding of a tile
 PAD_COL_GAP     = 6    # gap between left/right columns
 
 _STATE = {"tab": "EUA", "news_filter": "ALL"}
+_VPS_STATUS_CACHE = {
+    "expires_at": 0.0,
+    "online": False,
+    "detail": "checking...",
+    "pending": False,
+}
+_VPS_STATUS_LOCK = threading.Lock()
 
 # In-place tick registry — populated on render(), read on tick_update().
 # Each key is a metric name (e.g. "BTC_SPOT"); value holds refs to the
@@ -67,13 +76,118 @@ def _clear_tile_registry() -> None:
     _TILE_REGISTRY.clear()
 
 
+def _read_vps_status() -> tuple[bool, str]:
+    now = datetime.utcnow().timestamp()
+    with _VPS_STATUS_LOCK:
+        if now < float(_VPS_STATUS_CACHE["expires_at"]):
+            return bool(_VPS_STATUS_CACHE["online"]), str(_VPS_STATUS_CACHE["detail"])
+        if not bool(_VPS_STATUS_CACHE["pending"]):
+            _VPS_STATUS_CACHE["pending"] = True
+            _VPS_STATUS_CACHE["detail"] = "checking..."
+            threading.Thread(target=_probe_vps_status, daemon=True).start()
+        return bool(_VPS_STATUS_CACHE["online"]), str(_VPS_STATUS_CACHE["detail"])
+
+
+def _probe_vps_status() -> None:
+    online = False
+    detail = "not configured"
+    try:
+        from config.paths import VPS_CONFIG_PATH
+
+        vps_path = VPS_CONFIG_PATH
+        if vps_path.exists():
+            cfg = json.loads(vps_path.read_text(encoding="utf-8"))
+            host = str(cfg.get("host") or "").strip()
+            if host and host not in ("", "n/a"):
+                import socket
+
+                try:
+                    port = int(cfg.get("port", 22))
+                    with socket.create_connection((host, port), timeout=0.8):
+                        online = True
+                    detail = f"{host}:{port}"
+                except (OSError, ValueError):
+                    detail = f"{host}:{cfg.get('port', 22)}"
+            else:
+                detail = "host not set"
+    except (OSError, json.JSONDecodeError):
+        detail = "config error"
+    finally:
+        with _VPS_STATUS_LOCK:
+            _VPS_STATUS_CACHE["online"] = online
+            _VPS_STATUS_CACHE["detail"] = detail
+            _VPS_STATUS_CACHE["expires_at"] = datetime.utcnow().timestamp() + 30.0
+            _VPS_STATUS_CACHE["pending"] = False
+
+
+def _cancel_chunk_jobs(parent: tk.Widget) -> None:
+    jobs = getattr(parent, "_macro_chunk_jobs", None) or []
+    for job in jobs:
+        try:
+            parent.after_cancel(job)
+        except Exception:
+            pass
+    try:
+        parent._macro_chunk_jobs = []
+    except Exception:
+        pass
+    try:
+        delattr(parent, "_macro_active_chunk_job")
+    except Exception:
+        pass
+
+
+def _track_chunk_job(parent: tk.Widget, job) -> None:
+    jobs = list(getattr(parent, "_macro_chunk_jobs", None) or [])
+    jobs.append(job)
+    parent._macro_chunk_jobs = jobs
+    parent._macro_active_chunk_job = job
+
+
+def _discard_chunk_job(parent: tk.Widget, job) -> None:
+    jobs = list(getattr(parent, "_macro_chunk_jobs", None) or [])
+    try:
+        jobs.remove(job)
+    except ValueError:
+        pass
+    parent._macro_chunk_jobs = jobs
+
+
+def _run_chunked(parent: tk.Widget, steps: list, *, metric_name: str | None = None) -> None:
+    started = time.perf_counter()
+
+    def _run(index: int) -> None:
+        active_job = getattr(parent, "_macro_active_chunk_job", None)
+        if active_job is not None:
+            _discard_chunk_job(parent, active_job)
+            try:
+                delattr(parent, "_macro_active_chunk_job")
+            except Exception:
+                pass
+        if index >= len(steps):
+            if metric_name:
+                try:
+                    from launcher_support.screens._metrics import emit_timing_metric
+
+                    emit_timing_metric(metric_name, ms=(time.perf_counter() - started) * 1000.0)
+                except Exception:
+                    pass
+            return
+        steps[index]()
+        job = parent.after_idle(lambda idx=index + 1: _run(idx))
+        _track_chunk_job(parent, job)
+
+    _run(0)
+
+
 # ── DATA UTILS ───────────────────────────────────────────────
 
 def _macro_map(metrics, n=30):
-    from macro_brain.persistence.store import macro_series
+    from macro_brain.persistence.store import macro_series_many
     out = {}
+    series_map = macro_series_many(metrics)
     for m in metrics:
-        s = macro_series(m)
+        s = series_map.get(m) or []
         if not s: continue
         vals = [r["value"] for r in s[-n:]]
         last = s[-1]; prev = s[-2] if len(s) > 1 else None
@@ -236,11 +350,12 @@ def tick_update() -> int:
     tick. Returns the number of tiles that actually changed value.
     """
     try:
-        from macro_brain.persistence.store import macro_series
+        from macro_brain.persistence.store import macro_series_many
     except Exception:
         return 0
 
     changed = 0
+    live_refs: dict[str, dict] = {}
     for metric, refs in list(_TILE_REGISTRY.items()):
         value_lbl = refs.get("value")
         # Prune registry entries whose widgets are gone (tab switched).
@@ -251,11 +366,19 @@ def tick_update() -> int:
         except Exception:
             _TILE_REGISTRY.pop(metric, None)
             continue
+        live_refs[metric] = refs
 
-        try:
-            s = macro_series(metric)
-        except Exception:
-            continue
+    if not live_refs:
+        return 0
+
+    try:
+        series_map = macro_series_many(list(live_refs))
+    except Exception:
+        return 0
+
+    for metric, refs in live_refs.items():
+        value_lbl = refs.get("value")
+        s = series_map.get(metric) or []
         if not s:
             continue
         last = s[-1]
@@ -464,12 +587,15 @@ def _cot_matrix(parent, rows: list[tuple]):
     Each metric may be None. Latest value is pulled from macro_data;
     green/red tint based on sign, dim when missing.
     """
-    from macro_brain.persistence.store import latest_macro
+    from macro_brain.persistence.store import latest_macro, latest_macro_many
+
+    metrics = [m for _label, nc, sw, mm in rows for m in (nc, sw, mm) if m]
+    latest_map = latest_macro_many(metrics, n=1)
 
     def _val(metric: str | None) -> tuple[str, str]:
         if not metric:
             return "—", DIM
-        lat = latest_macro(metric, n=1)
+        lat = latest_map.get(metric) or []
         if not lat:
             return "—", DIM
         v = lat[0]["value"]
@@ -868,6 +994,288 @@ def _render_markets_tab_v2(parent):
                       us_only=True)
 
 
+def _render_markets_tab_v3(parent):
+    """USA desk rendered in batches to reduce time-to-content stalls."""
+    _cancel_chunk_jobs(parent)
+
+    def _render_overview() -> None:
+        overview = _panel_shell(parent, pady=(0, 6))
+        _section(overview, "US DESK Â· SNAPSHOT", pady_top=(0, 0))
+        snapshot = _macro_map([
+            "SP500", "US10Y", "DXY", "FED_RATE", "VIX", "CPI_US",
+        ])
+        _desk_banner(overview, snapshot, [
+            ("SP500",    "S&P 500", "{:,.0f}"),
+            ("US10Y",    "US10Y",   "{:.3f}%"),
+            ("DXY",      "DXY",     "{:.2f}"),
+            ("FED_RATE", "FED",     "{:.2f}%"),
+            ("VIX",      "VIX",     "{:.2f}"),
+            ("CPI_US",   "CPI",     "{:.2f}"),
+        ])
+        tk.Label(
+            overview,
+            text="  Price first, then curve and macro, then positioning, then institutional flow and news.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
+
+    def _render_market_now() -> None:
+        _section(parent, "US DESK Â· MARKET NOW", pady_top=(0, 0))
+        market_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(market_shell)
+        rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
+                            "YIELD_SPREAD_10_2", "FED_RATE"])
+        _section(left, "RATES Â· CURVE", pady_top=(0, 0))
+        _grid(left, rates, [
+            ("US13W",             "13W",     "{:.3f}%"),
+            ("US5Y",              "5Y",      "{:.3f}%"),
+            ("US10Y",             "10Y",     "{:.3f}%"),
+            ("US30Y",             "30Y",     "{:.3f}%"),
+            ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
+            ("FED_RATE",          "FED",     "{:.2f}%"),
+        ])
+
+        fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
+                         "DXY_BROAD"])
+        _section(right, "DOLLAR Â· FX", pady_top=(0, 0))
+        _grid(right, fx, [
+            ("DXY",       "DXY",     "{:.2f}"),
+            ("EUR_USD",   "EUR/USD", "{:.4f}"),
+            ("USD_JPY",   "USD/JPY", "{:.2f}"),
+            ("GBP_USD",   "GBP/USD", "{:.4f}"),
+            ("USD_CNY",   "USD/CNY", "{:.4f}"),
+            ("DXY_BROAD", "BROAD",   "{:.2f}"),
+        ])
+
+        left2, right2 = _two_col(market_shell)
+        eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
+                         "GOLD", "WTI_OIL", "COPPER"])
+        _section(left2, "EQUITIES Â· RISK", pady_top=(0, 0))
+        _grid(left2, eq, [
+            ("SP500",  "S&P 500", "{:,.0f}"),
+            ("NASDAQ", "NASDAQ",  "{:,.0f}"),
+            ("VIX",    "VIX",     "{:.2f}"),
+            ("GOLD",   "GOLD",    "${:,.0f}"),
+            ("WTI_OIL","WTI",     "${:.2f}"),
+            ("COPPER", "COPPER",  "${:.3f}"),
+        ])
+        _grid(left2, eq, [
+            ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
+        ])
+
+        econ = _macro_map([
+            "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
+            "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
+            "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
+        ], n=30)
+        _section(right2, "MACRO SNAPSHOT Â· FRED", pady_top=(0, 0))
+        _grid(right2, econ, [
+            ("CPI_US",             "CPI",          "{:.2f}"),
+            ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
+            ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
+            ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
+            ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
+            ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
+            ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
+            ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
+        ])
+        _grid(right2, econ, [
+            ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
+            ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
+        ])
+
+    def _render_positioning() -> None:
+        _section(parent, "US DESK Â· POSITIONING")
+        positioning_shell = _panel_shell(parent, pady=(0, 6))
+        tk.Label(
+            positioning_shell,
+            text="  CFTC futures positioning for dollar, rates, index futures and key US-linked macro trades.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
+        _cot_matrix(positioning_shell, [
+            ("DXY",       "DXY_NET_LONGS",       None,               None),
+            ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
+            ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
+            ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
+            ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
+            ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
+            ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
+            ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
+            ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
+        ])
+
+    def _render_flow_watch() -> None:
+        flow_shell = _panel_shell(parent, pady=(0, 6))
+        _section(flow_shell, "US DESK Â· FLOW WATCH", pady_top=(0, 0))
+        flow_left, flow_right = _two_col(flow_shell)
+        _render_institutional_flows(flow_left, "INSTITUTIONAL FLOW")
+        _render_calendar_list(flow_right, "CALENDAR Â· FED Â· LABOR Â· INFLATION", only_us=True)
+
+    def _render_news() -> None:
+        news_shell = _panel_shell(parent, pady=(0, 0))
+        _render_news_list(
+            news_shell,
+            "US NEWSFLOW Â· FED Â· TREASURY Â· BANKS Â· STREET",
+            allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
+            us_only=True,
+        )
+
+    _run_chunked(
+        parent,
+        [
+            _render_overview,
+            _render_market_now,
+            _render_positioning,
+            _render_flow_watch,
+            _render_news,
+        ],
+        metric_name="content.macro_brain.EUA.full",
+    )
+
+
+def _render_markets_tab_v4(parent):
+    """USA desk rendered in finer batches to shorten time-to-content."""
+    _cancel_chunk_jobs(parent)
+
+    def _render_overview() -> None:
+        overview = _panel_shell(parent, pady=(0, 6))
+        _section(overview, "US DESK SNAPSHOT", pady_top=(0, 0))
+        snapshot = _macro_map([
+            "SP500", "US10Y", "DXY", "FED_RATE", "VIX", "CPI_US",
+        ])
+        _desk_banner(overview, snapshot, [
+            ("SP500",    "S&P 500", "{:,.0f}"),
+            ("US10Y",    "US10Y",   "{:.3f}%"),
+            ("DXY",      "DXY",     "{:.2f}"),
+            ("FED_RATE", "FED",     "{:.2f}%"),
+            ("VIX",      "VIX",     "{:.2f}"),
+            ("CPI_US",   "CPI",     "{:.2f}"),
+        ])
+        tk.Label(
+            overview,
+            text="  Price first, then curve and macro, then positioning, then flow, calendar and news.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
+
+    def _render_market_now() -> None:
+        _section(parent, "US DESK MARKET NOW", pady_top=(0, 0))
+        market_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(market_shell)
+        rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
+                            "YIELD_SPREAD_10_2", "FED_RATE"])
+        _section(left, "RATES CURVE", pady_top=(0, 0))
+        _grid(left, rates, [
+            ("US13W",             "13W",     "{:.3f}%"),
+            ("US5Y",              "5Y",      "{:.3f}%"),
+            ("US10Y",             "10Y",     "{:.3f}%"),
+            ("US30Y",             "30Y",     "{:.3f}%"),
+            ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
+            ("FED_RATE",          "FED",     "{:.2f}%"),
+        ])
+
+        fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY", "DXY_BROAD"])
+        _section(right, "DOLLAR FX", pady_top=(0, 0))
+        _grid(right, fx, [
+            ("DXY",       "DXY",     "{:.2f}"),
+            ("EUR_USD",   "EUR/USD", "{:.4f}"),
+            ("USD_JPY",   "USD/JPY", "{:.2f}"),
+            ("GBP_USD",   "GBP/USD", "{:.4f}"),
+            ("USD_CNY",   "USD/CNY", "{:.4f}"),
+            ("DXY_BROAD", "BROAD",   "{:.2f}"),
+        ])
+
+        left2, right2 = _two_col(market_shell)
+        eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
+                         "GOLD", "WTI_OIL", "COPPER"])
+        _section(left2, "EQUITIES RISK", pady_top=(0, 0))
+        _grid(left2, eq, [
+            ("SP500",  "S&P 500", "{:,.0f}"),
+            ("NASDAQ", "NASDAQ",  "{:,.0f}"),
+            ("VIX",    "VIX",     "{:.2f}"),
+            ("GOLD",   "GOLD",    "${:,.0f}"),
+            ("WTI_OIL","WTI",     "${:.2f}"),
+            ("COPPER", "COPPER",  "${:.3f}"),
+        ])
+        _grid(left2, eq, [
+            ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
+        ])
+
+        econ = _macro_map([
+            "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
+            "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
+            "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
+        ], n=30)
+        _section(right2, "MACRO SNAPSHOT FRED", pady_top=(0, 0))
+        _grid(right2, econ, [
+            ("CPI_US",             "CPI",          "{:.2f}"),
+            ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
+            ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
+            ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
+            ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
+            ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
+            ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
+            ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
+        ])
+        _grid(right2, econ, [
+            ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
+            ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
+        ])
+
+    def _render_positioning() -> None:
+        _section(parent, "US DESK POSITIONING")
+        positioning_shell = _panel_shell(parent, pady=(0, 6))
+        tk.Label(
+            positioning_shell,
+            text="  CFTC futures positioning for dollar, rates, index futures and key US-linked macro trades.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
+        _cot_matrix(positioning_shell, [
+            ("DXY",       "DXY_NET_LONGS",       None,               None),
+            ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
+            ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
+            ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
+            ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
+            ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
+            ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
+            ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
+            ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
+        ])
+
+    def _render_flow() -> None:
+        flow_shell = _panel_shell(parent, pady=(0, 6))
+        _section(flow_shell, "US DESK FLOW WATCH", pady_top=(0, 0))
+        flow_left, flow_right = _two_col(flow_shell)
+        parent._macro_eua_v4_flow_right = flow_right
+        _render_institutional_flows(flow_left, "INSTITUTIONAL FLOW")
+
+    def _render_calendar() -> None:
+        flow_right = getattr(parent, "_macro_eua_v4_flow_right", None)
+        if flow_right is None:
+            return
+        _render_calendar_list(flow_right, "CALENDAR FED LABOR INFLATION", only_us=True)
+
+    def _render_news() -> None:
+        news_shell = _panel_shell(parent, pady=(0, 0))
+        _render_news_list(
+            news_shell,
+            "US NEWSFLOW FED TREASURY BANKS STREET",
+            allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
+            us_only=True,
+        )
+
+    _run_chunked(
+        parent,
+        [
+            _render_overview,
+            _render_market_now,
+            _render_positioning,
+            _render_flow,
+            _render_calendar,
+            _render_news,
+        ],
+        metric_name="content.macro_brain.EUA.full",
+    )
+
+
 def _render_br_tab(parent):
     """Brazilian equities + BRL forex."""
     br_indices = _macro_map([
@@ -1165,26 +1573,7 @@ def _render_network_tab(parent):
         tk.Label(box, text=val, font=(FONT, 14, "bold"),
                  fg=WHITE, bg=PANEL).pack()
 
-    vps_online = False; vps_detail = "not configured"
-    try:
-        from config.paths import VPS_CONFIG_PATH
-        vps_path = VPS_CONFIG_PATH
-        if vps_path.exists():
-            cfg = json.loads(vps_path.read_text(encoding="utf-8"))
-            host = (cfg.get("host") or "").strip()
-            if host and host not in ("", "n/a"):
-                import socket
-                try:
-                    port = int(cfg.get("port", 22))
-                    with socket.create_connection((host, port), timeout=3):
-                        vps_online = True
-                    vps_detail = f"{host}:{port}"
-                except (OSError, ValueError):
-                    vps_detail = f"{host}:{cfg.get('port', 22)}"
-            else:
-                vps_detail = "host not set"
-    except (OSError, json.JSONDecodeError):
-        pass
+    vps_online, vps_detail = _read_vps_status()
 
     _section(right, "VPS STATUS")
     vps_c = GREEN if vps_online else RED
@@ -1193,13 +1582,34 @@ def _render_network_tab(parent):
                        padx=12, pady=10)
     vps_box.pack(fill="x", padx=2, pady=2)
     _attach_hover(vps_box)
-    tk.Label(vps_box, text="● ONLINE" if vps_online else "○ OFFLINE",
-             font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL).pack(anchor="w")
-    tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
-             fg=WHITE, bg=PANEL).pack(anchor="w")
+    vps_status_lbl = tk.Label(vps_box, text="● ONLINE" if vps_online else "○ OFFLINE",
+                              font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL)
+    vps_status_lbl.pack(anchor="w")
+    vps_detail_lbl = tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
+                              fg=WHITE, bg=PANEL)
+    vps_detail_lbl.pack(anchor="w")
     tk.Label(vps_box, text="SSH connect test · port 22",
              font=(FONT, 6), fg=DIM, bg=PANEL).pack(anchor="w",
                                                      pady=(2, 0))
+    if vps_detail == "checking...":
+        def _refresh_vps_box() -> None:
+            try:
+                if not vps_box.winfo_exists():
+                    return
+            except Exception:
+                return
+            latest_online, latest_detail = _read_vps_status()
+            if latest_detail == "checking...":
+                vps_box.after(250, _refresh_vps_box)
+                return
+            latest_color = GREEN if latest_online else RED
+            vps_status_lbl.configure(
+                text="● ONLINE" if latest_online else "○ OFFLINE",
+                fg=latest_color,
+            )
+            vps_detail_lbl.configure(text=latest_detail)
+
+        vps_box.after(250, _refresh_vps_box)
 
     if procs:
         _section(parent, "PROCESSES · ACTIVE + RECENT")
@@ -1233,6 +1643,158 @@ def _render_network_tab(parent):
                      text=f"{_fmt_age(started)} ago" if started else "",
                      font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(
                          side="left", fill="x", expand=True)
+
+
+
+def _render_network_tab_v2(parent):
+    """BTC on-chain and ops tab rendered in batches."""
+    _cancel_chunk_jobs(parent)
+
+    def _render_onchain() -> None:
+        onchain = _macro_map([
+            "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
+            "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
+            "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
+            "BTC_24H_TRADE_VOLUME_USD",
+        ], n=30)
+        _section(parent, "BTC ON-CHAIN Â· NETWORK STATE", pady_top=(0, 0))
+        _grid(parent, onchain, [
+            ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
+            ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
+            ("BTC_BLOCK_HEIGHT",          "BLOCK",      "{:,.0f}"),
+            ("BTC_MEMPOOL_COUNT",         "MEMPOOL",    "{:,.0f}"),
+            ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB", "{:.0f}"),
+            ("BTC_24H_TX_COUNT",          "24H TX",     "{:,.0f}"),
+            ("BTC_24H_MINER_REVENUE_USD", "MINER REV",  "${:,.0f}"),
+            ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
+        ])
+
+    def _render_advanced() -> None:
+        adv = _macro_map([
+            "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
+            "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
+            "BTC_24H_FEES_BTC", "BTC_24H_MINED",
+        ], n=30)
+        _section(parent, "BTC ADVANCED Â· FEES Â· BLOCK TIME")
+        _grid(parent, adv, [
+            ("BTC_FEE_30MIN_SATVB",    "30MIN FEE",  "{:.0f}"),
+            ("BTC_FEE_1H_SATVB",       "1H FEE",     "{:.0f}"),
+            ("BTC_FEE_ECONOMY_SATVB",  "ECON FEE",   "{:.0f}"),
+            ("BTC_MEMPOOL_VSIZE",      "MP VSIZE",   "{:,.0f}"),
+            ("BTC_AVG_BLOCK_TIME_MIN", "BLOCK TIME", "{:.1f}"),
+            ("BTC_24H_FEES_BTC",       "24H FEES",   "{:.2f}"),
+            ("BTC_24H_MINED",          "24H MINED",  "{:.0f}"),
+        ])
+
+    def _render_ops_summary() -> None:
+        left, right = _two_col(parent)
+
+        _section(left, "ENGINES PORTAL Â· PROCESS MONITOR")
+        try:
+            from core.ops.proc import list_procs
+            procs = list_procs()
+        except Exception:
+            procs = []
+        parent._macro_network_procs = procs
+        running = [p for p in procs if p.get("alive") or p.get("status") == "running"]
+        finished = [p for p in procs if not p.get("alive") and p.get("status") == "finished"]
+
+        stat_row = tk.Frame(left, bg=BG)
+        stat_row.pack(fill="x", pady=PAD_ROW // 2)
+        for label, val in [
+            ("ACTIVE",   f"{len(running)}"),
+            ("FINISHED", f"{len(finished)}"),
+            ("TOTAL",    f"{len(procs)}"),
+        ]:
+            box = tk.Frame(stat_row, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1,
+                           padx=10, pady=4)
+            box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
+            _attach_hover(box)
+            tk.Label(box, text=label, font=(FONT, 6, "bold"),
+                     fg=DIM, bg=PANEL).pack()
+            tk.Label(box, text=val, font=(FONT, 14, "bold"),
+                     fg=WHITE, bg=PANEL).pack()
+
+        vps_online, vps_detail = _read_vps_status()
+        _section(right, "VPS STATUS")
+        vps_c = GREEN if vps_online else RED
+        vps_box = tk.Frame(right, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1,
+                           padx=12, pady=10)
+        vps_box.pack(fill="x", padx=2, pady=2)
+        _attach_hover(vps_box)
+        vps_status_lbl = tk.Label(vps_box, text="â— ONLINE" if vps_online else "â—‹ OFFLINE",
+                                  font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL)
+        vps_status_lbl.pack(anchor="w")
+        vps_detail_lbl = tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
+                                  fg=WHITE, bg=PANEL)
+        vps_detail_lbl.pack(anchor="w")
+        tk.Label(vps_box, text="SSH connect test Â· port 22",
+                 font=(FONT, 6), fg=DIM, bg=PANEL).pack(anchor="w", pady=(2, 0))
+        if vps_detail == "checking...":
+            def _refresh_vps_box() -> None:
+                try:
+                    if not vps_box.winfo_exists():
+                        return
+                except Exception:
+                    return
+                latest_online, latest_detail = _read_vps_status()
+                if latest_detail == "checking...":
+                    vps_box.after(250, _refresh_vps_box)
+                    return
+                latest_color = GREEN if latest_online else RED
+                vps_status_lbl.configure(
+                    text="â— ONLINE" if latest_online else "â—‹ OFFLINE",
+                    fg=latest_color,
+                )
+                vps_detail_lbl.configure(text=latest_detail)
+
+            vps_box.after(250, _refresh_vps_box)
+
+    def _render_processes() -> None:
+        procs = list(getattr(parent, "_macro_network_procs", []) or [])
+        if not procs:
+            return
+        _section(parent, "PROCESSES Â· ACTIVE + RECENT")
+        hdr = tk.Frame(parent, bg=BG)
+        hdr.pack(fill="x", pady=(0, 1))
+        for txt, w in [("", 3), ("ENGINE", 16), ("PID", 12), ("STATUS", 10), ("STARTED", 15)]:
+            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM,
+                     bg=BG, width=w, anchor="w").pack(side="left")
+
+        for p in procs[:15]:
+            engine = (p.get("engine") or "?").upper()
+            pid = p.get("pid") or "?"
+            status = p.get("status", "?")
+            alive = p.get("alive", False)
+            sc = GREEN if alive else DIM
+            row = tk.Frame(parent, bg=BG)
+            row.pack(fill="x")
+            tk.Label(row, text=f" {'â—' if alive else 'â—‹'}",
+                     font=(FONT, 8, "bold"), fg=sc, bg=BG, width=3).pack(side="left")
+            tk.Label(row, text=f"{engine:<14}", font=(FONT, 8, "bold"),
+                     fg=WHITE, bg=BG, width=16, anchor="w").pack(side="left")
+            tk.Label(row, text=f"{pid}", font=(FONT, 7),
+                     fg=DIM, bg=BG, width=12, anchor="w").pack(side="left")
+            tk.Label(row, text=status.upper(), font=(FONT, 7, "bold"),
+                     fg=sc, bg=BG, width=10, anchor="w").pack(side="left")
+            started = p.get("started", "")
+            tk.Label(row,
+                     text=f"{_fmt_age(started)} ago" if started else "",
+                     font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(
+                         side="left", fill="x", expand=True)
+
+    _run_chunked(
+        parent,
+        [
+            _render_onchain,
+            _render_advanced,
+            _render_ops_summary,
+            _render_processes,
+        ],
+        metric_name="content.macro_brain.REDE.full",
+    )
 
 
 def _render_book_tab(parent):
@@ -1361,7 +1923,136 @@ def _render_book_tab(parent):
 
 # ── TAB BAR / MAIN RENDER ────────────────────────────────────
 
-def _render_engines_tab(parent):
+def _render_book_tab_v2(parent):
+    """Macro book rendered in batches."""
+    _cancel_chunk_jobs(parent)
+    from macro_brain.persistence.store import (
+        active_theses, latest_regime, open_positions, pnl_summary,
+    )
+
+    pnl = pnl_summary()
+    total = pnl.get("total_pnl", 0) or 0
+    equity = pnl.get("equity", 0) or 0
+    initial = pnl.get("initial", 0) or 0
+    dd_pct = ((initial - equity) / initial * 100) if initial else 0
+    theses = active_theses()
+    positions = open_positions()
+    regime = latest_regime()
+
+    def _render_pnl() -> None:
+        _section(parent, "MACRO BOOK Â· PAPER", pady_top=(0, 0))
+        pnl_row = tk.Frame(parent, bg=BG)
+        pnl_row.pack(fill="x", pady=PAD_ROW // 2)
+        for label, val, color in [
+            ("EQUITY",    f"${equity:,.0f}", WHITE),
+            ("TOTAL P&L", f"${total:+,.0f}", GREEN if total >= 0 else RED),
+            ("INITIAL",   f"${initial:,.0f}", DIM2),
+            ("DRAWDOWN",  f"{-dd_pct:+.2f}%" if dd_pct > 0 else "0.00%", RED if dd_pct > 0 else GREEN),
+            ("THESES",    f"{len(theses)}", AMBER),
+            ("POSITIONS", f"{len(positions)}", AMBER),
+        ]:
+            box = tk.Frame(pnl_row, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1,
+                           padx=12, pady=6)
+            box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
+            _attach_hover(box)
+            tk.Label(box, text=val, font=(FONT, 13, "bold"),
+                     fg=color, bg=PANEL).pack()
+            tk.Label(box, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=PANEL).pack()
+
+    def _render_sides() -> None:
+        left, right = _two_col(parent)
+        _section(left, "ACTIVE THESES")
+        if theses:
+            for t in theses:
+                card = tk.Frame(left, bg=PANEL,
+                                highlightbackground=BORDER,
+                                highlightthickness=1)
+                card.pack(fill="x", pady=2, padx=2)
+                _attach_hover(card)
+                hdr_c = tk.Frame(card, bg=PANEL)
+                hdr_c.pack(fill="x", padx=6, pady=(4, 2))
+                sc = GREEN if t["direction"] == "long" else RED
+                tk.Label(hdr_c, text=t["direction"].upper(),
+                         font=(FONT, 8, "bold"), fg=sc, bg=PANEL).pack(side="left")
+                tk.Label(hdr_c, text=f"  {t['asset']}",
+                         font=(FONT, 10, "bold"),
+                         fg=WHITE, bg=PANEL).pack(side="left")
+                tk.Label(hdr_c, text=f"conf {t['confidence']:.0%}",
+                         font=(FONT, 8), fg=AMBER,
+                         bg=PANEL).pack(side="right", padx=4)
+                tk.Label(hdr_c, text=f"{t.get('target_horizon_days', '?')}d",
+                         font=(FONT, 8), fg=DIM,
+                         bg=PANEL).pack(side="right", padx=4)
+                rationale = t.get("rationale", "") or ""
+                tk.Label(card, text=rationale[:250], font=(FONT, 8), fg=DIM2,
+                         bg=PANEL, wraplength=500, justify="left",
+                         anchor="w").pack(fill="x", padx=6, pady=(0, 4))
+        else:
+            tk.Label(left, text="  (no active theses)", font=(FONT, 9),
+                     fg=DIM, bg=BG).pack(pady=6)
+
+        _section(right, "OPEN POSITIONS")
+        if positions:
+            for p in positions:
+                sc = GREEN if p["side"] == "long" else RED
+                card = tk.Frame(right, bg=PANEL,
+                                highlightbackground=BORDER,
+                                highlightthickness=1)
+                card.pack(fill="x", pady=2, padx=2)
+                _attach_hover(card)
+                tk.Label(card,
+                         text=f"  {p['side'].upper()}  {p['asset']}",
+                         font=(FONT, 10, "bold"),
+                         fg=sc, bg=PANEL).pack(anchor="w", padx=6, pady=(4, 0))
+                detail = f"  size ${p['size_usd']:,.0f}  @  {p['entry_price']:,.2f}"
+                tk.Label(card, text=detail, font=(FONT, 8),
+                         fg=WHITE, bg=PANEL).pack(anchor="w", padx=6, pady=(0, 4))
+        else:
+            tk.Label(right, text="  (no open positions)", font=(FONT, 9),
+                     fg=DIM, bg=BG).pack(pady=6)
+
+    def _render_regime() -> None:
+        _section(parent, "CURRENT REGIME Â· DETAILS")
+        if regime:
+            reg_name = (regime.get("regime") or "?").upper()
+            conf = regime.get("confidence") or 0.0
+            reg_color = {"RISK_ON": GREEN, "RISK_OFF": RED,
+                         "TRANSITION": AMBER, "UNCERTAINTY": DIM2}.get(reg_name, WHITE)
+            reg_row = tk.Frame(parent, bg=BG)
+            reg_row.pack(fill="x", pady=PAD_ROW // 2)
+            tk.Label(reg_row, text=reg_name, font=(FONT, 20, "bold"),
+                     fg=reg_color, bg=BG).pack(side="left", padx=(8, 20))
+            col = tk.Frame(reg_row, bg=BG)
+            col.pack(side="left")
+            tk.Label(col, text=f"confidence {conf:.0%}",
+                     font=(FONT, 10), fg=WHITE, bg=BG).pack(anchor="w")
+            tk.Label(col,
+                     text=f"snapshot age {_fmt_age(regime.get('ts', ''))}",
+                     font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w")
+            reason = regime.get("reason") or ""
+            if reason:
+                tk.Label(parent, text=f"  {reason}", font=(FONT, 8),
+                         fg=DIM2, bg=BG, anchor="w",
+                         wraplength=1000, justify="left").pack(
+                             fill="x", padx=6, pady=(2, 0))
+        else:
+            tk.Label(parent, text="  (no regime snapshot yet)",
+                     font=(FONT, 9), fg=DIM, bg=BG).pack(pady=6)
+
+    _run_chunked(
+        parent,
+        [
+            _render_pnl,
+            _render_sides,
+            _render_regime,
+        ],
+        metric_name="content.macro_brain.LIVRO.full",
+    )
+
+
+def _render_engines_tab_impl(parent):
     """iPod-classic engine picker — shared component."""
     try:
         from config.engines import ENGINES
@@ -1374,18 +2065,56 @@ def _render_engines_tab(parent):
     ep.render(parent, tracks)
 
 
+def _render_engines_tab(parent):
+    """Stage the engine picker so the tab responds before full mount."""
+    _cancel_chunk_jobs(parent)
+    shell = _panel_shell(parent, pady=(0, 0))
+    _section(shell, "ENGINES DESK", pady_top=(0, 0))
+    tk.Label(
+        shell,
+        text="  Loading engine picker, tracks and detail panel...",
+        font=(FONT, 8),
+        fg=DIM,
+        bg=PANEL,
+        anchor="w",
+    ).pack(fill="x", padx=4, pady=(2, 6))
+    started = time.perf_counter()
+
+    def _mount_picker() -> None:
+        try:
+            for child in shell.winfo_children():
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+            _render_engines_tab_impl(shell)
+        finally:
+            try:
+                from launcher_support.screens._metrics import emit_timing_metric
+
+                emit_timing_metric(
+                    "content.macro_brain.MOTORES.full",
+                    ms=(time.perf_counter() - started) * 1000.0,
+                )
+            except Exception:
+                pass
+
+    job = parent.after_idle(_mount_picker)
+    _track_chunk_job(parent, job)
+
+
 # Tabs in three functional groups — a thin divider is drawn between
 # groups in the tab bar so EUA / BRASIL / CRIPTO (mercados) is visually
 # separate from SINAIS / MACRO (análise), and from REDE / LIVRO /
 # MOTORES (operação). Labels are PT-BR / Valve-ish short.
 _TABS = [
-    ("EUA",      "1", _render_markets_tab_v2,  "mkt"),
+    ("EUA",      "1", _render_markets_tab_v4,  "mkt"),
     ("BRASIL",   "2", _render_br_tab,       "mkt"),
     ("CRIPTO",   "3", _render_crypto_tab,   "mkt"),
     ("SINAIS",   "4", _render_insights_tab, "anl"),
     ("MACRO",    "5", _render_analysis_tab, "anl"),
-    ("REDE",     "6", _render_network_tab,  "ops"),
-    ("LIVRO",    "7", _render_book_tab,     "ops"),
+    ("REDE",     "6", _render_network_tab_v2,  "ops"),
+    ("LIVRO",    "7", _render_book_tab_v2,  "ops"),
     ("MOTORES",  "8", _render_engines_tab,  "ops"),
 ]
 
@@ -1393,6 +2122,17 @@ _TABS = [
 def render(parent: tk.Widget, app=None) -> None:
     from macro_brain.persistence.store import init_db, latest_regime
     init_db()
+    pending_job = getattr(parent, "_macro_render_idle_job", None)
+    if pending_job is not None:
+        try:
+            parent.after_cancel(pending_job)
+        except Exception:
+            pass
+        try:
+            delattr(parent, "_macro_render_idle_job")
+        except Exception:
+            pass
+    _cancel_chunk_jobs(parent)
 
     # Full render rebuilds every tile, so any previously-registered refs
     # are about to become stale. Drop them now so tick_update() doesn't
@@ -1472,10 +2212,20 @@ def render(parent: tk.Widget, app=None) -> None:
     content_canvas.configure(yscrollcommand=content_scroll.set)
     content_canvas.pack(side="left", fill="both", expand=True)
     content_scroll.pack(side="right", fill="y")
+    content_loading = tk.Label(
+        content,
+        text="loading active desk...",
+        font=(FONT, 9),
+        fg=DIM,
+        bg=BG,
+        anchor="w",
+    )
+    content_loading.pack(fill="x", padx=6, pady=12)
 
     # Tab widget refs, keyed by tab_name — populated by _build_tabs
     # so _switch_tab can repaint styling without rebuilding the bar.
     _tab_refs: dict[str, tk.Label] = {}
+    render_state = {"job": None, "generation": 0}
 
     def _repaint_tabs() -> None:
         """Update active/inactive styling on existing tab widgets —
@@ -1493,22 +2243,73 @@ def render(parent: tk.Widget, app=None) -> None:
             else:
                 w.config(fg=DIM, bg=BG)
 
-    def _switch_tab(name):
-        _STATE["tab"] = name
-        _repaint_tabs()
-        # Clear + re-render only the content pane, not the tab bar.
+    def _cancel_pending_render() -> None:
+        job = render_state.get("job")
+        if job is None:
+            return
+        try:
+            parent.after_cancel(job)
+        except Exception:
+            pass
+        render_state["job"] = None
+        try:
+            delattr(parent, "_macro_render_idle_job")
+        except Exception:
+            pass
+
+    def _render_active_tab(name: str, generation: int) -> None:
+        render_state["job"] = None
+        try:
+            delattr(parent, "_macro_render_idle_job")
+        except Exception:
+            pass
+        if generation != render_state["generation"]:
+            return
         for w in content.winfo_children():
-            try: w.destroy()
-            except Exception: pass
+            try:
+                w.destroy()
+            except Exception:
+                pass
         _clear_tile_registry()
         for tab_name, _k, renderer, _g in _TABS:
             if tab_name == name:
-                try: renderer(content)
+                try:
+                    renderer(content)
                 except Exception as e:
                     log.warning(f"tab render {name} failed: {e}")
-                    tk.Label(content, text=f"Error: {e}",
-                             font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
+                    tk.Label(
+                        content,
+                        text=f"Error: {e}",
+                        font=(FONT, 9),
+                        fg=RED,
+                        bg=BG,
+                    ).pack(pady=20)
                 break
+
+    def _switch_tab(name):
+        _STATE["tab"] = name
+        _repaint_tabs()
+        render_state["generation"] += 1
+        _cancel_pending_render()
+        for w in content.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        _clear_tile_registry()
+        tk.Label(
+            content,
+            text=f"loading {name.lower()}...",
+            font=(FONT, 9),
+            fg=DIM,
+            bg=BG,
+            anchor="w",
+        ).pack(fill="x", padx=6, pady=12)
+        generation = render_state["generation"]
+        render_state["job"] = parent.after_idle(
+            lambda n=name, g=generation: _render_active_tab(n, g)
+        )
+        parent._macro_render_idle_job = render_state["job"]
 
     def _build_tabs():
         # Group tabs by their functional bucket so we can render a
@@ -1600,9 +2401,6 @@ def render(parent: tk.Widget, app=None) -> None:
     # pays the double-build cost.
     _build_tabs()
     _switch_tab(_STATE["tab"])
-    # Let the tab bar paint before we chain into content rendering —
-    # gives the user immediate feedback that the cockpit is loading.
-    outer.update_idletasks()
 
     # ── FOOTER ─────────────────────────────────────────
     foot = tk.Frame(outer, bg=BG)

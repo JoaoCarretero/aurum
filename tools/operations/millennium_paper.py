@@ -64,8 +64,6 @@ RUN_DIR = ROOT / "data" / "millennium_paper" / RUN_ID
 LOGS_DIR = RUN_DIR / "logs"
 REPORTS_DIR = RUN_DIR / "reports"
 STATE_DIR = RUN_DIR / "state"
-for _d in (LOGS_DIR, REPORTS_DIR, STATE_DIR):
-    _d.mkdir(parents=True, exist_ok=True)
 
 PAPER_LOG = LOGS_DIR / "paper.log"
 TRADES_PATH = REPORTS_DIR / "trades.jsonl"
@@ -79,12 +77,18 @@ MANIFEST_PATH = STATE_DIR / "manifest.json"
 KILL_FLAG = RUN_DIR / ".kill"
 
 
+def _ensure_run_dirs() -> None:
+    for _d in (LOGS_DIR, REPORTS_DIR, STATE_DIR):
+        _d.mkdir(parents=True, exist_ok=True)
+
+
 def _configure_run(label: str | None) -> None:
     """Re-point module-level paths at a new RUN_ID built from ``label``.
 
     Called from main() after argparse when --label differs from the
     env-derived LABEL. Rebuilds RUN_ID, RUN_DIR and every path global.
-    Safe to call multiple times; mkdir is idempotent.
+    Safe to call multiple times; disk materialization is deferred until
+    run_paper() starts.
     """
     global LABEL, RUN_ID, RUN_DIR, LOGS_DIR, REPORTS_DIR, STATE_DIR
     global PAPER_LOG, TRADES_PATH, EQUITY_PATH, FILLS_PATH, SIGNALS_PATH
@@ -96,8 +100,6 @@ def _configure_run(label: str | None) -> None:
     LOGS_DIR = RUN_DIR / "logs"
     REPORTS_DIR = RUN_DIR / "reports"
     STATE_DIR = RUN_DIR / "state"
-    for _d in (LOGS_DIR, REPORTS_DIR, STATE_DIR):
-        _d.mkdir(parents=True, exist_ok=True)
     PAPER_LOG = LOGS_DIR / "paper.log"
     TRADES_PATH = REPORTS_DIR / "trades.jsonl"
     EQUITY_PATH = REPORTS_DIR / "equity.jsonl"
@@ -692,6 +694,7 @@ def _write_run_summary(state: RunnerState, stopped_reason: str) -> None:
 
 def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
     """Main paper loop. Returns exit code."""
+    _ensure_run_dirs()
     handler = logging.FileHandler(PAPER_LOG, encoding="utf-8")
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     handler.setFormatter(fmt)

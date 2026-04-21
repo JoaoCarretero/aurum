@@ -4,8 +4,27 @@ Fake _scan_new_signals to return a signal; fake _fetch_new_bars to trigger
 target intrabar on next tick; verify artifacts (positions.json, account.json,
 trades.jsonl, equity.jsonl) are all valid.
 """
+import importlib
 import json
 from datetime import datetime, timezone
+
+
+def test_module_reload_does_not_create_run_dirs(monkeypatch):
+    from pathlib import Path
+    from tools.operations import millennium_paper as mp
+
+    mkdir_calls: list[Path] = []
+    original_mkdir = Path.mkdir
+
+    def spy_mkdir(self, *args, **kwargs):
+        mkdir_calls.append(self)
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", spy_mkdir)
+    importlib.reload(mp)
+
+    paper_calls = [path for path in mkdir_calls if "millennium_paper" in path.parts]
+    assert paper_calls == []
 
 
 def test_runner_single_tick_open_then_exit(tmp_path, monkeypatch):

@@ -12,6 +12,7 @@ import pytest
 
 from launcher_support.runs_history import (
     RunSummary,
+    clear_collect_caches,
     collect_local_runs,
     collect_vps_runs,
     fmt_duration,
@@ -20,6 +21,13 @@ from launcher_support.runs_history import (
     fmt_started,
     merge_runs,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_runs_history_caches():
+    clear_collect_caches()
+    yield
+    clear_collect_caches()
 
 
 def _write_run(tmp, *, engine_dir_name, run_id, mode, hb_overrides=None,
@@ -155,6 +163,35 @@ def test_collect_vps_runs_builds_summaries():
 
 def test_collect_vps_runs_empty_client_returns_empty():
     assert collect_vps_runs(None) == []
+
+
+def test_collect_local_runs_uses_ttl_cache(tmp_path):
+    _write_run(tmp_path, engine_dir_name="millennium_shadow",
+               run_id="L1", mode="shadow")
+    runs1 = collect_local_runs(tmp_path / "data")
+    _write_run(tmp_path, engine_dir_name="millennium_shadow",
+               run_id="L2", mode="shadow")
+    runs2 = collect_local_runs(tmp_path / "data")
+    assert [r.run_id for r in runs1] == ["L1"]
+    assert [r.run_id for r in runs2] == ["L1"]
+
+
+def test_collect_vps_runs_uses_ttl_cache():
+    runs_payload = [
+        {"run_id": "R1", "engine": "millennium", "mode": "shadow",
+         "status": "running",
+         "started_at": "2026-04-19T19:00:00Z",
+         "last_tick_at": "2026-04-20T11:00:00Z"},
+    ]
+    hbs = {"R1": {"ticks_ok": 10, "ticks_fail": 0, "status": "running"}}
+    client = _FakeClient(runs=runs_payload, heartbeats=hbs)
+
+    rows1 = collect_vps_runs(client)
+    client._heartbeats["R1"] = {"ticks_ok": 99, "ticks_fail": 0, "status": "running"}
+    rows2 = collect_vps_runs(client)
+
+    assert rows1[0].ticks_ok == 10
+    assert rows2[0].ticks_ok == 10
 
 
 # ─── merge_runs ────────────────────────────────────────────────────

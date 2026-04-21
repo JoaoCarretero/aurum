@@ -16,6 +16,7 @@ from core.ops.health import runtime_health
 _log = logging.getLogger("aurum.launcher.screens")
 
 _ALLOWED_PHASES = {"first_visit", "reentry", "legacy_rebuild"}
+_TIMINGS_MS: dict[str, float] = {}
 
 
 def emit_switch_metric(name: str, phase: str, *, ms: float) -> None:
@@ -33,6 +34,25 @@ def emit_switch_metric(name: str, phase: str, *, ms: float) -> None:
         "event=screen_switch name=%s phase=%s ms=%.1f",
         name, phase, ms,
     )
+
+
+def emit_timing_metric(name: str, *, ms: float) -> None:
+    """Record a named timing sample and keep the latest value in-memory."""
+    runtime_health.record(f"timing.{name}.samples")
+    _TIMINGS_MS[name] = float(ms)
+    _log.info(
+        "event=timing name=%s ms=%.1f",
+        name,
+        ms,
+    )
+
+
+def snapshot_timings() -> dict[str, float]:
+    return dict(_TIMINGS_MS)
+
+
+def clear_timings() -> None:
+    _TIMINGS_MS.clear()
 
 
 def timed_legacy_switch(name: str) -> Callable:

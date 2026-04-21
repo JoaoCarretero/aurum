@@ -7,7 +7,7 @@ import logging
 import pytest
 
 from core.ops.health import runtime_health
-from launcher_support.screens._metrics import emit_switch_metric
+from launcher_support.screens._metrics import clear_timings, emit_switch_metric, emit_timing_metric
 from launcher_support.screens._persistence import (
     configure_screen_logging,
     dump_screen_metrics,
@@ -31,9 +31,11 @@ def _strip_tagged_handlers() -> None:
 @pytest.fixture(autouse=True)
 def _isolation():
     runtime_health.counters.clear()
+    clear_timings()
     _strip_tagged_handlers()
     yield
     runtime_health.counters.clear()
+    clear_timings()
     _strip_tagged_handlers()
 
 
@@ -65,6 +67,7 @@ def test_configured_handler_writes_log_line(tmp_path):
 def test_dump_writes_filtered_snapshot(tmp_path):
     emit_switch_metric("splash", "first_visit", ms=1.0)
     emit_switch_metric("menu", "reentry", ms=2.0)
+    emit_timing_metric("boot.chrome", ms=8.5)
     runtime_health.record("unrelated.counter")
     path = dump_screen_metrics(tmp_path, reason="test")
     assert path is not None
@@ -76,6 +79,7 @@ def test_dump_writes_filtered_snapshot(tmp_path):
     assert counters.get("screen.splash.first_visit") == 1
     assert counters.get("screen.menu.reentry") == 1
     assert "unrelated.counter" not in counters
+    assert data["timings_ms"]["boot.chrome"] == 8.5
 
 
 def test_dump_returns_none_when_no_screen_counters(tmp_path):

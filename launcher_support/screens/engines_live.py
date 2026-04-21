@@ -59,6 +59,11 @@ class EnginesLiveScreen(Screen):
 
         from launcher_support import engines_live_view
 
+        if hasattr(app, "_schedule_first_paint_metric"):
+            try:
+                app._schedule_first_paint_metric("engines_live")
+            except Exception:
+                pass
         app._engines_live_handle = engines_live_view.render(
             app,
             host,

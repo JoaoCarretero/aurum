@@ -24,10 +24,13 @@ the engines live cockpit). This is the log, not the console.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import threading
+import time
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +44,9 @@ from core.ui.ui_palette import (
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_ROOT = ROOT / "data"
+_LOCAL_RUNS_CACHE: dict[str, tuple[float, list[RunSummary]]] = {}
+_VPS_RUNS_CACHE: dict[int, tuple[float, list[RunSummary]]] = {}
+_RUNS_CACHE_TTL_S = 2.0
 
 
 # ─── Data model ───────────────────────────────────────────────────
@@ -78,6 +84,10 @@ def collect_local_runs(data_root: Path | None = None) -> list[RunSummary]:
       - data/shadow/<engine>/<run_id>/state/heartbeat.json (legacy)
     """
     root = data_root or DATA_ROOT
+    cache_key = str(root.resolve()) if root.exists() else str(root)
+    cached = _cached_rows(_LOCAL_RUNS_CACHE, cache_key)
+    if cached is not None:
+        return cached
     rows: list[RunSummary] = []
     if not root.exists():
         return rows
@@ -97,6 +107,7 @@ def collect_local_runs(data_root: Path | None = None) -> list[RunSummary]:
             for sub in engine_dir.iterdir():
                 if sub.is_dir():
                     _scan_engine_dir(sub, sub.name.upper(), "shadow", rows)
+    _store_cached_rows(_LOCAL_RUNS_CACHE, cache_key, rows)
     return rows
 
 
@@ -171,65 +182,116 @@ def collect_vps_runs(client) -> list[RunSummary]:
     rows: list[RunSummary] = []
     if client is None:
         return rows
+    cache_key = id(client)
+    cached = _cached_rows(_VPS_RUNS_CACHE, cache_key)
+    if cached is not None:
+        return cached
     try:
         runs = client._get("/v1/runs")
     except Exception:  # noqa: BLE001
         return rows
     if not isinstance(runs, list):
         return rows
-    for r in runs:
-        rid = r.get("run_id")
-        if not rid:
-            continue
-        hb: dict = {}
-        account: dict | None = None
-        try:
-            hb = client._get(f"/v1/runs/{rid}/heartbeat") or {}
-        except Exception:  # noqa: BLE001
-            hb = {}
-        try:
-            account = client._get(f"/v1/runs/{rid}/account")
-            if isinstance(account, dict) and not account.get("available", True):
-                account = None
-        except Exception:  # noqa: BLE001
-            account = None
-        equity = None
-        initial = None
-        roi = None
-        trades_closed = None
-        if account:
+    indexed_runs = [(idx, r) for idx, r in enumerate(runs) if r.get("run_id")]
+    built_rows: dict[int, RunSummary] = {}
+    max_workers = min(8, max(1, len(indexed_runs)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_collect_single_vps_run, client, r): idx
+            for idx, r in indexed_runs
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
             try:
-                equity = float(account.get("equity") or 0.0)
-                initial = float(account.get("initial_balance") or 0.0)
-                if initial:
-                    roi = (equity - initial) / initial * 100.0
-                trades_closed = int(account.get("trades_closed") or 0)
-            except Exception:  # noqa: BLE001
-                pass
-        novel = hb.get("novel_since_prime")
-        if novel is None:
-            novel = hb.get("novel_total", r.get("novel_total"))
-        rows.append(RunSummary(
-            run_id=rid,
-            engine=str(r.get("engine") or hb.get("engine") or "?").upper(),
-            mode=str(r.get("mode") or hb.get("mode") or "?"),
-            status=str(r.get("status") or hb.get("status") or "unknown"),
-            started_at=r.get("started_at") or hb.get("started_at"),
-            stopped_at=hb.get("stopped_at"),
-            last_tick_at=r.get("last_tick_at") or hb.get("last_tick_at"),
-            ticks_ok=_as_int(hb.get("ticks_ok")),
-            ticks_fail=_as_int(hb.get("ticks_fail")),
-            novel=_as_int(novel),
-            equity=equity,
-            initial_balance=initial,
-            roi_pct=roi,
-            trades_closed=trades_closed,
-            source="vps",
-            run_dir=None,
-            heartbeat=hb,
-            _raw=r,
-        ))
+                row = future.result()
+            except Exception:
+                row = None
+            if row is not None:
+                built_rows[idx] = row
+    for idx, _ in indexed_runs:
+        row = built_rows.get(idx)
+        if row is not None:
+            rows.append(row)
+    _store_cached_rows(_VPS_RUNS_CACHE, cache_key, rows)
     return rows
+
+
+def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
+    rid = payload.get("run_id")
+    if not rid:
+        return None
+    hb: dict = {}
+    account: dict | None = None
+    try:
+        hb = client._get(f"/v1/runs/{rid}/heartbeat") or {}
+    except Exception:  # noqa: BLE001
+        hb = {}
+    try:
+        account = client._get(f"/v1/runs/{rid}/account")
+        if isinstance(account, dict) and not account.get("available", True):
+            account = None
+    except Exception:  # noqa: BLE001
+        account = None
+    equity = None
+    initial = None
+    roi = None
+    trades_closed = None
+    if account:
+        try:
+            equity = float(account.get("equity") or 0.0)
+            initial = float(account.get("initial_balance") or 0.0)
+            if initial:
+                roi = (equity - initial) / initial * 100.0
+            trades_closed = int(account.get("trades_closed") or 0)
+        except Exception:  # noqa: BLE001
+            pass
+    novel = hb.get("novel_since_prime")
+    if novel is None:
+        novel = hb.get("novel_total", payload.get("novel_total"))
+    return RunSummary(
+        run_id=rid,
+        engine=str(payload.get("engine") or hb.get("engine") or "?").upper(),
+        mode=str(payload.get("mode") or hb.get("mode") or "?"),
+        status=str(payload.get("status") or hb.get("status") or "unknown"),
+        started_at=payload.get("started_at") or hb.get("started_at"),
+        stopped_at=hb.get("stopped_at"),
+        last_tick_at=payload.get("last_tick_at") or hb.get("last_tick_at"),
+        ticks_ok=_as_int(hb.get("ticks_ok")),
+        ticks_fail=_as_int(hb.get("ticks_fail")),
+        novel=_as_int(novel),
+        equity=equity,
+        initial_balance=initial,
+        roi_pct=roi,
+        trades_closed=trades_closed,
+        source="vps",
+        run_dir=None,
+        heartbeat=hb,
+        _raw=payload,
+    )
+
+
+def _clone_rows(rows: list[RunSummary]) -> list[RunSummary]:
+    return [copy.deepcopy(row) for row in rows]
+
+
+def _cached_rows(cache: dict, key) -> list[RunSummary] | None:
+    now = time.monotonic()
+    entry = cache.get(key)
+    if entry is None:
+        return None
+    stamp, rows = entry
+    if (now - stamp) > _RUNS_CACHE_TTL_S:
+        return None
+    return _clone_rows(rows)
+
+
+def _store_cached_rows(cache: dict, key, rows: list[RunSummary]) -> None:
+    cache[key] = (time.monotonic(), _clone_rows(rows))
+
+
+def clear_collect_caches() -> None:
+    _LOCAL_RUNS_CACHE.clear()
+    _VPS_RUNS_CACHE.clear()
 
 
 def merge_runs(local: list[RunSummary],

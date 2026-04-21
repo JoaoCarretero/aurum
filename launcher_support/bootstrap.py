@@ -13,7 +13,6 @@ from pathlib import Path
 from config.engines import ENGINE_NAMES
 from config.paths import VPS_CONFIG_PATH
 from core.ops.health import runtime_health
-from core.data.transport import RequestSpec, TransportClient
 
 
 LEGACY_ENGINE_ALIASES = {
@@ -266,6 +265,10 @@ def run_vps_cmd(cmd: str, timeout: int = 10) -> str | None:
 
 
 def fetch_ticker_loop() -> None:
+    # Import lazily so the launcher shell can appear before the heavy data
+    # transport stack (pandas and friends) is loaded.
+    from core.data.transport import RequestSpec, TransportClient
+
     client = TransportClient()
     while True:
         try:

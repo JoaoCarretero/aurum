@@ -20,6 +20,7 @@ from pathlib import Path
 from config.paths import DATA_DIR
 from core.ops.health import runtime_health
 from core.ops.persistence import atomic_write_json
+from launcher_support.screens._metrics import snapshot_timings
 
 _LOGGER_NAME = "aurum.launcher.screens"
 _HANDLER_TAG = "aurum.screen_file"
@@ -93,6 +94,9 @@ def dump_screen_metrics(
         "captured_at": stamp,
         "counters": filtered,
     }
+    timings = snapshot_timings()
+    if timings:
+        payload["timings_ms"] = timings
     try:
         atomic_write_json(path, payload)
     except OSError:

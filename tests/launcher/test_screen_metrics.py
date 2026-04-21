@@ -6,14 +6,16 @@ import logging
 import pytest
 
 from core.ops.health import runtime_health
-from launcher_support.screens._metrics import emit_switch_metric
+from launcher_support.screens._metrics import clear_timings, emit_switch_metric, emit_timing_metric, snapshot_timings
 
 
 @pytest.fixture(autouse=True)
 def _reset_counters():
     runtime_health.counters.clear()
+    clear_timings()
     yield
     runtime_health.counters.clear()
+    clear_timings()
 
 
 def test_emit_records_counter_first_visit():
@@ -40,3 +42,10 @@ def test_emit_logs_ms(caplog):
 def test_emit_validates_phase():
     with pytest.raises(ValueError, match="phase"):
         emit_switch_metric("x", "bogus", ms=1.0)
+
+
+def test_emit_timing_records_latest_value():
+    emit_timing_metric("boot.chrome", ms=12.5)
+    emit_timing_metric("boot.chrome", ms=8.0)
+    assert runtime_health.snapshot().get("timing.boot.chrome.samples") == 2
+    assert snapshot_timings()["boot.chrome"] == 8.0
