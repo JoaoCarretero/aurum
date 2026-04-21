@@ -1,7 +1,8 @@
 """Tests for cleanup_data_layout script.
 
 Covers: dry-run default, --apply executes mv, idempotent re-run,
-preserves dirs listed in data/index.json.
+preserves dirs listed in data/index.json, audit/ never moved,
+skip warns and preserves src, nexus.db sidecar timestamp consistency.
 """
 from __future__ import annotations
 
@@ -19,7 +20,6 @@ def fake_data_root(
 ) -> Path:
     (tmp_path / "_bridgewater_compare" / "r1").mkdir(parents=True)
     (tmp_path / "anti_overfit" / "run").mkdir(parents=True)
-    (tmp_path / "audit" / "a1").mkdir(parents=True)
     (tmp_path / "nexus.db").write_text("vazio")
     (tmp_path / "runs" / "citadel_2026-04-18_153116").mkdir(parents=True)
     (tmp_path / "citadel").mkdir()
@@ -70,7 +70,47 @@ def test_apply_is_idempotent(fake_data_root: Path) -> None:
 
 
 def test_preserves_dirs_in_index_json(fake_data_root: Path) -> None:
-    (fake_data_root / "audit" / "run_citadel_123").mkdir()
     cd.run(dry_run=False)
     # engine dir `citadel` survives
     assert (fake_data_root / "citadel").exists()
+
+
+def test_audit_dir_is_not_moved(fake_data_root: Path) -> None:
+    """CRITICAL: data/audit/ holds live order trail — must NEVER be moved."""
+    (fake_data_root / "audit" / "orders-2026-04.jsonl").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    (fake_data_root / "audit" / "orders-2026-04.jsonl").write_text("{}")
+    cd.run(dry_run=False)
+    assert (fake_data_root / "audit").exists()
+    assert (fake_data_root / "audit" / "orders-2026-04.jsonl").exists()
+
+
+def test_skip_warns_and_preserves_src(
+    fake_data_root: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """If dst already exists, src must be preserved and user warned."""
+    # Pre-create the destination
+    (fake_data_root / "_archive" / "research" / "_bridgewater_compare").mkdir(
+        parents=True
+    )
+    cd.run(dry_run=False)
+    captured = capsys.readouterr()
+    assert "[WARN]" in captured.out
+    # Src still present because dst existed
+    assert (fake_data_root / "_bridgewater_compare").exists()
+
+
+def test_nexus_wal_sidecars_moved_with_same_timestamp(
+    fake_data_root: Path,
+) -> None:
+    (fake_data_root / "nexus.db-wal").write_text("wal")
+    (fake_data_root / "nexus.db-shm").write_text("shm")
+    cd.run(dry_run=False)
+    arch = fake_data_root / "_archive" / "db"
+    names = sorted(p.name for p in arch.iterdir())
+    # Expect 3 files — nexus.db.<stamp>, nexus.db.<stamp>-shm, nexus.db.<stamp>-wal
+    assert len(names) == 3
+    # All share the same timestamp prefix after "nexus.db."
+    prefixes = {n.split("nexus.db.")[1][:17] for n in names}
+    assert len(prefixes) == 1, f"timestamps differ: {names}"
