@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import signal as os_signal
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.fs import atomic_write  # noqa: E402
+from core.ops import db_live_runs  # noqa: E402
 from core.shadow_contract import compute_config_hash  # noqa: E402
 from core.data.ws_price_feed import (  # noqa: E402
     WSPriceFeed, make_live_price_fn,
@@ -589,6 +591,40 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
         "drawdown_pct": round(state.account.drawdown_pct, 3),
         "ks_state": state.ks.state.value,
     })
+    # DB live_runs upsert — best-effort; never crashes the tick loop.
+    # First tick: full INSERT (all immutable fields included).
+    # Subsequent ticks: mutable-only UPDATE (avoids ValueError from
+    # immutable-field guard in db_live_runs.upsert).
+    try:
+        if not getattr(state, "_live_runs_initialized", False):
+            db_live_runs.upsert(
+                run_id=RUN_ID,
+                engine="millennium",
+                mode="paper",
+                started_at=RUN_TS.isoformat(),
+                run_dir=str(RUN_DIR.relative_to(ROOT)),
+                host=socket.gethostname(),
+                label=LABEL,
+                status="running",
+                tick_count=state.ticks_ok,
+                novel_count=state.novel_total,
+                open_count=len(state.open_positions),
+                equity=round(state.account.equity, 2),
+                last_tick_at=now_iso,
+            )
+            state._live_runs_initialized = True  # type: ignore[attr-defined]
+        else:
+            db_live_runs.upsert(
+                run_id=RUN_ID,
+                status="running",
+                tick_count=state.ticks_ok,
+                novel_count=state.novel_total,
+                open_count=len(state.open_positions),
+                equity=round(state.account.equity, 2),
+                last_tick_at=now_iso,
+            )
+    except Exception:
+        log.exception("db_live_runs upsert failed (tick continues)")
 
 
 def _write_run_summary(state: RunnerState, stopped_reason: str) -> None:
@@ -708,6 +744,15 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
             except Exception:  # noqa: BLE001
                 pass
         _write_run_summary(state, stop["reason"] or "clean_exit")
+        # Final DB upsert: mark run as stopped.
+        try:
+            db_live_runs.upsert(
+                run_id=RUN_ID,
+                ended_at=datetime.now(timezone.utc).isoformat(),
+                status="stopped",
+            )
+        except Exception:
+            log.exception("db_live_runs final upsert failed")
         _tg_send(
             f"<b>MILLENNIUM paper STOP</b>\n"
             f"equity ${state.account.equity:,.2f} · "
