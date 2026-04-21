@@ -74,7 +74,8 @@ log.addHandler(_fh)
 def scan_mercurio(df: pd.DataFrame, symbol: str,
                   macro_bias_series, corr: dict,
                   htf_stack_dfs: dict | None = None,
-                  live_mode: bool = False) -> tuple[list, dict]:
+                  live_mode: bool = False,
+                  live_tail_bars: int = 4) -> tuple[list, dict]:
     """
     Scan a symbol for order-flow based entries.
     Same interface as scan_symbol / scan_hermes.
@@ -137,9 +138,10 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
 
     log.info(f"\n{'─'*60}\n  {symbol}\n{'─'*60}")
 
-    # See scan_symbol docstring: backtest range skips the tail, live scans it.
+    # See scan_symbol docstring: backtest range skips the tail, live scans
+    # only the recent live_tail_bars slice (default 4 = 60min at 15m tf).
     if live_mode:
-        _loop_start = max(min_idx, len(df) - MAX_HOLD - 2)
+        _loop_start = max(min_idx, len(df) - live_tail_bars - 1)
         _loop_end = len(df) - 1
     else:
         _loop_start = min_idx

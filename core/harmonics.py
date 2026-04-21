@@ -153,7 +153,8 @@ class _BayesWR:
 
 
 def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
-                capital_weight=0.35, log=None, live_mode: bool = False):
+                capital_weight=0.35, log=None, live_mode: bool = False,
+                live_tail_bars: int = 4):
     """
     Scan a single symbol for harmonic patterns (Gartley, Bat, Butterfly, Crab).
 
@@ -217,12 +218,13 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
     peak_equity=account; consecutive_losses=0
     cooldown_until=-1; sym_cooldown_until={}
     # Pattern-detection upper bound: backtest needs H_FORWARD forward bars
-    # to label WIN/LOSS; live mode scans all the way to the tail.
+    # to label WIN/LOSS; live scans only the recent live_tail_bars slice.
     _d_max = len(df) - 1 if live_mode else len(df) - H_FORWARD - 2
+    _d_min_live = (len(df) - live_tail_bars - 1) if live_mode else min_idx
     patterns_at=defaultdict(list)
     for k in range(len(alt)-4):
         X,A,B,C,D=alt[k],alt[k+1],alt[k+2],alt[k+3],alt[k+4]
-        if D["i"]<min_idx or D["i"]>=_d_max: continue
+        if D["i"]<_d_min_live or D["i"]>=_d_max: continue
         pat,ratios=_h_check(X,A,B,C,D)
         if not pat: continue
         direction="BEARISH" if D["type"]=="H" else "BULLISH"
@@ -232,9 +234,10 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
         if rr<H_MIN_RR: continue
         patterns_at[D["i"]].append({"pattern":pat,"direction":direction,
             "X":X,"A":A,"D":D,"target":target,"stop":stop,"rr":round(rr,2),"ratios":ratios})
-    # See scan_hermes docstring for loop-range / live_mode semantics.
+    # Loop range: backtest covers labelable region, live scans only the
+    # recent live_tail_bars slice (default 4 = ~60min at 15m tf).
     if live_mode:
-        _loop_start = max(min_idx, len(df) - H_FORWARD - 2)
+        _loop_start = max(min_idx, len(df) - live_tail_bars - 1)
         _loop_end = len(df) - 1
     else:
         _loop_start = min_idx

@@ -118,7 +118,8 @@ SEP = "─" * 80
 def scan_symbol(df: pd.DataFrame, symbol: str,
                 macro_bias_series, corr: dict,
                 htf_stack_dfs: dict | None = None,
-                live_mode: bool = False) -> tuple[list, dict]:
+                live_mode: bool = False,
+                live_tail_bars: int = 4) -> tuple[list, dict]:
     """Scan CITADEL signals on ``df``.
 
     ``live_mode`` controls the tail-bar handling. In backtest (default),
@@ -186,10 +187,14 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
     _tl.info(f"\n{'═'*72}\n  {symbol}  [{df['time'].iloc[0].date()} → {df['time'].iloc[-1].date()}]\n{'═'*72}")
 
     # Loop range: backtest scans the labelable region (bars with MAX_HOLD
-    # forward for trade outcome); live scans the tail (bars backtest would
-    # skip for lack of forward room). See function docstring.
+    # forward for trade outcome); live scans only the recent tail
+    # (live_tail_bars bars back from len-1), not the full MAX_HOLD gap.
+    # Rationale: live scan runs every tick_sec; the tail only needs to
+    # cover N recent bars so a restarted runner catches up without
+    # re-absorbing every stale historical signal into the prime seen_keys
+    # dict. Default 4 bars = 60min of safety margin at 15m tf.
     if live_mode:
-        _loop_start = max(min_idx, len(df) - MAX_HOLD - 2)
+        _loop_start = max(min_idx, len(df) - live_tail_bars - 1)
         _loop_end = len(df) - 1  # calc_levels needs idx+1 for entry ref
     else:
         _loop_start = min_idx
