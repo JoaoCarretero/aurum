@@ -47,6 +47,7 @@ from tkinter import messagebox
 
 from code_viewer import CodeViewer
 from config.engines import ENGINE_NAMES, SCRIPT_TO_KEY
+from core.ops.python_runtime import preferred_python_executable
 from core.ops.health import runtime_health
 from core.ops.persistence import atomic_write_json
 from launcher_support.bootstrap import (
@@ -5020,7 +5021,7 @@ class App(tk.Tk):
                 threading.Thread(target=_spawn_worker, daemon=True).start()
                 return
 
-            _cmd = [sys.executable, "-X", "utf8", "-u", str(path)]
+            _cmd = [preferred_python_executable(), "-X", "utf8", "-u", str(path)]
             if cli_args:
                 _cmd.extend(cli_args)
 

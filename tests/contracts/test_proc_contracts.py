@@ -152,6 +152,18 @@ class TestSpawn:
         state = proc._load_state_raw()
         assert str(info["pid"]) in state["procs"]
 
+    def test_spawn_uses_preferred_python_runtime(
+        self, isolated_state, fake_engine, mock_popen, dead_pid, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            proc,
+            "preferred_python_executable",
+            lambda: r"C:\Users\Joao\AppData\Local\Python\bin\python.exe",
+        )
+        info = proc.spawn(fake_engine)
+        assert info is not None
+        assert mock_popen[-1]["cmd"][0] == r"C:\Users\Joao\AppData\Local\Python\bin\python.exe"
+
     def test_duplicate_spawn_returns_none(
         self, isolated_state, fake_engine, mock_popen, monkeypatch,
     ):

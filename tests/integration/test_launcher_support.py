@@ -33,8 +33,8 @@ def test_execution_live_launch_plan_routes_janestreet_to_dedicated_runner():
 def test_execution_live_launch_plan_routes_millennium_to_dedicated_runner():
     plan = live_launch_plan("engines/millennium.py", "paper", {"leverage": "5x"})
     assert plan["uses_dedicated_runner"] is True
-    assert plan["script"] == "engines/millennium_live.py"
-    assert plan["cli_args"] == ["paper"]
+    assert plan["script"] == "tools/operations/millennium_paper.py"
+    assert plan["cli_args"] == ["--tick-sec", "900", "--run-hours", "0"]
 
 
 def test_execution_live_launch_plan_routes_generic_live_with_cli_args():

@@ -59,6 +59,13 @@ def live_launch_plan(script: str, mode_preset: str, cfg: dict | None) -> dict:
         }
     script_l = (script or "").replace("\\", "/").lower()
     if script_l.endswith("/millennium.py") or script_l == "engines/millennium.py":
+        if mode_preset == "paper":
+            return {
+                "script": "tools/operations/millennium_paper.py",
+                "stdin_inputs": [],
+                "cli_args": ["--tick-sec", "900", "--run-hours", "0"],
+                "uses_dedicated_runner": True,
+            }
         return {
             "script": "engines/millennium_live.py",
             "stdin_inputs": [],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from tools.maintenance.millennium_shadow import (
@@ -137,3 +138,17 @@ def test_run_tick_skips_stale_signals_after_prime(monkeypatch):
     assert last_novel is None
     assert appended == []
     assert notified == []
+
+
+def test_ensure_log_handlers_rebinds_shadow_log_after_label_change(monkeypatch):
+    import tools.maintenance.millennium_shadow as shadow
+
+    shadow._configure_run("desk-shadow-test")
+    shadow._ensure_log_handlers()
+
+    file_handlers = [
+        handler for handler in shadow.log.handlers
+        if isinstance(handler, logging.FileHandler)
+    ]
+    assert file_handlers
+    assert file_handlers[-1].baseFilename == str(shadow.SHADOW_LOG.resolve())

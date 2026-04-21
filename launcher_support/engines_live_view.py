@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
 
+from core.ops.python_runtime import preferred_python_executable
 from core.risk.key_store import KeyStoreError, load_runtime_keys
 from core.ui.ui_palette import (
     BG, BG2, BG3, PANEL,
@@ -314,7 +315,6 @@ def _show_new_instance_dialog(launcher, state) -> None:
     na VPS requer systemd template unit (Fase 6), nao coberto aqui.
     """
     import subprocess
-    import sys
 
     mode = state.get("mode") or "paper"
     if mode not in ("paper", "shadow"):
@@ -373,7 +373,7 @@ def _show_new_instance_dialog(launcher, state) -> None:
         if not label:
             _toast(launcher, "label obrigatorio", error=True)
             return
-        args = [sys.executable, "-m",
+        args = [preferred_python_executable(), "-m",
                 f"tools.{'operations' if mode == 'paper' else 'maintenance'}"
                 f".millennium_{mode}",
                 "--label", label]

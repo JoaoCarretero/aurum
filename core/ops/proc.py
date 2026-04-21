@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 
 from config.engines import PROC_ENGINES, PROC_NAMES as ENGINE_NAMES
 from config.paths import DATA_DIR, PROC_STATE_PATH
+from core.ops.python_runtime import preferred_python_executable
 from core.persistence import atomic_write_json
 
 STATE_FILE = PROC_STATE_PATH
@@ -266,7 +267,7 @@ def spawn(engine: str, stdin_lines: list[str] | None = None,
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{engine}_{ts}.log"
 
-    cmd = [sys.executable, "-u", cfg["script"]]
+    cmd = [preferred_python_executable(), "-u", cfg["script"]]
     if cli_args:
         cmd.extend(cli_args)
 

@@ -146,12 +146,41 @@ def _tg_send(text: str) -> None:
         # Alerting nunca derruba o runner. Erro vai pro log local.
         log.warning("telegram send failed: %s", exc)
 _fmt = logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s")
-_sh = logging.StreamHandler(sys.stdout)
-_sh.setFormatter(_fmt)
-log.addHandler(_sh)
-_fh = logging.FileHandler(SHADOW_LOG, encoding="utf-8")
-_fh.setFormatter(_fmt)
-log.addHandler(_fh)
+_LOG_FILE_TARGET: str | None = None
+
+
+def _ensure_log_handlers() -> None:
+    """Bind stream/file handlers to the current RUN_DIR log file.
+
+    When ``--label`` changes the RUN_DIR after import, SHADOW_LOG moves as
+    well. The file handler must follow the new path, otherwise logs land in
+    the bootstrap/orphan directory created before argparse finalized the run.
+    """
+    global _LOG_FILE_TARGET
+
+    if not any(
+        isinstance(handler, logging.StreamHandler)
+        and getattr(handler, "stream", None) is sys.stdout
+        for handler in log.handlers
+    ):
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(_fmt)
+        log.addHandler(stream_handler)
+
+    target = str(SHADOW_LOG.resolve())
+    if _LOG_FILE_TARGET == target:
+        return
+
+    for handler in list(log.handlers):
+        if isinstance(handler, logging.FileHandler):
+            log.removeHandler(handler)
+            with contextlib.suppress(Exception):
+                handler.close()
+
+    file_handler = logging.FileHandler(SHADOW_LOG, encoding="utf-8")
+    file_handler.setFormatter(_fmt)
+    log.addHandler(file_handler)
+    _LOG_FILE_TARGET = target
 
 
 def _git_describe() -> tuple[str, str]:
@@ -763,6 +792,7 @@ def main() -> int:
 
     if args.label is not None and sanitize_label(args.label) != LABEL:
         _configure_run(args.label)
+    _ensure_log_handlers()
 
     return run_shadow(args.tick_sec, args.run_hours)
 
