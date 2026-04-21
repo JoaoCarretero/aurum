@@ -517,6 +517,29 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 })
                 continue
 
+            # Portfolio gate V2: reject opening a position on a symbol that
+            # already has an open position in the OPPOSITE direction. Prevents
+            # accidental cross-engine hedges (e.g. JUMP SHORT + RENAISSANCE
+            # LONG on LINKUSDT simultaneously — zero net exposure, doubled
+            # costs). Policy: first-come-first-served within the tick. Same
+            # direction is allowed (confluence, not conflict).
+            t_sym = str(t.get("symbol") or "").upper()
+            t_dir = str(t.get("direction") or "").upper()
+            has_opposing = any(
+                str(p.symbol).upper() == t_sym
+                and str(p.direction).upper() != t_dir
+                for p in state.open_positions
+            )
+            if has_opposing:
+                _append_jsonl(SIGNALS_PATH, {
+                    "ts": now_iso, "engine": t.get("strategy"),
+                    "symbol": t.get("symbol"),
+                    "direction": t.get("direction"),
+                    "decision": "skipped",
+                    "reason": "direction_conflict",
+                })
+                continue
+
             live_fn = None
             if state.ws_feed is not None:
                 live_fn = make_live_price_fn(state.ws_feed, max_age_sec=60.0)

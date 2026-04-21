@@ -180,6 +180,117 @@ def test_runner_first_tick_opens_on_live_signal(tmp_path, monkeypatch):
     assert stale[0]["symbol"] == "XRPUSDT"
 
 
+def test_runner_rejects_opposing_direction_same_symbol(tmp_path, monkeypatch):
+    """Portfolio gate V2 — no hedge acidental cross-engine.
+
+    When two engines fire opposite-direction signals on the same symbol
+    in the same tick (e.g. JUMP SHORT LINKUSDT + RENAISSANCE LONG
+    LINKUSDT), the second one must be skipped. Policy is first-come-
+    first-served — whoever opens first keeps the slot. Prevents paying
+    entry+exit costs on a net-zero-exposure hedge (real 2026-04-21
+    scenario reported via Telegram).
+    """
+    from tools.operations import millennium_paper as mp
+
+    run_dir = tmp_path / "millennium_paper" / "OPP_TEST"
+    for sub in ("state", "reports", "logs"):
+        (run_dir / sub).mkdir(parents=True)
+
+    monkeypatch.setattr(mp, "RUN_DIR", run_dir)
+    monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
+    monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
+    monkeypatch.setattr(mp, "LOGS_DIR", run_dir / "logs")
+    monkeypatch.setattr(mp, "RUN_ID", "OPP_TEST")
+    monkeypatch.setattr(mp, "TRADES_PATH", run_dir / "reports" / "trades.jsonl")
+    monkeypatch.setattr(mp, "EQUITY_PATH", run_dir / "reports" / "equity.jsonl")
+    monkeypatch.setattr(mp, "FILLS_PATH", run_dir / "reports" / "fills.jsonl")
+    monkeypatch.setattr(mp, "SIGNALS_PATH", run_dir / "reports" / "signals.jsonl")
+    monkeypatch.setattr(mp, "POSITIONS_PATH", run_dir / "state" / "positions.json")
+    monkeypatch.setattr(mp, "ACCOUNT_PATH", run_dir / "state" / "account.json")
+    monkeypatch.setattr(mp, "HEARTBEAT_PATH", run_dir / "state" / "heartbeat.json")
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    ts1 = now.isoformat()
+    ts2 = (now + timedelta(seconds=60)).isoformat()
+
+    def fake_scan(notify=False):
+        return [
+            {"strategy": "JUMP", "symbol": "LINKUSDT", "direction": "SHORT",
+             "entry": 9.35, "stop": 9.50, "target": 8.90, "size": 30.0,
+             "timestamp": ts1, "open_ts": ts1},
+            {"strategy": "RENAISSANCE", "symbol": "LINKUSDT", "direction": "LONG",
+             "entry": 9.36, "stop": 9.30, "target": 9.43, "size": 57.0,
+             "timestamp": ts2, "open_ts": ts2},
+        ]
+    monkeypatch.setattr(mp, "_scan_new_signals", fake_scan)
+    monkeypatch.setattr(mp, "_fetch_new_bars", lambda s, since: [])
+
+    state = mp.RunnerState(account_size=10_000.0)
+    mp.run_one_tick(state, tick_idx=1, notify=False)
+
+    # First-come-first-served: JUMP SHORT wins, RENAISSANCE LONG is skipped.
+    assert len(state.open_positions) == 1
+    assert state.open_positions[0].engine == "JUMP"
+    assert state.open_positions[0].direction == "SHORT"
+
+    signals_path = run_dir / "reports" / "signals.jsonl"
+    lines = [json.loads(ln) for ln in signals_path.read_text().splitlines() if ln.strip()]
+    rejected = [ln for ln in lines if ln.get("reason") == "direction_conflict"]
+    assert len(rejected) == 1
+    assert rejected[0]["engine"] == "RENAISSANCE"
+
+
+def test_runner_allows_same_direction_same_symbol(tmp_path, monkeypatch):
+    """V2 gate only blocks OPPOSITE directions. Same direction passes.
+
+    Two engines concurring on the same direction is signal confluence,
+    not conflict. Accumulation/averaging in is a legitimate strategy in
+    live — let the operator decide via MAX_OPEN_POSITIONS.
+    """
+    from tools.operations import millennium_paper as mp
+
+    run_dir = tmp_path / "millennium_paper" / "SAME_DIR_TEST"
+    for sub in ("state", "reports", "logs"):
+        (run_dir / sub).mkdir(parents=True)
+
+    monkeypatch.setattr(mp, "RUN_DIR", run_dir)
+    monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
+    monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
+    monkeypatch.setattr(mp, "LOGS_DIR", run_dir / "logs")
+    monkeypatch.setattr(mp, "RUN_ID", "SAME_DIR_TEST")
+    monkeypatch.setattr(mp, "TRADES_PATH", run_dir / "reports" / "trades.jsonl")
+    monkeypatch.setattr(mp, "EQUITY_PATH", run_dir / "reports" / "equity.jsonl")
+    monkeypatch.setattr(mp, "FILLS_PATH", run_dir / "reports" / "fills.jsonl")
+    monkeypatch.setattr(mp, "SIGNALS_PATH", run_dir / "reports" / "signals.jsonl")
+    monkeypatch.setattr(mp, "POSITIONS_PATH", run_dir / "state" / "positions.json")
+    monkeypatch.setattr(mp, "ACCOUNT_PATH", run_dir / "state" / "account.json")
+    monkeypatch.setattr(mp, "HEARTBEAT_PATH", run_dir / "state" / "heartbeat.json")
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    ts1 = now.isoformat()
+    ts2 = (now + timedelta(seconds=60)).isoformat()
+
+    def fake_scan(notify=False):
+        return [
+            {"strategy": "JUMP", "symbol": "LINKUSDT", "direction": "SHORT",
+             "entry": 9.35, "stop": 9.50, "target": 8.90, "size": 30.0,
+             "timestamp": ts1, "open_ts": ts1},
+            {"strategy": "CITADEL", "symbol": "LINKUSDT", "direction": "SHORT",
+             "entry": 9.36, "stop": 9.52, "target": 8.85, "size": 25.0,
+             "timestamp": ts2, "open_ts": ts2},
+        ]
+    monkeypatch.setattr(mp, "_scan_new_signals", fake_scan)
+    monkeypatch.setattr(mp, "_fetch_new_bars", lambda s, since: [])
+
+    state = mp.RunnerState(account_size=10_000.0)
+    mp.run_one_tick(state, tick_idx=1, notify=False)
+
+    # Both SHORT LINKUSDT from different engines → both open (confluence).
+    assert len(state.open_positions) == 2
+
+
 def test_runner_rejects_stale_signal_post_prime(tmp_path, monkeypatch):
     """Even after prime, signals with historical timestamps must not open.
 
