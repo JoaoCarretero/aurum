@@ -26,8 +26,7 @@ _LIST_COLS: list[tuple[str, int]] = [
 
 def _archive_run(run_id: str) -> bool:
     """Soft-delete: mv run_dir into data/_archive/live/. Returns True on success."""
-    from core import db_live_runs as _db
-    run = _db.get_live_run(run_id)
+    run = db_live_runs.get_live_run(run_id)
     if run is None:
         return False
     src = Path(run["run_dir"])
@@ -43,7 +42,9 @@ def _archive_run(run_id: str) -> bool:
     return True
 
 
-def _open_dir(run_dir: str) -> None:
+def _open_dir(run_dir: str | None) -> None:
+    if not run_dir:
+        return
     p = Path(run_dir)
     if not p.is_absolute():
         p = DATA_DIR.parent / p
@@ -303,7 +304,7 @@ class LiveRunsScreen(Screen):
         actions = tk.Frame(self._detail_frame, bg=PANEL)
         actions.pack(fill="x", pady=(10, 0))
         for label, cmd, color in [
-            ("OPEN DIR", lambda rd=run.get("run_dir"): _open_dir(rd or ""), AMBER),
+            ("OPEN DIR", lambda rd=run.get("run_dir"): _open_dir(rd), AMBER),
             ("ARCHIVE", self._archive_selected, AMBER_D),
         ]:
             b = tk.Label(
