@@ -447,11 +447,11 @@ def test_engine_logs_excludes_non_engine_rows(app):
 def test_engine_logs_vps_scan_uses_run_summary_without_heartbeat_fanout(app, monkeypatch):
     class FakeClient:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, str | None]] = []
+            self.calls: list[str] = []
 
-        def active_runs_for(self, engine: str, mode: str | None = None):
-            self.calls.append((engine, mode))
-            if mode == "shadow":
+        def _get(self, path: str):
+            self.calls.append(path)
+            if path == "/v1/runs":
                 return [{
                     "run_id": "r1",
                     "engine": "millennium",
@@ -460,10 +460,24 @@ def test_engine_logs_vps_scan_uses_run_summary_without_heartbeat_fanout(app, mon
                     "started_at": "2026-04-21T13:20:10Z",
                     "last_tick_at": "2026-04-21T20:50:24Z",
                     "novel_total": 3,
+                }, {
+                    "run_id": "r2",
+                    "engine": "citadel",
+                    "mode": "paper",
+                    "status": "running",
+                    "started_at": "2026-04-21T13:30:10Z",
+                    "last_tick_at": "2026-04-21T20:55:24Z",
+                    "novel_total": 1,
+                }, {
+                    "run_id": "r3",
+                    "engine": "jump",
+                    "mode": "live",
+                    "status": "running",
+                    "started_at": "2026-04-21T13:40:10Z",
+                    "last_tick_at": "2026-04-21T20:56:24Z",
+                    "novel_total": 9,
                 }]
-            if mode == "paper":
-                return []
-            raise AssertionError(f"unexpected mode: {mode}")
+            raise AssertionError(f"unexpected path: {path}")
 
     client = FakeClient()
     monkeypatch.setattr(
@@ -473,9 +487,11 @@ def test_engine_logs_vps_scan_uses_run_summary_without_heartbeat_fanout(app, mon
 
     rows = app._eng_scan_vps_runs(limit=5)
 
-    assert len(rows) == 1
-    assert rows[0]["_heartbeat"]["novel_total"] == 3
-    assert client.calls == [("millennium", "shadow"), ("millennium", "paper")]
+    assert len(rows) == 2
+    assert rows[0]["engine"] == "CITADEL (paper)"
+    assert rows[1]["engine"] == "MILLENNIUM (shadow)"
+    assert rows[1]["_heartbeat"]["novel_total"] == 3
+    assert client.calls == ["/v1/runs"]
 
 
 def test_start_tunnel_async_spawns_background_worker(app, monkeypatch):
@@ -494,7 +510,7 @@ def test_start_tunnel_async_spawns_background_worker(app, monkeypatch):
         def start(self):
             self._target()
 
-    monkeypatch.setattr("launcher.threading.Thread", FakeThread)
+    monkeypatch.setattr(app._start_tunnel_async.__globals__["threading"], "Thread", FakeThread)
     app._aurum_tunnel = FakeTunnel()
 
     app._start_tunnel_async()

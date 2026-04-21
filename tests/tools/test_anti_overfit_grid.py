@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import tools.anti_overfit_grid as grid
 from tools.anti_overfit_grid import (
     ENGINE_SPECS,
     build_windows,
+    execute_run,
     render_checklist,
     summarize_results,
 )
@@ -16,6 +20,16 @@ def test_build_windows_uses_expected_split_lengths():
     assert windows[0].days == 1095
     assert windows[1].days == 366
     assert windows[2].days > 400
+
+
+def test_bridgewater_uses_recent_coverage_limited_split():
+    spec = ENGINE_SPECS["bridgewater"]
+    windows = build_windows(spec)
+
+    assert [w.name for w in windows] == ["train", "test", "holdout"]
+    assert windows[0].days == 20
+    assert windows[1].days == 10
+    assert windows[2].days == 10
 
 
 def test_summarize_results_ranks_by_train_dsr_and_picks_conservative_variant():
@@ -97,3 +111,57 @@ def test_summarize_results_marks_missing_test_and_holdout_as_pending():
     assert aggregate["conservative_variant"] is None
     assert aggregate["test_pending"] is True
     assert aggregate["holdout_pending"] is True
+
+
+def test_summarize_results_marks_none_test_metrics_as_pending():
+    spec = ENGINE_SPECS["bridgewater"]
+    results = {
+        "BW00_baseline": {
+            "train": {"sharpe": 2.0, "sortino": 2.5, "max_dd_pct": 2.0, "n_trades": 30, "dsr": 0.99},
+            "test": {"sharpe": None, "sortino": None},
+        },
+        "BW01_thresh_035": {
+            "train": {"sharpe": 1.9, "sortino": 2.3, "max_dd_pct": 2.1, "n_trades": 28, "dsr": 0.98},
+            "test": {"sharpe": None, "sortino": None},
+        },
+        "BW02_thresh_040": {
+            "train": {"sharpe": 1.8, "sortino": 2.2, "max_dd_pct": 2.2, "n_trades": 27, "dsr": 0.97},
+            "test": {"sharpe": None, "sortino": None},
+        },
+    }
+
+    aggregate = summarize_results(spec, results)
+
+    assert aggregate["worst_top3_test_sharpe"] is None
+    assert aggregate["test_pending"] is True
+    assert aggregate["conservative_variant"] is None
+
+
+def test_execute_run_treats_soft_exit_message_in_stderr_as_zero_trade(tmp_path, monkeypatch):
+    spec = ENGINE_SPECS["bridgewater"]
+    out_root = tmp_path / "artifacts"
+    root = tmp_path / "repo"
+    engine_dir = root / spec.data_dir
+    engine_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(grid, "ROOT", root)
+    monkeypatch.setattr(grid, "build_command", lambda *args, **kwargs: ["python", "fake.py"])
+    monkeypatch.setattr(grid.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=1,
+        stdout="",
+        stderr="sem trades fechados\n",
+    ))
+    monkeypatch.setattr(grid, "_find_new_run_dir", lambda *args, **kwargs: None)
+
+    result = execute_run(
+        spec,
+        "BW00_baseline",
+        spec.variants["BW00_baseline"],
+        build_windows(spec)[0],
+        "python",
+        out_root,
+    )
+
+    assert result["n_trades"] == 0
+    assert result["sharpe"] is None
+    assert result["stage_note"] == "no_closed_trades"

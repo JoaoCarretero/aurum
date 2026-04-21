@@ -26,15 +26,36 @@ STATE_FILE = PROC_STATE_PATH
 ZOMBIE_TTL = timedelta(days=1)
 
 ENGINES = {k: {"script": v["script"]} for k, v in PROC_ENGINES.items()}
+_STATE_CACHE_TTL_S = 1.0
+_STATE_CACHE: dict = {"t": 0.0, "val": None, "path": None}
+
+
+def clear_state_cache() -> None:
+    _STATE_CACHE["t"] = 0.0
+    _STATE_CACHE["val"] = None
+    _STATE_CACHE["path"] = None
 
 
 def _load_state_raw() -> dict:
     """Read state file as-is, without any side effects. Internal use only."""
+    now = time.monotonic()
+    cache_path = str(STATE_FILE)
+    if (
+        _STATE_CACHE["val"] is not None
+        and _STATE_CACHE["path"] == cache_path
+        and (now - _STATE_CACHE["t"]) < _STATE_CACHE_TTL_S
+    ):
+        return dict(_STATE_CACHE["val"])
     if STATE_FILE.exists():
         try:
-            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            _STATE_CACHE["t"] = now
+            _STATE_CACHE["val"] = dict(state)
+            _STATE_CACHE["path"] = cache_path
+            return state
         except (json.JSONDecodeError, OSError):
             pass
+    clear_state_cache()
     return {"procs": {}}
 
 
@@ -82,6 +103,9 @@ def _load_state() -> dict:
 
 def _save_state(state: dict):
     atomic_write_json(STATE_FILE, state)
+    _STATE_CACHE["t"] = time.monotonic()
+    _STATE_CACHE["val"] = dict(state)
+    _STATE_CACHE["path"] = str(STATE_FILE)
 
 
 # Windows API constants

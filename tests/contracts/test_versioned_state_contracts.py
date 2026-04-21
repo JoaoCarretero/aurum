@@ -12,12 +12,21 @@ from pathlib import Path
 
 import pytest
 
+import core.versioned_state as vs
 from core.versioned_state import (
+    clear_read_cache,
     read_versioned_json,
     schema_version_of,
     with_schema_version,
     write_versioned_json,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_versioned_state_cache():
+    clear_read_cache()
+    yield
+    clear_read_cache()
 
 
 class TestWithSchemaVersion:
@@ -70,6 +79,20 @@ class TestReadVersionedJson:
         write_versioned_json(dest, {"x": 1}, "v1")
         out = read_versioned_json(dest)
         assert out == {"x": 1, "schema_version": "v1"}
+
+    def test_uses_ttl_cache(self, tmp_path, monkeypatch):
+        dest = tmp_path / "ok.json"
+        dest.write_text(json.dumps({"x": 1, "schema_version": "v1"}), encoding="utf-8")
+        clock = {"value": 100.0}
+        monkeypatch.setattr(vs.time, "monotonic", lambda: clock["value"])
+
+        assert read_versioned_json(dest) == {"x": 1, "schema_version": "v1"}
+
+        dest.write_text(json.dumps({"x": 2, "schema_version": "v1"}), encoding="utf-8")
+        assert read_versioned_json(dest) == {"x": 1, "schema_version": "v1"}
+
+        clock["value"] += vs._READ_CACHE_TTL_S + 0.1
+        assert read_versioned_json(dest) == {"x": 2, "schema_version": "v1"}
 
 
 class TestSchemaVersionOf:

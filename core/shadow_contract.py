@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -124,6 +125,26 @@ class TradeRecord(BaseModel):
 
 # --- Discovery ------------------------------------------------
 
+_RUN_DISCOVERY_TTL_S = 1.0
+_RUN_DISCOVERY_CACHE: dict[tuple[str, tuple[str, ...] | None], tuple[float, list[Path]]] = {}
+_JSON_CACHE_TTL_S = 1.0
+_JSON_CACHE: dict[Path, tuple[float, dict]] = {}
+
+
+def clear_caches() -> None:
+    _RUN_DISCOVERY_CACHE.clear()
+    _JSON_CACHE.clear()
+
+
+def _load_json_cached(path: Path) -> dict:
+    now = time.monotonic()
+    cached = _JSON_CACHE.get(path)
+    if cached and (now - cached[0]) < _JSON_CACHE_TTL_S:
+        return dict(cached[1])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    _JSON_CACHE[path] = (now, dict(payload))
+    return payload
+
 def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
     """Return run_dir paths containing a heartbeat.json, sorted by mtime DESC.
 
@@ -134,6 +155,12 @@ def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
 
     If `engines` is given, restricts to those engine names.
     """
+    cache_key = (str(data_root), tuple(engines) if engines else None)
+    now = time.monotonic()
+    cached = _RUN_DISCOVERY_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _RUN_DISCOVERY_TTL_S:
+        return list(cached[1])
+
     runs: list[tuple[float, Path]] = []
     if not data_root.exists():
         return []
@@ -163,12 +190,14 @@ def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
                     if hb.exists():
                         runs.append((hb.stat().st_mtime, run_dir))
     runs.sort(key=lambda t: t[0], reverse=True)
-    return [p for _, p in runs]
+    resolved = [p for _, p in runs]
+    _RUN_DISCOVERY_CACHE[cache_key] = (now, list(resolved))
+    return resolved
 
 
 def load_heartbeat(run_dir: Path) -> Heartbeat:
     """Load and validate heartbeat.json. Raises pydantic ValidationError on bad shape."""
-    payload = json.loads((run_dir / "state" / "heartbeat.json").read_text(encoding="utf-8"))
+    payload = _load_json_cached(run_dir / "state" / "heartbeat.json")
     return Heartbeat(**payload)
 
 
@@ -177,7 +206,7 @@ def load_manifest(run_dir: Path) -> Manifest | None:
     path = run_dir / "state" / "manifest.json"
     if not path.exists():
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = _load_json_cached(path)
     return Manifest(**payload)
 
 

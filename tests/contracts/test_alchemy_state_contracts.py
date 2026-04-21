@@ -69,6 +69,22 @@ class TestReadDiscovery:
         assert snap["run_id"] == "new"
         assert snap["account"] == 200
 
+    def test_snapshot_discovery_uses_ttl_cache(self, tmp_root, monkeypatch):
+        base = tmp_root / "data" / "janestreet"
+        now = time.time()
+        _write_snapshot(base / "old_run", {"run_id": "old"}, mtime=now - 100)
+        a = AlchemyState(root=tmp_root)
+        clock = {"value": 100.0}
+        monkeypatch.setattr("core.alchemy_state.time.monotonic", lambda: clock["value"])
+
+        assert a._latest_snapshot_path().parent.parent.name == "old_run"
+
+        _write_snapshot(base / "new_run", {"run_id": "new"}, mtime=now)
+        assert a._latest_snapshot_path().parent.parent.name == "old_run"
+
+        clock["value"] += a._SNAPSHOT_DISCOVERY_TTL_S + 0.1
+        assert a._latest_snapshot_path().parent.parent.name == "new_run"
+
 
 # ────────────────────────────────────────────────────────────
 # read() — pin_run override
@@ -178,6 +194,23 @@ class TestParams:
         for k, v in defaults.items():
             if k != first_key:
                 assert params[k] == v
+
+    def test_read_params_uses_ttl_cache(self, tmp_root, monkeypatch):
+        cfg = tmp_root / "config"
+        cfg.mkdir()
+        params_path = cfg / "alchemy_params.json"
+        params_path.write_text(json.dumps({"MIN_APR": 10.0}), encoding="utf-8")
+        a = AlchemyState(root=tmp_root)
+        clock = {"value": 200.0}
+        monkeypatch.setattr("core.alchemy_state.time.monotonic", lambda: clock["value"])
+
+        assert a.read_params()["MIN_APR"] == 10.0
+
+        params_path.write_text(json.dumps({"MIN_APR": 20.0}), encoding="utf-8")
+        assert a.read_params()["MIN_APR"] == 10.0
+
+        clock["value"] += a._PARAMS_CACHE_TTL_S + 0.1
+        assert a.read_params()["MIN_APR"] == 20.0
 
     def test_malformed_params_fallback_to_defaults(self, tmp_root):
         cfg = tmp_root / "config"

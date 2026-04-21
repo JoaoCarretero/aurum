@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,10 +12,19 @@ from core.shadow_contract import (
     Manifest,
     Heartbeat,
     RunSummary,
+    clear_caches,
     find_runs,
+    load_heartbeat,
     load_manifest,
     compute_config_hash,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_shadow_contract_caches():
+    clear_caches()
+    yield
+    clear_caches()
 
 
 def test_manifest_parses_valid_payload():
@@ -236,3 +246,50 @@ def test_find_runs_filters_paper_by_engine(tmp_path):
     (paper / "heartbeat.json").write_text("{}")
     assert len(find_runs(tmp_path, engines=["millennium"])) == 1
     assert len(find_runs(tmp_path, engines=["citadel"])) == 0
+
+
+def test_find_runs_uses_ttl_cache(tmp_path, monkeypatch):
+    clock = {"value": 100.0}
+    monkeypatch.setattr("core.shadow_contract.time.monotonic", lambda: clock["value"])
+    r1 = _make_run(tmp_path, "millennium_shadow", "r1", {"status": "running", "run_id": "r1"})
+    os.utime(r1 / "state" / "heartbeat.json", (1000, 1000))
+
+    runs = find_runs(tmp_path)
+    assert [r.name for r in runs] == ["r1"]
+
+    r2 = _make_run(tmp_path, "millennium_shadow", "r2", {"status": "running", "run_id": "r2"})
+    os.utime(r2 / "state" / "heartbeat.json", (1010, 1010))
+    cached = find_runs(tmp_path)
+    assert [r.name for r in cached] == ["r1"]
+
+    clock["value"] += 1.1
+    fresh = find_runs(tmp_path)
+    assert [r.name for r in fresh] == ["r2", "r1"]
+
+
+def test_load_heartbeat_uses_ttl_cache(tmp_path, monkeypatch):
+    clock = {"value": 200.0}
+    monkeypatch.setattr("core.shadow_contract.time.monotonic", lambda: clock["value"])
+    hb = {
+        "run_id": "r1",
+        "status": "running",
+        "ticks_ok": 1,
+        "ticks_fail": 0,
+        "novel_total": 2,
+        "last_tick_at": None,
+        "last_error": None,
+        "tick_sec": 900,
+    }
+    run_dir = _make_run(tmp_path, "millennium_shadow", "r1", hb)
+
+    first = load_heartbeat(run_dir)
+    assert first.ticks_ok == 1
+
+    hb["ticks_ok"] = 9
+    (run_dir / "state" / "heartbeat.json").write_text(json.dumps(hb))
+    cached = load_heartbeat(run_dir)
+    assert cached.ticks_ok == 1
+
+    clock["value"] += 1.1
+    fresh = load_heartbeat(run_dir)
+    assert fresh.ticks_ok == 9

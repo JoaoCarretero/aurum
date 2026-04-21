@@ -18,7 +18,9 @@ Métricas / code / run são incrementais — caller fornece o que tiver.
 from __future__ import annotations
 
 import json
+import time
 import tkinter as tk
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -54,6 +56,125 @@ BASKET_OPTS   = [
     ("BLUECHIP", "9"),
 ]
 LEVERAGE_OPTS = [("1x", "1.0"), ("2x", "2.0"), ("3x", "3.0"), ("5x", "5.0")]
+
+_LIVE_FS_CACHE_TTL_S = 1.0
+_LIVE_FS_CACHE: dict[tuple[Any, ...], tuple[float, Any]] = {}
+_ENGINE_LIVE_DIR_MAP = {
+    "live": "live",
+    "janestreet": "janestreet",
+    "citadel": "live",
+    "bridgewater": "live",
+    "jump": "live",
+    "deshaw": "live",
+    "renaissance": "live",
+}
+
+
+def clear_live_fs_cache() -> None:
+    _LIVE_FS_CACHE.clear()
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _engine_live_dir(slug: str) -> Path:
+    return _repo_root() / "data" / _ENGINE_LIVE_DIR_MAP.get(slug, slug)
+
+
+def _cached_live_fs(key: tuple[Any, ...], loader: Callable[[], Any]) -> Any:
+    now = time.monotonic()
+    cached = _LIVE_FS_CACHE.get(key)
+    if cached and (now - cached[0]) < _LIVE_FS_CACHE_TTL_S:
+        return cached[1]
+    value = loader()
+    _LIVE_FS_CACHE[key] = (now, value)
+    return value
+
+
+def _latest_live_run_dir(slug: str) -> Path | None:
+    def _load() -> Path | None:
+        eng_dir = _engine_live_dir(slug)
+        if not eng_dir.is_dir():
+            return None
+        try:
+            return max(
+                (d for d in eng_dir.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime,
+                default=None,
+            )
+        except OSError:
+            return None
+
+    return _cached_live_fs(("latest_live_run_dir", slug), _load)
+
+
+def _safe_tail_lines(path: Path, n_lines: int = 300) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            return "".join(deque(fh, maxlen=n_lines))
+    except OSError as e:
+        return f"(read error: {e})"
+
+
+def _load_live_log(slug: str, n_lines: int = 300) -> tuple[Path | None, str]:
+    def _load() -> tuple[Path | None, str]:
+        eng_dir = _engine_live_dir(slug)
+        if not eng_dir.is_dir():
+            return None, "(no live run found for this engine)"
+        try:
+            runs = sorted(
+                (d for d in eng_dir.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            return None, "(no live run found for this engine)"
+
+        for rd in runs:
+            for candidate in (
+                rd / "logs" / "live.log",
+                rd / "logs" / "engine.log",
+                rd / "log.txt",
+            ):
+                if candidate.is_file():
+                    return candidate, _safe_tail_lines(candidate, n_lines=n_lines)
+        return None, "(no live run found for this engine)"
+
+    return _cached_live_fs(("live_log", slug, n_lines), _load)
+
+
+def _load_live_positions(slug: str) -> list[dict[str, Any]]:
+    def _load() -> list[dict[str, Any]]:
+        eng_dir = _engine_live_dir(slug)
+        if not eng_dir.is_dir():
+            return []
+        try:
+            runs = sorted(
+                (d for d in eng_dir.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            return []
+        for rd in runs:
+            pj = rd / "state" / "positions.json"
+            if not pj.is_file():
+                continue
+            try:
+                data = json.loads(pj.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return [
+                    {"symbol": k, **(v if isinstance(v, dict) else {"value": v})}
+                    for k, v in data.items()
+                ]
+        return []
+
+    return _cached_live_fs(("live_positions", slug), _load)
 
 
 def _bright(hex_color: str, factor: float = 1.2) -> str:
@@ -1221,39 +1342,7 @@ def render(
     def _paint_log(host, t: EngineTrack):
         """Live log tail — finds the most recent run dir for this engine
         and tails its log file. Refreshes every 1s while open."""
-        from pathlib import Path as _P
-        path = _P(__file__).resolve().parent.parent
-        # Map slug → engine dir under data/
-        eng_dir_map = {
-            "live": "live",
-            "janestreet": "janestreet",
-            "citadel": "live",  # citadel runs live via engines/live.py
-            "bridgewater": "live", "jump": "live",
-            "deshaw": "live", "renaissance": "live",
-        }
-        eng_dir = path / "data" / eng_dir_map.get(t.slug, t.slug)
-        log_text = "(no live run found for this engine)"
-        log_path = None
-        if eng_dir.is_dir():
-            try:
-                runs = sorted(
-                    [d for d in eng_dir.iterdir() if d.is_dir()],
-                    key=lambda d: d.stat().st_mtime, reverse=True,
-                )
-                for rd in runs:
-                    candidates = [
-                        rd / "logs" / "live.log",
-                        rd / "logs" / "engine.log",
-                        rd / "log.txt",
-                    ]
-                    for c in candidates:
-                        if c.is_file():
-                            log_path = c
-                            break
-                    if log_path:
-                        break
-            except OSError:
-                pass
+        log_path, log_text = _load_live_log(t.slug, n_lines=300)
 
         head_row = tk.Frame(host, bg=PANEL)
         head_row.pack(fill="x", pady=(0, 4))
@@ -1274,51 +1363,13 @@ def render(
         text_w.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        if log_path:
-            try:
-                with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
-                    lines = fh.readlines()[-300:]
-                log_text = "".join(lines)
-            except OSError as e:
-                log_text = f"(read error: {e})"
         text_w.insert("1.0", log_text)
         text_w.see("end")
         text_w.configure(state="disabled")
 
     def _paint_positions(host, t: EngineTrack):
         """Open positions for this engine's most recent live run."""
-        from pathlib import Path as _P
-        path = _P(__file__).resolve().parent.parent
-        eng_dir_map = {
-            "live": "live", "janestreet": "janestreet",
-            "citadel": "live", "bridgewater": "live", "jump": "live",
-            "deshaw": "live", "renaissance": "live",
-        }
-        eng_dir = path / "data" / eng_dir_map.get(t.slug, t.slug)
-        positions = []
-        if eng_dir.is_dir():
-            try:
-                runs = sorted(
-                    [d for d in eng_dir.iterdir() if d.is_dir()],
-                    key=lambda d: d.stat().st_mtime, reverse=True,
-                )
-                for rd in runs:
-                    pj = rd / "state" / "positions.json"
-                    if pj.is_file():
-                        try:
-                            data = json.loads(pj.read_text(encoding="utf-8"))
-                            if isinstance(data, list):
-                                positions = data
-                            elif isinstance(data, dict):
-                                positions = [
-                                    {"symbol": k, **(v if isinstance(v, dict) else {"value": v})}
-                                    for k, v in data.items()
-                                ]
-                            break
-                        except (json.JSONDecodeError, OSError):
-                            continue
-            except OSError:
-                pass
+        positions = _load_live_positions(t.slug)
 
         head = tk.Frame(host, bg=PANEL)
         head.pack(fill="x", pady=(0, 6))

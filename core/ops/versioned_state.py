@@ -7,10 +7,19 @@ tools can evolve safely over time.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 from core.persistence import atomic_write_json
+
+
+_READ_CACHE_TTL_S = 1.0
+_READ_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+
+def clear_read_cache() -> None:
+    _READ_CACHE.clear()
 
 
 def with_schema_version(payload: dict[str, Any], schema_version: str) -> dict[str, Any]:
@@ -20,18 +29,32 @@ def with_schema_version(payload: dict[str, Any], schema_version: str) -> dict[st
 
 
 def write_versioned_json(path: str | Path, payload: dict[str, Any], schema_version: str, **json_kwargs: Any) -> Path:
-    return atomic_write_json(path, with_schema_version(payload, schema_version), **json_kwargs)
+    out = with_schema_version(payload, schema_version)
+    dest = atomic_write_json(path, out, **json_kwargs)
+    _READ_CACHE[str(Path(dest))] = (time.monotonic(), dict(out))
+    return dest
 
 
 def read_versioned_json(path: str | Path, default: Any = None) -> dict[str, Any] | Any:
     p = Path(path)
+    cache_key = str(p)
+    cached = _READ_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and (now - cached[0]) < _READ_CACHE_TTL_S:
+        return dict(cached[1]) if isinstance(cached[1], dict) else default
     if not p.exists():
+        _READ_CACHE.pop(cache_key, None)
         return default
     try:
         with p.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else default
+        if isinstance(data, dict):
+            _READ_CACHE[cache_key] = (now, dict(data))
+            return data
+        _READ_CACHE.pop(cache_key, None)
+        return default
     except (json.JSONDecodeError, OSError):
+        _READ_CACHE.pop(cache_key, None)
         return default
 
 

@@ -39,8 +39,10 @@ def isolated_state(tmp_path, monkeypatch):
     state_path = tmp_path / "procs.json"
     monkeypatch.setattr(proc, "STATE_FILE", state_path)
     monkeypatch.setattr(proc, "_LIST_CACHE", {"t": 0.0, "val": None})
+    proc.clear_state_cache()
     monkeypatch.setattr(proc, "_last_cleanup_ts", 0.0)
-    return state_path
+    yield state_path
+    proc.clear_state_cache()
 
 
 @pytest.fixture
@@ -108,6 +110,28 @@ class TestStateIO:
         data = {"procs": {"123": {"engine": "x", "pid": 123, "status": "running"}}}
         proc._save_state(data)
         assert proc._load_state_raw() == data
+
+    def test_load_state_raw_uses_ttl_cache(self, isolated_state, monkeypatch):
+        isolated_state.write_text(
+            json.dumps({"procs": {"1": {"engine": "x"}}}),
+            encoding="utf-8",
+        )
+        now = {"value": 100.0}
+        monkeypatch.setattr(proc.time, "monotonic", lambda: now["value"])
+
+        first = proc._load_state_raw()
+        assert first == {"procs": {"1": {"engine": "x"}}}
+
+        isolated_state.write_text(
+            json.dumps({"procs": {"2": {"engine": "y"}}}),
+            encoding="utf-8",
+        )
+        cached = proc._load_state_raw()
+        assert cached == {"procs": {"1": {"engine": "x"}}}
+
+        now["value"] += proc._STATE_CACHE_TTL_S + 0.1
+        fresh = proc._load_state_raw()
+        assert fresh == {"procs": {"2": {"engine": "y"}}}
 
 
 # ────────────────────────────────────────────────────────────

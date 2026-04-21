@@ -37,6 +37,8 @@ RUNS_DIR = DATA_DIR / "runs"
 INDEX_PATH = RUN_INDEX_PATH
 INDEX_LOCK_PATH = INDEX_PATH.with_suffix(INDEX_PATH.suffix + ".lock")
 _INDEX_LOCK = threading.Lock()
+_INDEX_CACHE_TTL_S = 2.0
+_INDEX_CACHE: tuple[float, str, list] | None = None
 
 
 # ── TeeLogger ──────────────────────────────────────────────────────────────
@@ -295,18 +297,46 @@ def append_to_index(run_dir, summary, config, overfit_results=None):
         # Fallback: write directly
         with open(INDEX_PATH, "w", encoding="utf-8") as f:
             json.dump(index, f, ensure_ascii=False, indent=2, default=str)
+    _set_index_cache(index)
 
 
 def _load_index() -> list:
     """Load the global index, returning [] on missing/corrupt file."""
+    cached = _get_index_cache()
+    if cached is not None:
+        return cached
     if not INDEX_PATH.exists():
         return []
     try:
         with open(INDEX_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, list) else []
+        if isinstance(data, list):
+            _set_index_cache(data)
+            return list(data)
+        _set_index_cache([])
+        return []
     except (json.JSONDecodeError, OSError):
         return []
+
+
+def _get_index_cache() -> list | None:
+    cache = _INDEX_CACHE
+    if cache is None:
+        return None
+    stamp, path_str, rows = cache
+    if path_str != str(INDEX_PATH) or (time.monotonic() - stamp) > _INDEX_CACHE_TTL_S:
+        return None
+    return list(rows)
+
+
+def _set_index_cache(rows: list) -> None:
+    global _INDEX_CACHE
+    _INDEX_CACHE = (time.monotonic(), str(INDEX_PATH), list(rows))
+
+
+def clear_index_cache() -> None:
+    global _INDEX_CACHE
+    _INDEX_CACHE = None
 
 
 class _FileLock:
@@ -441,6 +471,7 @@ def append_to_index(run_dir, summary, config, overfit_results=None, entry_overri
         except OSError:
             with open(INDEX_PATH, "w", encoding="utf-8") as f:
                 json.dump(index, f, ensure_ascii=False, indent=2, default=str)
+        _set_index_cache(index)
 
 
 # ── 6. list_runs ───────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ Covers:
 """
 from __future__ import annotations
 
+import copy
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,7 +36,9 @@ def isolated_paper(tmp_path, monkeypatch):
     """Redirect PAPER_STATE_FILE to a tmp_path file."""
     p = tmp_path / "paper_state.json"
     monkeypatch.setattr(PortfolioMonitor, "PAPER_STATE_FILE", p)
-    return p
+    PortfolioMonitor.clear_paper_cache()
+    yield p
+    PortfolioMonitor.clear_paper_cache()
 
 
 @pytest.fixture
@@ -155,6 +158,27 @@ class TestPaperState:
         PortfolioMonitor.paper_state_save(state)
         reloaded = PortfolioMonitor.paper_state_load()
         assert reloaded["current_balance"] == 5_000.0
+
+    def test_paper_state_load_uses_ttl_cache(self, isolated_paper, monkeypatch):
+        clock = {"value": 100.0}
+        monkeypatch.setattr("core.portfolio_monitor.time.monotonic", lambda: clock["value"])
+        initial = PortfolioMonitor._paper_default_state()
+        PortfolioMonitor.paper_state_save(initial)
+        PortfolioMonitor.clear_paper_cache()
+
+        first = PortfolioMonitor.paper_state_load()
+        assert first["current_balance"] == PortfolioMonitor.PAPER_DEFAULT_BALANCE
+
+        mutated = copy.deepcopy(initial)
+        mutated["current_balance"] = 7_500.0
+        isolated_paper.write_text(json.dumps(mutated, indent=2), encoding="utf-8")
+
+        cached = PortfolioMonitor.paper_state_load()
+        assert cached["current_balance"] == PortfolioMonitor.PAPER_DEFAULT_BALANCE
+
+        clock["value"] += PortfolioMonitor._PAPER_CACHE_TTL_S + 0.1
+        fresh = PortfolioMonitor.paper_state_load()
+        assert fresh["current_balance"] == 7_500.0
 
     def test_set_balance_deposit(self, isolated_paper):
         PortfolioMonitor.paper_state_load()

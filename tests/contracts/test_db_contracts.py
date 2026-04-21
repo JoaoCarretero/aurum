@@ -35,6 +35,13 @@ def iso_db(tmp_path, monkeypatch):
     return {"db_path": db_path, "data_dir": data_dir}
 
 
+@pytest.fixture(autouse=True)
+def _clear_db_index_cache():
+    db.clear_index_cache()
+    yield
+    db.clear_index_cache()
+
+
 def _write_run_json(data_dir: Path, engine: str, run_ts: str,
                      payload: dict | None = None) -> Path:
     """Escreve reports/X.json em data/{engine}/{run_ts}/reports/.
@@ -182,6 +189,21 @@ class TestSaveRun:
         run_id = db.save_run("citadel", str(json_path))
         persisted = db.get_trades(run_id)
         assert len(persisted) == 2
+
+    def test_lookup_index_days_uses_ttl_cache(self, iso_db):
+        index_path = iso_db["data_dir"].parent / "index.json"
+        db.INDEX_PATH = index_path
+        index_path.write_text(json.dumps([
+            {"run_id": "citadel_2026-04-15_0900", "period_days": 30},
+        ]), encoding="utf-8")
+
+        assert db._lookup_index_days("citadel_2026-04-15_0900") == 30
+
+        index_path.write_text(json.dumps([
+            {"run_id": "citadel_2026-04-15_0900", "period_days": 99},
+        ]), encoding="utf-8")
+
+        assert db._lookup_index_days("citadel_2026-04-15_0900") == 30
 
 
 class TestListRuns:

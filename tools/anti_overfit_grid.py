@@ -43,6 +43,80 @@ class EngineSpec:
 
 
 ENGINE_SPECS: dict[str, EngineSpec] = {
+    "bridgewater": EngineSpec(
+        key="bridgewater",
+        display="BRIDGEWATER",
+        script="engines/bridgewater.py",
+        data_dir="data/bridgewater",
+        checklist_path="docs/engines/bridgewater/checklist.md",
+        basket="bluechip",
+        interval="1h",
+        train_days=20,
+        train_end="2026-03-31",
+        test_end="2026-04-10",
+        holdout_end="2026-04-20",
+        variants={
+            "BW00_baseline": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 2,
+                "min_dir_thresh": 0.30,
+                "strict_direction": True,
+            },
+            "BW01_thresh_035": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 2,
+                "min_dir_thresh": 0.35,
+                "strict_direction": True,
+            },
+            "BW02_thresh_040": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 2,
+                "min_dir_thresh": 0.40,
+                "strict_direction": True,
+            },
+            "BW03_components_3": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 3,
+                "min_dir_thresh": 0.30,
+                "strict_direction": True,
+            },
+            "BW04_health_on": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 2,
+                "min_dir_thresh": 0.30,
+                "strict_direction": True,
+                "enable_symbol_health": True,
+            },
+            "BW05_cooldown_4": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 2,
+                "min_dir_thresh": 0.30,
+                "strict_direction": True,
+                "post_trade_cooldown_bars": 4,
+            },
+            "BW06_thresh_035_components_3": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 3,
+                "min_dir_thresh": 0.35,
+                "strict_direction": True,
+            },
+            "BW07_thresh_035_health_on": {
+                "preset": "robust",
+                "allowed_regimes": "BEAR,CHOP",
+                "min_components": 2,
+                "min_dir_thresh": 0.35,
+                "strict_direction": True,
+                "enable_symbol_health": True,
+            },
+        },
+    ),
     "deshaw": EngineSpec(
         key="deshaw",
         display="DE SHAW",
@@ -252,6 +326,15 @@ ENGINE_SPECS: dict[str, EngineSpec] = {
 
 
 FLAG_MAP = {
+    "bridgewater": {
+        "preset": "--preset",
+        "allowed_regimes": "--allowed-regimes",
+        "min_components": "--min-components",
+        "min_dir_thresh": "--min-dir-thresh",
+        "strict_direction": "--strict-direction",
+        "enable_symbol_health": "--enable-symbol-health",
+        "post_trade_cooldown_bars": "--post-trade-cooldown-bars",
+    },
     "deshaw": {
         "allowed_macro_entry": "--allowed-macro-entry",
         "min_hmm_chop_prob": "--min-hmm-chop-prob",
@@ -446,11 +529,54 @@ def execute_run(spec: EngineSpec, variant: str, overrides: dict[str, Any], windo
     (logs_dir / f"{tag}.stdout.txt").write_text(proc.stdout or "", encoding="utf-8")
     (logs_dir / f"{tag}.stderr.txt").write_text(proc.stderr or "", encoding="utf-8")
 
-    if proc.returncode != 0:
-        raise RuntimeError(f"{variant}/{window.name} exited with {proc.returncode}")
-
     run_dir = _find_new_run_dir(engine_dir, before, started_at)
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+    combined_output = f"{stdout}\n{stderr}"
+
+    def _is_soft_exit() -> bool:
+        lowered = combined_output.lower()
+        return (
+            "sem trades fechados" in lowered
+            or "insufficient sentiment coverage" in lowered
+        )
+
+    if proc.returncode != 0:
+        # Some engines legitimately produce no closed trades on short windows.
+        # Record the stage as zero-trade instead of killing the whole protocol.
+        if _is_soft_exit():
+            return {
+                "run_dir": str(run_dir.relative_to(ROOT)) if run_dir else "",
+                "n_trades": 0,
+                "win_rate": 0.0,
+                "pnl": 0.0,
+                "roi_pct": 0.0,
+                "sharpe": None,
+                "sortino": None,
+                "max_dd_pct": 0.0,
+                "skew": 0.0,
+                "kurtosis": 0.0,
+                "dsr": None,
+                "stage_note": "no_closed_trades",
+            }
+        raise RuntimeError(f"{variant}/{window.name} exited with {proc.returncode}: {stderr or stdout}")
+
     if run_dir is None:
+        if _is_soft_exit():
+            return {
+                "run_dir": "",
+                "n_trades": 0,
+                "win_rate": 0.0,
+                "pnl": 0.0,
+                "roi_pct": 0.0,
+                "sharpe": None,
+                "sortino": None,
+                "max_dd_pct": 0.0,
+                "skew": 0.0,
+                "kurtosis": 0.0,
+                "dsr": None,
+                "stage_note": "no_summary_soft_exit",
+            }
         raise RuntimeError(f"{variant}/{window.name} did not produce a summary.json run dir")
 
     return _stage_metrics(run_dir, n_trials=len(spec.variants))

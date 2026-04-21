@@ -6,11 +6,14 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+import time
 
 from config.paths import AURUM_DB_PATH, DATA_DIR, RUN_INDEX_PATH
 
 DB_PATH = AURUM_DB_PATH
 INDEX_PATH = RUN_INDEX_PATH
+_INDEX_CACHE_TTL_S = 2.0
+_INDEX_ROWS_CACHE: tuple[float, str, list[dict] | None] | None = None
 
 _ENGINE_ALIASES = {
     "backtest": "citadel",
@@ -145,10 +148,7 @@ def _normalize_run_id(run_id: str | None, engine: str, json_path: str | None = N
 
 
 def _lookup_index_days(run_id: str) -> int | None:
-    try:
-        rows = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    rows = _load_index_rows()
     if not isinstance(rows, list):
         return None
     for row in reversed(rows):
@@ -156,6 +156,32 @@ def _lookup_index_days(run_id: str) -> int | None:
             days = row.get("period_days")
             return int(days) if days is not None else None
     return None
+
+
+def _load_index_rows() -> list[dict] | None:
+    global _INDEX_ROWS_CACHE
+    path = str(INDEX_PATH)
+    now = time.monotonic()
+    cache = _INDEX_ROWS_CACHE
+    if cache is not None:
+        stamp, cached_path, rows = cache
+        if cached_path == path and (now - stamp) <= _INDEX_CACHE_TTL_S:
+            return rows
+    try:
+        rows = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _INDEX_ROWS_CACHE = (now, path, None)
+        return None
+    if not isinstance(rows, list):
+        _INDEX_ROWS_CACHE = (now, path, None)
+        return None
+    _INDEX_ROWS_CACHE = (now, path, rows)
+    return rows
+
+
+def clear_index_cache() -> None:
+    global _INDEX_ROWS_CACHE
+    _INDEX_ROWS_CACHE = None
 
 
 def _extract_run_fields(

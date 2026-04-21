@@ -225,6 +225,11 @@ class TestHashChain:
         # (first is referenced via second's prev_hash)
         assert second["prev_hash"] == _hash(first)
 
+    def test_read_last_nonempty_line_skips_trailing_blank_lines(self, tmp_path):
+        path = tmp_path / "orders-2026-04.jsonl"
+        path.write_text('{"a":1}\n\n', encoding="utf-8")
+        assert AuditTrail._read_last_nonempty_line(path) == '{"a":1}'
+
 
 # ────────────────────────────────────────────────────────────
 # Canonical JSON determinism

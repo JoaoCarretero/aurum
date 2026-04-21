@@ -152,7 +152,7 @@ def test_sentiment_limits_keep_live_caps_but_expand_historical_oos_window():
     assert historical == (108, 3168, 3168)
 
 
-def test_collect_sentiment_fails_closed_when_historical_oi_ls_unavailable(monkeypatch):
+def test_collect_sentiment_marks_historical_oi_ls_unavailable_without_raising(monkeypatch):
     def _funding(sym, limit=0, end_time_ms=None):
         return pd.DataFrame(
             {
@@ -170,11 +170,16 @@ def test_collect_sentiment_fails_closed_when_historical_oi_ls_unavailable(monkey
         lambda df, window=30: pd.Series([0.0] * len(df), index=df.index),
     )
 
-    with pytest.raises(RuntimeError, match="historical sentiment unavailable for OOS window"):
-        bridgewater.collect_sentiment(["BTCUSDT"], end_time_ms=1234567890, window_days=30)
+    out = bridgewater.collect_sentiment(["BTCUSDT"], end_time_ms=1234567890, window_days=30)
+
+    assert out["BTCUSDT"]["funding_z"] is not None
+    assert out["BTCUSDT"]["oi_df"] is None
+    assert out["BTCUSDT"]["oi_ready"] is False
+    assert out["BTCUSDT"]["ls_signal"] is None
+    assert out["BTCUSDT"]["ls_ready"] is False
 
 
-def test_collect_sentiment_fails_when_any_symbol_lacks_historical_coverage(monkeypatch):
+def test_collect_sentiment_keeps_other_symbols_when_one_lacks_historical_coverage(monkeypatch):
     def _funding(sym, limit=0, end_time_ms=None):
         return pd.DataFrame(
             {
@@ -219,8 +224,11 @@ def test_collect_sentiment_fails_when_any_symbol_lacks_historical_coverage(monke
     )
     monkeypatch.setattr(bridgewater, "cached_coverage", lambda kind, sym, period: None)
 
-    with pytest.raises(RuntimeError, match="ETHUSDT: oi\\(cache=empty\\)"):
-        bridgewater.collect_sentiment(["BTCUSDT", "ETHUSDT"], end_time_ms=1234567890, window_days=30)
+    out = bridgewater.collect_sentiment(["BTCUSDT", "ETHUSDT"], end_time_ms=1234567890, window_days=30)
+
+    assert out["BTCUSDT"]["oi_ready"] is True
+    assert out["ETHUSDT"]["oi_df"] is None
+    assert out["ETHUSDT"]["oi_ready"] is False
 
 
 def test_collect_sentiment_uses_partial_cached_history_for_oos(monkeypatch):

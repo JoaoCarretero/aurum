@@ -15,8 +15,12 @@ pure helpers are the load-bearing contract:
 """
 from __future__ import annotations
 
+import json
+import os
+
 import pytest
 
+import core.engine_picker as ep
 from core.engine_picker import (
     DEFAULT_GROUPS,
     GROUP_ORDER,
@@ -258,3 +262,92 @@ class TestSafe:
         flag = []
         _safe(lambda: flag.append(1))
         assert flag == [1]
+
+
+@pytest.fixture(autouse=True)
+def _clear_live_fs_cache():
+    ep.clear_live_fs_cache()
+    yield
+    ep.clear_live_fs_cache()
+
+
+class TestLiveFsHelpers:
+    def test_latest_live_run_dir_uses_ttl_cache(self, tmp_path, monkeypatch):
+        repo_file = tmp_path / "core" / "ops" / "engine_picker.py"
+        repo_file.parent.mkdir(parents=True)
+        repo_file.touch()
+        monkeypatch.setattr(ep, "__file__", str(repo_file))
+        repo_root = repo_file.resolve().parent.parent.parent
+        now = {"value": 100.0}
+        monkeypatch.setattr(ep.time, "monotonic", lambda: now["value"])
+
+        eng_dir = repo_root / "data" / "live"
+        older = eng_dir / "run_old"
+        newer = eng_dir / "run_new"
+        older.mkdir(parents=True)
+        newer.mkdir(parents=True)
+        older_ts = 1_700_000_000
+        newer_ts = older_ts + 10
+        os.utime(older, (older_ts, older_ts))
+        os.utime(newer, (newer_ts, newer_ts))
+
+        assert ep._latest_live_run_dir("live") == newer
+
+        newest = eng_dir / "run_latest"
+        newest.mkdir()
+        latest_ts = newer_ts + 10
+        os.utime(newest, (latest_ts, latest_ts))
+        assert ep._latest_live_run_dir("live") == newer
+
+        now["value"] += ep._LIVE_FS_CACHE_TTL_S + 0.1
+        assert ep._latest_live_run_dir("live") == newest
+
+    def test_load_live_log_tails_last_lines_and_uses_cache(self, tmp_path, monkeypatch):
+        repo_file = tmp_path / "core" / "ops" / "engine_picker.py"
+        repo_file.parent.mkdir(parents=True)
+        repo_file.touch()
+        monkeypatch.setattr(ep, "__file__", str(repo_file))
+        repo_root = repo_file.resolve().parent.parent.parent
+        now = {"value": 200.0}
+        monkeypatch.setattr(ep.time, "monotonic", lambda: now["value"])
+
+        log_path = repo_root / "data" / "live" / "run_001" / "logs" / "live.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("".join(f"line {i}\n" for i in range(1, 8)), encoding="utf-8")
+
+        found, tail = ep._load_live_log("live", n_lines=3)
+        assert found == log_path
+        assert tail == "line 5\nline 6\nline 7\n"
+
+        log_path.write_text("mutated\n", encoding="utf-8")
+        _, cached_tail = ep._load_live_log("live", n_lines=3)
+        assert cached_tail == "line 5\nline 6\nline 7\n"
+
+        now["value"] += ep._LIVE_FS_CACHE_TTL_S + 0.1
+        _, fresh_tail = ep._load_live_log("live", n_lines=3)
+        assert fresh_tail == "mutated\n"
+
+    def test_load_live_positions_normalizes_dict_payload(self, tmp_path, monkeypatch):
+        repo_file = tmp_path / "core" / "ops" / "engine_picker.py"
+        repo_file.parent.mkdir(parents=True)
+        repo_file.touch()
+        monkeypatch.setattr(ep, "__file__", str(repo_file))
+        repo_root = repo_file.resolve().parent.parent.parent
+
+        positions_path = repo_root / "data" / "live" / "run_001" / "state" / "positions.json"
+        positions_path.parent.mkdir(parents=True)
+        positions_path.write_text(
+            json.dumps(
+                {
+                    "BTCUSDT": {"side": "LONG", "qty": 1},
+                    "ETHUSDT": 2,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        positions = ep._load_live_positions("bridgewater")
+        assert positions == [
+            {"symbol": "BTCUSDT", "side": "LONG", "qty": 1},
+            {"symbol": "ETHUSDT", "value": 2},
+        ]

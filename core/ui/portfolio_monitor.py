@@ -264,6 +264,18 @@ class PortfolioMonitor:
     # Class-level lock: every read/modify/write of paper_state.json goes
     # through this, protecting the file from concurrent mutations.
     _PAPER_LOCK = threading.Lock()
+    _PAPER_CACHE_TTL_S = 1.0
+    _PAPER_CACHE: tuple[float, str, dict] | None = None
+
+    @classmethod
+    def clear_paper_cache(cls) -> None:
+        cls._PAPER_CACHE = None
+
+    @classmethod
+    def _set_paper_cache(cls, state: dict) -> dict:
+        cached = copy.deepcopy(state)
+        cls._PAPER_CACHE = (time.monotonic(), str(cls.PAPER_STATE_FILE), cached)
+        return copy.deepcopy(cached)
 
     @classmethod
     def _paper_default_state(cls) -> dict:
@@ -291,12 +303,20 @@ class PortfolioMonitor:
     @classmethod
     def _paper_read_unlocked(cls) -> dict | None:
         """Read the file without acquiring the lock. Caller must hold it."""
+        cache = cls._PAPER_CACHE
+        if cache is not None:
+            stamp, path_str, state = cache
+            if path_str == str(cls.PAPER_STATE_FILE) and (time.monotonic() - stamp) < cls._PAPER_CACHE_TTL_S:
+                return copy.deepcopy(state)
         f = cls.PAPER_STATE_FILE
         if not f.exists():
+            cls.clear_paper_cache()
             return None
         try:
-            return json.loads(f.read_text(encoding="utf-8"))
+            state = json.loads(f.read_text(encoding="utf-8"))
+            return cls._set_paper_cache(state)
         except Exception:
+            cls.clear_paper_cache()
             return None
 
     @classmethod
@@ -308,6 +328,7 @@ class PortfolioMonitor:
         tmp = f.with_suffix(f.suffix + ".tmp")
         tmp.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
         tmp.replace(f)  # atomic rename on both POSIX and Windows
+        cls._set_paper_cache(state)
 
     @classmethod
     def paper_state_load(cls) -> dict:

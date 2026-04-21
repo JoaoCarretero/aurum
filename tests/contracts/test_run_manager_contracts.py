@@ -37,6 +37,13 @@ def isolated_dirs(tmp_path, monkeypatch):
     return runs, index
 
 
+@pytest.fixture(autouse=True)
+def _clear_run_manager_index_cache():
+    rm.clear_index_cache()
+    yield
+    rm.clear_index_cache()
+
+
 # ────────────────────────────────────────────────────────────
 # snapshot_config
 # ────────────────────────────────────────────────────────────
@@ -165,6 +172,13 @@ class TestLoadIndex:
     def test_valid_list_returned_as_is(self, isolated_dirs):
         _, index = isolated_dirs
         index.write_text(json.dumps([{"run_id": "x"}]), encoding="utf-8")
+        assert rm._load_index() == [{"run_id": "x"}]
+
+    def test_uses_ttl_cache(self, isolated_dirs):
+        _, index = isolated_dirs
+        index.write_text(json.dumps([{"run_id": "x"}]), encoding="utf-8")
+        assert rm._load_index() == [{"run_id": "x"}]
+        index.write_text(json.dumps([{"run_id": "y"}]), encoding="utf-8")
         assert rm._load_index() == [{"run_id": "x"}]
 
 

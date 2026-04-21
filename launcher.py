@@ -8539,25 +8539,19 @@ class App(tk.Tk):
             return []
         runs: list[dict] = []
         try:
-            active_shadow = client.active_runs_for("millennium", mode="shadow")
-            active_paper = client.active_runs_for("millennium", mode="paper")
-            if isinstance(active_shadow, list):
-                runs.extend(active_shadow)
-            if isinstance(active_paper, list):
-                runs.extend(active_paper)
-        except AttributeError:
-            try:
-                raw_runs = client._get("/v1/runs")
-            except Exception:
-                return []
-            if not isinstance(raw_runs, list):
-                return []
-            runs = [
-                r for r in raw_runs
-                if isinstance(r, dict) and str(r.get("status") or "").lower() == "running"
-            ]
+            raw_runs = client._get("/v1/runs")
         except Exception:
             return []
+        if not isinstance(raw_runs, list):
+            return []
+        runs = [
+            r for r in raw_runs
+            if (
+                isinstance(r, dict)
+                and str(r.get("status") or "").lower() == "running"
+                and str(r.get("mode") or "").lower() in {"shadow", "paper"}
+            )
+        ]
 
         runs.sort(key=lambda r: str(r.get("started_at") or r.get("last_tick_at") or ""), reverse=True)
         rows: list[dict] = []

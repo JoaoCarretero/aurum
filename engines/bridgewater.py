@@ -294,10 +294,11 @@ def collect_sentiment(symbols: list, end_time_ms: int | None = None,
         details = "; ".join(missing_historical[:5])
         if len(missing_historical) > 5:
             details += f"; ... (+{len(missing_historical) - 5} symbols)"
-        raise RuntimeError(
-            "historical sentiment unavailable for OOS window; "
-            "run tools/capture/prewarm_sentiment_cache.py for the target basket/window. "
-            f"Missing coverage: {details}"
+        log.warning(
+            "historical sentiment partially unavailable for OOS window; "
+            "continuing with per-symbol eligibility/coverage gating. "
+            "Missing coverage: %s",
+            details,
         )
 
     return sentiment

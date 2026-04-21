@@ -17,6 +17,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,10 @@ _DEFAULT_CONFIG = {
     "auto_open_browser": True,
 }
 
+_CONFIG_CACHE_TTL_S = 2.0
+_CONFIG_CACHE: dict[str, tuple[float, dict]] = {}
+_FRAMEWORK_CACHE_TTL_S = 2.0
+
 _FRAMEWORK_COMMANDS = {
     "next":   lambda port: "npx next dev",
     "vite":   lambda port: "npx vite",
@@ -52,6 +57,7 @@ class SiteRunner:
 
     def __init__(self, config_path: str | Path = SITE_CONFIG_PATH):
         self.config_path = Path(config_path)
+        self._framework_cache: dict[str, tuple[float, tuple[str, str]]] = {}
         self.config: dict = self._load_config()
         self.proc: Optional[subprocess.Popen] = None
         self.start_time: Optional[datetime] = None
@@ -65,10 +71,17 @@ class SiteRunner:
     # ── CONFIG ────────────────────────────────────────────────
     def _load_config(self) -> dict:
         merged = dict(_DEFAULT_CONFIG)
+        cache_key = str(self.config_path)
+        now = time.monotonic()
+        cached = _CONFIG_CACHE.get(cache_key)
+        if cached and (now - cached[0]) < _CONFIG_CACHE_TTL_S:
+            merged.update(cached[1])
+            return merged
         if self.config_path.exists():
             try:
                 data = json.loads(self.config_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
+                    _CONFIG_CACHE[cache_key] = (now, dict(data))
                     for k, v in data.items():
                         merged[k] = v
             except Exception:
@@ -80,6 +93,7 @@ class SiteRunner:
         for k, v in kwargs.items():
             self.config[k] = v
         atomic_write_json(self.config_path, self.config)
+        _CONFIG_CACHE[str(self.config_path)] = (time.monotonic(), dict(self.config))
 
     # ── FRAMEWORK DETECTION ───────────────────────────────────
     def detect_framework(self, project_dir: str | None = None) -> tuple[str, str]:
@@ -88,19 +102,32 @@ class SiteRunner:
         port = int(self.config.get("port", 3000) or 3000)
         if not d.exists() or not d.is_dir():
             return ("unknown", "npm run dev")
+        cache_key = str(d.resolve())
+        now = time.monotonic()
+        cached = self._framework_cache.get(cache_key)
+        if cached and (now - cached[0]) < _FRAMEWORK_CACHE_TTL_S:
+            return cached[1]
 
         # 1. Next.js
         if any(d.glob("next.config.*")):
-            return ("next", _FRAMEWORK_COMMANDS["next"](port))
+            detected = ("next", _FRAMEWORK_COMMANDS["next"](port))
+            self._framework_cache[cache_key] = (now, detected)
+            return detected
         # 2. Vite
         if any(d.glob("vite.config.*")):
-            return ("vite", _FRAMEWORK_COMMANDS["vite"](port))
+            detected = ("vite", _FRAMEWORK_COMMANDS["vite"](port))
+            self._framework_cache[cache_key] = (now, detected)
+            return detected
         # 3. Nuxt
         if any(d.glob("nuxt.config.*")):
-            return ("nuxt", _FRAMEWORK_COMMANDS["nuxt"](port))
+            detected = ("nuxt", _FRAMEWORK_COMMANDS["nuxt"](port))
+            self._framework_cache[cache_key] = (now, detected)
+            return detected
         # 4. Gatsby
         if any(d.glob("gatsby-config.*")):
-            return ("gatsby", _FRAMEWORK_COMMANDS["gatsby"](port))
+            detected = ("gatsby", _FRAMEWORK_COMMANDS["gatsby"](port))
+            self._framework_cache[cache_key] = (now, detected)
+            return detected
         # 5/6. package.json scripts
         pkg = d / "package.json"
         if pkg.exists():
@@ -108,21 +135,33 @@ class SiteRunner:
                 pkg_data = json.loads(pkg.read_text(encoding="utf-8"))
                 scripts = pkg_data.get("scripts", {}) if isinstance(pkg_data, dict) else {}
                 if "dev" in scripts:
-                    return ("custom", "npm run dev")
+                    detected = ("custom", "npm run dev")
+                    self._framework_cache[cache_key] = (now, detected)
+                    return detected
                 if "start" in scripts:
-                    return ("custom", "npm start")
+                    detected = ("custom", "npm start")
+                    self._framework_cache[cache_key] = (now, detected)
+                    return detected
             except Exception:
                 pass
         # 7. Django
         if (d / "manage.py").exists():
-            return ("django", _FRAMEWORK_COMMANDS["django"](port))
+            detected = ("django", _FRAMEWORK_COMMANDS["django"](port))
+            self._framework_cache[cache_key] = (now, detected)
+            return detected
         # 8. Rust
         if (d / "Cargo.toml").exists():
-            return ("rust", _FRAMEWORK_COMMANDS["rust"](port))
+            detected = ("rust", _FRAMEWORK_COMMANDS["rust"](port))
+            self._framework_cache[cache_key] = (now, detected)
+            return detected
         # 9. Static HTML
         if (d / "index.html").exists():
-            return ("static", _FRAMEWORK_COMMANDS["static"](port))
-        return ("unknown", "npm run dev")
+            detected = ("static", _FRAMEWORK_COMMANDS["static"](port))
+            self._framework_cache[cache_key] = (now, detected)
+            return detected
+        detected = ("unknown", "npm run dev")
+        self._framework_cache[cache_key] = (now, detected)
+        return detected
 
     def resolved_command(self) -> tuple[str, list[str]]:
         """Apply user override / explicit framework selection / autodetect."""

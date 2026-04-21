@@ -164,21 +164,46 @@ class AuditTrail:
             return None
         for f in files:
             try:
-                with f.open("r", encoding="utf-8") as fh:
-                    last_line = None
-                    for line in fh:
-                        line = line.rstrip("\n")
-                        if line:
-                            last_line = line
-                    if last_line is None:
-                        continue
-                    row = json.loads(last_line)
-                    # Compute hash of this row (the stored row IS the
-                    # prev_hash seed for the next write).
-                    return _hash(row)
+                last_line = self._read_last_nonempty_line(f)
+                if last_line is None:
+                    continue
+                row = json.loads(last_line)
+                # Compute hash of this row (the stored row IS the
+                # prev_hash seed for the next write).
+                return _hash(row)
             except (OSError, json.JSONDecodeError):
                 continue
         return None
+
+    @staticmethod
+    def _read_last_nonempty_line(path: Path) -> str | None:
+        """Read the last non-empty line without loading the whole file."""
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            pos = fh.tell()
+            if pos <= 0:
+                return None
+
+            chunks: list[bytes] = []
+            line = b""
+            while pos > 0:
+                read_size = min(4096, pos)
+                pos -= read_size
+                fh.seek(pos)
+                chunk = fh.read(read_size)
+                chunks.insert(0, chunk)
+                data = b"".join(chunks).rstrip(b"\r\n")
+                if not data:
+                    continue
+                parts = data.splitlines()
+                if parts:
+                    line = parts[-1].strip()
+                    if line:
+                        break
+
+            if not line:
+                return None
+            return line.decode("utf-8", errors="replace")
 
     # ── Write ─────────────────────────────────────────────────────────
 

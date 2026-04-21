@@ -28,9 +28,9 @@ import json
 import sys
 import platform
 import logging
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
-from collections import defaultdict
 
 from config.runtime import snapshot as config_snapshot
 from core.health import runtime_health
@@ -64,8 +64,8 @@ def _safe_read_json(path: Path):
 def _safe_tail(path: Path, n_lines: int = LOG_TAIL_LINES) -> str | None:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        return "".join(lines[-n_lines:])
+            lines = deque(f, maxlen=n_lines)
+        return "".join(lines)
     except Exception:
         return None
 
