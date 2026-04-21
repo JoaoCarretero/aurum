@@ -33,6 +33,10 @@ CREATE INDEX IF NOT EXISTS idx_live_runs_engine_started
 
 
 def apply(conn: sqlite3.Connection) -> None:
-    """Apply migration 001 to an open connection. Idempotent."""
+    """Apply migration 001 to an open connection. Idempotent.
+
+    Note: executescript() issues an implicit COMMIT before running the
+    script; the explicit commit below is a belt-and-suspenders guard.
+    """
     conn.executescript(DDL)
     conn.commit()

@@ -64,6 +64,8 @@ def test_apply_enforces_mode_check(tmp_path: Path) -> None:
             "INSERT INTO live_runs(run_id, engine, mode, started_at, run_dir) "
             "VALUES ('r1', 'citadel', 'BOGUS', '2026-04-20T00:00:00Z', 'd/r1')"
         )
+    count = conn.execute("SELECT COUNT(*) FROM live_runs").fetchone()[0]
+    assert count == 0
     conn.close()
 
 
