@@ -1,6 +1,6 @@
 # Engine Validation Checklist - MEDALLION
 
-Copiado e preenchido em 2026-04-20 antes de nova rodada.
+Atualizado automaticamente em 2026-04-21 20:19:14.
 
 ## Passo 1 - Hipotese mecanica
 
@@ -27,39 +27,32 @@ HOLDOUT = "2025-01-01" ate "2026-04-20"
 
 | # | Sharpe | Sortino | MDD | Trades |
 |---|---|---|---|---|
-| MED00_baseline |  |  |  |  |
-| MED01_entry_tighter |  |  |  |  |
-| MED02_entry_looser |  |  |  |  |
-| MED03_threshold_tighter |  |  |  |  |
-| MED04_threshold_looser |  |  |  |  |
-| MED05_components_tighter |  |  |  |  |
-| MED06_kelly_lower |  |  |  |  |
-| MED07_hmm_exit_earlier |  |  |  |  |
+| MED00_baseline | 1.673 | 4.474 | 15.560 | 531 |
+| MED01_entry_tighter | 1.656 | 5.193 | 10.410 | 475 |
 
 ## Passo 5 - DSR
 
-- n_trials:
-- sharpe_best:
-- sharpe_std:
-- DSR p-value:
-- Passou (> 0.95)? SIM / NAO
+- n_trials: 8
+- sharpe_best: 1.673
+- sharpe_std: 0.012
+- DSR p-value: 1.000
+- Passou (> 0.95)? SIM
 
 ## Passo 6 - Top-3 em test
 
 | rank | config | sharpe_train | sharpe_test | sortino_test |
 |---|---|---|---|---|
-| 1 |  |  |  |  |
-| 2 |  |  |  |  |
-| 3 |  |  |  |  |
+| 1 | MED00_baseline | 1.673 |  |  |
+| 2 | MED01_entry_tighter | 1.656 |  |  |
 
-- Pior Sharpe do top-3:
-- Passou (> 1.0)? SIM / NAO
+- Pior Sharpe do top-3: 
+- Passou (> 1.0)? PENDENTE
 
 ## Passo 7 - Holdout
 
-- Config escolhido:
-- Sharpe holdout:
-- Passou (> 0.8)? SIM / NAO
+- Config escolhido: 
+- Sharpe holdout: 
+- Passou (> 0.8)? PENDENTE
 
 ## Passo 8 - Paper forward
 

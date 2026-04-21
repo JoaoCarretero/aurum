@@ -46,6 +46,18 @@ Conclusion: trend-follow with Hawkes ENDO gate is structurally
 incompatible with crypto 1h/4h in this universe. Engine archived as
 experimental — needs new signal base (not EMA cross) to justify revival.
 Do NOT register in FROZEN_ENGINES.
+
+Revalidation status (2026-04-21)
+--------------------------------
+- Anti-overfit split hardcoded for the reopening round:
+  train ≤ 2024-06-01, test 2024-06-01→2025-04-01, holdout 2025-04-01→2026-04-20.
+- Closed 8-config grid tested only lifecycle coherence around the known
+  mismatch `eta_lower=0.65` vs `eta_exit_lower=0.75`.
+- Result: all 8 variants produced 0 trades in train. Diagnostic showed
+  `eta_smooth` never reached the 0.65 lower gate in the stable 4h universe
+  before 2024-06-01 (best pre-train max: FET 0.6344).
+- Protocol stop rule triggered at step 5: no train trades => no defensible
+  train Sharpe, no DSR pass, no promotion to test/holdout. Archive stands.
 """
 
 from __future__ import annotations
