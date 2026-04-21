@@ -1,6 +1,7 @@
 """DataCenterScreen for the DATA routing hub."""
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from typing import Any
 
@@ -9,11 +10,17 @@ from launcher_support.screens.base import Screen
 
 
 class DataCenterScreen(Screen):
+    # on_enter rglobs engine dirs + stats 200+ cache files — ~130ms on OneDrive.
+    # Cache the result so rapid reentry (user navigates submenu and comes back)
+    # stays sub-ms. Stale counts for a few seconds are fine.
+    _COUNTS_TTL_SEC = 10.0
+
     def __init__(self, parent: tk.Misc, app: Any):
         super().__init__(parent)
         self.app = app
         self._subtitle_label: tk.Label | None = None
         self._stat_tags: dict[str, tk.Label] = {}
+        self._counts_cache: tuple[float, dict[str, Any]] | None = None
 
     def build(self) -> None:
         outer = tk.Frame(self.container, bg=BG)
@@ -116,10 +123,12 @@ class DataCenterScreen(Screen):
         app._kb("<Key-0>", lambda: app._menu("main"))
         app._bind_global_nav()
 
-        bt_count = app._data_count_backtests()
-        eng_running, eng_total = app._data_count_procs()
-        rep_count = app._data_count_reports()
-        cache_tag = self._cache_tag()
+        counts = self._get_counts()
+        bt_count = counts["bt_count"]
+        eng_running = counts["eng_running"]
+        eng_total = counts["eng_total"]
+        rep_count = counts["rep_count"]
+        cache_tag = counts["cache_tag"]
 
         if self._subtitle_label is not None:
             self._subtitle_label.configure(
@@ -149,6 +158,23 @@ class DataCenterScreen(Screen):
             "x": app._export_analysis,
         }.items():
             app._kb(f"<Key-{key_label}>", cmd)
+
+    def _get_counts(self) -> dict[str, Any]:
+        now = time.monotonic()
+        cache = self._counts_cache
+        if cache is not None and (now - cache[0]) < self._COUNTS_TTL_SEC:
+            return cache[1]
+        app = self.app
+        eng_running, eng_total = app._data_count_procs()
+        data = {
+            "bt_count": app._data_count_backtests(),
+            "eng_running": eng_running,
+            "eng_total": eng_total,
+            "rep_count": app._data_count_reports(),
+            "cache_tag": self._cache_tag(),
+        }
+        self._counts_cache = (now, data)
+        return data
 
     def _cache_tag(self) -> str:
         try:
