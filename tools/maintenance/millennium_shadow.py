@@ -40,6 +40,7 @@ from core.ops.fs import atomic_write  # noqa: E402
 from core.risk.key_store import KeyStoreError, load_runtime_keys  # noqa: E402
 from tools.operations.millennium_signal_gate import (  # noqa: E402
     is_live_signal,
+    parse_utc_ts,
     signal_timestamp,
     trade_key,
 )
@@ -417,7 +418,16 @@ def _tg_signal(trade: dict) -> None:
     target = _fmt_num(trade.get("target"))
     rr = _fmt_num(trade.get("rr"))
     size = _fmt_num(trade.get("size"))
-    ts = str(trade.get("timestamp") or "").replace("T", " ")[:16]
+    # Clamp cosmetic ts to "now" so incomplete tail candles don't surface a
+    # future open_time (e.g. H1 candle 11:00 displayed at 10:45). Dedup is
+    # unaffected — trade_key() uses the raw open_ts, not this display field.
+    raw_ts = trade.get("timestamp")
+    parsed = parse_utc_ts(raw_ts)
+    now = datetime.now(timezone.utc)
+    if parsed is not None and parsed > now:
+        ts = now.isoformat().replace("T", " ")[:16]
+    else:
+        ts = str(raw_ts or "").replace("T", " ")[:16]
     dir_emoji = "LONG" if direction.startswith("L") else "SHORT" if direction.startswith("S") else direction
     tv_sym = sym.replace("/", "").replace("-", "")
     chart = (f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_sym}.P&interval=60"

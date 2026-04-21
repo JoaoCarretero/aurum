@@ -120,6 +120,66 @@ def test_runner_first_tick_primes_without_opening(tmp_path, monkeypatch):
     assert len(state.seen_keys) == 2
 
 
+def test_runner_first_tick_opens_on_live_signal(tmp_path, monkeypatch):
+    """Paper must open on the first tick when the signal is live.
+
+    Before 2026-04-21, priming unconditionally blocked opens on tick 1,
+    forcing runs <15m (i.e. every short run) to produce zero trades. Fix
+    lets is_live_signal() be the sole stale gate — historical residue is
+    still filtered, but a fresh signal arriving at boot is actionable.
+    """
+    from tools.operations import millennium_paper as mp
+
+    run_dir = tmp_path / "millennium_paper" / "FIRST_OPEN_TEST"
+    for sub in ("state", "reports", "logs"):
+        (run_dir / sub).mkdir(parents=True)
+
+    monkeypatch.setattr(mp, "RUN_DIR", run_dir)
+    monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
+    monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
+    monkeypatch.setattr(mp, "LOGS_DIR", run_dir / "logs")
+    monkeypatch.setattr(mp, "RUN_ID", "FIRST_OPEN_TEST")
+    monkeypatch.setattr(mp, "TRADES_PATH", run_dir / "reports" / "trades.jsonl")
+    monkeypatch.setattr(mp, "EQUITY_PATH", run_dir / "reports" / "equity.jsonl")
+    monkeypatch.setattr(mp, "FILLS_PATH", run_dir / "reports" / "fills.jsonl")
+    monkeypatch.setattr(mp, "SIGNALS_PATH", run_dir / "reports" / "signals.jsonl")
+    monkeypatch.setattr(mp, "POSITIONS_PATH", run_dir / "state" / "positions.json")
+    monkeypatch.setattr(mp, "ACCOUNT_PATH", run_dir / "state" / "account.json")
+    monkeypatch.setattr(mp, "HEARTBEAT_PATH", run_dir / "state" / "heartbeat.json")
+
+    live_ts = datetime.now(timezone.utc).isoformat()
+
+    def fake_scan(notify=False):
+        # Mix: one stale (must be rejected) + one live (must open).
+        return [
+            {"strategy": "CITADEL", "symbol": "XRPUSDT", "direction": "BEARISH",
+             "entry": 1.956, "stop": 1.965, "target": 1.934, "size": 500,
+             "timestamp": "2026-01-22T14:00:00Z",
+             "open_ts": "2026-01-22T14:00:00Z"},
+            {"strategy": "JUMP", "symbol": "BTCUSDT", "direction": "LONG",
+             "entry": 100.0, "stop": 98.0, "target": 101.5, "size": 1.0,
+             "timestamp": live_ts, "open_ts": live_ts},
+        ]
+    monkeypatch.setattr(mp, "_scan_new_signals", fake_scan)
+    monkeypatch.setattr(mp, "_fetch_new_bars", lambda s, since: [])
+
+    state = mp.RunnerState(account_size=10_000.0)
+    mp.run_one_tick(state, tick_idx=1, notify=False)
+
+    # Both signals are dedup-seen; primed becomes True after first scan.
+    assert state.primed is True
+    assert len(state.seen_keys) == 2
+    # Only the live signal opens. Stale one is rejected by is_live_signal.
+    assert len(state.open_positions) == 1
+    assert state.open_positions[0].symbol == "BTCUSDT"
+
+    signals_path = run_dir / "reports" / "signals.jsonl"
+    lines = [json.loads(ln) for ln in signals_path.read_text().splitlines() if ln.strip()]
+    stale = [ln for ln in lines if ln.get("reason") == "stale_bar"]
+    assert len(stale) == 1
+    assert stale[0]["symbol"] == "XRPUSDT"
+
+
 def test_runner_rejects_stale_signal_post_prime(tmp_path, monkeypatch):
     """Even after prime, signals with historical timestamps must not open.
 

@@ -468,11 +468,13 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
         except Exception as exc:  # noqa: BLE001
             log.warning("scan failed: %s", exc)
             all_trades = []
-        # First tick primes seen_keys without opening positions. The
-        # MILLENNIUM scan returns *all* historical trades in the 90d
-        # DataFrame; without priming, paper would treat 628 backscan
-        # signals as novels and open the first 5 using prices from
-        # months ago (bug 2026-04-19).
+        # First tick still populates seen_keys for dedup, but no longer
+        # blocks opens — is_live_signal() is the real stale gate against
+        # the 90d backscan residue (bug 2026-04-19). Pre-2026-04-21 the
+        # priming unconditionally skipped opens, forcing every run to wait
+        # one full tick_sec (15m default) before ever trading; runs killed
+        # before tick 2 produced zero trades (data/millennium_paper/*
+        # empty).
         priming = not state.primed
         primed_count = 0
         for t in all_trades:
@@ -481,14 +483,13 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 continue
             state.seen_keys.add(key)
             state.novel_total += 1
-            if priming:
-                primed_count += 1
-                continue
 
             # Live-bar filter: only open on signals from the most recent
-            # bar. Rejects residual history that slips past priming (e.g.
-            # a deleted+readded bar between ticks).
+            # bar(s). Rejects 90d backscan residue and most "future-ts"
+            # artifacts from incomplete tail candles.
             if not _is_live_signal(t, state.tick_sec):
+                if priming:
+                    primed_count += 1
                 _append_jsonl(SIGNALS_PATH, {
                     "ts": now_iso, "engine": t.get("strategy"),
                     "symbol": t.get("symbol"),

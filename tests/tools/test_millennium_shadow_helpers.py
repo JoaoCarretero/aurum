@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from tools.maintenance.millennium_shadow import _fmt_num, _trade_key, _run_tick
+from datetime import datetime, timedelta, timezone
+
+from tools.maintenance.millennium_shadow import (
+    _fmt_num,
+    _run_tick,
+    _tg_signal,
+    _trade_key,
+)
 from tools.operations.millennium_signal_gate import is_live_signal
 
 
@@ -37,6 +44,60 @@ def test_is_live_signal_uses_reference_timestamp():
         tick_sec=900,
         reference_ts="2026-04-20T11:00:01+00:00",
     ) is False
+
+
+def test_tg_signal_clamps_future_ts_to_now(monkeypatch):
+    """Future ts (from incomplete tail candle) must be clamped to now.
+
+    live_mode scan can emit a signal whose timestamp = next candle's
+    open_time, which is in the future relative to observation. Telegram
+    used to render that literal, confusing the operator. Clamp is
+    cosmetic — does not affect dedup or gating.
+    """
+    import tools.maintenance.millennium_shadow as shadow
+
+    sent: list[str] = []
+    monkeypatch.setattr(shadow, "_tg_send", lambda text: sent.append(text))
+
+    future_ts = (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()
+    trade = {
+        "strategy": "JUMP", "symbol": "ARBUSDT", "direction": "BEARISH",
+        "entry": 0.126, "stop": 0.1274, "target": 0.1217,
+        "rr": 3, "size": 27645,
+        "timestamp": future_ts,
+    }
+
+    _tg_signal(trade)
+
+    assert len(sent) == 1
+    msg = sent[0]
+    # Rendered ts should be <= now (rounded to minute; tolerate drift).
+    now_minute = datetime.now(timezone.utc).isoformat().replace("T", " ")[:13]
+    assert now_minute in msg, f"clamped ts not in message: {msg}"
+    # And the raw future ts should NOT leak into the rendered line.
+    future_minute = future_ts.replace("T", " ")[:16]
+    assert future_minute not in msg
+
+
+def test_tg_signal_preserves_past_ts(monkeypatch):
+    """Past/present ts rendered as-is (only future ts is clamped)."""
+    import tools.maintenance.millennium_shadow as shadow
+
+    sent: list[str] = []
+    monkeypatch.setattr(shadow, "_tg_send", lambda text: sent.append(text))
+
+    past_ts = "2026-04-20T10:00:00Z"
+    trade = {
+        "strategy": "CITADEL", "symbol": "BTCUSDT", "direction": "LONG",
+        "entry": 100.0, "stop": 98.0, "target": 103.0,
+        "rr": 1.5, "size": 0.1,
+        "timestamp": past_ts,
+    }
+
+    _tg_signal(trade)
+
+    assert len(sent) == 1
+    assert "2026-04-20 10:00" in sent[0]
 
 
 def test_run_tick_skips_stale_signals_after_prime(monkeypatch):

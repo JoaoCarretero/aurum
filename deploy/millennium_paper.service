@@ -13,7 +13,13 @@ WorkingDirectory=/srv/aurum.finance
 EnvironmentFile=-/etc/aurum/paper.env
 Environment=PYTHONUNBUFFERED=1
 # Defaults if /etc/aurum/paper.env absent: 10k account, 15min tick, no deadline.
-ExecStart=/usr/bin/python3 tools/operations/millennium_paper.py --account-size ${AURUM_PAPER_ACCOUNT_SIZE} --tick-sec 900 --run-hours 0
+# argparse reads AURUM_PAPER_ACCOUNT_SIZE via its default= lambda and falls back
+# to 10_000.0 if unset. Prior ExecStart passed ${AURUM_PAPER_ACCOUNT_SIZE} as a
+# positional token — if the env was missing, systemd expanded it to empty and
+# argparse consumed "--tick-sec" as the float value, crashing on boot. That
+# triggered Restart=on-failure every 30s (crash-loop). Trust the argparse
+# default — env still flows through EnvironmentFile.
+ExecStart=/usr/bin/python3 tools/operations/millennium_paper.py --tick-sec 900 --run-hours 0
 
 MemoryMax=1G
 CPUQuota=150%
