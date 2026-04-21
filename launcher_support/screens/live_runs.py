@@ -9,7 +9,7 @@ import time
 import tkinter as tk
 from typing import Any
 
-from core.ui.ui_palette import AMBER, AMBER_D, BG, BG2, BG3, BORDER, DIM, DIM2, FONT, PANEL, WHITE
+from core.ui.ui_palette import AMBER, AMBER_D, BG, BG3, BORDER, DIM, DIM2, FONT, PANEL
 from launcher_support.screens.base import Screen
 from core import db_live_runs
 
@@ -31,6 +31,7 @@ class LiveRunsScreen(Screen):
         self._list_cache: tuple[float, str, list[dict]] | None = None
         self._selected_run_id: str | None = None
         self._list_frame: tk.Frame | None = None
+        self._list_canvas: tk.Canvas | None = None
         self._detail_frame: tk.Frame | None = None
         self._filter_tabs: dict[str, tk.Label] = {}
 
@@ -86,8 +87,30 @@ class LiveRunsScreen(Screen):
                      fg=DIM, bg=BG, width=width, anchor="w").pack(side="left")
         tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
 
-        self._list_frame = tk.Frame(left, bg=BG)
-        self._list_frame.pack(fill="both", expand=True)
+        # Scrollable list area — Canvas + Scrollbar (mirrors connections.py pattern)
+        list_canvas = tk.Canvas(left, bg=BG, highlightthickness=0)
+        list_sb = tk.Scrollbar(left, orient="vertical", command=list_canvas.yview)
+        self._list_frame = tk.Frame(list_canvas, bg=BG)
+        self._list_frame.bind(
+            "<Configure>",
+            lambda _e: list_canvas.configure(scrollregion=list_canvas.bbox("all")),
+        )
+        list_canvas.create_window((0, 0), window=self._list_frame, anchor="nw")
+        list_canvas.configure(yscrollcommand=list_sb.set)
+        list_canvas.pack(side="left", fill="both", expand=True)
+        list_sb.pack(side="right", fill="y")
+        self._list_canvas = list_canvas
+
+        def _list_wheel(event: tk.Event) -> None:
+            try:
+                list_canvas.yview_scroll(-1 * (event.delta // 120), "units")
+            except Exception:
+                pass
+
+        self._bind(list_canvas, "<Enter>",
+                   lambda _e: list_canvas.bind_all("<MouseWheel>", _list_wheel))
+        self._bind(list_canvas, "<Leave>",
+                   lambda _e: list_canvas.unbind_all("<MouseWheel>"))
 
         right = tk.Frame(
             split, bg=PANEL, highlightbackground=BORDER, highlightthickness=1,
@@ -119,6 +142,15 @@ class LiveRunsScreen(Screen):
                         lambda m=mode: self.set_filter(m))
         self._render()
 
+    def on_exit(self) -> None:
+        app = self.app
+        if hasattr(app, "_clear_kb"):
+            try:
+                app._clear_kb()
+            except Exception:
+                pass
+        super().on_exit()
+
     def set_filter(self, mode: str) -> None:
         if mode not in self._MODES:
             return
@@ -129,6 +161,7 @@ class LiveRunsScreen(Screen):
                 bg=BG3 if m == mode else BG,
             )
         self._list_cache = None  # force refresh on filter change
+        self._selected_run_id = None  # reset so auto-select picks newest in new mode
         self._render()
 
     def _fetch_runs(self) -> list[dict]:
@@ -156,7 +189,9 @@ class LiveRunsScreen(Screen):
             return
         for run in runs:
             self._render_row(run)
-        # auto-select newest if none selected
+        # auto-select newest if nothing selected
+        # TODO(task-10): clear _selected_run_id if it no longer appears in list
+        # (e.g., after ARCHIVE). For now, detail panel falls back to "run not found".
         if self._selected_run_id is None and runs:
             self._select(runs[0]["run_id"])
 
