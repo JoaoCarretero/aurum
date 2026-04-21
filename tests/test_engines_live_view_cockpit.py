@@ -452,6 +452,56 @@ def test_load_cockpit_runs_cached_uses_ttl_cache(monkeypatch):
     assert [row["run_id"] for row in second] == ["r1"]
 
 
+def test_find_latest_shadow_run_prefers_active_catalog_row(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    class _Row:
+        run_dir = Path(r"C:\aurum\data\millennium_shadow\live_shadow")
+        heartbeat = {"run_id": "live_shadow", "status": "running"}
+        started_at = "2026-04-21T23:33:17Z"
+        last_tick_at = "2026-04-21T23:33:48Z"
+        status = "running"
+        run_id = "live_shadow"
+
+    monkeypatch.setattr(evv, "_use_remote_shadow_cache", lambda: False)
+    monkeypatch.setattr(evv.run_catalog, "latest_active_run", lambda **kw: _Row())
+
+    result = evv._find_latest_shadow_run()
+
+    assert result is not None
+    run_dir, hb = result
+    assert run_dir == Path(r"C:\aurum\data\millennium_shadow\live_shadow")
+    assert hb["run_id"] == "live_shadow"
+    assert hb["last_tick_at"] == "2026-04-21T23:33:48Z"
+
+
+def test_active_paper_runs_uses_catalog_rows(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    class _Row:
+        def __init__(self, run_id, status):
+            self.run_id = run_id
+            self.engine = "MILLENNIUM"
+            self.mode = "paper"
+            self.status = status
+            self.label = "desk"
+            self.novel = 1
+            self.started_at = "2026-04-21T23:33:18Z"
+            self.last_tick_at = "2026-04-21T23:33:19Z"
+            self.source = "db"
+
+    monkeypatch.setattr(
+        evv.run_catalog,
+        "list_runs_catalog",
+        lambda **kw: [_Row("paper_live", "running"), _Row("paper_old", "stopped")],
+    )
+
+    rows = evv._active_paper_runs(launcher=None)
+
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == "paper_live"
+
+
 def test_fetch_paper_extras_uses_ttl_cache(monkeypatch):
     import launcher_support.engines_live_view as evv
 

@@ -221,6 +221,21 @@ def list_runs_catalog(*, mode: str | None = None, client=None, limit_db: int = 5
     return rows
 
 
+def latest_active_run(
+    *,
+    engine: str | None = None,
+    mode: str | None = None,
+    client=None,
+    limit_db: int = 500,
+) -> RunSummary | None:
+    rows = list_runs_catalog(mode=mode, client=client, limit_db=limit_db)
+    if engine is not None:
+        want = str(engine).strip().upper()
+        rows = [row for row in rows if row.engine == want]
+    rows = [row for row in rows if str(row.status or "").lower() == "running"]
+    return rows[0] if rows else None
+
+
 def get_run_summary(run_id: str, *, client=None, limit_db: int = 500) -> RunSummary | None:
     for row in list_runs_catalog(client=client, limit_db=limit_db):
         if row.run_id == run_id:
@@ -408,6 +423,21 @@ def list_engine_log_sections(
             running.append(row)
         else:
             stopped.append(row)
+
+    running_keys = {
+        (
+            str(row.get("engine") or "").strip().lower(),
+            str(row.get("mode") or "").strip().lower(),
+        )
+        for row in running
+    }
+    stopped = [
+        row for row in stopped
+        if (
+            str(row.get("engine") or "").strip().lower(),
+            str(row.get("mode") or "").strip().lower(),
+        ) not in running_keys
+    ]
     running.sort(key=engine_log_recency_key, reverse=True)
     stopped.sort(key=engine_log_recency_key, reverse=True)
     return running, stopped, error

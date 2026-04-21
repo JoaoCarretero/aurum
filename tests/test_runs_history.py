@@ -548,7 +548,7 @@ def test_list_engine_log_sections_dedupes_vps_over_historical(monkeypatch):
 
     assert error is None
     assert [row.get("_run_id") for row in running] == ["RID1", None]
-    assert [row.get("_run_id") for row in stopped] == ["RID2"]
+    assert stopped == []
 
 
 def test_list_engine_log_sections_reports_list_procs_error(monkeypatch):
@@ -574,6 +574,46 @@ def test_list_engine_log_sections_reports_list_procs_error(monkeypatch):
     assert running == []
     assert stopped == []
     assert "list_procs failed" in error
+
+
+def test_list_engine_log_sections_hides_stopped_duplicate_when_running_exists(monkeypatch):
+    from core.ops import run_catalog
+
+    monkeypatch.setattr("core.ops.proc.list_procs", lambda: [])
+    monkeypatch.setattr("core.ops.proc.ENGINES", {"millennium": object()}, raising=False)
+    monkeypatch.setattr(
+        run_catalog,
+        "collect_engine_log_vps_rows",
+        lambda client, limit=20: [{
+            "engine": "MILLENNIUM (shadow)",
+            "mode": "shadow",
+            "alive": True,
+            "_remote": True,
+            "_run_id": "RID1",
+            "started_at": "2026-04-21T23:33:17Z",
+            "_heartbeat": {"started_at": "2026-04-21T23:33:17Z"},
+        }],
+    )
+    monkeypatch.setattr(
+        run_catalog,
+        "collect_engine_log_local_rows",
+        lambda limit=30, hours=72: [{
+            "engine": "MILLENNIUM (shadow)",
+            "mode": "shadow",
+            "alive": False,
+            "_remote": False,
+            "_run_id": "OLD1",
+            "started_at": "2026-04-21T13:00:00Z",
+            "_heartbeat": {"started_at": "2026-04-21T13:00:00Z"},
+        }],
+    )
+
+    running, stopped, error = run_catalog.list_engine_log_sections(client=None)
+
+    assert error is None
+    assert len(running) == 1
+    assert running[0]["_run_id"] == "RID1"
+    assert stopped == []
 
 
 # ─── Formatters ────────────────────────────────────────────────────

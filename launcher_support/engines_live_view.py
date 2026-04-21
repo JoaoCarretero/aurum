@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 from core.ops.python_runtime import preferred_python_executable
+from core.ops import run_catalog
 from core.risk.key_store import KeyStoreError, load_runtime_keys
 from core.ui.ui_palette import (
     BG, BG2, BG3, PANEL,
@@ -1852,6 +1853,20 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
         if run_dir is not None and hb is not None:
             return (run_dir, hb)
 
+    if Path.cwd().resolve() == _REPO_ROOT.resolve():
+        latest = run_catalog.latest_active_run(engine="MILLENNIUM", mode="shadow")
+        if latest is not None and latest.run_dir is not None:
+            hb = dict(latest.heartbeat or {})
+            if latest.started_at and "started_at" not in hb:
+                hb["started_at"] = latest.started_at
+            if latest.last_tick_at and "last_tick_at" not in hb:
+                hb["last_tick_at"] = latest.last_tick_at
+            if latest.status and "status" not in hb:
+                hb["status"] = latest.status
+            if latest.run_id and "run_id" not in hb:
+                hb["run_id"] = latest.run_id
+            return latest.run_dir, hb
+
     # Local disk fallback (layout existente)
     root = Path("data/millennium_shadow")
     cache_key = str(root.resolve()) if root.exists() else str(root)
@@ -2517,11 +2532,20 @@ def _active_paper_runs(launcher) -> list[dict]:
     is kept on the launcher to power the multi-instance picker above the
     detail pane — one entry per concurrent paper run.
     """
-    runs = _load_cockpit_runs_cached(launcher=launcher)
-    matches = [r for r in runs
-               if r.get("mode") == "paper"
-               and r.get("status") == "running"]
-    matches.sort(key=lambda r: r.get("started_at") or "", reverse=True)
+    rows = run_catalog.list_runs_catalog(mode="paper", client=_get_cockpit_client())
+    matches: list[dict] = []
+    for row in rows:
+        if row.engine != "MILLENNIUM" or str(row.status or "").lower() != "running":
+            continue
+        matches.append({
+            "run_id": row.run_id,
+            "label": row.label,
+            "novel_total": row.novel,
+            "started_at": row.started_at,
+            "last_tick_at": row.last_tick_at,
+            "status": row.status,
+            "source": row.source,
+        })
     return matches
 
 
@@ -2537,11 +2561,10 @@ def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
          runs still surface when nothing else is alive).
       4. ``None`` — cockpit unreachable or no paper runs at all.
     """
-    runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
-    paper_runs = [r for r in runs if r.get("mode") == "paper"]
+    paper_runs = _active_paper_runs(launcher)
     if not paper_runs:
         return None
-    active = [r for r in paper_runs if r.get("status") == "running"]
+    active = [r for r in paper_runs if str(r.get("status") or "").lower() == "running"]
     if state is not None:
         picked = state.get("selected_run_id")
         if picked and any(r.get("run_id") == picked for r in active):
