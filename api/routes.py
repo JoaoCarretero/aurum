@@ -286,9 +286,18 @@ async def account_history(
 trading_router = APIRouter(prefix="/api/trading", tags=["trading"])
 
 
+_STATUS_CACHE: dict = {"ts": 0.0, "payload": None}
+_STATUS_TTL_SEC = 2.0
+
+
 @trading_router.get("/status")
 async def trading_status(user: dict = Depends(require_admin)):
-    """Get all engine states."""
+    """Get all engine states. Cached 2s to absorb cockpit polling bursts."""
+    now = time.monotonic()
+    cached = _STATUS_CACHE["payload"]
+    if cached is not None and (now - _STATUS_CACHE["ts"]) < _STATUS_TTL_SEC:
+        return cached
+
     conn = get_conn()
     try:
         rows = conn.execute("SELECT * FROM engine_state").fetchall()
@@ -317,7 +326,10 @@ async def trading_status(user: dict = Depends(require_admin)):
             "process": proc_map.get(eng, {"alive": False, "status": "stopped"}),
         }
 
-    return {"engines": result}
+    payload = {"engines": result}
+    _STATUS_CACHE["ts"] = now
+    _STATUS_CACHE["payload"] = payload
+    return payload
 
 
 _POSITIONS_CACHE: dict = {"ts": 0.0, "payload": None}

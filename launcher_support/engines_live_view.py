@@ -1733,6 +1733,9 @@ def _resolve_log_path(slug: str, proc: dict) -> Path | None:
     return None
 
 
+_LOG_TAIL_WINDOW_BYTES = 16 * 1024
+
+
 def _read_log_tail(path: Path | None, n: int = 18) -> list[str]:
     if path is None:
         return []
@@ -1741,7 +1744,20 @@ def _read_log_tail(path: Path | None, n: int = 18) -> list[str]:
     if cached is not None:
         return list(cached)
     try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()[-n:]
+        # Read at most the trailing window — avoids slurping multi-MB logs
+        # on every 1s cache miss. 16KB buffer is plenty for ~200 log lines.
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            start = max(0, size - _LOG_TAIL_WINDOW_BYTES)
+            f.seek(start)
+            chunk = f.read().decode("utf-8", errors="ignore")
+        # Drop the first partial line if we didn't start at byte 0.
+        if start > 0:
+            nl = chunk.find("\n")
+            if nl != -1:
+                chunk = chunk[nl + 1:]
+        lines = chunk.splitlines()[-n:]
         _cache_put(_LOG_TAIL_CACHE, cache_key, list(lines))
         return lines
     except OSError:
