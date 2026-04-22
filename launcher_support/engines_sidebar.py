@@ -199,6 +199,9 @@ def render_sidebar(
     collapsed: bool = False,
     on_toggle: Callable[[], None] | None = None,
     on_new_instance: Callable[[], None] | None = None,
+    instances_for_selected: list[dict] | None = None,
+    on_select_instance: Callable[[str, str], None] | None = None,
+    active_instance_key: tuple[str, str] | None = None,
 ) -> tk.Frame:
     """Institutional engine sidebar — 150px rail left of detail pane.
 
@@ -308,7 +311,57 @@ def render_sidebar(
                 for g2 in grand.winfo_children():
                     g2.bind("<Button-1>", _handler)
 
+        # Sub-rows de instancia — aparecem so para o engine atualmente
+        # selecionado que tenha 2+ instancias. Antes isso vivia numa
+        # tabela separada (_render_engine_instance_picker) no detail
+        # pane; merged aqui pra operador ver engine + suas instancias
+        # numa so tabela, sem scroll por 2 regioes diferentes.
+        if (is_sel and instances_for_selected and len(instances_for_selected) >= 2
+                and on_select_instance is not None):
+            for inst in instances_for_selected:
+                _render_sidebar_instance_row(
+                    frame, inst, bg=bg,
+                    active_key=active_instance_key,
+                    on_select=on_select_instance,
+                )
+
     return frame
+
+
+def _render_sidebar_instance_row(parent: tk.Widget, inst: dict, *, bg: str,
+                                 active_key: tuple[str, str] | None,
+                                 on_select: Callable[[str, str], None]) -> None:
+    """Indented sub-row sob o engine selecionado. Mostra mode · label · ticks."""
+    rid = str(inst.get("run_id") or "")
+    mode = str(inst.get("mode") or "").lower()
+    label = str(inst.get("label") or "") or (
+        f"#{rid.split('_')[-1][:6]}" if rid else "?"
+    )
+    ticks = inst.get("ticks_ok") or 0
+    is_active = active_key is not None and (mode, rid) == active_key
+
+    mode_color = {"paper": AMBER_B, "shadow": GREEN}.get(mode, DIM2)
+    row_bg = BG2 if is_active else bg
+    name_fg = WHITE if is_active else DIM
+
+    sub = tk.Frame(parent, bg=row_bg, cursor="hand2")
+    sub.pack(fill="x", padx=0, pady=0)
+
+    tk.Frame(sub, bg=row_bg, width=3).pack(side="left", fill="y")
+    tk.Label(sub, text="└", fg=DIM2, bg=row_bg,
+             font=(FONT, 7)).pack(side="left", padx=(6, 2))
+    tk.Label(sub, text=mode[:6].upper(), fg=mode_color, bg=row_bg,
+             font=(FONT, 6, "bold")).pack(side="left", padx=(0, 4))
+    tk.Label(sub, text=label[:12], fg=name_fg, bg=row_bg,
+             font=(FONT, 7)).pack(side="left", padx=(0, 4))
+    tk.Label(sub, text=f"{ticks}t", fg=DIM2, bg=row_bg,
+             font=(FONT, 6)).pack(side="right", padx=(0, 6))
+
+    def _click(_e, _rid=rid, _mode=mode):
+        on_select(_rid, _mode)
+    sub.bind("<Button-1>", _click)
+    for child in sub.winfo_children():
+        child.bind("<Button-1>", _click)
 
 
 def render_detail(

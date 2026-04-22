@@ -1490,10 +1490,41 @@ def _render_detail(state, launcher):
     def _open_new_instance():
         _show_new_instance_dialog(launcher, state)
 
+    # Instancias do engine selecionado ficam inline na sidebar — antes
+    # viviam em _render_engine_instance_picker no detail pane (tabela
+    # separada). Merged agora: engine + suas instancias numa so secao.
+    instances_for_selected: list[dict] | None = None
+    active_instance_key: tuple[str, str] | None = None
+    if slug:
+        instances_for_selected = _active_engine_runs(
+            slug, launcher=launcher, state=state, mode=None,
+        )
+        cur_mode = str(state.get("mode") or "").lower()
+        cur_rid = state.get(
+            "selected_paper_run_id" if cur_mode == "paper"
+            else "selected_shadow_run_id"
+        )
+        if cur_rid:
+            active_instance_key = (cur_mode, str(cur_rid))
+
+    def _on_instance_select(rid: str, mode: str):
+        if mode == "paper":
+            state["selected_paper_run_id"] = rid
+        elif mode == "shadow":
+            state["selected_shadow_run_id"] = rid
+        set_mode = state.get("set_mode")
+        if mode and mode != state.get("mode") and callable(set_mode):
+            set_mode(mode)
+        else:
+            _render_detail(state, launcher)
+
     render_sidebar(sidebar_host, rows, selected_slug=slug, on_select=_on_engine_select,
                    collapsed=state.get("sidebar_collapsed", False),
                    on_toggle=_toggle_sidebar,
-                   on_new_instance=_open_new_instance)
+                   on_new_instance=_open_new_instance,
+                   instances_for_selected=instances_for_selected,
+                   on_select_instance=_on_instance_select,
+                   active_instance_key=active_instance_key)
 
     # SHADOW mode: path dedicado (telemetria do VPS cockpit API).
     if mode == "shadow":
@@ -2273,18 +2304,9 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     """
     name = meta.get("display", slug.upper())
 
-    # Cross-mode picker (same as paper): show every paper + shadow
-    # instance of this engine in one row with mode badges.
-    engine_runs = _active_engine_runs(
-        slug, launcher=launcher, state=state, mode=state.get("mode"),
-    )
-    if len(engine_runs) >= 2:
-        _render_engine_instance_picker(
-            parent,
-            active_runs=engine_runs,
-            state=state,
-            launcher=launcher,
-        )
+    # Instance picker antes ficava aqui (vertical table no detail pane).
+    # Agora foi merged na sidebar ENGINES — ve-se engine + instancias
+    # juntos, uma so tabela em vez de duas. Call site removido.
 
     run_dir, hb, trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
 
@@ -3225,23 +3247,9 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     """
     name = meta.get("display", slug.upper())
 
-    # Multi-instance picker: if 2+ paper runs are active, let the operator
-    # pick which one to render. Selection persists in
-    # state["selected_paper_run_id"]
-    # so the next refresh cycle keeps the same run in focus.
-    # Cross-mode picker: show every paper + shadow instance of this
-    # engine. Clicking a shadow tab swaps mode transparently. Only
-    # surfaces when there are 2+ running instances to pick from.
-    engine_runs = _active_engine_runs(
-        slug, launcher=launcher, state=state, mode=state.get("mode"),
-    )
-    if len(engine_runs) >= 2:
-        _render_engine_instance_picker(
-            parent,
-            active_runs=engine_runs,
-            state=state,
-            launcher=launcher,
-        )
+    # Instance picker antes ficava aqui (vertical table no detail pane).
+    # Agora foi merged na sidebar ENGINES — ve-se engine + instancias
+    # juntos, uma so tabela em vez de duas. Call site removido.
 
     # Discover which paper run_id the detail pane should render
     run_id = _fetch_paper_run_id(launcher, state)
