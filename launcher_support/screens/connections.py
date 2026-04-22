@@ -4,6 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from typing import Any
 
+from core.ui.scroll import bind_mousewheel
 from core.ui.ui_palette import AMBER, AMBER_D, BG, BG2, DIM, FONT, GREEN
 from launcher_support.screens.base import Screen
 
@@ -66,14 +67,7 @@ class ConnectionsScreen(Screen):
         sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
         self._wheel_canvas = canvas
 
-        def _wheel(event: tk.Event) -> None:
-            try:
-                canvas.yview_scroll(-1 * (event.delta // 120), "units")
-            except Exception:
-                pass
-
-        self._bind(canvas, "<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _wheel))
-        self._bind(canvas, "<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+        bind_mousewheel(canvas)
 
         sections = [
             ("CRYPTO EXCHANGES", [
@@ -192,11 +186,8 @@ class ConnectionsScreen(Screen):
             app._kb(f"<Key-{key_label.lower()}>", cmd)
 
     def on_exit(self) -> None:
-        canvas = self._wheel_canvas
-        if canvas is not None:
-            try:
-                canvas.unbind_all("<MouseWheel>")
-            except Exception:
-                pass
+        # Nao chamamos unbind_all aqui — destruiria scroll global de outras
+        # telas. bind_mousewheel usa ancestry check entao handler virado
+        # no-op quando canvas nao existir mais.
         self._wheel_canvas = None
         super().on_exit()

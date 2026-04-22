@@ -981,65 +981,13 @@ def _bind_scroll_canvas(canvas: tk.Canvas, window_id: int, pad_x: int = 0) -> No
 
 
 def _wire_scroll_wheel(canvas: tk.Canvas, targets: list[tk.Widget] | None = None) -> None:
-    """Bind MouseWheel no canvas sem poluir global namespace.
+    """Delegate pro helper compartilhado em core.ui.scroll.
 
-    Antes: bind_all + unbind_all on Leave. Isso nukava TODO <MouseWheel>
-    bind do app quando o mouse saia do canvas — scroll quebrava em outras
-    telas, e o proprio scroll do Macro Brain ficava dessincronizado com
-    tick_update de 3s (hover events disparam re-bind).
-
-    Agora: bind_all UMA vez com handler que checa ancestry — se widget
-    sob cursor nao pertence ao canvas, no-op. Zero unbind_all, zero
-    interferencia com outros scroll regions. Linux Button-4/5 suportado.
+    targets mantido na assinatura pra back-compat (ancestry check cobre).
     """
-    del targets  # kept in signature for back-compat; ancestry check basta
-
-    def _scroll(delta: int) -> None:
-        if delta:
-            try:
-                canvas.yview_scroll(delta, "units")
-            except Exception:
-                pass
-
-    def _on_wheel(event):
-        # Handler global — so age se widget sob cursor pertence ao canvas.
-        try:
-            w = canvas.winfo_containing(event.x_root, event.y_root)
-        except Exception:
-            return
-        while w is not None:
-            if w is canvas:
-                break
-            try:
-                w = w.master
-            except Exception:
-                return
-        else:
-            return
-        # Windows/Mac delta e multiplo de 120; Linux usa num=4/5.
-        if getattr(event, "delta", 0):
-            _scroll(-1 * (event.delta // 120))
-        elif getattr(event, "num", 0) == 4:
-            _scroll(-1)
-        elif getattr(event, "num", 0) == 5:
-            _scroll(1)
-
-    def _rebind(_event=None):
-        # Outras telas do launcher fazem unbind_all("<MouseWheel>") no
-        # Leave deles, nukando nossos handlers. Re-registra se o binding
-        # ficou vazio — check evita stacking (add="+" acumula).
-        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            try:
-                if not canvas.bind_all(seq):
-                    canvas.bind_all(seq, _on_wheel, add="+")
-            except Exception:
-                pass
-
-    _rebind()  # inicial
-    try:
-        canvas.bind("<Enter>", _rebind)
-    except Exception:
-        pass
+    del targets
+    from core.ui.scroll import bind_mousewheel
+    bind_mousewheel(canvas)
 
 
 def _render_bot_slots(parent, network: str,
