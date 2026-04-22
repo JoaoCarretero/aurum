@@ -131,3 +131,14 @@ def test_splash_renders_with_missing_index_json(gui_root, fake_app, fake_conn, t
         if s.canvas.type(item) == "text"
     ]
     assert any("NO SESSION DATA" in t for t in texts)
+
+
+@pytest.mark.gui
+def test_splash_apply_live_data_updates_tagged_value(gui_root, fake_app, fake_conn):
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
+    s.mount()
+    s.on_enter()
+    s._apply_live_data({"btc": ("67,240 +2.30% ▲", "#00ff00")})
+    items = s.canvas.find_withtag("tile-btc-value")
+    assert items, "tile-btc-value tag must exist on canvas"
+    assert s.canvas.itemcget(items[0], "text") == "67,240 +2.30% ▲"

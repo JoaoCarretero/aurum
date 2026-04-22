@@ -156,6 +156,46 @@ class SplashScreen(Screen):
             "roster": roster,
         }
 
+    def _fetch_market_pulse(self) -> dict:
+        """Bloqueante. Pode levantar. Retorna dict com chaves btc/eth/reg/fund."""
+        from core.data.market_data import MarketDataFetcher
+        fetcher = MarketDataFetcher(["BTCUSDT", "ETHUSDT"])
+        fetcher.fetch_all()  # timeout interno 5s
+        tickers = fetcher.tickers
+        fund = fetcher.funding_avg()
+        out: dict[str, tuple[str, str]] = {}
+        for sym, key in (("BTCUSDT", "btc"), ("ETHUSDT", "eth")):
+            t = tickers.get(sym)
+            if not t:
+                out[key] = ("---", DIM)
+                continue
+            price = t["price"]
+            pct = t["pct"]
+            arrow = "▲" if pct >= 0 else "▼"
+            col = GREEN if pct >= 0 else RED
+            out[key] = (f"{price:>8,.0f} {pct:+5.2f}% {arrow}", col)
+        if fund is not None:
+            fund_pct = fund * 100.0
+            out["fund"] = (f"{fund_pct:+.3f}% /8h", WHITE)
+        else:
+            out["fund"] = ("---", DIM)
+        out["reg"] = ("---", DIM)  # v1: sem regime macro; v1.1 pode adicionar
+        return out
+
+    def _apply_live_data(self, data: dict) -> None:
+        """UI-thread callback. Atualiza valores por tag."""
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            return
+        canvas = self.canvas
+        if canvas is None:
+            return
+        for key, (text, color) in data.items():
+            tag = f"tile-{key}-value"
+            try:
+                canvas.itemconfigure(tag, text=text, fill=color)
+            except tk.TclError:
+                return  # canvas destruído
+
     def _draw_offline_tiles(self, canvas: tk.Canvas, data: dict) -> None:
         self._draw_wordmark(canvas)
         gap = self._TILE_GAP
