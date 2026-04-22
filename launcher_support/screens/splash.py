@@ -1,7 +1,9 @@
 """SplashScreen - pilot migration of launcher._splash."""
 from __future__ import annotations
 
+import threading
 import tkinter as tk
+from pathlib import Path
 from typing import Any
 
 from core.ui.ui_palette import (
@@ -10,6 +12,13 @@ from core.ui.ui_palette import (
 )
 
 from launcher_support.screens.base import Screen
+from launcher_support.screens.splash_data import (
+    ENGINE_ROSTER_LAYOUT,
+    load_splash_cache,
+    read_engine_roster,
+    read_last_session,
+    save_splash_cache,
+)
 
 
 class SplashScreen(Screen):
@@ -56,6 +65,9 @@ class SplashScreen(Screen):
         self.canvas: tk.Canvas | None = None
         self._design_w = app._SPLASH_DESIGN_W
         self._design_h = app._SPLASH_DESIGN_H
+        self._cancel_event: threading.Event | None = None
+        self._index_path = Path("data/index.json")
+        self._cache_path = Path("data/splash_cache.json")
 
     def build(self) -> None:
         frame = tk.Frame(self.container, bg=BG)
@@ -99,6 +111,20 @@ class SplashScreen(Screen):
         canvas = self.canvas
         if canvas is None:
             return
+
+        canvas.delete("splash")
+        offline = self._read_offline_data()
+        self._draw_offline_tiles(canvas, offline)
+
+        self._bind(canvas, "<Button-1>", lambda e: app._splash_on_click())
+        app._bind_global_nav()
+        self._after(500, self._pulse_tick)
+        self._bind(canvas, "<Configure>", self._render_resize)
+        self._render_resize()
+        self._kick_async_fetch()
+
+    def _read_offline_data(self) -> dict:
+        app = self.app
         try:
             st = self.conn.status_summary()
             market_val = st.get("market", "-")
@@ -115,35 +141,166 @@ class SplashScreen(Screen):
             has_tg = False
             has_keys = False
 
-        market_cell = "LIVE" if market_val and market_val != "-" else "OFFLINE"
-        market_col = GREEN if market_cell == "LIVE" else DIM
-        conn_cell = "BINANCE READY" if has_keys else "OFFLINE"
+        market_txt = "● LIVE" if market_val and market_val != "-" else "○ OFFLINE"
+        market_col = GREEN if "LIVE" in market_txt else DIM
+        conn_txt = "● BINANCE" if has_keys else "○ OFFLINE"
         conn_col = GREEN if has_keys else DIM
-        tg_cell = "ONLINE" if has_tg else "OFFLINE"
+        tg_txt = "● ONLINE" if has_tg else "○ OFFLINE"
         tg_col = GREEN if has_tg else DIM
 
-        canvas.delete("splash")
-        self._draw_session_overview(
+        session = read_last_session(self._index_path)
+        roster = read_engine_roster(self._index_path)
+        cache = load_splash_cache(self._cache_path)
+
+        return {
+            "status": {
+                "market": (market_txt, market_col),
+                "conn":   (conn_txt, conn_col),
+                "tg":     (tg_txt, tg_col),
+                "apilat": ("---", DIM),
+            },
+            "risk": {
+                "killsw":  ("ARMED", RED),
+                "ddvel":   ("---", DIM),
+                "aggnot":  ("---", DIM),
+                "gates":   ("---", DIM),
+            },
+            "pulse": {
+                "btc":  (cache.get("btc",  "---"), cache.get("btc_col",  DIM)),
+                "eth":  (cache.get("eth",  "---"), cache.get("eth_col",  DIM)),
+                "reg":  (cache.get("reg",  "---"), cache.get("reg_col",  DIM)),
+                "fund": (cache.get("fund", "---"), cache.get("fund_col", DIM)),
+            },
+            "session": session,
+            "roster": roster,
+        }
+
+    def _draw_offline_tiles(self, canvas: tk.Canvas, data: dict) -> None:
+        self._draw_wordmark(canvas)
+        gap = self._TILE_GAP
+        w = self._TILE_W_SIMPLE
+
+        # Row 1: STATUS | RISK | MARKET PULSE
+        r1_x_starts = [
+            self._CONTENT_X1,
+            self._CONTENT_X1 + w + gap,
+            self._CONTENT_X1 + 2 * (w + gap),
+        ]
+        self._draw_splash_tile(
             canvas,
-            left_rows=[
-                ("ENGINE", "AURUM CORE", WHITE),
-                ("MODE", "OPERATOR CONSOLE", AMBER_B),
-                ("ACCOUNT", "PAPER / MULTI", WHITE),
-                ("ENVIRONMENT", "LOCAL", WHITE),
+            x1=r1_x_starts[0], y1=self._ROW1_Y1,
+            x2=r1_x_starts[0] + w, y2=self._ROW1_Y2,
+            title="STATUS",
+            rows=[
+                ("market", "MARKET", *data["status"]["market"]),
+                ("conn",   "CONN",   *data["status"]["conn"]),
+                ("tg",     "TG",     *data["status"]["tg"]),
+                ("apilat", "API LAT", *data["status"]["apilat"]),
             ],
-            right_rows=[
-                ("MARKET FEED", market_cell, market_col),
-                ("CONNECTION", conn_cell, conn_col),
-                ("TELEGRAM", tg_cell, tg_col),
-                ("RISK", "KILL-SWITCH ARMED", RED),
+        )
+        self._draw_splash_tile(
+            canvas,
+            x1=r1_x_starts[1], y1=self._ROW1_Y1,
+            x2=r1_x_starts[1] + w, y2=self._ROW1_Y2,
+            title="RISK",
+            rows=[
+                ("killsw", "KILL-SW", *data["risk"]["killsw"]),
+                ("ddvel",  "DD VEL",  *data["risk"]["ddvel"]),
+                ("aggnot", "AGG NOT", *data["risk"]["aggnot"]),
+                ("gates",  "GATES",   *data["risk"]["gates"]),
+            ],
+        )
+        self._draw_splash_tile(
+            canvas,
+            x1=r1_x_starts[2], y1=self._ROW1_Y1,
+            x2=r1_x_starts[2] + w, y2=self._ROW1_Y2,
+            title="MARKET PULSE",
+            rows=[
+                ("btc",  "BTC",  *data["pulse"]["btc"]),
+                ("eth",  "ETH",  *data["pulse"]["eth"]),
+                ("reg",  "REG",  *data["pulse"]["reg"]),
+                ("fund", "FUND", *data["pulse"]["fund"]),
             ],
         )
 
-        self._bind(canvas, "<Button-1>", lambda e: app._splash_on_click())
-        app._bind_global_nav()
-        self._after(500, self._pulse_tick)
-        self._bind(canvas, "<Configure>", self._render_resize)
-        self._render_resize()
+        # Row 2: LAST SESSION (simples) | ENGINE ROSTER (wide)
+        self._draw_last_session_tile(canvas, x1=self._CONTENT_X1, y1=self._ROW2_Y1, data=data["session"])
+        self._draw_roster_tile(
+            canvas,
+            x1=self._CONTENT_X1 + w + gap,
+            y1=self._ROW2_Y1,
+            roster=data["roster"],
+        )
+
+        # Prompt
+        canvas.create_line(
+            self._RULE_X1, self._PROMPT_DIVIDER_Y, self._RULE_X2, self._PROMPT_DIVIDER_Y,
+            fill=DIM2, width=1, tags="splash",
+        )
+        canvas.create_text(
+            self._CENTER_X, self._PROMPT_Y,
+            anchor="center", text="[ ENTER TO ACCESS DESK ]_",
+            font=(FONT, 11, "bold"), fill=AMBER_B, tags=("splash", "prompt2"),
+        )
+
+    def _draw_last_session_tile(self, canvas: tk.Canvas, *, x1: int, y1: int, data: dict | None) -> None:
+        x2 = x1 + self._TILE_W_SIMPLE
+        y2 = y1 + self._TILE_H
+        if data is None:
+            self.app._draw_panel(canvas, x1, y1, x2, y2, title="LAST SESSION", accent=AMBER, tag="splash")
+            canvas.create_text(
+                x1 + self._TILE_W_SIMPLE // 2, y1 + self._TILE_H // 2,
+                anchor="center", text="NO SESSION DATA",
+                font=(FONT, 9, "bold"), fill=DIM, tags="splash",
+            )
+            return
+        ts_txt = str(data.get("timestamp", "-"))[:19].replace("T", " ")
+        trades = int(data.get("n_trades") or 0)
+        pnl_val = data.get("pnl")
+        if isinstance(pnl_val, (int, float)):
+            pnl_txt = f"{pnl_val:+.2f}"
+            pnl_col = GREEN if pnl_val >= 0 else RED
+        else:
+            pnl_txt = "---"
+            pnl_col = DIM
+        engine_txt = str(data.get("engine", "-")).upper()[:10]
+        self._draw_splash_tile(
+            canvas,
+            x1=x1, y1=y1, x2=x2, y2=y2,
+            title="LAST SESSION",
+            rows=[
+                ("sess_ts",     "WHEN",    ts_txt,     WHITE),
+                ("sess_engine", "ENGINE",  engine_txt, AMBER_B),
+                ("sess_trades", "TRADES",  str(trades), WHITE),
+                ("sess_pnl",    "PNL",     pnl_txt,    pnl_col),
+            ],
+        )
+
+    def _draw_roster_tile(self, canvas: tk.Canvas, *, x1: int, y1: int, roster: list[dict]) -> None:
+        x2 = x1 + self._TILE_W_WIDE
+        y2 = y1 + self._TILE_H
+        self.app._draw_panel(canvas, x1, y1, x2, y2, title="ENGINE ROSTER", accent=AMBER, tag="splash")
+
+        # 2 colunas × 6 linhas. Grid interno:
+        col_w = (self._TILE_W_WIDE - 2 * self._TILE_PAD) // 2
+        col_x = [x1 + self._TILE_PAD, x1 + self._TILE_PAD + col_w]
+        line_h = 15
+        y_start = y1 + 32
+
+        for i, entry in enumerate(roster):
+            col = i % 2
+            row = i // 2
+            x = col_x[col]
+            yy = y_start + row * line_h
+            name = entry["name"]
+            status = entry["status"]
+            sh = entry["sharpe"]
+            sh_txt = f"{sh:>5.2f}" if isinstance(sh, (int, float)) else "  —  "
+            canvas.create_text(
+                x, yy, anchor="w",
+                text=f"{name:<8} {status}  {sh_txt}",
+                font=(FONT, 8, "bold"), fill=WHITE, tags=("splash", f"roster-{name.lower()}"),
+            )
 
     def _render_resize(self, _event=None) -> None:
         if self.canvas is None:
@@ -203,181 +360,57 @@ class SplashScreen(Screen):
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
         logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
-        band_gap = self._TOP_BAND_GAP
+        band_gap = self._WORDMARK_BAND_GAP
+
+        # top rule (full width)
         canvas.create_line(
-            self._RULE_X1,
-            self._TOP_BAND_Y,
-            self._CENTER_X - band_gap,
-            self._TOP_BAND_Y,
-            fill=AMBER_D,
-            width=1,
-            tags="wordmark",
+            self._RULE_X1, self._TOP_RULE_Y, self._RULE_X2, self._TOP_RULE_Y,
+            fill=AMBER_D, width=1, tags="splash",
+        )
+        # AURUM FINANCE wordmark band
+        canvas.create_line(
+            self._RULE_X1, self._WORDMARK_BAND_Y,
+            self._CENTER_X - band_gap, self._WORDMARK_BAND_Y,
+            fill=AMBER_D, width=1, tags="splash",
         )
         canvas.create_line(
-            self._CENTER_X + band_gap,
-            self._TOP_BAND_Y,
-            self._RULE_X2,
-            self._TOP_BAND_Y,
-            fill=AMBER_D,
-            width=1,
-            tags="wordmark",
+            self._CENTER_X + band_gap, self._WORDMARK_BAND_Y,
+            self._RULE_X2, self._WORDMARK_BAND_Y,
+            fill=AMBER_D, width=1, tags="splash",
         )
         canvas.create_text(
-            self._CENTER_X,
-            self._TOP_BAND_Y,
-            anchor="center",
-            text="AURUM FINANCE",
-            font=(FONT, 7, "bold"),
-            fill=AMBER,
-            tags="wordmark",
+            self._CENTER_X, self._WORDMARK_BAND_Y,
+            anchor="center", text="AURUM FINANCE",
+            font=(FONT, 7, "bold"), fill=AMBER, tags="splash",
         )
-        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=22, tag="splash-logo")
+
+        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=18, tag="splash")
+
         canvas.create_text(
-            logo_cx,
-            self._TITLE_Y,
-            anchor="center",
-            text="OPERATOR DESK",
-            font=(FONT, 22, "bold"),
-            fill=WHITE,
-            tags="wordmark",
+            logo_cx, self._TITLE_Y, anchor="center", text="OPERATOR DESK",
+            font=(FONT, 18, "bold"), fill=WHITE, tags="splash",
         )
         canvas.create_text(
-            logo_cx,
-            self._BRAND_Y,
-            anchor="center",
+            logo_cx, self._SUBTITLE_Y, anchor="center",
             text="Quant operations console",
-            font=(FONT, 9),
-            fill=DIM2,
-            tags="wordmark",
+            font=(FONT, 9), fill=DIM2, tags="splash",
         )
         canvas.create_line(
-            logo_cx - self._WORDMARK_DIVIDER_HALF,
-            self._BRAND_Y + 18,
-            logo_cx + self._WORDMARK_DIVIDER_HALF,
-            self._BRAND_Y + 18,
-            fill=AMBER_D,
-            width=1,
-            tags="wordmark",
+            logo_cx - self._TAGLINE_DIVIDER_HALF, self._TAGLINE_Y - 8,
+            logo_cx + self._TAGLINE_DIVIDER_HALF, self._TAGLINE_Y - 8,
+            fill=BORDER, width=1, tags="splash",
         )
         canvas.create_text(
-            logo_cx,
-            self._BRAND_Y + 34,
-            anchor="center",
-            text=self.tagline,
-            font=(FONT, 8),
-            fill=DIM,
-            tags="subtitle",
-        )
-        canvas.create_line(
-            logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            self._BRAND_Y + 50,
-            logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            self._BRAND_Y + 50,
-            fill=BORDER,
-            width=1,
-            tags="subtitle",
-        )
-        canvas.create_text(
-            self._CENTER_X,
-            self._INTRO_Y,
-            anchor="center",
-            text="Live supervision, routing, and risk control for coordinated multi-engine execution.",
-            font=(FONT, 8),
-            fill=WHITE,
-            tags="subtitle",
-        )
-        canvas.create_line(
-            logo_cx - self._SUBTITLE_DIVIDER_HALF,
-            self._INTRO_Y + self._INTRO_BLOCK_GAP + 2,
-            logo_cx + self._SUBTITLE_DIVIDER_HALF,
-            self._INTRO_Y + self._INTRO_BLOCK_GAP + 2,
-            fill=DIM2,
-            width=1,
-            tags="subtitle",
+            logo_cx, self._TAGLINE_Y, anchor="center", text=self.tagline,
+            font=(FONT, 8), fill=DIM, tags="splash",
         )
 
-    def _draw_session_overview(
-        self,
-        canvas: tk.Canvas,
-        *,
-        left_rows: list[tuple[str, str, str]],
-        right_rows: list[tuple[str, str, str]],
-    ) -> None:
-        panel_x1 = self._CENTER_X - (self._SESSION_PANEL_W // 2)
-        panel_x2 = self._CENTER_X + (self._SESSION_PANEL_W // 2)
-        inner_x1 = panel_x1 + self._SESSION_GUTTER
-        inner_x2 = panel_x2 - self._SESSION_GUTTER
-        usable_w = inner_x2 - inner_x1
-        col_w = (usable_w - self._SESSION_COLUMN_GAP) // 2
-        left_col_x = inner_x1 + 12
-        right_col_x = inner_x1 + col_w + self._SESSION_COLUMN_GAP + 12
-        divider_x = self._CENTER_X
-        header_y = self._SESSION_PANEL_Y1 + 28
-        row_y = self._SESSION_PANEL_Y1 + 44
-
-        self.app._draw_panel(
-            canvas,
-            panel_x1,
-            self._SESSION_PANEL_Y1,
-            panel_x2,
-            self._SESSION_PANEL_Y2,
-            title="SESSION OVERVIEW",
-            accent=AMBER,
-            tag="splash",
-        )
+        # bottom rule
         canvas.create_line(
-            divider_x,
-            self._SESSION_PANEL_Y1 + 24,
-            divider_x,
-            self._SESSION_PANEL_Y2 - 16,
-            fill=BORDER,
-            width=1,
-            tags="splash",
-        )
-        self._draw_overview_column_header(canvas, x=left_col_x, y=header_y, title="DESK")
-        self._draw_overview_column_header(canvas, x=right_col_x, y=header_y, title="STATUS")
-        self.app._draw_kv_rows(
-            canvas,
-            left_col_x,
-            row_y,
-            left_rows,
-            value_x=left_col_x + self._SESSION_LABEL_VALUE_GAP,
-            line_h=self._SESSION_LINE_H,
-            tag="splash",
-        )
-        self.app._draw_kv_rows(
-            canvas,
-            right_col_x,
-            row_y,
-            right_rows,
-            value_x=right_col_x + self._SESSION_LABEL_VALUE_GAP,
-            line_h=self._SESSION_LINE_H,
-            tag="splash",
+            self._RULE_X1, self._BOTTOM_RULE_Y, self._RULE_X2, self._BOTTOM_RULE_Y,
+            fill=DIM2, width=1, tags="splash",
         )
 
-    def _draw_overview_column_header(
-        self,
-        canvas: tk.Canvas,
-        *,
-        x: int,
-        y: int,
-        title: str,
-    ) -> None:
-        canvas.create_text(
-            x,
-            y,
-            anchor="w",
-            text=title,
-            font=(FONT, 7, "bold"),
-            fill=AMBER,
-            tags="splash",
-        )
-        canvas.create_line(
-            x,
-            y + 8,
-            x + 244,
-            y + 8,
-            fill=BORDER,
-            width=1,
-            tags="splash",
-        )
+    def _kick_async_fetch(self) -> None:
+        """Stub: async fetch lands in Task 9. Por enquanto no-op."""
+        pass
