@@ -1220,12 +1220,83 @@ def _render_bucket(parent, title, items, state):
         if is_live_bucket:
             slug, meta, proc = tup
             _render_row_live(parent, slug, meta, proc, state)
+            # Sub-rows de instancias sob o engine selecionado. Antes
+            # viviam numa segunda tabela (sidebar ENGINES rail dentro
+            # do detail pane) — operador reportou "duas barras fazem a
+            # mesma coisa". Agora tudo numa secao so: master list com
+            # instancias indentadas sob o engine ativo. Filtrado pelo
+            # mode atual (paper/shadow/etc), entao "separe shadow em
+            # shadow e paper em paper" tb fica respeitado — so aparece
+            # o set da aba ativa.
+            if state.get("selected_slug") == slug:
+                _render_live_instance_subrows(parent, slug, state)
         elif is_research_like:
             slug, meta = tup
             _render_row_research(parent, slug, meta, state)
         else:
             slug, meta = tup
             _render_row_ready(parent, slug, meta, state)
+
+
+def _render_live_instance_subrows(parent, slug: str, state: dict) -> None:
+    """Indented instance rows sob o engine LIVE selecionado.
+
+    Filtra pelo `state["mode"]` atual — em paper so mostra paper
+    instances, em shadow so shadow. Respeita o modo selecionado no
+    header pill e deixa cada aba com seu conjunto proprio.
+    """
+    current_mode = str(state.get("mode") or "").lower()
+    if current_mode not in ("paper", "shadow"):
+        return  # demo/testnet/live nao tem multi-instance em VPS
+
+    instances = _active_engine_runs(
+        slug, launcher=None, state=state, mode=current_mode,
+    )
+    if not instances:
+        return
+
+    cur_rid = state.get(
+        "selected_paper_run_id" if current_mode == "paper"
+        else "selected_shadow_run_id"
+    )
+    active_rid = str(cur_rid) if cur_rid else None
+
+    for inst in instances:
+        rid = str(inst.get("run_id") or "")
+        label = str(inst.get("label") or "") or (
+            f"#{rid.split('_')[-1][:6]}" if rid else "?"
+        )
+        ticks = inst.get("ticks_ok") or 0
+        is_active = rid == active_rid
+        mode_color = _MODE_COLORS.get(current_mode, DIM2)
+        row_bg = BG2 if is_active else BG
+        label_fg = WHITE if is_active else DIM
+
+        sub = tk.Frame(parent, bg=row_bg, cursor="hand2")
+        sub.pack(fill="x", padx=0, pady=0)
+        # Indent left strip + hierarchical glyph
+        tk.Frame(sub, bg=row_bg, width=6).pack(side="left", fill="y")
+        tk.Label(sub, text="└", fg=DIM2, bg=row_bg,
+                 font=(FONT, 7)).pack(side="left", padx=(0, 4))
+        tk.Label(sub, text=current_mode.upper()[:6], fg=mode_color,
+                 bg=row_bg, font=(FONT, 6, "bold")).pack(side="left",
+                                                          padx=(0, 4))
+        tk.Label(sub, text=label[:14], fg=label_fg, bg=row_bg,
+                 font=(FONT, 7)).pack(side="left")
+        tk.Label(sub, text=f"{ticks}t", fg=DIM2, bg=row_bg,
+                 font=(FONT, 6)).pack(side="right", padx=(0, 8))
+
+        def _click(_e, _rid=rid, _mode=current_mode):
+            if _mode == "paper":
+                state["selected_paper_run_id"] = _rid
+            else:
+                state["selected_shadow_run_id"] = _rid
+            refresh = state.get("refresh")
+            if callable(refresh):
+                refresh()
+        sub.bind("<Button-1>", _click)
+        for child in sub.winfo_children():
+            child.bind("<Button-1>", _click)
 
 
 def _select_slug(state, slug, bucket):
@@ -1476,55 +1547,11 @@ def _render_detail(state, launcher):
                 continue
             heartbeats[proc_slug] = {"status": "running"}
 
-    registry = _engine_registry_for_sidebar(state)
-    rows = build_engine_rows(registry, heartbeats)
-
-    def _on_engine_select(new_slug: str):
-        state["selected_slug"] = new_slug
-        _render_detail(state, launcher)
-
-    def _toggle_sidebar():
-        state["sidebar_collapsed"] = not state.get("sidebar_collapsed", False)
-        _render_detail(state, launcher)
-
-    def _open_new_instance():
-        _show_new_instance_dialog(launcher, state)
-
-    # Instancias do engine selecionado ficam inline na sidebar — antes
-    # viviam em _render_engine_instance_picker no detail pane (tabela
-    # separada). Merged agora: engine + suas instancias numa so secao.
-    instances_for_selected: list[dict] | None = None
-    active_instance_key: tuple[str, str] | None = None
-    if slug:
-        instances_for_selected = _active_engine_runs(
-            slug, launcher=launcher, state=state, mode=None,
-        )
-        cur_mode = str(state.get("mode") or "").lower()
-        cur_rid = state.get(
-            "selected_paper_run_id" if cur_mode == "paper"
-            else "selected_shadow_run_id"
-        )
-        if cur_rid:
-            active_instance_key = (cur_mode, str(cur_rid))
-
-    def _on_instance_select(rid: str, mode: str):
-        if mode == "paper":
-            state["selected_paper_run_id"] = rid
-        elif mode == "shadow":
-            state["selected_shadow_run_id"] = rid
-        set_mode = state.get("set_mode")
-        if mode and mode != state.get("mode") and callable(set_mode):
-            set_mode(mode)
-        else:
-            _render_detail(state, launcher)
-
-    render_sidebar(sidebar_host, rows, selected_slug=slug, on_select=_on_engine_select,
-                   collapsed=state.get("sidebar_collapsed", False),
-                   on_toggle=_toggle_sidebar,
-                   on_new_instance=_open_new_instance,
-                   instances_for_selected=instances_for_selected,
-                   on_select_instance=_on_instance_select,
-                   active_instance_key=active_instance_key)
+    # Sidebar rail DENTRO do detail pane foi removida (antes duplicava
+    # a master list da esquerda — operador reportou "duas barras fazem
+    # a mesma coisa"). Selecao + lista de engines vive so na master
+    # list agora. sidebar_host fica como placeholder 0-width pra
+    # preservar refs de layout (shell reuse checa winfo_exists).
 
     # SHADOW mode: path dedicado (telemetria do VPS cockpit API).
     if mode == "shadow":
