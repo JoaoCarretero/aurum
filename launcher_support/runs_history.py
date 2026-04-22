@@ -852,13 +852,204 @@ def _load_detail(r: RunSummary, state: dict) -> None:
 
     _render_detail_header(host, r)
 
+    # Banner de erro — se ultima tick falhou, mostra em destaque vermelho
+    # antes de qualquer outra secao. Operador ve o problema imediatamente.
+    hb = r.heartbeat or {}
+    last_err = hb.get("last_error")
+    if last_err:
+        _render_error_banner(host, str(last_err))
+
     body = tk.Frame(host, bg=PANEL)
     body.pack(fill="both", expand=True, padx=10, pady=(4, 0))
 
     _render_detail_telemetry(body, r)
+    _render_detail_scan(body, r)
+    _render_detail_health(body, r)
+    _render_detail_probe(body, r)
     _render_detail_equity_metrics(body, r)
     _render_detail_trades(body, r)
     _render_detail_log_tail(body, r)
+
+
+def _render_error_banner(parent: tk.Widget, err: str) -> None:
+    """Banner vermelho compacto pra last_error do heartbeat."""
+    bar = tk.Frame(parent, bg=BG)
+    bar.pack(fill="x")
+    inner = tk.Frame(bar, bg=BG)
+    inner.pack(fill="x", padx=10, pady=(4, 6))
+    tk.Label(inner, text="LAST ERROR", font=(FONT, 6, "bold"),
+             fg=RED, bg=BG, anchor="w").pack(anchor="w")
+    tk.Label(inner, text=err[:300], font=(FONT, 7),
+             fg=RED, bg=BG, anchor="w", justify="left",
+             wraplength=260).pack(anchor="w", pady=(1, 0))
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
+
+
+def _format_age_since(iso_str: str | None) -> str:
+    """Format 'N seconds ago' relative to now. Returns 'never' if null."""
+    if not iso_str:
+        return "never"
+    try:
+        t = datetime.fromisoformat(str(iso_str).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        secs = int((datetime.now(timezone.utc) - t).total_seconds())
+        if secs < 0:
+            return "just now"
+        if secs < 60:
+            return f"{secs}s ago"
+        if secs < 3600:
+            return f"{secs // 60}m ago"
+        if secs < 86400:
+            h, m = divmod(secs // 60, 60)
+            return f"{h}h{m:02d}m ago"
+        return f"{secs // 86400}d ago"
+    except Exception:  # noqa: BLE001
+        return str(iso_str)[:16]
+
+
+def _render_detail_scan(parent: tk.Widget, r: RunSummary) -> None:
+    """SCAN funnel: scanned -> dedup -> stale -> live -> opened.
+
+    Mostra onde o pipeline de sinais perde candidatos na ultima tick.
+    Se todos os last_scan_* forem None ou 0 e nunca houve novel, nao
+    renderiza a secao (run muito nova ou engine sem scan stats).
+    """
+    hb = r.heartbeat or {}
+    scan_keys = ("last_scan_scanned", "last_scan_dedup",
+                 "last_scan_stale", "last_scan_live")
+    if all(hb.get(k) is None for k in scan_keys) and not hb.get("last_novel_at"):
+        return
+
+    scanned = hb.get("last_scan_scanned") or 0
+    dedup = hb.get("last_scan_dedup") or 0
+    stale = hb.get("last_scan_stale") or 0
+    live = hb.get("last_scan_live") or 0
+    opened = hb.get("last_scan_opened")
+    last_novel_at = hb.get("last_novel_at")
+    novel_age = _format_age_since(last_novel_at)
+
+    rows = [
+        ("scanned", str(scanned), WHITE if scanned > 0 else DIM2),
+        ("dedup", str(dedup), DIM if dedup == 0 else WHITE),
+        ("stale", str(stale), DIM if stale == 0 else AMBER_D),
+        ("live", str(live), GREEN if live > 0 else DIM2),
+    ]
+    if opened is not None:
+        rows.append(("opened", str(opened),
+                     GREEN if opened > 0 else DIM2))
+    rows.append((
+        "last novel", novel_age,
+        AMBER_B if last_novel_at else DIM2,
+    ))
+    _detail_section(parent, "SCAN (last tick)", rows)
+
+
+def _render_detail_health(parent: tk.Widget, r: RunSummary) -> None:
+    """HEALTH — drawdown, kill switch, primed flag, tick cadence.
+
+    Campos paper-specific (drawdown_pct, ks_state, primed, account_size)
+    aparecem so se o heartbeat reportar. Shadow que nao tem esses campos
+    ainda renderiza tick_sec + cadencia real.
+    """
+    hb = r.heartbeat or {}
+    if not hb:
+        return
+
+    rows = []
+    dd = hb.get("drawdown_pct")
+    if dd is not None:
+        dd_f = float(dd)
+        dd_color = (RED if dd_f >= 5 else
+                    AMBER_D if dd_f >= 2 else WHITE)
+        rows.append(("drawdown", f"{dd_f:.2f}%", dd_color))
+
+    ks = hb.get("ks_state")
+    if ks is not None:
+        ks_str = str(ks).upper()
+        ks_color = (GREEN if ks_str == "NORMAL" else
+                    AMBER_D if ks_str == "WARNING" else RED)
+        rows.append(("kill switch", ks_str, ks_color))
+
+    primed = hb.get("primed")
+    if primed is not None:
+        rows.append((
+            "primed",
+            "yes" if primed else "no",
+            GREEN if primed else AMBER_D,
+        ))
+
+    tick_sec = hb.get("tick_sec")
+    if tick_sec is not None:
+        rows.append(("tick sec", f"{int(tick_sec)}s", DIM))
+
+    # Cadencia real: last tick age vs tick_sec esperado. Se > 2x tick_sec,
+    # processo pode estar congelado mesmo com status=running.
+    last_tick = hb.get("last_tick_at")
+    if last_tick and tick_sec:
+        age_s = None
+        try:
+            t = datetime.fromisoformat(str(last_tick).replace("Z", "+00:00"))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            age_s = int((datetime.now(timezone.utc) - t).total_seconds())
+        except Exception:  # noqa: BLE001
+            pass
+        if age_s is not None:
+            threshold = int(tick_sec) * 2
+            age_color = (RED if age_s > threshold else
+                         AMBER_D if age_s > int(tick_sec) * 1.3 else WHITE)
+            rows.append((
+                "last tick",
+                _format_age_since(last_tick),
+                age_color,
+            ))
+
+    if not rows:
+        return
+    _detail_section(parent, "HEALTH", rows)
+
+
+def _render_detail_probe(parent: tk.Widget, r: RunSummary) -> None:
+    """PROBE DIAGNOSTIC — renderiza apenas quando engine == PROBE.
+
+    Traz os campos diagnosticos do heartbeat da probe: top_score contra
+    o threshold ativo, distribuicao de score (above_threshold / 80pct /
+    60pct), top symbol + direction + macro regime detectado.
+    """
+    if str(r.engine).upper() != "PROBE":
+        return
+    hb = r.heartbeat or {}
+    top = hb.get("top_score")
+    if top is None:
+        return
+
+    thr = float(hb.get("threshold") or 0.62)
+    top_f = float(top)
+    top_color = (GREEN if top_f >= thr else
+                 AMBER_B if top_f >= thr * 0.8 else
+                 AMBER_D if top_f >= thr * 0.6 else DIM)
+
+    mean = float(hb.get("mean_score") or 0)
+    n_thr = int(hb.get("n_above_threshold") or 0)
+    n_80 = int(hb.get("n_above_80pct") or 0)
+    n_60 = int(hb.get("n_above_60pct") or 0)
+
+    rows = [
+        ("top score", f"{top_f:.3f}", top_color),
+        ("top symbol", str(hb.get("top_symbol") or "—"), WHITE),
+        ("direction", str(hb.get("top_direction") or "—"), AMBER),
+        ("macro", str(hb.get("macro") or "—"), AMBER),
+        ("threshold", f"{thr:.3f}", DIM),
+        ("mean score", f"{mean:.3f}", WHITE),
+        ("above thr", str(n_thr),
+         GREEN if n_thr > 0 else DIM2),
+        ("above 80%", str(n_80),
+         AMBER_B if n_80 > 0 else DIM2),
+        ("above 60%", str(n_60),
+         AMBER_D if n_60 > 0 else DIM2),
+    ]
+    _detail_section(parent, "PROBE DIAGNOSTIC", rows)
 
 
 def _render_detail_header(parent: tk.Widget, r: RunSummary) -> None:
