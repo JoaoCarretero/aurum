@@ -305,22 +305,51 @@ def macro_series(metric: str, since: str | None = None) -> list[dict]:
 
 
 def macro_series_many(
-    metrics: list[str] | tuple[str, ...], since: str | None = None,
+    metrics: list[str] | tuple[str, ...],
+    since: str | None = None,
+    tail: int | None = None,
 ) -> dict[str, list[dict]]:
-    """Fetch multiple macro series in one query, grouped by metric."""
+    """Fetch multiple macro series in one query, grouped by metric.
+
+    ``tail``: se setado, retorna apenas os ultimos N rows por metric
+    (via ROW_NUMBER window). Util pra tick_update que so precisa dos
+    2 valores mais recentes — evita fetch de historia inteira
+    repetidamente (3s cadence amplifica).
+    """
     ordered_metrics = [str(metric) for metric in metrics if str(metric)]
     if not ordered_metrics:
         return {}
     placeholders = ", ".join("?" for _ in ordered_metrics)
-    q = (
-        "SELECT metric, ts, value FROM macro_data "
-        f"WHERE metric IN ({placeholders})"
-    )
     params: list[Any] = list(ordered_metrics)
-    if since:
-        q += " AND ts >= ?"
-        params.append(since)
-    q += " ORDER BY metric ASC, ts ASC"
+
+    if tail is not None and tail > 0:
+        # Window function: particiona por metric, pega os N mais recentes.
+        # SQLite 3.25+ (Python 3.14 empacota 3.43+). Output ordenado asc
+        # por ts dentro de cada metric pra manter contrato.
+        where_since = ""
+        if since:
+            where_since = " AND ts >= ?"
+            params.append(since)
+        q = (
+            "WITH ranked AS ("
+            "  SELECT metric, ts, value, "
+            "         ROW_NUMBER() OVER (PARTITION BY metric ORDER BY ts DESC) AS rn "
+            f"  FROM macro_data WHERE metric IN ({placeholders}){where_since}"
+            ") "
+            "SELECT metric, ts, value FROM ranked WHERE rn <= ? "
+            "ORDER BY metric ASC, ts ASC"
+        )
+        params.append(int(tail))
+    else:
+        q = (
+            "SELECT metric, ts, value FROM macro_data "
+            f"WHERE metric IN ({placeholders})"
+        )
+        if since:
+            q += " AND ts >= ?"
+            params.append(since)
+        q += " ORDER BY metric ASC, ts ASC"
+
     grouped: dict[str, list[dict]] = {metric: [] for metric in ordered_metrics}
     with _conn() as c:
         rows = c.execute(q, params).fetchall()

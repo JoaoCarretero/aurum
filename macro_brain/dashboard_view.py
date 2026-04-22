@@ -796,7 +796,9 @@ def tick_update() -> int:
         return 0
 
     try:
-        series_map = macro_series_many(list(live_refs))
+        # tail=2: so precisamos de latest + prev pra value label, change%,
+        # e flash direction. Evita varrer historia inteira a cada 3s.
+        series_map = macro_series_many(list(live_refs), tail=2)
     except Exception:
         return 0
 
