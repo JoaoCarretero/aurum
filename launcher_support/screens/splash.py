@@ -1,7 +1,6 @@
 """SplashScreen - pilot migration of launcher._splash."""
 from __future__ import annotations
 
-import threading
 import tkinter as tk
 from pathlib import Path
 from typing import Any
@@ -13,11 +12,9 @@ from core.ui.ui_palette import (
 
 from launcher_support.screens.base import Screen
 from launcher_support.screens.splash_data import (
-    ENGINE_ROSTER_LAYOUT,
-    load_splash_cache,
     read_engine_roster,
     read_last_session,
-    save_splash_cache,
+    read_macro_brain,
 )
 
 
@@ -33,6 +30,14 @@ class SplashScreen(Screen):
         "TUN": AMBER_B,  # em tuning (ORNSTEIN)
         "OFF": DIM,      # fora da bateria (TWOSIGMA, AQR)
         "NO":  RED,      # falhou OOS (DE_SHAW, KEPOS, MEDALLION)
+    }
+
+    # Mapa regime_raw do macro_brain -> cor pro valor "REGIME" no tile.
+    _REGIME_COLORS = {
+        "risk_on":     GREEN,
+        "risk_off":    RED,
+        "transition":  AMBER,
+        "uncertainty": DIM,
     }
 
     # Top band + wordmark
@@ -76,9 +81,7 @@ class SplashScreen(Screen):
         self.canvas: tk.Canvas | None = None
         self._design_w = app._SPLASH_DESIGN_W
         self._design_h = app._SPLASH_DESIGN_H
-        self._cancel_event: threading.Event | None = None
         self._index_path = Path("data/index.json")
-        self._cache_path = Path("data/splash_cache.json")
 
     def build(self) -> None:
         """Cria frame + canvas. Todo desenho acontece em on_enter."""
@@ -113,7 +116,6 @@ class SplashScreen(Screen):
         self._after(500, self._pulse_tick)
         self._bind(canvas, "<Configure>", self._render_resize)
         self._render_resize()
-        self._kick_async_fetch()
 
     def _read_offline_data(self) -> dict:
         app = self.app
@@ -142,7 +144,31 @@ class SplashScreen(Screen):
 
         session = read_last_session(self._index_path)
         roster = read_engine_roster(self._index_path)
-        cache = load_splash_cache(self._cache_path)
+        macro = read_macro_brain()
+
+        if macro is None:
+            macro_rows = {
+                "regime":  ("---",  DIM),
+                "why":     ("---",  DIM),
+                "thesis":  ("FLAT", DIM),
+                "idea":    ("awaiting signal", DIM),
+            }
+        else:
+            regime_col = self._REGIME_COLORS.get(macro["regime_raw"], DIM)
+            conf = macro.get("confidence")
+            regime_txt = macro["regime"]
+            if isinstance(conf, (int, float)):
+                regime_txt = f"{regime_txt} {conf:.0%}"
+            thesis_txt = macro["thesis"]
+            tconf = macro.get("thesis_conf")
+            if isinstance(tconf, (int, float)) and thesis_txt != "FLAT":
+                thesis_txt = f"{thesis_txt} {tconf:.2f}"
+            macro_rows = {
+                "regime":  (regime_txt, regime_col),
+                "why":     (macro["why"], DIM2),
+                "thesis":  (thesis_txt, AMBER_B if thesis_txt != "FLAT" else DIM),
+                "idea":    (macro["idea"], WHITE if macro["idea"] != "awaiting signal" else DIM),
+            }
 
         return {
             "status": {
@@ -157,65 +183,17 @@ class SplashScreen(Screen):
                 "aggnot":  ("---", DIM),
                 "gates":   ("---", DIM),
             },
-            "pulse": {
-                "btc":  (cache.get("btc",  "---"), cache.get("btc_col",  DIM)),
-                "eth":  (cache.get("eth",  "---"), cache.get("eth_col",  DIM)),
-                "reg":  (cache.get("reg",  "---"), cache.get("reg_col",  DIM)),
-                "fund": (cache.get("fund", "---"), cache.get("fund_col", DIM)),
-            },
+            "macro": macro_rows,
             "session": session,
             "roster": roster,
         }
-
-    def _fetch_market_pulse(self) -> dict:
-        """Bloqueante. Pode levantar. Retorna dict com chaves btc/eth/reg/fund."""
-        from core.data.market_data import MarketDataFetcher
-        fetcher = MarketDataFetcher(["BTCUSDT", "ETHUSDT"])
-        fetcher.fetch_all()  # timeout interno 5s
-        # snapshot() faz copia atomica sob o lock — evita race com workers
-        snap = fetcher.snapshot()
-        tickers = snap["tickers"]
-        funding_map = snap["funding"]
-        fund = (sum(funding_map.values()) / len(funding_map)) if funding_map else None
-        out: dict[str, tuple[str, str]] = {}
-        for sym, key in (("BTCUSDT", "btc"), ("ETHUSDT", "eth")):
-            t = tickers.get(sym)
-            if not t:
-                out[key] = ("---", DIM)
-                continue
-            price = t["price"]
-            pct = t["pct"]
-            arrow = "▲" if pct >= 0 else "▼"
-            col = GREEN if pct >= 0 else RED
-            out[key] = (f"{price:>8,.0f} {pct:+5.2f}% {arrow}", col)
-        if fund is not None:
-            fund_pct = fund * 100.0
-            out["fund"] = (f"{fund_pct:+.3f}% /8h", WHITE)
-        else:
-            out["fund"] = ("---", DIM)
-        out["reg"] = ("---", DIM)  # v1: sem regime macro; v1.1 pode adicionar
-        return out
-
-    def _apply_live_data(self, data: dict) -> None:
-        """UI-thread callback. Atualiza valores por tag."""
-        if self._cancel_event is not None and self._cancel_event.is_set():
-            return
-        canvas = self.canvas
-        if canvas is None:
-            return
-        for key, (text, color) in data.items():
-            tag = f"tile-{key}-value"
-            try:
-                canvas.itemconfigure(tag, text=text, fill=color)
-            except tk.TclError:
-                return  # canvas destruído
 
     def _draw_offline_tiles(self, canvas: tk.Canvas, data: dict) -> None:
         self._draw_wordmark(canvas)
         gap = self._TILE_GAP
         w = self._TILE_W_SIMPLE
 
-        # Row 1: STATUS | RISK | MARKET PULSE
+        # Row 1: STATUS | RISK | MACRO BRAIN
         r1_x_starts = [
             self._CONTENT_X1,
             self._CONTENT_X1 + w + gap,
@@ -249,12 +227,12 @@ class SplashScreen(Screen):
             canvas,
             x1=r1_x_starts[2], y1=self._ROW1_Y1,
             x2=r1_x_starts[2] + w, y2=self._ROW1_Y2,
-            title="MARKET PULSE",
+            title="MACRO BRAIN",
             rows=[
-                ("btc",  "BTC",  *data["pulse"]["btc"]),
-                ("eth",  "ETH",  *data["pulse"]["eth"]),
-                ("reg",  "REG",  *data["pulse"]["reg"]),
-                ("fund", "FUND", *data["pulse"]["fund"]),
+                ("regime", "REGIME", *data["macro"]["regime"]),
+                ("why",    "WHY",    *data["macro"]["why"]),
+                ("thesis", "THESIS", *data["macro"]["thesis"]),
+                ("idea",   "IDEA",   *data["macro"]["idea"]),
             ],
         )
 
@@ -358,7 +336,11 @@ class SplashScreen(Screen):
             canvas.itemconfigure("prompt2", text=current[:-1] + " ")
         else:
             canvas.itemconfigure("prompt2", text=current[:-1] + "_")
-        self._after(500, self._pulse_tick)
+        # Reschedule direto (sem tracking): o tick e self-perpetuating enquanto
+        # canvas existir. Evita acumular after_ids no _tracked_after_ids em
+        # sessoes longas — o initial call em on_enter ja foi tracked. Cleanup
+        # acontece quando o canvas morre (callback early-returns via TclError).
+        self.container.after(500, self._pulse_tick)
 
     def _draw_splash_tile(
         self,
@@ -448,44 +430,3 @@ class SplashScreen(Screen):
             fill=DIM2, width=1, tags="splash",
         )
 
-    def _kick_async_fetch(self) -> None:
-        """Dispara daemon thread que busca dados live e atualiza canvas.
-
-        O cancel_event e passado como arg pra thread capturar o evento da
-        sessao atual — se o user sair e reentrar no splash antes do fetch
-        retornar, a thread velha nao atropela o canvas novo.
-        """
-        ev = threading.Event()
-        self._cancel_event = ev
-        thread = threading.Thread(
-            target=self._fetch_live_worker, args=(ev,), daemon=True,
-        )
-        thread.start()
-
-    def _fetch_live_worker(self, cancel_event: threading.Event) -> None:
-        """Roda off UI thread. Tenta market pulse; marshalls updates via after()."""
-        if cancel_event.is_set():
-            return
-        try:
-            pulse = self._fetch_market_pulse()
-        except Exception:
-            pulse = None
-        if cancel_event.is_set():
-            return
-        if pulse:
-            try:
-                self.container.after(0, lambda d=pulse: self._apply_live_data(d))
-                self._save_pulse_to_cache(pulse)
-            except tk.TclError:
-                return  # container destroyed
-
-    def _save_pulse_to_cache(self, pulse: dict) -> None:
-        plain = {k: v[0] for k, v in pulse.items()}
-        for k, v in pulse.items():
-            plain[f"{k}_col"] = v[1]
-        save_splash_cache(self._cache_path, plain)
-
-    def on_exit(self) -> None:
-        if self._cancel_event is not None:
-            self._cancel_event.set()
-        super().on_exit()

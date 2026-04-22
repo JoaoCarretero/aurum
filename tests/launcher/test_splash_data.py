@@ -11,6 +11,7 @@ from launcher_support.screens.splash_data import (
     load_splash_cache,
     read_engine_roster,
     read_last_session,
+    read_macro_brain,
     save_splash_cache,
 )
 
@@ -139,6 +140,93 @@ def test_splash_cache_load_null_json_returns_empty_dict(tmp_path):
     p = tmp_path / "null.json"
     p.write_text("null", encoding="utf-8")
     assert load_splash_cache(p) == {}
+
+
+def test_read_macro_brain_returns_none_when_import_fails(monkeypatch):
+    """macro_brain nao instalado ou quebrado → read_macro_brain retorna None."""
+    import sys
+    # Force ImportError pro submodule
+    monkeypatch.setitem(sys.modules, "macro_brain.persistence.store", None)
+    assert read_macro_brain() is None
+
+
+def test_read_macro_brain_parses_regime_and_thesis(monkeypatch):
+    """Stub store → return dict com regime/thesis formatados corretamente."""
+    import launcher_support.screens.splash_data as sd
+
+    fake_regime = {
+        "regime":     "risk_on",
+        "confidence": 0.6,
+        "reason":     "DXY_z30d=-1.73 <= -0.5; VIX_z30d=-1.00 <= 0.0",
+    }
+    fake_theses = [{
+        "direction":  "long",
+        "asset":      "BTCUSDT",
+        "confidence": 0.55,
+        "rationale":  "Fear&Greed extreme fear (21) + regime uncertainty.",
+    }]
+
+    # Stub o import tardio dentro da funcao
+    import sys, types
+    fake_mod = types.ModuleType("macro_brain.persistence.store")
+    fake_mod.latest_regime = lambda: fake_regime
+    fake_mod.active_theses = lambda: fake_theses
+    monkeypatch.setitem(sys.modules, "macro_brain.persistence.store", fake_mod)
+
+    out = sd.read_macro_brain()
+    assert out is not None
+    assert out["regime"] == "RISK ON"
+    assert out["regime_raw"] == "risk_on"
+    assert out["confidence"] == 0.6
+    assert out["why"].startswith("DXY_z30d")
+    assert len(out["why"]) <= 18
+    assert out["thesis"] == "LONG BTC"
+    assert out["thesis_conf"] == 0.55
+    assert out["idea"].startswith("Fear&Greed")
+    assert len(out["idea"]) <= 18
+
+
+def test_read_macro_brain_no_theses_returns_flat(monkeypatch):
+    """Regime presente sem theses → thesis=FLAT / idea=awaiting signal."""
+    import launcher_support.screens.splash_data as sd
+    import sys, types
+    fake_mod = types.ModuleType("macro_brain.persistence.store")
+    fake_mod.latest_regime = lambda: {"regime": "transition", "confidence": 0.4, "reason": "mixed"}
+    fake_mod.active_theses = lambda: []
+    monkeypatch.setitem(sys.modules, "macro_brain.persistence.store", fake_mod)
+    out = sd.read_macro_brain()
+    assert out is not None
+    assert out["regime"] == "TRANSITION"
+    assert out["thesis"] == "FLAT"
+    assert out["thesis_conf"] is None
+    assert out["idea"] == "awaiting signal"
+
+
+def test_read_macro_brain_nan_confidence_becomes_none(monkeypatch):
+    """Confidence NaN do macro_brain nao pode virar 'nan%' no splash."""
+    import launcher_support.screens.splash_data as sd
+    import sys, types, math
+    fake_mod = types.ModuleType("macro_brain.persistence.store")
+    fake_mod.latest_regime = lambda: {"regime": "risk_on", "confidence": float("nan"), "reason": "rule"}
+    fake_mod.active_theses = lambda: [{"direction": "long", "asset": "BTCUSDT",
+                                       "confidence": float("nan"), "rationale": "why"}]
+    monkeypatch.setitem(sys.modules, "macro_brain.persistence.store", fake_mod)
+    out = sd.read_macro_brain()
+    assert out is not None
+    assert out["confidence"] is None
+    assert out["thesis_conf"] is None
+
+
+def test_read_macro_brain_store_raises_returns_none(monkeypatch):
+    """Ambas fontes raise → read_macro_brain retorna None, sem crash."""
+    import sys, types
+    fake_mod = types.ModuleType("macro_brain.persistence.store")
+    def _boom():
+        raise RuntimeError("db locked")
+    fake_mod.latest_regime = _boom
+    fake_mod.active_theses = _boom
+    monkeypatch.setitem(sys.modules, "macro_brain.persistence.store", fake_mod)
+    assert read_macro_brain() is None
 
 
 def test_splash_cache_save_swallows_non_serializable(tmp_path):
