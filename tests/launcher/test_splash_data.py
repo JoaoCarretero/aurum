@@ -57,3 +57,13 @@ def test_read_last_session_skips_rows_without_timestamp(tmp_path):
     result = read_last_session(idx)
     assert result is not None
     assert result["engine"] == "jump"
+
+
+def test_read_last_session_skips_rows_with_unparseable_timestamp(tmp_path):
+    idx = _write_index(tmp_path, [
+        {"engine": "bad", "timestamp": "not-a-date", "n_trades": 1},
+        {"engine": "jump", "timestamp": "2026-04-21T15:30:00", "n_trades": 7, "pnl": 420.0},
+    ])
+    result = read_last_session(idx)
+    assert result is not None
+    assert result["engine"] == "jump"
