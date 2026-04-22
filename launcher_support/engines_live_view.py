@@ -1570,14 +1570,16 @@ def _render_detail(state, launcher):
         and detail_inner is not None and getattr(detail_inner, "winfo_exists", lambda: False)()
     )
 
-    # Skip full detail rebuild when nothing material changed. Master list
-    # already sig-skips; this covers the detail pane.
+    # Skip full detail rebuild when nothing material changed. Uses the
+    # _cheap variants so this check never blocks on HTTP or lock
+    # acquisition — the fallback sig is "loading" when caches are empty,
+    # which triggers exactly one rebuild per cache warmup (acceptable).
     _rd_t0 = time.perf_counter()
     if reuse_shell and mode in ("paper", "shadow") and slug:
         if mode == "paper":
-            new_sig = ("paper", slug, _paper_content_sig(state, launcher))
+            new_sig = ("paper", slug, _paper_content_sig_cheap(state))
         else:
-            new_sig = ("shadow", slug, _shadow_content_sig(state, launcher))
+            new_sig = ("shadow", slug, _shadow_content_sig_cheap(state))
         last_sig = state.get("_detail_last_render_sig")
         if new_sig == last_sig:
             t = (time.perf_counter() - _rd_t0) * 1000.0
@@ -2549,6 +2551,75 @@ def _schedule_shadow_refresh(launcher, state) -> None:
         state["shadow_refresh_aid"] = aid
     except Exception:
         pass
+
+
+def _paper_content_sig_cheap(state) -> tuple:
+    """Cache-only paper detail signature. NO HTTP, NO lock acquisition.
+
+    Reads from _COCKPIT_RUNS_CACHE and _PAPER_SNAPSHOT_CACHE directly via
+    plain dict .get(). Dict reads are atomic in CPython (GIL guarantees
+    it); the sig is advisory anyway — a transient stale read just means
+    one extra rebuild when caches catch up. The whole function must stay
+    under 1ms because the render-skip path runs on every refresh on the
+    tk main loop. The heavyweight _paper_content_sig kept for callers
+    that need full fidelity after a worker completes.
+    """
+    cached_runs = _COCKPIT_RUNS_CACHE.get("runs")
+    if not cached_runs:
+        return ("loading",)
+    run_id: str | None = None
+    for r in cached_runs:
+        if (str(r.get("engine") or "").lower() == "millennium"
+                and str(r.get("mode") or "").lower() == "paper"
+                and str(r.get("status") or "").lower() == "running"):
+            run_id = str(r.get("run_id") or "")
+            if run_id:
+                break
+    if run_id is None:
+        return ("no-run",)
+    picked = (state or {}).get("selected_paper_run_id")
+    if picked:
+        run_id = picked
+    cached = _PAPER_SNAPSHOT_CACHE.get(run_id)
+    if cached is None:
+        return ("loading", run_id)
+    _ts, payload = cached
+    hb, positions, series, _account = payload
+    if hb is None:
+        return ("loading", run_id)
+    return (
+        run_id,
+        hb.get("status"),
+        hb.get("last_tick_at"),
+        hb.get("novel_total"),
+        len(positions),
+        len(series),
+    )
+
+
+def _shadow_content_sig_cheap(state) -> tuple:
+    """Cache-only shadow detail signature. Same contract as the paper
+    version — never blocks, reads dict .get() only."""
+    if not _SHADOW_SNAPSHOT_CACHE:
+        return ("loading",)
+    # Pick any cached run — the actual selection happens on real render.
+    # Sig only needs to detect *change*, not fidelity.
+    try:
+        _k, entry = next(iter(_SHADOW_SNAPSHOT_CACHE.items()))
+    except StopIteration:
+        return ("loading",)
+    _ts, payload = entry
+    run_dir, hb, trades = payload
+    if hb is None:
+        return ("loading",)
+    return (
+        state.get("selected_slug"),
+        str(run_dir or ""),
+        hb.get("status"),
+        hb.get("last_tick_at"),
+        hb.get("novel_total"),
+        len(trades) if trades else 0,
+    )
 
 
 def _shadow_content_sig(state, launcher=None) -> tuple:
