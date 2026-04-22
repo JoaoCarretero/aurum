@@ -23,6 +23,22 @@ import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
+from datetime import datetime
+
+
+# TEMP DIAGNOSTIC — multi-instance picker visibility. Remove after fix.
+_DIAG_LOG = Path(__file__).resolve().parent.parent / "data" / ".cockpit_timing.log"
+
+
+def _dlog(msg: str) -> None:
+    try:
+        _DIAG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_DIAG_LOG, "a", encoding="utf-8") as f:
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            f.write(f"{ts} {msg}\n")
+    except Exception:
+        pass
+
 
 from core.ops.python_runtime import preferred_python_executable
 from core.ops import run_catalog
@@ -2909,6 +2925,9 @@ def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
 
     matches = list(matches_by_id.values())
     matches.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
+    _dlog(f"_active_mode_runs({mode}) cached_runs={len(cached_runs)} "
+          f"vps_has_mode={vps_has_runs_for_mode} returned={len(matches)}: "
+          f"{[(m.get('label'), m.get('source')) for m in matches]}")
     return matches
 
 
@@ -3158,6 +3177,9 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     # state["selected_paper_run_id"]
     # so the next refresh cycle keeps the same run in focus.
     active_runs = _active_paper_runs(launcher, state)
+    _dlog(f"_render_detail_paper: active_runs={len(active_runs)} "
+          f"picker={'YES' if len(active_runs) >= 2 else 'no'} "
+          f"labels={[r.get('label') for r in active_runs]}")
     if len(active_runs) >= 2:
         _render_paper_instance_picker(parent, active_runs, state, launcher)
 
