@@ -1306,340 +1306,6 @@ def _render_institutional_flows(parent, title: str):
 
 # ── TAB RENDERERS ────────────────────────────────────────────
 
-def _render_markets_tab(parent):
-    """USA desk — rates, equities, macro, COT, institutions and US news."""
-    _section(parent, "US DESK · MARKET NOW", pady_top=(0, 0))
-    left, right = _two_col(parent)
-    rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
-                         "YIELD_SPREAD_10_2", "FED_RATE"])
-    _section(left, "RATES · CURVE", pady_top=(0, 0))
-    _grid(left, rates, [
-        ("US13W",             "13W",     "{:.3f}%"),
-        ("US5Y",              "5Y",      "{:.3f}%"),
-        ("US10Y",             "10Y",     "{:.3f}%"),
-        ("US30Y",             "30Y",     "{:.3f}%"),
-        ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
-        ("FED_RATE",          "FED",     "{:.2f}%"),
-    ])
-
-    fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
-                      "DXY_BROAD"])
-    _section(right, "DOLLAR · FX", pady_top=(0, 0))
-    _grid(right, fx, [
-        ("DXY",       "DXY",     "{:.2f}"),
-        ("EUR_USD",   "EUR/USD", "{:.4f}"),
-        ("USD_JPY",   "USD/JPY", "{:.2f}"),
-        ("GBP_USD",   "GBP/USD", "{:.4f}"),
-        ("USD_CNY",   "USD/CNY", "{:.4f}"),
-        ("DXY_BROAD", "BROAD",   "{:.2f}"),
-    ])
-
-    left2, right2 = _two_col(parent)
-    eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
-                     "GOLD", "WTI_OIL", "COPPER"])
-    _section(left2, "EQUITIES · RISK", pady_top=(0, 0))
-    _grid(left2, eq, [
-        ("SP500",  "S&P 500", "{:,.0f}"),
-        ("NASDAQ", "NASDAQ",  "{:,.0f}"),
-        ("VIX",    "VIX",     "{:.2f}"),
-        ("GOLD",   "GOLD",    "${:,.0f}"),
-        ("WTI_OIL","WTI",     "${:.2f}"),
-        ("COPPER", "COPPER",  "${:.3f}"),
-    ])
-    _grid(left2, eq, [
-        ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
-    ])
-
-    econ = _macro_map([
-        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
-        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
-        "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
-    ], n=30)
-    _section(right2, "MACRO SNAPSHOT · FRED", pady_top=(0, 0))
-    _grid(right2, econ, [
-        ("CPI_US",             "CPI",          "{:.2f}"),
-        ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
-        ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
-        ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
-        ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
-        ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
-        ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
-        ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
-    ])
-    _grid(right2, econ, [
-        ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
-        ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
-    ])
-
-    _section(parent, "US DESK · POSITIONING")
-    _cot_matrix(parent, [
-        ("DXY",       "DXY_NET_LONGS",       None,               None),
-        ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
-        ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
-        ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
-        ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
-        ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
-        ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
-        ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
-        ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
-    ])
-
-    _render_institutional_flows(parent, "INSTITUTIONAL FLOW")
-    _render_calendar_list(parent, "CALENDAR · FED · LABOR · INFLATION", only_us=True)
-
-    _render_news_list(parent, "US NEWSFLOW · FED · TREASURY · BANKS · STREET",
-                      allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
-                      us_only=True)
-def _render_markets_tab_v2(parent):
-    """USA desk reorganized into visual shells without changing data scope."""
-    overview = _panel_shell(parent, pady=(0, 6))
-    _section(overview, "US DESK · SNAPSHOT", pady_top=(0, 0))
-    snapshot = _macro_map([
-        "SP500", "US10Y", "DXY", "FED_RATE", "VIX", "CPI_US",
-    ])
-    _desk_banner(overview, snapshot, [
-        ("SP500",    "S&P 500", "{:,.0f}"),
-        ("US10Y",    "US10Y",   "{:.3f}%"),
-        ("DXY",      "DXY",     "{:.2f}"),
-        ("FED_RATE", "FED",     "{:.2f}%"),
-        ("VIX",      "VIX",     "{:.2f}"),
-        ("CPI_US",   "CPI",     "{:.2f}"),
-    ])
-    tk.Label(overview,
-             text="  Price first, then curve and macro, then positioning, then institutional flow and news.",
-             font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w").pack(fill="x", padx=2, pady=(0, 2))
-
-    _section(parent, "US DESK · MARKET NOW", pady_top=(0, 0))
-    market_shell = _panel_shell(parent, pady=(0, 6))
-    left, right = _two_col(market_shell)
-    rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
-                        "YIELD_SPREAD_10_2", "FED_RATE"])
-    _section(left, "RATES · CURVE", pady_top=(0, 0))
-    _grid(left, rates, [
-        ("US13W",             "13W",     "{:.3f}%"),
-        ("US5Y",              "5Y",      "{:.3f}%"),
-        ("US10Y",             "10Y",     "{:.3f}%"),
-        ("US30Y",             "30Y",     "{:.3f}%"),
-        ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
-        ("FED_RATE",          "FED",     "{:.2f}%"),
-    ])
-
-    fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
-                     "DXY_BROAD"])
-    _section(right, "DOLLAR · FX", pady_top=(0, 0))
-    _grid(right, fx, [
-        ("DXY",       "DXY",     "{:.2f}"),
-        ("EUR_USD",   "EUR/USD", "{:.4f}"),
-        ("USD_JPY",   "USD/JPY", "{:.2f}"),
-        ("GBP_USD",   "GBP/USD", "{:.4f}"),
-        ("USD_CNY",   "USD/CNY", "{:.4f}"),
-        ("DXY_BROAD", "BROAD",   "{:.2f}"),
-    ])
-
-    left2, right2 = _two_col(market_shell)
-    eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
-                     "GOLD", "WTI_OIL", "COPPER"])
-    _section(left2, "EQUITIES · RISK", pady_top=(0, 0))
-    _grid(left2, eq, [
-        ("SP500",  "S&P 500", "{:,.0f}"),
-        ("NASDAQ", "NASDAQ",  "{:,.0f}"),
-        ("VIX",    "VIX",     "{:.2f}"),
-        ("GOLD",   "GOLD",    "${:,.0f}"),
-        ("WTI_OIL","WTI",     "${:.2f}"),
-        ("COPPER", "COPPER",  "${:.3f}"),
-    ])
-    _grid(left2, eq, [
-        ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
-    ])
-
-    econ = _macro_map([
-        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
-        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
-        "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
-    ], n=30)
-    _section(right2, "MACRO SNAPSHOT · FRED", pady_top=(0, 0))
-    _grid(right2, econ, [
-        ("CPI_US",             "CPI",          "{:.2f}"),
-        ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
-        ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
-        ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
-        ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
-        ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
-        ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
-        ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
-    ])
-    _grid(right2, econ, [
-        ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
-        ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
-    ])
-
-    _section(parent, "US DESK · POSITIONING")
-    positioning_shell = _panel_shell(parent, pady=(0, 6))
-    tk.Label(positioning_shell,
-             text="  CFTC futures positioning for dollar, rates, index futures and key US-linked macro trades.",
-             font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w").pack(fill="x", padx=2, pady=(0, 2))
-    _cot_matrix(positioning_shell, [
-        ("DXY",       "DXY_NET_LONGS",       None,               None),
-        ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
-        ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
-        ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
-        ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
-        ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
-        ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
-        ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
-        ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
-    ])
-
-    flow_shell = _panel_shell(parent, pady=(0, 6))
-    _section(flow_shell, "US DESK · FLOW WATCH", pady_top=(0, 0))
-    flow_left, flow_right = _two_col(flow_shell)
-    _render_institutional_flows(flow_left, "INSTITUTIONAL FLOW")
-    _render_calendar_list(flow_right, "CALENDAR · FED · LABOR · INFLATION", only_us=True)
-
-    news_shell = _panel_shell(parent, pady=(0, 0))
-    _render_news_list(news_shell, "US NEWSFLOW · FED · TREASURY · BANKS · STREET",
-                      allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
-                      us_only=True)
-
-
-def _render_markets_tab_v3(parent):
-    """USA desk rendered in batches to reduce time-to-content stalls."""
-    _cancel_chunk_jobs(parent)
-
-    def _render_overview() -> None:
-        overview = _panel_shell(parent, pady=(0, 6))
-        _section(overview, "US DESK Â· SNAPSHOT", pady_top=(0, 0))
-        snapshot = _macro_map([
-            "SP500", "US10Y", "DXY", "FED_RATE", "VIX", "CPI_US",
-        ])
-        _desk_banner(overview, snapshot, [
-            ("SP500",    "S&P 500", "{:,.0f}"),
-            ("US10Y",    "US10Y",   "{:.3f}%"),
-            ("DXY",      "DXY",     "{:.2f}"),
-            ("FED_RATE", "FED",     "{:.2f}%"),
-            ("VIX",      "VIX",     "{:.2f}"),
-            ("CPI_US",   "CPI",     "{:.2f}"),
-        ])
-        tk.Label(
-            overview,
-            text="  Price first, then curve and macro, then positioning, then institutional flow and news.",
-            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
-        ).pack(fill="x", padx=2, pady=(0, 2))
-
-    def _render_market_now() -> None:
-        _section(parent, "US DESK Â· MARKET NOW", pady_top=(0, 0))
-        market_shell = _panel_shell(parent, pady=(0, 6))
-        left, right = _two_col(market_shell)
-        rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
-                            "YIELD_SPREAD_10_2", "FED_RATE"])
-        _section(left, "RATES Â· CURVE", pady_top=(0, 0))
-        _grid(left, rates, [
-            ("US13W",             "13W",     "{:.3f}%"),
-            ("US5Y",              "5Y",      "{:.3f}%"),
-            ("US10Y",             "10Y",     "{:.3f}%"),
-            ("US30Y",             "30Y",     "{:.3f}%"),
-            ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
-            ("FED_RATE",          "FED",     "{:.2f}%"),
-        ])
-
-        fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
-                         "DXY_BROAD"])
-        _section(right, "DOLLAR Â· FX", pady_top=(0, 0))
-        _grid(right, fx, [
-            ("DXY",       "DXY",     "{:.2f}"),
-            ("EUR_USD",   "EUR/USD", "{:.4f}"),
-            ("USD_JPY",   "USD/JPY", "{:.2f}"),
-            ("GBP_USD",   "GBP/USD", "{:.4f}"),
-            ("USD_CNY",   "USD/CNY", "{:.4f}"),
-            ("DXY_BROAD", "BROAD",   "{:.2f}"),
-        ])
-
-        left2, right2 = _two_col(market_shell)
-        eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
-                         "GOLD", "WTI_OIL", "COPPER"])
-        _section(left2, "EQUITIES Â· RISK", pady_top=(0, 0))
-        _grid(left2, eq, [
-            ("SP500",  "S&P 500", "{:,.0f}"),
-            ("NASDAQ", "NASDAQ",  "{:,.0f}"),
-            ("VIX",    "VIX",     "{:.2f}"),
-            ("GOLD",   "GOLD",    "${:,.0f}"),
-            ("WTI_OIL","WTI",     "${:.2f}"),
-            ("COPPER", "COPPER",  "${:.3f}"),
-        ])
-        _grid(left2, eq, [
-            ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
-        ])
-
-        econ = _macro_map([
-            "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
-            "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
-            "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
-        ], n=30)
-        _section(right2, "MACRO SNAPSHOT Â· FRED", pady_top=(0, 0))
-        _grid(right2, econ, [
-            ("CPI_US",             "CPI",          "{:.2f}"),
-            ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
-            ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
-            ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
-            ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
-            ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
-            ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
-            ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
-        ])
-        _grid(right2, econ, [
-            ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
-            ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
-        ])
-
-    def _render_positioning() -> None:
-        _section(parent, "US DESK Â· POSITIONING")
-        positioning_shell = _panel_shell(parent, pady=(0, 6))
-        tk.Label(
-            positioning_shell,
-            text="  CFTC futures positioning for dollar, rates, index futures and key US-linked macro trades.",
-            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
-        ).pack(fill="x", padx=2, pady=(0, 2))
-        _cot_matrix(positioning_shell, [
-            ("DXY",       "DXY_NET_LONGS",       None,               None),
-            ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
-            ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
-            ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
-            ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
-            ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
-            ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
-            ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
-            ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
-        ])
-
-    def _render_flow_watch() -> None:
-        flow_shell = _panel_shell(parent, pady=(0, 6))
-        _section(flow_shell, "US DESK Â· FLOW WATCH", pady_top=(0, 0))
-        flow_left, flow_right = _two_col(flow_shell)
-        _render_institutional_flows(flow_left, "INSTITUTIONAL FLOW")
-        _render_calendar_list(flow_right, "CALENDAR Â· FED Â· LABOR Â· INFLATION", only_us=True)
-
-    def _render_news() -> None:
-        news_shell = _panel_shell(parent, pady=(0, 0))
-        _render_news_list(
-            news_shell,
-            "US NEWSFLOW Â· FED Â· TREASURY Â· BANKS Â· STREET",
-            allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
-            us_only=True,
-        )
-
-    _run_chunked(
-        parent,
-        [
-            _render_overview,
-            _render_market_now,
-            _render_positioning,
-            _render_flow_watch,
-            _render_news,
-        ],
-        metric_name="content.macro_brain.EUA.full",
-    )
-
-
 def _render_markets_tab_v4(parent):
     """USA desk rendered in finer batches to shorten time-to-content."""
     _cancel_chunk_jobs(parent)
@@ -1785,178 +1451,241 @@ def _render_markets_tab_v4(parent):
 
 
 def _render_br_tab(parent):
-    """Brazilian equities + BRL forex."""
-    br_indices = _macro_map([
-        "IBOVESPA", "BR_SMALL_CAPS", "BR_REAL_ESTATE",
-        "USD_BRL", "EUR_BRL",
-    ], n=30)
-    _section(parent, "BR INDICES · FOREX", pady_top=(0, 0))
-    _grid(parent, br_indices, [
-        ("IBOVESPA",       "IBOV",       "{:,.0f}"),
-        ("BR_SMALL_CAPS",  "SMALL CAPS", "{:,.2f}"),
-        ("BR_REAL_ESTATE", "IFIX",       "{:,.2f}"),
-        ("USD_BRL",        "USD/BRL",    "{:.4f}"),
-        ("EUR_BRL",        "EUR/BRL",    "{:.4f}"),
-    ])
+    """BR desk — IBOV, forex, stocks, ADRs. Banner + chunked sections."""
+    _cancel_chunk_jobs(parent)
 
-    stocks1 = _macro_map([
-        "PETR4_PETROBRAS", "VALE3_VALE", "ITUB4_ITAU", "BBDC4_BRADESCO",
-        "BBAS3_BB", "ABEV3_AMBEV", "B3SA3_B3", "WEGE3_WEG",
-    ], n=30)
-    _section(parent, "B3 TOP STOCKS · BANCOS · PETRO · MINERADORAS")
-    _grid(parent, stocks1, [
-        ("PETR4_PETROBRAS", "PETR4", "R${:.2f}"),
-        ("VALE3_VALE",      "VALE3", "R${:.2f}"),
-        ("ITUB4_ITAU",      "ITUB4", "R${:.2f}"),
-        ("BBDC4_BRADESCO",  "BBDC4", "R${:.2f}"),
-        ("BBAS3_BB",        "BBAS3", "R${:.2f}"),
-        ("ABEV3_AMBEV",     "ABEV3", "R${:.2f}"),
-        ("B3SA3_B3",        "B3SA3", "R${:.2f}"),
-        ("WEGE3_WEG",       "WEGE3", "R${:.2f}"),
-    ])
+    def _render_overview() -> None:
+        overview = _panel_shell(parent, pady=(0, 6))
+        _section(overview, "BR SNAPSHOT", pady_top=(0, 0))
+        snap = _macro_map([
+            "IBOVESPA", "USD_BRL", "EUR_BRL",
+            "BR_SMALL_CAPS", "BR_REAL_ESTATE",
+            "PETR4_PETROBRAS",
+        ])
+        _desk_banner(overview, snap, [
+            ("IBOVESPA",        "IBOV",    "{:,.0f}"),
+            ("USD_BRL",         "USD/BRL", "{:.4f}"),
+            ("EUR_BRL",         "EUR/BRL", "{:.4f}"),
+            ("BR_SMALL_CAPS",   "SMALL",   "{:,.2f}"),
+            ("BR_REAL_ESTATE",  "IFIX",    "{:,.2f}"),
+            ("PETR4_PETROBRAS", "PETR4",   "R${:.2f}"),
+        ])
+        tk.Label(
+            overview,
+            text="  Indice e forex primeiro, depois B3 blue chips, mid/small caps e ADRs listados em NY.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
 
-    stocks2 = _macro_map([
-        "RENT3_LOCALIZA", "PRIO3_PRIO", "BRAP4_BRADESPAR",
-        "SUZB3_SUZANO", "JBSS3_JBS", "KLBN11_KLABIN",
-        "ELET3_ELETROBRAS", "MGLU3_MAGALU",
-    ], n=30)
-    _grid(parent, stocks2, [
-        ("RENT3_LOCALIZA",   "RENT3",  "R${:.2f}"),
-        ("PRIO3_PRIO",       "PRIO3",  "R${:.2f}"),
-        ("BRAP4_BRADESPAR",  "BRAP4",  "R${:.2f}"),
-        ("SUZB3_SUZANO",     "SUZB3",  "R${:.2f}"),
-        ("JBSS3_JBS",        "JBSS3",  "R${:.2f}"),
-        ("KLBN11_KLABIN",    "KLBN11", "R${:.2f}"),
-        ("ELET3_ELETROBRAS", "ELET3",  "R${:.2f}"),
-        ("MGLU3_MAGALU",     "MGLU3",  "R${:.2f}"),
-    ])
+    def _render_stocks() -> None:
+        _section(parent, "B3 BLUE CHIPS · MID CAPS")
+        stocks_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(stocks_shell)
 
-    adrs = _macro_map(["VALE_ADR", "ITUB_ADR", "PBR_ADR", "BBD_ADR"], n=30)
-    _section(parent, "BRAZILIAN ADRs · US-LISTED")
-    _grid(parent, adrs, [
-        ("VALE_ADR", "VALE NYSE", "${:.2f}"),
-        ("ITUB_ADR", "ITUB NYSE", "${:.2f}"),
-        ("PBR_ADR",  "PBR NYSE",  "${:.2f}"),
-        ("BBD_ADR",  "BBD NYSE",  "${:.2f}"),
-    ])
+        stocks1 = _macro_map([
+            "PETR4_PETROBRAS", "VALE3_VALE", "ITUB4_ITAU", "BBDC4_BRADESCO",
+            "BBAS3_BB", "ABEV3_AMBEV", "B3SA3_B3", "WEGE3_WEG",
+        ], n=30)
+        _section(left, "TOP 8 BOVESPA", pady_top=(0, 0))
+        _grid(left, stocks1, [
+            ("PETR4_PETROBRAS", "PETR4", "R${:.2f}"),
+            ("VALE3_VALE",      "VALE3", "R${:.2f}"),
+            ("ITUB4_ITAU",      "ITUB4", "R${:.2f}"),
+            ("BBDC4_BRADESCO",  "BBDC4", "R${:.2f}"),
+        ])
+        _grid(left, stocks1, [
+            ("BBAS3_BB",    "BBAS3", "R${:.2f}"),
+            ("ABEV3_AMBEV", "ABEV3", "R${:.2f}"),
+            ("B3SA3_B3",    "B3SA3", "R${:.2f}"),
+            ("WEGE3_WEG",   "WEGE3", "R${:.2f}"),
+        ])
+
+        stocks2 = _macro_map([
+            "RENT3_LOCALIZA", "PRIO3_PRIO", "BRAP4_BRADESPAR",
+            "SUZB3_SUZANO", "JBSS3_JBS", "KLBN11_KLABIN",
+            "ELET3_ELETROBRAS", "MGLU3_MAGALU",
+        ], n=30)
+        _section(right, "MID + SMALL CAPS", pady_top=(0, 0))
+        _grid(right, stocks2, [
+            ("RENT3_LOCALIZA",   "RENT3",  "R${:.2f}"),
+            ("PRIO3_PRIO",       "PRIO3",  "R${:.2f}"),
+            ("BRAP4_BRADESPAR",  "BRAP4",  "R${:.2f}"),
+            ("SUZB3_SUZANO",     "SUZB3",  "R${:.2f}"),
+        ])
+        _grid(right, stocks2, [
+            ("JBSS3_JBS",        "JBSS3",  "R${:.2f}"),
+            ("KLBN11_KLABIN",    "KLBN11", "R${:.2f}"),
+            ("ELET3_ELETROBRAS", "ELET3",  "R${:.2f}"),
+            ("MGLU3_MAGALU",     "MGLU3",  "R${:.2f}"),
+        ])
+
+    def _render_adrs() -> None:
+        _section(parent, "BRAZILIAN ADRs · US-LISTED")
+        adr_shell = _panel_shell(parent, pady=(0, 0))
+        adrs = _macro_map(["VALE_ADR", "ITUB_ADR", "PBR_ADR", "BBD_ADR"], n=30)
+        _grid(adr_shell, adrs, [
+            ("VALE_ADR", "VALE NYSE", "${:.2f}"),
+            ("ITUB_ADR", "ITUB NYSE", "${:.2f}"),
+            ("PBR_ADR",  "PBR NYSE",  "${:.2f}"),
+            ("BBD_ADR",  "BBD NYSE",  "${:.2f}"),
+        ])
+
+    _run_chunked(
+        parent,
+        [_render_overview, _render_stocks, _render_adrs],
+        metric_name="content.macro_brain.BRASIL.full",
+    )
 
 
 def _render_crypto_tab(parent):
-    """Crypto deep — organizado por rede."""
-    _section(parent, "BTC · NETWORK · ON-CHAIN · POSITIONING",
-             pady_top=(0, 0))
-    btc = _macro_map([
-        "BTC_SPOT", "BTC_DOMINANCE", "BTC_HASH_RATE", "BTC_DIFFICULTY",
-        "BTC_BLOCK_HEIGHT", "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
-        "BTC_24H_TX_COUNT",
-    ], n=30)
-    _grid(parent, btc, [
-        ("BTC_SPOT",              "PRICE",      "${:,.0f}"),
-        ("BTC_DOMINANCE",         "DOMINANCE",  "{:.2f}%"),
-        ("BTC_HASH_RATE",         "HASHRATE",   "{:,.0f}"),
-        ("BTC_DIFFICULTY",        "DIFFICULTY", "{:,.0f}"),
-        ("BTC_BLOCK_HEIGHT",      "BLOCK",      "{:,.0f}"),
-        ("BTC_MEMPOOL_COUNT",     "MEMPOOL",    "{:,.0f}"),
-        ("BTC_FEE_FASTEST_SATVB", "FEE sat/vB", "{:.0f}"),
-        ("BTC_24H_TX_COUNT",      "24H TX",     "{:,.0f}"),
-    ])
-    btc_extra = _macro_map([
-        "BTC_CME_NET_LONGS", "BTC_CME_SWAP_NET", "BTC_CME_MM_NET",
-    ], n=12)
-    _grid(parent, btc_extra, [
-        ("BTC_CME_NET_LONGS", "BTC CME NC NET", "{:+,.0f}"),
-        ("BTC_CME_SWAP_NET",  "BTC CME BANKS",  "{:+,.0f}"),
-        ("BTC_CME_MM_NET",    "BTC CME FUNDS",  "{:+,.0f}"),
-    ])
+    """Crypto desk — BTC + alts + DeFi. Banner + chunked sections.
 
-    _section(parent, "ETH · ETHEREUM · DEFI DOMINANT")
-    eth = _macro_map(["ETH_SPOT", "DEFI_ETHEREUM_TVL"], n=30)
-    _grid(parent, eth, [
-        ("ETH_SPOT",          "ETH PRICE",    "${:,.1f}"),
-        ("DEFI_ETHEREUM_TVL", "ETH DEFI TVL", "${:,.0f}"),
-    ])
+    Absorve conteudo do antigo REDE tab (advanced BTC fees + block time)
+    pra deixar tudo que e on-chain/crypto num lugar so.
+    """
+    _cancel_chunk_jobs(parent)
 
-    _section(parent, "SOL · SOLANA · HIGH THROUGHPUT")
-    sol = _macro_map(["SOL_SPOT", "DEFI_SOLANA_TVL"], n=30)
-    _grid(parent, sol, [
-        ("SOL_SPOT",        "SOL PRICE",    "${:.2f}"),
-        ("DEFI_SOLANA_TVL", "SOL DEFI TVL", "${:,.0f}"),
-    ])
-    _render_bot_slots(parent, network="SOL")
+    def _render_overview() -> None:
+        overview = _panel_shell(parent, pady=(0, 6))
+        _section(overview, "CRYPTO SNAPSHOT", pady_top=(0, 0))
+        snap = _macro_map([
+            "BTC_SPOT", "ETH_SPOT", "SOL_SPOT",
+            "BTC_DOMINANCE", "TOTAL_CRYPTO_MCAP", "CRYPTO_FEAR_GREED",
+        ])
+        _desk_banner(overview, snap, [
+            ("BTC_SPOT",          "BTC",    "${:,.0f}"),
+            ("ETH_SPOT",          "ETH",    "${:,.1f}"),
+            ("SOL_SPOT",          "SOL",    "${:.2f}"),
+            ("BTC_DOMINANCE",     "BTC.D",  "{:.2f}%"),
+            ("TOTAL_CRYPTO_MCAP", "MCAP",   "${:,.0f}"),
+            ("CRYPTO_FEAR_GREED", "F&G",    "{:.0f}/100"),
+        ])
+        tk.Label(
+            overview,
+            text="  Spot primeiro, depois BTC network e positioning, altcoins, HL perps e cross-chain DeFi.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
 
-    _section(parent, "HYPE · HYPERLIQUID · PERPS")
-    hl = _macro_map([
-        "HL_TOTAL_OI", "HL_BTC_PRICE", "HL_BTC_OI_USD", "HL_BTC_FUNDING",
-        "HL_ETH_OI_USD", "HL_ETH_FUNDING", "HL_HYPE_PRICE",
-        "HL_HYPE_OI_USD",
-    ], n=12)
-    _grid(parent, hl, [
-        ("HL_TOTAL_OI",    "TOTAL OI",    "${:,.0f}"),
-        ("HL_BTC_PRICE",   "BTC PERP",    "${:,.0f}"),
-        ("HL_BTC_OI_USD",  "BTC OI",      "${:,.0f}"),
-        ("HL_BTC_FUNDING", "BTC FUNDING", "{:+.4f}%"),
-        ("HL_ETH_OI_USD",  "ETH OI",      "${:,.0f}"),
-        ("HL_ETH_FUNDING", "ETH FUNDING", "{:+.4f}%"),
-        ("HL_HYPE_PRICE",  "HYPE TOKEN",  "${:.2f}"),
-        ("HL_HYPE_OI_USD", "HYPE OI",     "${:,.0f}"),
-    ])
-    _render_bot_slots(parent, network="HYPE")
+    def _render_btc_network() -> None:
+        _section(parent, "BTC NETWORK · ON-CHAIN")
+        net_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(net_shell)
 
-    _section(parent, "CROSS-CHAIN DEFI · TVL PER NETWORK")
-    defi = _macro_map([
-        "DEFI_TOTAL_TVL", "DEFI_ETHEREUM_TVL", "DEFI_SOLANA_TVL",
-        "DEFI_BSC_TVL", "DEFI_BASE_TVL", "DEFI_ARBITRUM_TVL",
-        "DEFI_TRON_TVL", "DEFI_HYPERLIQUID_TVL",
-    ], n=30)
-    _grid(parent, defi, [
-        ("DEFI_TOTAL_TVL",       "TOTAL",    "${:,.0f}"),
-        ("DEFI_ETHEREUM_TVL",    "ETH",      "${:,.0f}"),
-        ("DEFI_SOLANA_TVL",      "SOL",      "${:,.0f}"),
-        ("DEFI_BSC_TVL",         "BSC",      "${:,.0f}"),
-        ("DEFI_BASE_TVL",        "BASE",     "${:,.0f}"),
-        ("DEFI_ARBITRUM_TVL",    "ARB",      "${:,.0f}"),
-        ("DEFI_TRON_TVL",        "TRON",     "${:,.0f}"),
-        ("DEFI_HYPERLIQUID_TVL", "HYPE L1",  "${:,.0f}"),
-    ])
+        onchain = _macro_map([
+            "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
+            "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
+            "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
+            "BTC_24H_TRADE_VOLUME_USD",
+        ], n=30)
+        _section(left, "NETWORK STATE", pady_top=(0, 0))
+        _grid(left, onchain, [
+            ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
+            ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
+            ("BTC_BLOCK_HEIGHT",          "BLOCK",      "{:,.0f}"),
+            ("BTC_MEMPOOL_COUNT",         "MEMPOOL",    "{:,.0f}"),
+        ])
+        _grid(left, onchain, [
+            ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB", "{:.0f}"),
+            ("BTC_24H_TX_COUNT",          "24H TX",     "{:,.0f}"),
+            ("BTC_24H_MINER_REVENUE_USD", "MINER REV",  "${:,.0f}"),
+            ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
+        ])
 
+        adv = _macro_map([
+            "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
+            "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
+            "BTC_24H_FEES_BTC", "BTC_24H_MINED",
+        ], n=30)
+        _section(right, "FEES + BLOCK TIME", pady_top=(0, 0))
+        _grid(right, adv, [
+            ("BTC_FEE_30MIN_SATVB",    "30MIN FEE",  "{:.0f}"),
+            ("BTC_FEE_1H_SATVB",       "1H FEE",     "{:.0f}"),
+            ("BTC_FEE_ECONOMY_SATVB",  "ECON FEE",   "{:.0f}"),
+            ("BTC_MEMPOOL_VSIZE",      "MP VSIZE",   "{:,.0f}"),
+        ])
+        _grid(right, adv, [
+            ("BTC_AVG_BLOCK_TIME_MIN", "BLOCK TIME", "{:.1f}"),
+            ("BTC_24H_FEES_BTC",       "24H FEES",   "{:.2f}"),
+            ("BTC_24H_MINED",          "24H MINED",  "{:.0f}"),
+        ])
 
-def _render_insights_tab(parent):
-    """Derived cross-asset analytics only — no raw US desk feeds here."""
+    def _render_btc_positioning() -> None:
+        _section(parent, "BTC POSITIONING · CFTC")
+        pos_shell = _panel_shell(parent, pady=(0, 6))
+        _cot_matrix(pos_shell, [
+            ("BTC CME", "BTC_CME_NET_LONGS",
+             "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
+        ])
 
-    try:
-        from macro_brain.ml_engine.analytics import compute_all
-        insights = compute_all()
-    except Exception:
-        insights = []
-    if insights:
-        _section(parent, "MACRO ANALYTICS · DERIVED INSIGHTS",
-                 pady_top=(0, 0))
-        sig_c = {"bullish": GREEN, "bearish": RED,
-                 "warning": AMBER, "neutral": DIM2}
-        row = tk.Frame(parent, bg=BG); row.pack(fill="x", pady=PAD_ROW // 2)
-        for ins in insights:
-            sc = sig_c.get(ins.signal, WHITE)
-            card = tk.Frame(row, bg=PANEL,
-                            highlightbackground=BORDER, highlightthickness=1)
-            card.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-            _attach_hover(card)
-            tk.Label(card, text=ins.name.upper(), font=(FONT, 6, "bold"),
-                     fg=DIM, bg=PANEL, anchor="w").pack(
-                         fill="x", padx=PAD_TILE_INNER, pady=(2, 0))
-            tk.Label(card, text=str(ins.value), font=(FONT, 9, "bold"),
-                     fg=WHITE, bg=PANEL, anchor="w").pack(
-                         fill="x", padx=PAD_TILE_INNER)
-            tk.Label(card, text=ins.signal.upper(), font=(FONT, 7, "bold"),
-                     fg=sc, bg=PANEL, anchor="w").pack(
-                         fill="x", padx=PAD_TILE_INNER)
-            tk.Label(card, text=ins.detail[:60], font=(FONT, 7),
-                     fg=DIM2, bg=PANEL, anchor="w", wraplength=180,
-                     justify="left").pack(
-                         fill="x", padx=PAD_TILE_INNER, pady=(0, 2))
-    _section(parent, "ANALYTICS SCOPE")
-    tk.Label(parent,
-             text="  Raw US calendar, news, COT and institutional flow moved to [1] EUA.",
-             font=(FONT, 8), fg=DIM2, bg=BG, anchor="w").pack(fill="x", padx=6)
+    def _render_alts() -> None:
+        _section(parent, "ALTCOINS · HYPERLIQUID PERPS")
+        alt_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(alt_shell)
+
+        alt_spot = _macro_map([
+            "ETH_SPOT", "DEFI_ETHEREUM_TVL",
+            "SOL_SPOT", "DEFI_SOLANA_TVL",
+        ], n=30)
+        _section(left, "ETH · SOL SPOT + TVL", pady_top=(0, 0))
+        _grid(left, alt_spot, [
+            ("ETH_SPOT",          "ETH",      "${:,.1f}"),
+            ("DEFI_ETHEREUM_TVL", "ETH TVL",  "${:,.0f}"),
+            ("SOL_SPOT",          "SOL",      "${:.2f}"),
+            ("DEFI_SOLANA_TVL",   "SOL TVL",  "${:,.0f}"),
+        ])
+        _render_bot_slots(left, network="SOL")
+
+        hl = _macro_map([
+            "HL_TOTAL_OI", "HL_BTC_PRICE", "HL_BTC_OI_USD", "HL_BTC_FUNDING",
+            "HL_ETH_OI_USD", "HL_ETH_FUNDING", "HL_HYPE_PRICE",
+            "HL_HYPE_OI_USD",
+        ], n=12)
+        _section(right, "HYPERLIQUID PERPS", pady_top=(0, 0))
+        _grid(right, hl, [
+            ("HL_TOTAL_OI",    "TOTAL OI",    "${:,.0f}"),
+            ("HL_BTC_PRICE",   "BTC PERP",    "${:,.0f}"),
+            ("HL_BTC_OI_USD",  "BTC OI",      "${:,.0f}"),
+            ("HL_BTC_FUNDING", "BTC FUND",    "{:+.4f}%"),
+        ])
+        _grid(right, hl, [
+            ("HL_ETH_OI_USD",  "ETH OI",      "${:,.0f}"),
+            ("HL_ETH_FUNDING", "ETH FUND",    "{:+.4f}%"),
+            ("HL_HYPE_PRICE",  "HYPE TOKEN",  "${:.2f}"),
+            ("HL_HYPE_OI_USD", "HYPE OI",     "${:,.0f}"),
+        ])
+        _render_bot_slots(right, network="HYPE")
+
+    def _render_defi() -> None:
+        _section(parent, "CROSS-CHAIN DEFI · TVL PER NETWORK")
+        defi_shell = _panel_shell(parent, pady=(0, 0))
+        defi = _macro_map([
+            "DEFI_TOTAL_TVL", "DEFI_ETHEREUM_TVL", "DEFI_SOLANA_TVL",
+            "DEFI_BSC_TVL", "DEFI_BASE_TVL", "DEFI_ARBITRUM_TVL",
+            "DEFI_TRON_TVL", "DEFI_HYPERLIQUID_TVL",
+        ], n=30)
+        _grid(defi_shell, defi, [
+            ("DEFI_TOTAL_TVL",       "TOTAL",    "${:,.0f}"),
+            ("DEFI_ETHEREUM_TVL",    "ETH",      "${:,.0f}"),
+            ("DEFI_SOLANA_TVL",      "SOL",      "${:,.0f}"),
+            ("DEFI_BSC_TVL",         "BSC",      "${:,.0f}"),
+        ])
+        _grid(defi_shell, defi, [
+            ("DEFI_BASE_TVL",        "BASE",     "${:,.0f}"),
+            ("DEFI_ARBITRUM_TVL",    "ARB",      "${:,.0f}"),
+            ("DEFI_TRON_TVL",        "TRON",     "${:,.0f}"),
+            ("DEFI_HYPERLIQUID_TVL", "HYPE L1",  "${:,.0f}"),
+        ])
+
+    _run_chunked(
+        parent,
+        [
+            _render_overview,
+            _render_btc_network,
+            _render_btc_positioning,
+            _render_alts,
+            _render_defi,
+        ],
+        metric_name="content.macro_brain.CRIPTO.full",
+    )
 
 
 def _render_analysis_tab(parent):
@@ -2014,419 +1743,6 @@ def _render_analysis_tab(parent):
         ("ETH CME",   None,                 "ETH_CME_SWAP_NET", "ETH_CME_MM_NET"),
     ])
 
-
-def _render_network_tab(parent):
-    """BTC on-chain — Portal | VPS — Processes."""
-    onchain = _macro_map([
-        "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
-        "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
-        "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
-        "BTC_24H_TRADE_VOLUME_USD",
-    ], n=30)
-    _section(parent, "BTC ON-CHAIN · NETWORK STATE", pady_top=(0, 0))
-    _grid(parent, onchain, [
-        ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
-        ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
-        ("BTC_BLOCK_HEIGHT",          "BLOCK",      "{:,.0f}"),
-        ("BTC_MEMPOOL_COUNT",         "MEMPOOL",    "{:,.0f}"),
-        ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB", "{:.0f}"),
-        ("BTC_24H_TX_COUNT",          "24H TX",     "{:,.0f}"),
-        ("BTC_24H_MINER_REVENUE_USD", "MINER REV",  "${:,.0f}"),
-        ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
-    ])
-
-    adv = _macro_map([
-        "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
-        "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
-        "BTC_24H_FEES_BTC", "BTC_24H_MINED",
-    ], n=30)
-    _section(parent, "BTC ADVANCED · FEES · BLOCK TIME")
-    _grid(parent, adv, [
-        ("BTC_FEE_30MIN_SATVB",    "30MIN FEE",  "{:.0f}"),
-        ("BTC_FEE_1H_SATVB",       "1H FEE",     "{:.0f}"),
-        ("BTC_FEE_ECONOMY_SATVB",  "ECON FEE",   "{:.0f}"),
-        ("BTC_MEMPOOL_VSIZE",      "MP VSIZE",   "{:,.0f}"),
-        ("BTC_AVG_BLOCK_TIME_MIN", "BLOCK TIME", "{:.1f}"),
-        ("BTC_24H_FEES_BTC",       "24H FEES",   "{:.2f}"),
-        ("BTC_24H_MINED",          "24H MINED",  "{:.0f}"),
-    ])
-
-    left, right = _two_col(parent)
-
-    _section(left, "ENGINES PORTAL · PROCESS MONITOR")
-    try:
-        from core.ops.proc import list_procs
-        procs = list_procs()
-    except Exception:
-        procs = []
-    running = [p for p in procs if p.get("alive") or
-               p.get("status") == "running"]
-    finished = [p for p in procs if not p.get("alive") and
-                p.get("status") == "finished"]
-
-    stat_row = tk.Frame(left, bg=BG); stat_row.pack(fill="x",
-                                                    pady=PAD_ROW // 2)
-    for label, val in [
-        ("ACTIVE",   f"{len(running)}"),
-        ("FINISHED", f"{len(finished)}"),
-        ("TOTAL",    f"{len(procs)}"),
-    ]:
-        box = tk.Frame(stat_row, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1,
-                       padx=10, pady=4)
-        box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-        _attach_hover(box)
-        tk.Label(box, text=label, font=(FONT, 6, "bold"),
-                 fg=DIM, bg=PANEL).pack()
-        tk.Label(box, text=val, font=(FONT, 14, "bold"),
-                 fg=WHITE, bg=PANEL).pack()
-
-    vps_online, vps_detail = _read_vps_status()
-
-    _section(right, "VPS STATUS")
-    vps_c = GREEN if vps_online else RED
-    vps_box = tk.Frame(right, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1,
-                       padx=12, pady=10)
-    vps_box.pack(fill="x", padx=2, pady=2)
-    _attach_hover(vps_box)
-    vps_status_lbl = tk.Label(vps_box, text="● ONLINE" if vps_online else "○ OFFLINE",
-                              font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL)
-    vps_status_lbl.pack(anchor="w")
-    vps_detail_lbl = tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
-                              fg=WHITE, bg=PANEL)
-    vps_detail_lbl.pack(anchor="w")
-    tk.Label(vps_box, text="SSH connect test · port 22",
-             font=(FONT, 6), fg=DIM, bg=PANEL).pack(anchor="w",
-                                                     pady=(2, 0))
-    if vps_detail == "checking...":
-        def _refresh_vps_box() -> None:
-            try:
-                if not vps_box.winfo_exists():
-                    return
-            except Exception:
-                return
-            latest_online, latest_detail = _read_vps_status()
-            if latest_detail == "checking...":
-                vps_box.after(250, _refresh_vps_box)
-                return
-            latest_color = GREEN if latest_online else RED
-            vps_status_lbl.configure(
-                text="● ONLINE" if latest_online else "○ OFFLINE",
-                fg=latest_color,
-            )
-            vps_detail_lbl.configure(text=latest_detail)
-
-        vps_box.after(250, _refresh_vps_box)
-
-    if procs:
-        _section(parent, "PROCESSES · ACTIVE + RECENT")
-        hdr = tk.Frame(parent, bg=BG); hdr.pack(fill="x", pady=(0, 1))
-        for txt, w in [("", 3), ("ENGINE", 16), ("PID", 12),
-                       ("STATUS", 10), ("STARTED", 15)]:
-            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM,
-                     bg=BG, width=w, anchor="w").pack(side="left")
-
-        for p in procs[:15]:
-            engine = (p.get("engine") or "?").upper()
-            pid = p.get("pid") or "?"
-            status = p.get("status", "?")
-            alive = p.get("alive", False)
-            sc = GREEN if alive else DIM
-            row = tk.Frame(parent, bg=BG); row.pack(fill="x")
-            tk.Label(row, text=f" {'●' if alive else '○'}",
-                     font=(FONT, 8, "bold"), fg=sc, bg=BG,
-                     width=3).pack(side="left")
-            tk.Label(row, text=f"{engine:<14}", font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG, width=16,
-                     anchor="w").pack(side="left")
-            tk.Label(row, text=f"{pid}", font=(FONT, 7),
-                     fg=DIM, bg=BG, width=12,
-                     anchor="w").pack(side="left")
-            tk.Label(row, text=status.upper(), font=(FONT, 7, "bold"),
-                     fg=sc, bg=BG, width=10,
-                     anchor="w").pack(side="left")
-            started = p.get("started", "")
-            tk.Label(row,
-                     text=f"{_fmt_age(started)} ago" if started else "",
-                     font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(
-                         side="left", fill="x", expand=True)
-
-
-
-def _render_network_tab_v2(parent):
-    """BTC on-chain and ops tab rendered in batches."""
-    _cancel_chunk_jobs(parent)
-
-    def _render_onchain() -> None:
-        onchain = _macro_map([
-            "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
-            "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
-            "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
-            "BTC_24H_TRADE_VOLUME_USD",
-        ], n=30)
-        _section(parent, "BTC ON-CHAIN Â· NETWORK STATE", pady_top=(0, 0))
-        _grid(parent, onchain, [
-            ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
-            ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
-            ("BTC_BLOCK_HEIGHT",          "BLOCK",      "{:,.0f}"),
-            ("BTC_MEMPOOL_COUNT",         "MEMPOOL",    "{:,.0f}"),
-            ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB", "{:.0f}"),
-            ("BTC_24H_TX_COUNT",          "24H TX",     "{:,.0f}"),
-            ("BTC_24H_MINER_REVENUE_USD", "MINER REV",  "${:,.0f}"),
-            ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
-        ])
-
-    def _render_advanced() -> None:
-        adv = _macro_map([
-            "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
-            "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
-            "BTC_24H_FEES_BTC", "BTC_24H_MINED",
-        ], n=30)
-        _section(parent, "BTC ADVANCED Â· FEES Â· BLOCK TIME")
-        _grid(parent, adv, [
-            ("BTC_FEE_30MIN_SATVB",    "30MIN FEE",  "{:.0f}"),
-            ("BTC_FEE_1H_SATVB",       "1H FEE",     "{:.0f}"),
-            ("BTC_FEE_ECONOMY_SATVB",  "ECON FEE",   "{:.0f}"),
-            ("BTC_MEMPOOL_VSIZE",      "MP VSIZE",   "{:,.0f}"),
-            ("BTC_AVG_BLOCK_TIME_MIN", "BLOCK TIME", "{:.1f}"),
-            ("BTC_24H_FEES_BTC",       "24H FEES",   "{:.2f}"),
-            ("BTC_24H_MINED",          "24H MINED",  "{:.0f}"),
-        ])
-
-    def _render_ops_summary() -> None:
-        left, right = _two_col(parent)
-
-        _section(left, "ENGINES PORTAL Â· PROCESS MONITOR")
-        try:
-            from core.ops.proc import list_procs
-            procs = list_procs()
-        except Exception:
-            procs = []
-        parent._macro_network_procs = procs
-        running = [p for p in procs if p.get("alive") or p.get("status") == "running"]
-        finished = [p for p in procs if not p.get("alive") and p.get("status") == "finished"]
-
-        stat_row = tk.Frame(left, bg=BG)
-        stat_row.pack(fill="x", pady=PAD_ROW // 2)
-        for label, val in [
-            ("ACTIVE",   f"{len(running)}"),
-            ("FINISHED", f"{len(finished)}"),
-            ("TOTAL",    f"{len(procs)}"),
-        ]:
-            box = tk.Frame(stat_row, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1,
-                           padx=10, pady=4)
-            box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-            _attach_hover(box)
-            tk.Label(box, text=label, font=(FONT, 6, "bold"),
-                     fg=DIM, bg=PANEL).pack()
-            tk.Label(box, text=val, font=(FONT, 14, "bold"),
-                     fg=WHITE, bg=PANEL).pack()
-
-        vps_online, vps_detail = _read_vps_status()
-        _section(right, "VPS STATUS")
-        vps_c = GREEN if vps_online else RED
-        vps_box = tk.Frame(right, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1,
-                           padx=12, pady=10)
-        vps_box.pack(fill="x", padx=2, pady=2)
-        _attach_hover(vps_box)
-        vps_status_lbl = tk.Label(vps_box, text="â— ONLINE" if vps_online else "â—‹ OFFLINE",
-                                  font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL)
-        vps_status_lbl.pack(anchor="w")
-        vps_detail_lbl = tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
-                                  fg=WHITE, bg=PANEL)
-        vps_detail_lbl.pack(anchor="w")
-        tk.Label(vps_box, text="SSH connect test Â· port 22",
-                 font=(FONT, 6), fg=DIM, bg=PANEL).pack(anchor="w", pady=(2, 0))
-        if vps_detail == "checking...":
-            def _refresh_vps_box() -> None:
-                try:
-                    if not vps_box.winfo_exists():
-                        return
-                except Exception:
-                    return
-                latest_online, latest_detail = _read_vps_status()
-                if latest_detail == "checking...":
-                    vps_box.after(250, _refresh_vps_box)
-                    return
-                latest_color = GREEN if latest_online else RED
-                vps_status_lbl.configure(
-                    text="â— ONLINE" if latest_online else "â—‹ OFFLINE",
-                    fg=latest_color,
-                )
-                vps_detail_lbl.configure(text=latest_detail)
-
-            vps_box.after(250, _refresh_vps_box)
-
-    def _render_processes() -> None:
-        procs = list(getattr(parent, "_macro_network_procs", []) or [])
-        if not procs:
-            return
-        _section(parent, "PROCESSES Â· ACTIVE + RECENT")
-        hdr = tk.Frame(parent, bg=BG)
-        hdr.pack(fill="x", pady=(0, 1))
-        for txt, w in [("", 3), ("ENGINE", 16), ("PID", 12), ("STATUS", 10), ("STARTED", 15)]:
-            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM,
-                     bg=BG, width=w, anchor="w").pack(side="left")
-
-        for p in procs[:15]:
-            engine = (p.get("engine") or "?").upper()
-            pid = p.get("pid") or "?"
-            status = p.get("status", "?")
-            alive = p.get("alive", False)
-            sc = GREEN if alive else DIM
-            row = tk.Frame(parent, bg=BG)
-            row.pack(fill="x")
-            tk.Label(row, text=f" {'â—' if alive else 'â—‹'}",
-                     font=(FONT, 8, "bold"), fg=sc, bg=BG, width=3).pack(side="left")
-            tk.Label(row, text=f"{engine:<14}", font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG, width=16, anchor="w").pack(side="left")
-            tk.Label(row, text=f"{pid}", font=(FONT, 7),
-                     fg=DIM, bg=BG, width=12, anchor="w").pack(side="left")
-            tk.Label(row, text=status.upper(), font=(FONT, 7, "bold"),
-                     fg=sc, bg=BG, width=10, anchor="w").pack(side="left")
-            started = p.get("started", "")
-            tk.Label(row,
-                     text=f"{_fmt_age(started)} ago" if started else "",
-                     font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(
-                         side="left", fill="x", expand=True)
-
-    _run_chunked(
-        parent,
-        [
-            _render_onchain,
-            _render_advanced,
-            _render_ops_summary,
-            _render_processes,
-        ],
-        metric_name="content.macro_brain.REDE.full",
-    )
-
-
-def _render_book_tab(parent):
-    """Macro paper P&L header · Theses | Positions · Regime details."""
-    from macro_brain.persistence.store import (
-        active_theses, latest_regime, open_positions, pnl_summary,
-    )
-
-    pnl = pnl_summary()
-    total = pnl.get("total_pnl", 0) or 0
-    equity = pnl.get("equity", 0) or 0
-    initial = pnl.get("initial", 0) or 0
-    dd_pct = ((initial - equity) / initial * 100) if initial else 0
-    theses = active_theses()
-    positions = open_positions()
-
-    _section(parent, "MACRO BOOK · PAPER", pady_top=(0, 0))
-    pnl_row = tk.Frame(parent, bg=BG); pnl_row.pack(fill="x",
-                                                    pady=PAD_ROW // 2)
-    for label, val, color in [
-        ("EQUITY",    f"${equity:,.0f}",                       WHITE),
-        ("TOTAL P&L", f"${total:+,.0f}",
-                      GREEN if total >= 0 else RED),
-        ("INITIAL",   f"${initial:,.0f}",                      DIM2),
-        ("DRAWDOWN",
-         f"{-dd_pct:+.2f}%" if dd_pct > 0 else "0.00%",
-         RED if dd_pct > 0 else GREEN),
-        ("THESES",    f"{len(theses)}",                        AMBER),
-        ("POSITIONS", f"{len(positions)}",                     AMBER),
-    ]:
-        box = tk.Frame(pnl_row, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1,
-                       padx=12, pady=6)
-        box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-        _attach_hover(box)
-        tk.Label(box, text=val, font=(FONT, 13, "bold"),
-                 fg=color, bg=PANEL).pack()
-        tk.Label(box, text=label, font=(FONT, 7, "bold"),
-                 fg=DIM, bg=PANEL).pack()
-
-    left, right = _two_col(parent)
-
-    _section(left, "ACTIVE THESES")
-    if theses:
-        for t in theses:
-            card = tk.Frame(left, bg=PANEL,
-                            highlightbackground=BORDER,
-                            highlightthickness=1)
-            card.pack(fill="x", pady=2, padx=2)
-            _attach_hover(card)
-            hdr_c = tk.Frame(card, bg=PANEL)
-            hdr_c.pack(fill="x", padx=6, pady=(4, 2))
-            sc = GREEN if t["direction"] == "long" else RED
-            tk.Label(hdr_c, text=t["direction"].upper(),
-                     font=(FONT, 8, "bold"), fg=sc, bg=PANEL).pack(side="left")
-            tk.Label(hdr_c, text=f"  {t['asset']}",
-                     font=(FONT, 10, "bold"),
-                     fg=WHITE, bg=PANEL).pack(side="left")
-            tk.Label(hdr_c, text=f"conf {t['confidence']:.0%}",
-                     font=(FONT, 8), fg=AMBER,
-                     bg=PANEL).pack(side="right", padx=4)
-            tk.Label(hdr_c, text=f"{t.get('target_horizon_days', '?')}d",
-                     font=(FONT, 8), fg=DIM,
-                     bg=PANEL).pack(side="right", padx=4)
-            rationale = t.get("rationale", "") or ""
-            tk.Label(card, text=rationale[:250], font=(FONT, 8), fg=DIM2,
-                     bg=PANEL, wraplength=500, justify="left",
-                     anchor="w").pack(fill="x", padx=6, pady=(0, 4))
-    else:
-        tk.Label(left, text="  (no active theses)", font=(FONT, 9),
-                 fg=DIM, bg=BG).pack(pady=6)
-
-    _section(right, "OPEN POSITIONS")
-    if positions:
-        for p in positions:
-            sc = GREEN if p["side"] == "long" else RED
-            card = tk.Frame(right, bg=PANEL,
-                            highlightbackground=BORDER,
-                            highlightthickness=1)
-            card.pack(fill="x", pady=2, padx=2)
-            _attach_hover(card)
-            tk.Label(card,
-                     text=f"  {p['side'].upper()}  {p['asset']}",
-                     font=(FONT, 10, "bold"),
-                     fg=sc, bg=PANEL).pack(anchor="w", padx=6,
-                                           pady=(4, 0))
-            detail = (
-                f"  size ${p['size_usd']:,.0f}  @  "
-                f"{p['entry_price']:,.2f}"
-            )
-            tk.Label(card, text=detail, font=(FONT, 8),
-                     fg=WHITE, bg=PANEL).pack(anchor="w", padx=6,
-                                               pady=(0, 4))
-    else:
-        tk.Label(right, text="  (no open positions)", font=(FONT, 9),
-                 fg=DIM, bg=BG).pack(pady=6)
-
-    _section(parent, "CURRENT REGIME · DETAILS")
-    regime = latest_regime()
-    if regime:
-        reg_name = (regime.get("regime") or "?").upper()
-        conf = regime.get("confidence") or 0.0
-        reg_color = {"RISK_ON": GREEN, "RISK_OFF": RED,
-                     "TRANSITION": AMBER, "UNCERTAINTY": DIM2}.get(
-                         reg_name, WHITE)
-        reg_row = tk.Frame(parent, bg=BG); reg_row.pack(fill="x",
-                                                        pady=PAD_ROW // 2)
-        tk.Label(reg_row, text=reg_name, font=(FONT, 20, "bold"),
-                 fg=reg_color, bg=BG).pack(side="left", padx=(8, 20))
-        col = tk.Frame(reg_row, bg=BG); col.pack(side="left")
-        tk.Label(col, text=f"confidence {conf:.0%}",
-                 font=(FONT, 10), fg=WHITE, bg=BG).pack(anchor="w")
-        tk.Label(col,
-                 text=f"snapshot age {_fmt_age(regime.get('ts', ''))}",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w")
-        reason = regime.get("reason") or ""
-        if reason:
-            tk.Label(parent, text=f"  {reason}", font=(FONT, 8),
-                     fg=DIM2, bg=BG, anchor="w",
-                     wraplength=1000, justify="left").pack(
-                         fill="x", padx=6, pady=(2, 0))
-    else:
-        tk.Label(parent, text="  (no regime snapshot yet)",
-                 font=(FONT, 9), fg=DIM, bg=BG).pack(pady=6)
 
 
 # ── TAB BAR / MAIN RENDER ────────────────────────────────────
@@ -2560,70 +1876,17 @@ def _render_book_tab_v2(parent):
     )
 
 
-def _render_engines_tab_impl(parent):
-    """iPod-classic engine picker — shared component."""
-    try:
-        from config.engines import ENGINES
-        from core import engine_picker as ep
-    except Exception as e:
-        tk.Label(parent, text=f"picker unavailable: {e}",
-                 font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
-        return
-    tracks = ep.build_tracks_from_registry(ENGINES)
-    ep.render(parent, tracks)
 
-
-def _render_engines_tab(parent):
-    """Stage the engine picker so the tab responds before full mount."""
-    _cancel_chunk_jobs(parent)
-    shell = _panel_shell(parent, pady=(0, 0))
-    _section(shell, "ENGINES DESK", pady_top=(0, 0))
-    tk.Label(
-        shell,
-        text="  Loading engine picker, tracks and detail panel...",
-        font=(FONT, 8),
-        fg=DIM,
-        bg=PANEL,
-        anchor="w",
-    ).pack(fill="x", padx=4, pady=(2, 6))
-    started = time.perf_counter()
-
-    def _mount_picker() -> None:
-        try:
-            for child in shell.winfo_children():
-                try:
-                    child.destroy()
-                except Exception:
-                    pass
-            _render_engines_tab_impl(shell)
-        finally:
-            try:
-                from launcher_support.screens._metrics import emit_timing_metric
-
-                emit_timing_metric(
-                    "content.macro_brain.MOTORES.full",
-                    ms=(time.perf_counter() - started) * 1000.0,
-                )
-            except Exception:
-                pass
-
-    job = parent.after_idle(_mount_picker)
-    _track_chunk_job(parent, job)
-
-
-# Tabs in three functional groups — a thin divider is drawn between
-# groups in the tab bar so EUA / BRASIL / CRIPTO (mercados) is visually
-# separate from SINAIS / MACRO (análise), and from REDE / LIVRO /
-# MOTORES (operação). Labels are PT-BR / Valve-ish short.
+# Tabs em dois grupos — divider fino entre mercados (EUA/BRASIL/CRIPTO)
+# e analise+book (MACRO/LIVRO). SINAIS foi dobrado em MACRO; REDE foi
+# absorvido em CRIPTO (BTC on-chain + fees); MOTORES saiu (redundante
+# com Live Cockpit do launcher principal).
 _TABS = [
-    ("EUA",      "1", _render_markets_tab_v4,  "mkt"),
-    ("BRASIL",   "2", _render_br_tab,       "mkt"),
-    ("CRIPTO",   "3", _render_crypto_tab,   "mkt"),
-    ("SINAIS",   "4", _render_insights_tab, "anl"),
-    ("MACRO",    "5", _render_analysis_tab, "anl"),
-    ("REDE",     "6", _render_network_tab_v2,  "ops"),
-    ("LIVRO",    "7", _render_book_tab_v2,  "ops"),
-    ("MOTORES",  "8", _render_engines_tab,  "ops"),
+    ("EUA",     "1", _render_markets_tab_v4, "mkt"),
+    ("BRASIL",  "2", _render_br_tab,         "mkt"),
+    ("CRIPTO",  "3", _render_crypto_tab,     "mkt"),
+    ("MACRO",   "4", _render_analysis_tab,   "anl"),
+    ("LIVRO",   "5", _render_book_tab_v2,    "anl"),
 ]
 
 
