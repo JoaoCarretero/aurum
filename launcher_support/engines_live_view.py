@@ -913,6 +913,33 @@ def _shadow_active_slugs(*, launcher=None, state=None) -> set[str]:
 
 def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, dict | None, list[dict]]:
     """Return latest shadow snapshot from poller cache or cockpit API."""
+    picked_run_id = _fetch_shadow_run_id(state)
+    local_row = (
+        run_catalog.get_run_summary(picked_run_id, client=_get_cockpit_client())
+        if picked_run_id else
+        run_catalog.latest_active_run(engine="MILLENNIUM", mode="shadow")
+    )
+    if local_row is not None and str(local_row.status or "").lower() != "running":
+        local_row = None
+    if local_row is not None and local_row.run_dir is not None:
+        hb = dict(local_row.heartbeat or {})
+        if local_row.started_at and "started_at" not in hb:
+            hb["started_at"] = local_row.started_at
+        if local_row.last_tick_at and "last_tick_at" not in hb:
+            hb["last_tick_at"] = local_row.last_tick_at
+        if local_row.status and "status" not in hb:
+            hb["status"] = local_row.status
+        if local_row.run_id and "run_id" not in hb:
+            hb["run_id"] = local_row.run_id
+        trades_path = local_row.run_dir / "reports" / "shadow_trades.jsonl"
+        trades = []
+        if trades_path.exists():
+            try:
+                trades = run_catalog._tail_jsonl_records(trades_path, limit=20)
+            except Exception:
+                trades = []
+        return local_row.run_dir, hb, trades
+
     try:
         from launcher_support.tunnel_registry import get_shadow_poller
         poller = get_shadow_poller()
@@ -1847,12 +1874,6 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
     por ate timeout_sec quando o tunnel esta lento/down. Se nao tem
     poller ativo, cai pro disco local (dev workflow preservado).
     """
-    # Remote path via poller cache (nunca bloqueia)
-    if _use_remote_shadow_cache():
-        run_dir, hb, _trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
-        if run_dir is not None and hb is not None:
-            return (run_dir, hb)
-
     if Path.cwd().resolve() == _REPO_ROOT.resolve():
         latest = run_catalog.latest_active_run(engine="MILLENNIUM", mode="shadow")
         if latest is not None and latest.run_dir is not None:
@@ -1866,6 +1887,12 @@ def _find_latest_shadow_run() -> tuple[Path, dict] | None:
             if latest.run_id and "run_id" not in hb:
                 hb["run_id"] = latest.run_id
             return latest.run_dir, hb
+
+    # Remote path via poller cache (nunca bloqueia)
+    if _use_remote_shadow_cache():
+        run_dir, hb, _trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
+        if run_dir is not None and hb is not None:
+            return (run_dir, hb)
 
     # Local disk fallback (layout existente)
     root = Path("data/millennium_shadow")
@@ -2153,6 +2180,16 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     """
     name = meta.get("display", slug.upper())
 
+    active_runs = _active_shadow_runs()
+    if len(active_runs) >= 2:
+        _render_run_instance_picker(
+            parent,
+            active_runs=active_runs,
+            state=state,
+            launcher=launcher,
+            state_key="selected_shadow_run_id",
+        )
+
     run_dir, hb, trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
 
     # Detail pane
@@ -2295,7 +2332,7 @@ def _shadow_content_sig(state, launcher=None) -> tuple:
         selected_sig = (selected.get("strategy"), selected.get("symbol"),
                         selected.get("timestamp"))
     return (state.get("selected_slug"), str(run_dir or ""), hb_sig, trades_sig,
-            selected_sig)
+            selected_sig, state.get("selected_shadow_run_id"))
 
 
 def _refresh_shadow_detail(launcher, state) -> None:
@@ -2487,42 +2524,53 @@ def _render_shadow_empty_state(parent, launcher, state):
 # equity.jsonl via cockpit API endpoints added in feat/millennium-paper.
 # Shows full trading dashboard via render_detail paper kwargs.
 
-def _render_paper_instance_picker(parent, active_runs: list[dict],
-                                  state: dict, launcher) -> None:
-    """Compact row of clickable instance tags above the paper detail.
-
-    Shown only when 2+ paper runs are active concurrently (multi-instance
-    operation). Each tag reads "<LABEL>  <Nt>" where N is tick count.
-    Selected run draws in AMBER; others in DIM. Click updates
-    ``state["selected_run_id"]`` and triggers a detail re-render.
-    """
+def _render_run_instance_picker(
+    parent,
+    *,
+    active_runs: list[dict],
+    state: dict,
+    launcher,
+    state_key: str,
+    title: str = "INSTANCES:",
+) -> None:
     row = tk.Frame(parent, bg=PANEL, highlightbackground=BORDER,
                    highlightthickness=1)
     row.pack(fill="x", padx=8, pady=(4, 2))
-    tk.Label(row, text="INSTANCES:", fg=DIM, bg=PANEL,
+    tk.Label(row, text=title, fg=DIM, bg=PANEL,
              font=(FONT, 7, "bold")).pack(side="left", padx=(6, 4), pady=2)
-    current = state.get("selected_run_id")
-    # If nothing picked yet, highlight the most recent (index 0)
+    current = state.get(state_key)
     effective = current if current and any(
         r.get("run_id") == current for r in active_runs
     ) else (active_runs[0].get("run_id") if active_runs else None)
 
     def _make_click(rid: str):
         def _click(_event=None):
-            state["selected_run_id"] = rid
+            state[state_key] = rid
             _render_detail(state, launcher)
         return _click
 
     for r in active_runs:
         rid = r.get("run_id") or ""
         label = r.get("label") or f"#{rid.split('_')[-1][:6]}" if rid else "?"
-        ticks = r.get("novel_total", 0)
+        ticks = r.get("ticks_ok", 0)
         fg = AMBER if rid == effective else DIM
-        tag = tk.Label(row, text=f" {label}  {ticks}t ",
+        tag = tk.Label(row, text=f" {label}  {ticks}tk ",
                        fg=fg, bg=PANEL, font=(FONT, 7),
                        padx=4, cursor="hand2")
         tag.pack(side="left", padx=2, pady=2)
         tag.bind("<Button-1>", _make_click(rid))
+
+
+def _render_paper_instance_picker(parent, active_runs: list[dict],
+                                  state: dict, launcher) -> None:
+    """Compact row of clickable instance tags above the paper detail."""
+    _render_run_instance_picker(
+        parent,
+        active_runs=active_runs,
+        state=state,
+        launcher=launcher,
+        state_key="selected_paper_run_id",
+    )
 
 
 def _active_paper_runs(launcher) -> list[dict]:
@@ -2540,6 +2588,7 @@ def _active_paper_runs(launcher) -> list[dict]:
         matches.append({
             "run_id": row.run_id,
             "label": row.label,
+            "ticks_ok": row.ticks_ok or 0,
             "novel_total": row.novel,
             "started_at": row.started_at,
             "last_tick_at": row.last_tick_at,
@@ -2549,11 +2598,44 @@ def _active_paper_runs(launcher) -> list[dict]:
     return matches
 
 
+def _active_shadow_runs() -> list[dict]:
+    rows = run_catalog.list_runs_catalog(mode="shadow", client=_get_cockpit_client())
+    matches: list[dict] = []
+    for row in rows:
+        if row.engine != "MILLENNIUM" or str(row.status or "").lower() != "running":
+            continue
+        matches.append({
+            "run_id": row.run_id,
+            "label": row.label,
+            "ticks_ok": row.ticks_ok or 0,
+            "novel_total": row.novel,
+            "started_at": row.started_at,
+            "last_tick_at": row.last_tick_at,
+            "status": row.status,
+            "source": row.source,
+        })
+    return matches
+
+
+def _fetch_shadow_run_id(state: dict | None = None) -> str | None:
+    shadow_runs = _active_shadow_runs()
+    if not shadow_runs:
+        return None
+    active = [r for r in shadow_runs if str(r.get("status") or "").lower() == "running"]
+    if state is not None:
+        picked = state.get("selected_shadow_run_id")
+        if picked and any(r.get("run_id") == picked for r in active):
+            return picked
+    if active:
+        return active[0].get("run_id")
+    return shadow_runs[0].get("run_id")
+
+
 def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
     """Resolve which paper run_id the detail pane should render.
 
     Precedence:
-      1. ``state["selected_run_id"]`` — if it points at a still-active
+      1. ``state["selected_paper_run_id"]`` — if it points at a still-active
          paper run (operator picked this explicitly via the instance
          picker).
       2. Most recent active paper run.
@@ -2566,7 +2648,7 @@ def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
         return None
     active = [r for r in paper_runs if str(r.get("status") or "").lower() == "running"]
     if state is not None:
-        picked = state.get("selected_run_id")
+        picked = state.get("selected_paper_run_id")
         if picked and any(r.get("run_id") == picked for r in active):
             return picked
     if active:
@@ -2577,6 +2659,62 @@ def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
 def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list[float], dict | None]:
     """Fetch heartbeat + account + positions + equity via cockpit API.
     Returns (heartbeat, positions, equity_series, account_snapshot)."""
+    summary = run_catalog.get_run_summary(run_id, client=_get_cockpit_client())
+    if summary is not None and summary.run_dir is not None:
+        hb = dict(summary.heartbeat or {})
+        if summary.started_at and "started_at" not in hb:
+            hb["started_at"] = summary.started_at
+        if summary.last_tick_at and "last_tick_at" not in hb:
+            hb["last_tick_at"] = summary.last_tick_at
+        if summary.status and "status" not in hb:
+            hb["status"] = summary.status
+        if summary.run_id and "run_id" not in hb:
+            hb["run_id"] = summary.run_id
+
+        positions: list[dict] = []
+        positions_path = summary.run_dir / "state" / "positions.json"
+        if positions_path.exists():
+            try:
+                payload = json.loads(positions_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    positions = list(payload.get("positions") or [])
+                elif isinstance(payload, list):
+                    positions = payload
+            except Exception:
+                positions = []
+
+        account: dict | None = None
+        account_path = summary.run_dir / "state" / "account.json"
+        if account_path.exists():
+            try:
+                payload = json.loads(account_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    account = payload
+            except Exception:
+                account = None
+
+        series: list[float] = []
+        equity_path = summary.run_dir / "reports" / "equity.jsonl"
+        if equity_path.exists():
+            try:
+                points = run_catalog._tail_jsonl_records(equity_path, limit=200)
+                series = [float(point.get("equity") or 0.0) for point in points]
+            except Exception:
+                series = []
+
+        if account is None and hb:
+            account = {
+                "equity": hb.get("equity", 0.0),
+                "drawdown_pct": hb.get("drawdown_pct", 0.0),
+                "initial_balance": hb.get("account_size", 10_000.0),
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "ks_state": hb.get("ks_state", "NORMAL"),
+                "metrics": {},
+            }
+        if hb or positions or series or account is not None:
+            return hb or None, positions, series, account
+
     client = _get_cockpit_client()
     if client is None:
         return None, [], [], None
@@ -2701,7 +2839,7 @@ def _paper_content_sig(state, launcher=None) -> tuple:
         len(series),
         last_equity,
         account_sig,
-        state.get("selected_run_id"),
+        state.get("selected_paper_run_id"),
     )
 
 
@@ -2713,7 +2851,8 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     name = meta.get("display", slug.upper())
 
     # Multi-instance picker: if 2+ paper runs are active, let the operator
-    # pick which one to render. Selection persists in state["selected_run_id"]
+    # pick which one to render. Selection persists in
+    # state["selected_paper_run_id"]
     # so the next refresh cycle keeps the same run in focus.
     active_runs = _active_paper_runs(launcher)
     if len(active_runs) >= 2:

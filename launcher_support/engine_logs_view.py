@@ -34,6 +34,7 @@ def render_screen(app, host: tk.Misc, *, on_escape) -> None:
     app._eng_filter_tabs = {}
     app._eng_historical_cache = None
     app._eng_historical_cache_ts = 0.0
+    app._eng_refresh_generation = 0
 
     outer = tk.Frame(host, bg=BG)
     outer.pack(fill="both", expand=True, padx=28, pady=18)
@@ -207,7 +208,10 @@ def render_screen(app, host: tk.Misc, *, on_escape) -> None:
     app._eng_entries_stop = threading.Event()
     app._eng_entries_thread = None
 
-    app._eng_refresh()
+    try:
+        app.after(0, app._eng_refresh)
+    except Exception:
+        app._eng_refresh()
     app._eng_poll_logs()
 
 
@@ -247,80 +251,122 @@ def refresh_list(app) -> None:
     except Exception:
         return
 
+    generation = int(getattr(app, "_eng_refresh_generation", 0)) + 1
+    app._eng_refresh_generation = generation
+
     for child in app._eng_list_wrap.winfo_children():
         try:
             child.destroy()
         except Exception:
             pass
 
-    try:
-        from launcher_support.engines_live_view import _get_cockpit_client
-        from core.ops import run_catalog
-
-        client = _get_cockpit_client()
-    except Exception:
-        client = None
-        run_catalog = None
-
-    if run_catalog is None:
-        running, stopped, error_text = [], [], "run catalog unavailable"
-    else:
-        running, stopped, error_text = run_catalog.list_engine_log_sections(
-            client=client,
-            mode_filter=app._eng_mode_filter,
-            vps_limit=20,
-            historical_limit=30,
-            historical_hours=72,
-        )
-
-    if error_text:
-        tk.Label(app._eng_list_wrap, text=f"  {error_text}", font=(FONT, 7), fg=RED, bg=BG, anchor="w").pack(fill="x")
-
     refresh_filter_tabs(app)
     filt_label = app._eng_mode_filter.upper() if app._eng_mode_filter != "all" else "ALL ENGINES"
-
     tk.Label(
         app._eng_list_wrap,
-        text=f"  *  RUNNING  |  {filt_label}  ({len(running)})",
+        text=f"  ...  LOADING  |  {filt_label}",
         font=(FONT, 7, "bold"),
-        fg=GREEN,
+        fg=AMBER_D,
         bg=BG,
         anchor="w",
     ).pack(fill="x", pady=(2, 2))
-    if running:
-        for row in running:
-            render_row(app, row)
-    else:
-        tk.Label(
-            app._eng_list_wrap,
-            text="   -- nenhum engine ativo no filtro selecionado --",
-            font=(FONT, 7, "italic"),
-            fg=DIM2,
-            bg=BG,
-            anchor="w",
-        ).pack(fill="x", pady=2)
 
-    tk.Frame(app._eng_list_wrap, bg=DIM2, height=1).pack(fill="x", pady=(6, 4), padx=8)
-    tk.Label(
-        app._eng_list_wrap,
-        text=f"  o  STOPPED (ultimas 72h)  |  {filt_label}  ({len(stopped)})",
-        font=(FONT, 7, "bold"),
-        fg=DIM,
-        bg=BG,
-        anchor="w",
-    ).pack(fill="x", pady=(2, 2))
-    if stopped:
-        for row in stopped[:30]:
-            render_row(app, row)
-    else:
-        tk.Label(
-            app._eng_list_wrap,
-            text="   -- sem runs recentes no filtro selecionado --",
-            font=(FONT, 7, "italic"),
-            fg=DIM2,
-            bg=BG,
-            anchor="w",
-        ).pack(fill="x", pady=2)
+    def _worker(gen: int, mode_filter: str) -> None:
+        try:
+            from launcher_support.engines_live_view import _get_cockpit_client
+            from core.ops import run_catalog
+
+            client = _get_cockpit_client()
+        except Exception:
+            client = None
+            run_catalog = None
+
+        if run_catalog is None:
+            running, stopped, error_text = [], [], "run catalog unavailable"
+        else:
+            running, stopped, error_text = run_catalog.list_engine_log_sections(
+                client=client,
+                mode_filter=mode_filter,
+                vps_limit=20,
+                historical_limit=30,
+                historical_hours=72,
+            )
+
+        def _apply() -> None:
+            if getattr(app, "_eng_refresh_generation", 0) != gen:
+                return
+            try:
+                if not app._eng_list_wrap.winfo_exists():
+                    return
+            except Exception:
+                return
+
+            for child in app._eng_list_wrap.winfo_children():
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+
+            if error_text:
+                tk.Label(app._eng_list_wrap, text=f"  {error_text}", font=(FONT, 7), fg=RED, bg=BG, anchor="w").pack(fill="x")
+
+            refresh_filter_tabs(app)
+            current_label = app._eng_mode_filter.upper() if app._eng_mode_filter != "all" else "ALL ENGINES"
+
+            tk.Label(
+                app._eng_list_wrap,
+                text=f"  *  RUNNING  |  {current_label}  ({len(running)})",
+                font=(FONT, 7, "bold"),
+                fg=GREEN,
+                bg=BG,
+                anchor="w",
+            ).pack(fill="x", pady=(2, 2))
+            if running:
+                for row in running:
+                    render_row(app, row)
+            else:
+                tk.Label(
+                    app._eng_list_wrap,
+                    text="   -- nenhum engine ativo no filtro selecionado --",
+                    font=(FONT, 7, "italic"),
+                    fg=DIM2,
+                    bg=BG,
+                    anchor="w",
+                ).pack(fill="x", pady=2)
+
+            tk.Frame(app._eng_list_wrap, bg=DIM2, height=1).pack(fill="x", pady=(6, 4), padx=8)
+            tk.Label(
+                app._eng_list_wrap,
+                text=f"  o  STOPPED (ultimas 72h)  |  {current_label}  ({len(stopped)})",
+                font=(FONT, 7, "bold"),
+                fg=DIM,
+                bg=BG,
+                anchor="w",
+            ).pack(fill="x", pady=(2, 2))
+            if stopped:
+                for row in stopped[:30]:
+                    render_row(app, row)
+            else:
+                tk.Label(
+                    app._eng_list_wrap,
+                    text="   -- sem runs recentes no filtro selecionado --",
+                    font=(FONT, 7, "italic"),
+                    fg=DIM2,
+                    bg=BG,
+                    anchor="w",
+                ).pack(fill="x", pady=2)
+
+        try:
+            app.after(0, _apply)
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=_worker,
+        args=(generation, app._eng_mode_filter),
+        name="engine-logs-refresh",
+        daemon=True,
+    ).start()
 
     try:
         if getattr(app, "_eng_after_id", None):

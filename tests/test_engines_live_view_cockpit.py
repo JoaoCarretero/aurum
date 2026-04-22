@@ -298,13 +298,47 @@ def test_fetch_shadow_snapshot_falls_back_to_cockpit_when_poller_empty():
     try:
         tunnel_registry.set_shadow_poller(FakePoller())
         evv._COCKPIT_CLIENT_SINGLETON = FakeClient()
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(evv, "_fetch_shadow_run_id", lambda state=None: None)
+        monkeypatch.setattr(evv.run_catalog, "latest_active_run", lambda **kw: None)
         run_dir, hb, trades = evv._fetch_shadow_snapshot()
         assert str(run_dir).replace("\\", "/") == "remote:/r1"
         assert hb["ticks_ok"] == 3
         assert trades[0]["strategy"] == "JUMP"
     finally:
+        monkeypatch.undo()
         evv._COCKPIT_CLIENT_SINGLETON = None
         tunnel_registry.reset_for_tests()
+
+
+def test_fetch_shadow_snapshot_prefers_local_active_run(monkeypatch, tmp_path):
+    from launcher_support import engines_live_view as evv
+    from types import SimpleNamespace
+
+    run_dir = tmp_path / "data" / "millennium_shadow" / "live-shadow"
+    (run_dir / "reports").mkdir(parents=True)
+    (run_dir / "reports" / "shadow_trades.jsonl").write_text(
+        json.dumps({"strategy": "JUMP", "symbol": "BTCUSDT"}) + "\n",
+        encoding="utf-8",
+    )
+
+    row = SimpleNamespace(
+        run_id="live-shadow",
+        run_dir=run_dir,
+        heartbeat={"run_id": "live-shadow", "status": "running", "ticks_ok": 1},
+        started_at="2026-04-21T23:33:17Z",
+        last_tick_at="2026-04-21T23:33:48Z",
+        status="running",
+    )
+
+    monkeypatch.setattr(evv, "_fetch_shadow_run_id", lambda state=None: None)
+    monkeypatch.setattr(evv.run_catalog, "latest_active_run", lambda **kw: row)
+
+    got_run_dir, hb, trades = evv._fetch_shadow_snapshot()
+
+    assert got_run_dir == run_dir
+    assert hb["run_id"] == "live-shadow"
+    assert trades[0]["strategy"] == "JUMP"
 
 
 def test_load_shadow_snapshot_cached_uses_ttl_cache(monkeypatch):
@@ -485,6 +519,7 @@ def test_active_paper_runs_uses_catalog_rows(monkeypatch):
             self.mode = "paper"
             self.status = status
             self.label = "desk"
+            self.ticks_ok = 7
             self.novel = 1
             self.started_at = "2026-04-21T23:33:18Z"
             self.last_tick_at = "2026-04-21T23:33:19Z"
@@ -500,6 +535,66 @@ def test_active_paper_runs_uses_catalog_rows(monkeypatch):
 
     assert len(rows) == 1
     assert rows[0]["run_id"] == "paper_live"
+    assert rows[0]["ticks_ok"] == 7
+
+
+def test_active_shadow_runs_uses_catalog_rows(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    class _Row:
+        def __init__(self, run_id, status):
+            self.run_id = run_id
+            self.engine = "MILLENNIUM"
+            self.mode = "shadow"
+            self.status = status
+            self.label = "desk-shadow"
+            self.ticks_ok = 11
+            self.novel = 2
+            self.started_at = "2026-04-21T23:33:17Z"
+            self.last_tick_at = "2026-04-21T23:33:48Z"
+            self.source = "db"
+
+    monkeypatch.setattr(
+        evv.run_catalog,
+        "list_runs_catalog",
+        lambda **kw: [_Row("shadow_live", "running"), _Row("shadow_old", "stopped")],
+    )
+
+    rows = evv._active_shadow_runs()
+
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == "shadow_live"
+    assert rows[0]["ticks_ok"] == 11
+
+
+def test_fetch_shadow_run_id_honors_selected_shadow_instance(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    monkeypatch.setattr(
+        evv,
+        "_active_shadow_runs",
+        lambda: [
+            {"run_id": "shadow_a", "status": "running"},
+            {"run_id": "shadow_b", "status": "running"},
+        ],
+    )
+
+    assert evv._fetch_shadow_run_id({"selected_shadow_run_id": "shadow_b"}) == "shadow_b"
+
+
+def test_fetch_paper_run_id_honors_selected_paper_instance(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    monkeypatch.setattr(
+        evv,
+        "_active_paper_runs",
+        lambda launcher: [
+            {"run_id": "paper_a", "status": "running"},
+            {"run_id": "paper_b", "status": "running"},
+        ],
+    )
+
+    assert evv._fetch_paper_run_id(None, {"selected_paper_run_id": "paper_b"}) == "paper_b"
 
 
 def test_fetch_paper_extras_uses_ttl_cache(monkeypatch):
@@ -533,6 +628,49 @@ def test_fetch_paper_extras_uses_ttl_cache(monkeypatch):
     assert first[1][0]["symbol"] == "BTCUSDT"
     assert second[0]["status"] == "running"
     assert second[1][0]["symbol"] == "BTCUSDT"
+
+
+def test_fetch_paper_extras_sync_prefers_local_run_dir(monkeypatch, tmp_path):
+    import launcher_support.engines_live_view as evv
+    from types import SimpleNamespace
+
+    run_dir = tmp_path / "data" / "millennium_paper" / "paper-live"
+    (run_dir / "state").mkdir(parents=True)
+    (run_dir / "reports").mkdir(parents=True)
+    (run_dir / "state" / "positions.json").write_text(
+        json.dumps({"positions": [{"symbol": "ETHUSDT", "qty": 2}]}),
+        encoding="utf-8",
+    )
+    (run_dir / "state" / "account.json").write_text(
+        json.dumps({"equity": 10123.0, "initial_balance": 10000.0, "metrics": {}}),
+        encoding="utf-8",
+    )
+    (run_dir / "reports" / "equity.jsonl").write_text(
+        "\n".join([
+            json.dumps({"equity": 10000.0}),
+            json.dumps({"equity": 10123.0}),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    row = SimpleNamespace(
+        run_id="paper-live",
+        run_dir=run_dir,
+        heartbeat={"run_id": "paper-live", "status": "running", "ticks_ok": 1},
+        started_at="2026-04-21T23:33:18Z",
+        last_tick_at="2026-04-21T23:33:19Z",
+        status="running",
+    )
+
+    monkeypatch.setattr(evv.run_catalog, "get_run_summary", lambda *args, **kwargs: row)
+    monkeypatch.setattr(evv, "_get_cockpit_client", lambda: None)
+
+    hb, positions, series, account = evv._fetch_paper_extras_sync("paper-live")
+
+    assert hb["run_id"] == "paper-live"
+    assert positions[0]["symbol"] == "ETHUSDT"
+    assert series == [10000.0, 10123.0]
+    assert account["equity"] == 10123.0
 
 
 def test_refresh_paper_detail_skips_rerender_when_signature_unchanged(monkeypatch):
