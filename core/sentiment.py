@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import requests
 
 log = logging.getLogger("THOTH")
 
@@ -21,6 +22,11 @@ log = logging.getLogger("THOTH")
 _last_req = 0.0
 _REQ_GAP = 0.15  # 150ms between requests
 _REQ_LOCK = threading.Lock()
+
+# Shared session — reuses TCP/TLS connections across calls. requests.Session
+# is thread-safe for basic GETs (urllib3 pool handles concurrency), which is
+# what prewarm_sentiment_cache does under ThreadPoolExecutor.
+_SESSION = requests.Session()
 _SENTIMENT_CACHE_DIR = Path("data/sentiment")
 _PERIOD_MS = {
     "5m": 5 * 60 * 1000,
@@ -139,9 +145,8 @@ def _slice_partial_cached_history(
 
 def _fetch_binance_rows(url: str, params: dict, label: str) -> list[dict] | None:
     try:
-        import requests
         _rate_limit()
-        resp = requests.get(url, params=params, timeout=10)
+        resp = _SESSION.get(url, params=params, timeout=10)
         if resp.status_code != 200:
             log.warning(f"{label}: HTTP {resp.status_code}")
             return None
