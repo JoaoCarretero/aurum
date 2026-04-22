@@ -38,6 +38,9 @@ class BinanceFuturesAPI:
         self.secret = api_secret or ""
         self.mode = mode if mode in _BASE_URLS else "testnet"
         self.base = _BASE_URLS[self.mode]
+        # Per-instance Session — reuses TCP/TLS across _signed_get + ping,
+        # saving one full TLS handshake per call on long-lived engines.
+        self._session = requests.Session()
 
     # ── INTERNALS ─────────────────────────────────────────────
     def _signed_get(self, path: str, params: Optional[dict] = None):
@@ -61,7 +64,7 @@ class BinanceFuturesAPI:
         ).hexdigest()
         url = f"{self.base}{path}?{query}&signature={sig}"
         try:
-            r = requests.get(
+            r = self._session.get(
                 url,
                 headers={"X-MBX-APIKEY": self.key},
                 timeout=_DEFAULT_TIMEOUT,
@@ -99,7 +102,7 @@ class BinanceFuturesAPI:
         """Returns server-time lag in ms (positive = local clock ahead)."""
         try:
             t0 = time.time()
-            r = requests.get(f"{self.base}/fapi/v1/time", timeout=_DEFAULT_TIMEOUT)
+            r = self._session.get(f"{self.base}/fapi/v1/time", timeout=_DEFAULT_TIMEOUT)
             if r.status_code != 200:
                 return None
             srv = int(r.json().get("serverTime", 0))
