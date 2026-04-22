@@ -225,12 +225,27 @@ def _fmt_age(ts):
 
 # ── UI PRIMITIVES ────────────────────────────────────────────
 
-def _draw_spark(canvas, values, color=AMBER, w=80, h=14,
-                show_bounds: bool = True):
-    """Sparkline line chart com bounds opcionais (teto/piso pontilhados).
+_AREA_FILL_AMBER = "#4a3d23"  # amber muted pra area fill (AMBER * 0.35 sobre PANEL)
+_AREA_FILL_GREEN = "#3a4a28"
+_AREA_FILL_RED   = "#4a2a24"
 
-    ``show_bounds``: se True, desenha linhas pontilhadas no min e max da
-    serie (dash dim) pra dar range visual instantaneo tipo Bloomberg.
+
+def _area_fill_for(color: str) -> str:
+    if color == GREEN:
+        return _AREA_FILL_GREEN
+    if color == RED:
+        return _AREA_FILL_RED
+    return _AREA_FILL_AMBER
+
+
+def _draw_spark(canvas, values, color=AMBER, w=80, h=14,
+                show_bounds: bool = False, fill_area: bool = True):
+    """Sparkline line chart com area fill opcional abaixo da linha.
+
+    ``fill_area``: True desenha polygon muted abaixo da linha (vibe
+    TradingView). Default True pros tiles normais.
+    ``show_bounds``: linhas dotted no min/max. Default False (bounds
+    poluem em canvas pequeno).
     """
     canvas.delete("all")
     if not values or len(values) < 2:
@@ -238,19 +253,26 @@ def _draw_spark(canvas, values, color=AMBER, w=80, h=14,
     mn, mx = min(values), max(values)
     rng = mx - mn if mx > mn else 1.0
 
-    # Bounds dotted — teto e piso cinza dim. Desenha ANTES da linha
-    # principal pra linha ficar por cima.
-    if show_bounds and h >= 12:
-        canvas.create_line(2, 2, w - 2, 2, fill=DIM2, dash=(1, 2))
-        canvas.create_line(2, h - 2, w - 2, h - 2, fill=DIM2, dash=(1, 2))
+    if show_bounds and h >= 18:
+        canvas.create_line(2, 2, w - 2, 2, fill=DIM2, dash=(1, 3))
+        canvas.create_line(2, h - 2, w - 2, h - 2, fill=DIM2, dash=(1, 3))
 
     pts = []
     for i, v in enumerate(values):
         x = 2 + (w - 4) * (i / (len(values) - 1))
         y = h - 2 - (h - 4) * ((v - mn) / rng)
         pts.append(x); pts.append(y)
-    if len(pts) >= 4:
-        canvas.create_line(*pts, fill=color, width=1)
+    if len(pts) < 4:
+        return
+
+    # Area fill polygon — da linha ate o piso, cor muted.
+    if fill_area and h >= 10:
+        poly = [pts[0], h - 1] + pts + [pts[-2], h - 1]
+        canvas.create_polygon(*poly, fill=_area_fill_for(color), outline="")
+
+    # Smooth=True da uma curva Catmull-Rom — anti-alias visual barato.
+    canvas.create_line(*pts, fill=color, width=1,
+                       smooth=True if len(values) <= 60 else False)
 
 
 def _draw_spark_candles(canvas, values, w=80, h=14, show_bounds: bool = True):
@@ -356,12 +378,11 @@ def _tile(parent, label, value, change="", change_color=WHITE,
                                fg=change_color, bg=PANEL, anchor="e")
         change_lbl.pack(side="right", padx=2)
 
-    # Sparkline canvas — sempre presente, mesmo tiles sem data iniciam
-    # vazios e recebem a 1a renderizacao no primeiro tick_update.
-    spark_cv = tk.Canvas(f, bg=PANEL, height=14, highlightthickness=0,
+    # Sparkline canvas — line chart com area fill (TradingView-vibe).
+    # h=18 menos esticado que 14; area fill da densidade visual.
+    spark_cv = tk.Canvas(f, bg=PANEL, height=18, highlightthickness=0,
                           borderwidth=0)
     spark_cv.pack(fill="x", padx=PAD_TILE_INNER, pady=(0, 3))
-    # Desenho inicial se ja temos series (mini-candles por default)
     if series:
         try:
             vals = [
@@ -370,13 +391,12 @@ def _tile(parent, label, value, change="", change_color=WHITE,
             ]
             vals = [v for v in vals if isinstance(v, (int, float))]
             if len(vals) >= 2:
-                # Deferred render via after() — winfo_width so e valido pos-pack.
                 spark_cv.after(
                     30,
-                    lambda cv=spark_cv, vv=vals:
-                        _draw_spark_candles(cv, vv,
-                                            w=(cv.winfo_width() or 80),
-                                            h=14),
+                    lambda cv=spark_cv, vv=vals, sc=spark_color:
+                        _draw_spark(cv, vv, color=sc,
+                                    w=(cv.winfo_width() or 80),
+                                    h=18, fill_area=True),
                 )
         except Exception:
             pass
@@ -566,41 +586,75 @@ def _statusbar_tick(changed: int) -> None:
         pass
 
 
-def _draw_detail_chart(canvas, values, color=AMBER, w=440, h=200):
-    """Line chart limpo com grid horizontal (4 linhas) + polyline AMBER.
+def _draw_detail_chart(canvas, values, color=AMBER, w=420, h=260,
+                       fmt: str | None = None):
+    """Detail line chart estilo TradingView — area fill + grid X/Y +
+    last-value highlight dashed + Y-axis labels (max/last/min).
 
-    Menos denso que candles pra drill-down de 100 bars. Gridlines dim,
-    min/max labels no canto.
+    Proporcao alvo ~1.6:1 (nao esticado). Margem direita 48px pra labels.
     """
     canvas.delete("all")
     if not values or len(values) < 2:
         return
     mn, mx = min(values), max(values)
     rng = mx - mn if mx > mn else 1.0
-    pad = 6
+    pad_l, pad_r, pad_t, pad_b = 10, 50, 10, 10
+    plot_w = w - pad_l - pad_r
+    plot_h = h - pad_t - pad_b
+    last = values[-1]
 
+    # Grid Y — 4 linhas horizontais dotted
     for i in range(1, 4):
-        y = pad + (h - 2 * pad) * i / 4
-        canvas.create_line(pad, y, w - pad, y, fill=BORDER, dash=(1, 3))
+        y = pad_t + plot_h * i / 4
+        canvas.create_line(pad_l, y, w - pad_r, y,
+                           fill=BORDER, dash=(1, 4))
+    # Grid X — 4 linhas verticais dotted
+    for i in range(1, 4):
+        x = pad_l + plot_w * i / 4
+        canvas.create_line(x, pad_t, x, h - pad_b,
+                           fill=BORDER, dash=(1, 4))
 
+    # Pontos da linha
     pts = []
     for i, v in enumerate(values):
-        x = pad + (w - 2 * pad) * (i / (len(values) - 1))
-        y = h - pad - (h - 2 * pad) * ((v - mn) / rng)
+        x = pad_l + plot_w * (i / (len(values) - 1))
+        y = pad_t + plot_h * (1 - (v - mn) / rng)
         pts.append(x); pts.append(y)
-    if len(pts) >= 4:
-        canvas.create_line(*pts, fill=color, width=2, smooth=False)
 
-    canvas.create_text(w - pad, pad + 2, anchor="ne",
-                       text=f"{mx:.4g}", font=(FONT, 6), fill=DIM)
-    canvas.create_text(w - pad, h - pad - 2, anchor="se",
-                       text=f"{mn:.4g}", font=(FONT, 6), fill=DIM)
+    # Area fill abaixo da linha
+    if len(pts) >= 4:
+        poly = [pts[0], h - pad_b] + pts + [pts[-2], h - pad_b]
+        canvas.create_polygon(*poly, fill=_area_fill_for(color),
+                              outline="")
+        canvas.create_line(*pts, fill=color, width=2,
+                           smooth=True if len(values) <= 60 else False)
+
+    # Last value horizontal dashed highlight (atravessa plot area)
+    last_y = pad_t + plot_h * (1 - (last - mn) / rng)
+    canvas.create_line(pad_l, last_y, w - pad_r, last_y,
+                       fill=DIM, dash=(2, 3))
+
+    # Dot no ultimo ponto
+    last_x = pad_l + plot_w
+    canvas.create_oval(last_x - 3, last_y - 3,
+                       last_x + 3, last_y + 3,
+                       fill=color, outline=WHITE, width=1)
+
+    # Y-axis labels (direita)
+    def _lbl(y, text, fg, bold=False):
+        font = (FONT, 7, "bold") if bold else (FONT, 7)
+        canvas.create_text(w - pad_r + 5, y, anchor="w",
+                           text=text, font=font, fill=fg)
+
+    _lbl(pad_t,           _fmt_val(mx, fmt), DIM)
+    _lbl(last_y,          _fmt_val(last, fmt), color, bold=True)
+    _lbl(h - pad_b,       _fmt_val(mn, fmt), DIM)
 
 
 def _open_tile_detail(metric_key: str, label: str,
                      fmt: str | None = None) -> None:
-    """Click-to-expand popup (Toplevel 460x300) com line chart de 100
-    barras + min/avg/max/last footer.
+    """Click-to-expand popup (Toplevel 460x340) com line chart area-filled
+    + grid X/Y + last-value highlight. Proporcao 1.6:1, nao esticado.
     """
     try:
         from macro_brain.persistence.store import macro_series_many
@@ -613,21 +667,31 @@ def _open_tile_detail(metric_key: str, label: str,
         top = tk.Toplevel()
         top.title(f"{label} — {metric_key}")
         top.configure(bg=BG)
-        top.geometry("460x300")
+        top.geometry("460x340")
 
         tk.Label(top, text=f"  [ {label} · {metric_key} ]",
                  font=(FONT, 9, "bold"), fg=AMBER, bg=BG,
                  anchor="w").pack(fill="x", padx=10, pady=(10, 4))
 
-        cv = tk.Canvas(top, bg=PANEL, width=440, height=200,
+        cv = tk.Canvas(top, bg=PANEL, width=420, height=260,
                        highlightthickness=1,
                        highlightbackground=BORDER)
         cv.pack(padx=10, pady=2)
 
         if len(vals) >= 2:
+            # Direction-colored line: green se tendencia up, red se down
+            line_color = AMBER
+            if len(vals) >= 2:
+                delta = vals[-1] - vals[0]
+                if delta > 0:
+                    line_color = GREEN
+                elif delta < 0:
+                    line_color = RED
             cv.after(
                 30,
-                lambda: _draw_detail_chart(cv, vals, w=440, h=200),
+                lambda c=line_color: _draw_detail_chart(
+                    cv, vals, color=c, w=420, h=260, fmt=fmt,
+                ),
             )
             avg = sum(vals) / len(vals)
             foot_text = (
@@ -815,24 +879,25 @@ def tick_update() -> int:
             except Exception:
                 pass
 
-        # Spark series — usa mini-candles por default pra densidade visual
-        # estilo Bloomberg. Se spark_style='line', desenha polyline simples.
+        # Spark series — default line com area fill (TradingView-vibe).
+        # Pra forcar candles num tile especifico, setar spark_style='candles'
+        # no registry.
         spark_cv = refs.get("spark")
         if spark_cv is not None:
             try:
                 if spark_cv.winfo_exists():
                     vals = [r["value"] for r in s[-30:]]
                     w = spark_cv.winfo_width() or 80
-                    h = spark_cv.winfo_height() or 14
-                    style = refs.get("spark_style", "candles")
-                    if style == "line":
+                    h = spark_cv.winfo_height() or 18
+                    style = refs.get("spark_style", "line")
+                    if style == "candles":
+                        _draw_spark_candles(spark_cv, vals, w=w, h=h)
+                    else:
                         _draw_spark(
                             spark_cv, vals,
                             color=refs.get("spark_color", AMBER),
-                            w=w, h=h,
+                            w=w, h=h, fill_area=True,
                         )
-                    else:
-                        _draw_spark_candles(spark_cv, vals, w=w, h=h)
             except Exception:
                 pass
 
