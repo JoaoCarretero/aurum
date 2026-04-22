@@ -482,8 +482,13 @@ class SplashScreen(Screen):
         Em vez disso, logo inferior espelha a superior (mesma escala
         e distancia do respectivo rule) pra fechar a composicao
         simetricamente.
+
+        Nudge de -6px no X da logo: o triangulo tem apex no topo e
+        base larga embaixo, o que cria assimetria otica — aos olhos
+        parece deslocado pra direita mesmo estando geometricamente em
+        cx=460. Deslocar 6px pra esquerda alinha com o centro visual.
         """
-        logo_cx = self._CENTER_X
+        logo_cx = self._CENTER_X - 6
 
         # top rule (full width)
         canvas.create_line(
