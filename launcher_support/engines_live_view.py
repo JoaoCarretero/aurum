@@ -939,6 +939,30 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
             except Exception:
                 trades = []
         return local_row.run_dir, hb, trades
+    if local_row is not None and local_row.run_id:
+        client = _get_cockpit_client()
+        if client is not None:
+            try:
+                hb = client.get_heartbeat(local_row.run_id)
+            except Exception:
+                hb = {
+                    "run_id": local_row.run_id,
+                    "status": local_row.status or "unknown",
+                    "ticks_ok": local_row.ticks_ok or 0,
+                    "ticks_fail": local_row.ticks_fail or 0,
+                    "novel_total": local_row.novel or 0,
+                    "started_at": local_row.started_at,
+                    "last_tick_at": local_row.last_tick_at,
+                    "tick_sec": 900,
+                    "last_error": "heartbeat fetch failed",
+                }
+            try:
+                trades_payload = client.get_trades(local_row.run_id, limit=20)
+                raw_trades = (trades_payload or {}).get("trades") or []
+                trades = [trade for trade in raw_trades if isinstance(trade, dict)]
+            except Exception:
+                trades = []
+            return Path(f"remote://{local_row.run_id}"), hb, trades
 
     try:
         from launcher_support.tunnel_registry import get_shadow_poller
@@ -2552,9 +2576,11 @@ def _render_run_instance_picker(
     for r in active_runs:
         rid = r.get("run_id") or ""
         label = r.get("label") or f"#{rid.split('_')[-1][:6]}" if rid else "?"
+        source = str(r.get("source") or "").lower()
+        source_tag = "VPS" if source == "vps" else "LOCAL"
         ticks = r.get("ticks_ok", 0)
         fg = AMBER if rid == effective else DIM
-        tag = tk.Label(row, text=f" {label}  {ticks}tk ",
+        tag = tk.Label(row, text=f" {source_tag}:{label}  {ticks}tk ",
                        fg=fg, bg=PANEL, font=(FONT, 7),
                        padx=4, cursor="hand2")
         tag.pack(side="left", padx=2, pady=2)

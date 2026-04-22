@@ -341,6 +341,45 @@ def test_fetch_shadow_snapshot_prefers_local_active_run(monkeypatch, tmp_path):
     assert trades[0]["strategy"] == "JUMP"
 
 
+def test_fetch_shadow_snapshot_honors_selected_remote_run(monkeypatch):
+    from launcher_support import engines_live_view as evv
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(
+        run_id="remote-shadow",
+        run_dir=None,
+        heartbeat=None,
+        started_at="2026-04-21T23:33:17Z",
+        last_tick_at="2026-04-21T23:33:48Z",
+        status="running",
+        ticks_ok=44,
+        ticks_fail=0,
+        novel=1,
+        source="vps",
+    )
+
+    class _Client:
+        def get_heartbeat(self, run_id):
+            assert run_id == "remote-shadow"
+            return {"run_id": run_id, "status": "running", "ticks_ok": 44}
+
+        def get_trades(self, run_id, limit=20):
+            assert run_id == "remote-shadow"
+            return {"trades": [{"strategy": "JUMP", "symbol": "BTCUSDT"}]}
+
+    monkeypatch.setattr(evv, "_fetch_shadow_run_id", lambda state=None: "remote-shadow")
+    monkeypatch.setattr(evv.run_catalog, "get_run_summary", lambda *args, **kwargs: row)
+    monkeypatch.setattr(evv, "_get_cockpit_client", lambda: _Client())
+
+    got_run_dir, hb, trades = evv._fetch_shadow_snapshot(
+        state={"selected_shadow_run_id": "remote-shadow"}
+    )
+
+    assert str(got_run_dir).replace("\\", "/") == "remote:/remote-shadow"
+    assert hb["ticks_ok"] == 44
+    assert trades[0]["strategy"] == "JUMP"
+
+
 def test_load_shadow_snapshot_cached_uses_ttl_cache(monkeypatch):
     from pathlib import Path
     import launcher_support.engines_live_view as evv
