@@ -18,7 +18,7 @@ from core.ui.ui_palette import AMBER, AMBER_D, BG, BG3, BORDER, DIM, DIM2, FONT,
 from launcher_support.screens.base import Screen
 from launcher_support.runs_history import (
     _render_detail_health, _render_detail_probe, _render_detail_scan,
-    _render_error_banner,
+    _render_error_banner, lazy_fetch_heartbeat,
 )
 from core import db_live_runs
 from core.ops import run_catalog
@@ -320,13 +320,13 @@ class LiveRunsScreen(Screen):
             ("novel signals", str(run.novel or 0)),
         ])
 
-        # Health metrics vindos do cockpit heartbeat. Quando o tunnel
-        # VPS esta up, run.heartbeat traz campos ricos — renderiza SCAN
-        # (funil scanned/dedup/stale/live/opened), HEALTH (drawdown/
-        # ks_state/primed/tick cadence), PROBE DIAGNOSTIC (so pra engine
-        # probe). Error banner em vermelho no topo se last_error nao
-        # null. Os renderers sao reusados de runs_history pra garantir
-        # visual identico cross-view.
+        # Health metrics vindos do cockpit heartbeat. collect_vps_runs
+        # NAO popula r.heartbeat (perf optimization pra evitar 2*N
+        # round-trips na listagem). Lazy-fetch aqui quando o operador
+        # clica numa run especifica — ~100ms via tunnel, tolerable no
+        # click-to-detail flow. Sem client_factory ou tunnel down, hb
+        # continua None e as secoes skipam silently.
+        lazy_fetch_heartbeat(run, self._client_factory)
         hb = run.heartbeat or {}
         if hb.get("last_error"):
             _render_error_banner(self._detail_frame, str(hb["last_error"]))

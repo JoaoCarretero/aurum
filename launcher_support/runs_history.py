@@ -534,6 +534,11 @@ def render_runs_history(parent: tk.Widget, launcher,
         "rows": [],
         "refresh_aid": None,
         "filter_mode": "all",  # all | shadow | paper
+        # client_factory stash — _load_detail usa pra lazy-fetch do
+        # heartbeat VPS quando o operador clica numa run. Sem isso,
+        # as secoes SCAN/HEALTH/PROBE skipam silently porque
+        # collect_vps_runs nao popula r.heartbeat (perf optimization).
+        "client_factory": client_factory,
     }
 
     split = tk.Frame(root, bg=BG)
@@ -834,6 +839,34 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
 
 # ─── Detail pane ───────────────────────────────────────────────────
 
+def lazy_fetch_heartbeat(r: RunSummary, client_factory) -> None:
+    """Lazy-fetch heartbeat do VPS quando operador clica numa run.
+
+    `collect_vps_runs` nao popula r.heartbeat por performance (antes
+    fazia 2*N round-trips). O detail pane precisa dos campos ricos
+    (last_scan_*, drawdown_pct, ks_state, top_score, etc), entao aqui
+    buscamos sob demanda via cockpit `/v1/runs/{id}/heartbeat`. Muta
+    r.heartbeat in-place. Silent on failure — secoes skipam se hb
+    continuar None.
+    """
+    if r.heartbeat is not None:
+        return  # ja populado (local/db source, ou fetch anterior)
+    if r.source != "vps" or client_factory is None:
+        return
+    try:
+        client = client_factory()
+    except Exception:
+        client = None
+    if client is None:
+        return
+    try:
+        hb = client._get(f"/v1/runs/{r.run_id}/heartbeat")
+    except Exception:
+        hb = None
+    if isinstance(hb, dict) and hb:
+        r.heartbeat = hb
+
+
 def _load_detail(r: RunSummary, state: dict) -> None:
     host = state.get("detail_host")
     if host is None:
@@ -843,6 +876,11 @@ def _load_detail(r: RunSummary, state: dict) -> None:
             return
     except Exception:
         return
+
+    # Lazy-fetch do heartbeat VPS quando necessario. Sync call —
+    # ~100ms via tunnel, tolerable no click-to-detail flow.
+    client_factory = state.get("client_factory")
+    lazy_fetch_heartbeat(r, client_factory)
 
     for w in host.winfo_children():
         try:
