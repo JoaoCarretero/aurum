@@ -161,8 +161,11 @@ class SplashScreen(Screen):
         from core.data.market_data import MarketDataFetcher
         fetcher = MarketDataFetcher(["BTCUSDT", "ETHUSDT"])
         fetcher.fetch_all()  # timeout interno 5s
-        tickers = fetcher.tickers
-        fund = fetcher.funding_avg()
+        # snapshot() faz copia atomica sob o lock — evita race com workers
+        snap = fetcher.snapshot()
+        tickers = snap["tickers"]
+        funding_map = snap["funding"]
+        fund = (sum(funding_map.values()) / len(funding_map)) if funding_map else None
         out: dict[str, tuple[str, str]] = {}
         for sym, key in (("BTCUSDT", "btc"), ("ETHUSDT", "eth")):
             t = tickers.get(sym)
@@ -433,20 +436,28 @@ class SplashScreen(Screen):
         )
 
     def _kick_async_fetch(self) -> None:
-        """Dispara daemon thread que busca dados live e atualiza canvas."""
-        self._cancel_event = threading.Event()
-        thread = threading.Thread(target=self._fetch_live_worker, daemon=True)
+        """Dispara daemon thread que busca dados live e atualiza canvas.
+
+        O cancel_event e passado como arg pra thread capturar o evento da
+        sessao atual — se o user sair e reentrar no splash antes do fetch
+        retornar, a thread velha nao atropela o canvas novo.
+        """
+        ev = threading.Event()
+        self._cancel_event = ev
+        thread = threading.Thread(
+            target=self._fetch_live_worker, args=(ev,), daemon=True,
+        )
         thread.start()
 
-    def _fetch_live_worker(self) -> None:
+    def _fetch_live_worker(self, cancel_event: threading.Event) -> None:
         """Roda off UI thread. Tenta market pulse; marshalls updates via after()."""
-        if self._cancel_event is not None and self._cancel_event.is_set():
+        if cancel_event.is_set():
             return
         try:
             pulse = self._fetch_market_pulse()
         except Exception:
             pulse = None
-        if self._cancel_event is not None and self._cancel_event.is_set():
+        if cancel_event.is_set():
             return
         if pulse:
             try:

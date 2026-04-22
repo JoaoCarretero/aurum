@@ -96,7 +96,7 @@ def read_engine_roster(index_path: Path) -> list[dict]:
         parsed = _parse_timestamp(r.get("timestamp"))
         if parsed is None:
             continue
-        assert parsed is not None  # narrow Optional[datetime] para type-checkers
+        # parsed: datetime (Optional narrowed pelo continue acima)
         try:
             sh_f = float(sh)
         except (TypeError, ValueError):
