@@ -1,0 +1,24 @@
+[Unit]
+Description=AURUM · cleanup stale running rows em live_runs DB
+Documentation=https://github.com/joao/aurum.finance
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/srv/aurum.finance
+
+# Paper runner tem bug latente: nao marca status='stopped' no heartbeat
+# ao SIGTERM (shadow marca). Sem este cleanup, restarts acumulam rows
+# phantom com status='running' no live_runs DB, poluindo o cockpit picker
+# e contadores de RUNNING.
+#
+# Threshold 30min cobre tick_sec=900 (15min) + margem de 2x antes de
+# considerar orfao. Safe pra services vivos (eles upserat o last_tick_at
+# a cada tick).
+ExecStart=/usr/bin/sqlite3 /srv/aurum.finance/data/aurum.db \
+  "UPDATE live_runs SET status='stopped', ended_at=datetime('now') \
+   WHERE status='running' AND datetime(last_tick_at) < datetime('now','-30 minutes');"
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aurum-cleanup-stale-runs

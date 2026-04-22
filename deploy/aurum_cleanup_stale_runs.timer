@@ -1,0 +1,12 @@
+[Unit]
+Description=AURUM · run aurum_cleanup_stale_runs hourly
+Requires=aurum_cleanup_stale_runs.service
+
+[Timer]
+# Roda 5 min apos boot (graca period) + a cada hora depois.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
