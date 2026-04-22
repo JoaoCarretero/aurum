@@ -2584,21 +2584,31 @@ def _paper_content_sig_cheap(state) -> tuple:
 
 def _shadow_content_sig_cheap(state) -> tuple:
     """Cache-only shadow detail signature. Same contract as the paper
-    version — never blocks, reads dict .get() only."""
+    version — never blocks, reads dict .get() only.
+
+    Bug fix: a sig PRECISA incluir selected_shadow_run_id. Se o operador
+    clica em outro shadow run no picker, _render_detail compara sig nova
+    vs antiga; se a selecao nao aparece na tupla, sig permanece igual,
+    _render_detail early-returns e a tela nao atualiza — picker parece
+    "morto". Paper faz isso certo via `picked = state.get(...)` em
+    _paper_content_sig_cheap.
+    """
+    picked = (state or {}).get("selected_shadow_run_id") or ""
     if not _SHADOW_SNAPSHOT_CACHE:
-        return ("loading",)
+        return ("loading", picked)
     # Pick any cached run — the actual selection happens on real render.
     # Sig only needs to detect *change*, not fidelity.
     try:
         _k, entry = next(iter(_SHADOW_SNAPSHOT_CACHE.items()))
     except StopIteration:
-        return ("loading",)
+        return ("loading", picked)
     _ts, payload = entry
     run_dir, hb, trades = payload
     if hb is None:
-        return ("loading",)
+        return ("loading", picked)
     return (
         state.get("selected_slug"),
+        picked,                        # <-- NEW: muda → sig muda → re-render
         str(run_dir or ""),
         hb.get("status"),
         hb.get("last_tick_at"),
