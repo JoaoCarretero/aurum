@@ -67,7 +67,40 @@ def render(app, name, script, desc, parent_menu):
             app._cfg_period = v
             for b, bv in app._per_btns:
                 b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
+            # Limpa o entry custom ao selecionar preset.
+            try:
+                app._cfg_period_entry.delete(0, tk.END)
+            except Exception:
+                pass
         btn.bind("<Button-1>", select_period)
+
+    # Custom days entry — digite um numero livre, sobrescreve preset.
+    tk.Label(per_f, text="  ou  ", font=(FONT, 8), fg=DIM2,
+             bg=BG).pack(side="left", padx=(8, 2))
+    app._cfg_period_entry = tk.Entry(per_f, width=6, font=(FONT, 9, "bold"),
+                                     fg=AMBER, bg=BG3, insertbackground=AMBER,
+                                     relief="flat", highlightthickness=1,
+                                     highlightbackground=DIM2,
+                                     highlightcolor=AMBER)
+    app._cfg_period_entry.pack(side="left", padx=2, ipady=3)
+
+    def _apply_custom_period(_event=None):
+        raw = app._cfg_period_entry.get().strip()
+        try:
+            n = int(raw)
+        except ValueError:
+            return
+        if n < 7:
+            return
+        app._cfg_period = str(n)
+        # Limpa highlight dos presets (usuario foi pro custom).
+        for b, _bv in app._per_btns:
+            b.configure(fg=DIM, bg=BG3)
+    app._cfg_period_entry.bind("<KeyRelease>", _apply_custom_period)
+    app._cfg_period_entry.bind("<FocusOut>", _apply_custom_period)
+
+    tk.Label(per_f, text="dias", font=(FONT, 8), fg=DIM2,
+             bg=BG).pack(side="left", padx=(2, 0))
 
     # -- BASKET --
     tk.Label(f, text="CESTA DE ATIVOS", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
