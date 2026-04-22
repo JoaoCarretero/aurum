@@ -1607,8 +1607,14 @@ def _render_detail(state, launcher):
     mode = state.get("mode")
 
     if mode == "paper":
-        slug = "millennium"
-        bucket = "LIVE"
+        # Pre 2026-04-22: forcava slug="millennium" + bucket="LIVE" no
+        # paper mode. Com runners per-engine (citadel/jump/renaissance),
+        # paper tem tambem as 3 engines — preservar selecao do usuario.
+        # Defaults so aplicam quando nada foi selecionado ainda.
+        if not slug:
+            slug = "millennium"
+        if not bucket:
+            bucket = "LIVE"
         state["selected_slug"] = slug
         state["selected_bucket"] = bucket
 
