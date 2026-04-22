@@ -325,10 +325,7 @@ PERIODS_UI = [
 _BT_COLS: list[tuple[str, int]] = [
     ("DATE / TIME",  19),
     ("STRATEGY",     14),
-    # TF: 5 → 6 chars. "15m"/"1h"/"4h" cabem facil em 5, mas
-    # a coluna encostava no DAYS; 6 da respiro visual e fica
-    # na mesma largura da coluna DAYS/TRADES — visual mais consistente.
-    ("TF",            6),
+    ("TF",            5),
     ("DAYS",          5),
     ("BASKET",       10),
     ("RUN",          14),
@@ -515,8 +512,34 @@ class App(tk.Tk):
             _configure_screen_logging()
         except Exception:
             pass
+        # Auto-cleanup stale live_runs rows no startup — paper runner tem
+        # bug latente de nao marcar SIGTERM stopped; sem isso, o cockpit
+        # lista "runs travadas" fantasmas. Threshold 30min (2x tick_sec).
+        try:
+            from core.ops.db_live_runs import cleanup_stale_rows
+            cleaned = cleanup_stale_rows(stale_minutes=30)
+            if cleaned:
+                import logging
+                logging.getLogger(__name__).info(
+                    "startup: cleaned %d stale live_runs rows", cleaned)
+        except Exception:
+            pass
         self.title("AURUM Terminal")
         self.configure(bg=BG)
+        # Defensive: forca Tk default palette pra BG em tudo. Se alguma
+        # Frame em algum canto esquecer `bg=BG` explicito, o Windows
+        # mostraria SystemButtonFace (~#F0F0F0 = "branco") no fundo.
+        # tk_setPalette varre todos widget defaults e seta em massa,
+        # inclusive pras classes de menu/dialog/messagebox criadas
+        # internamente. Chamado ANTES de chrome/widgets serem criados.
+        try:
+            self.tk_setPalette(
+                background=BG, foreground=WHITE,
+                activeBackground=BG3, activeForeground=WHITE,
+                highlightColor=BORDER, highlightBackground=BG,
+            )
+        except Exception:
+            pass
         self._configure_windows_dpi()
         self.geometry("960x660")
         self.minsize(860, 560)
@@ -741,20 +764,7 @@ class App(tk.Tk):
         ).start()
 
     def _shutdown_runtime(self) -> None:
-        """Stop background services idempotently for WM_DELETE and tests.
-
-        Fase FAST (sync, ~10ms): flags + after_cancel. Tudo que e cheap.
-        Fase SLOW (daemon thread): poller.stop + tunnel.stop. Antes rodava
-        sync e bloqueava o close button por ate 3s (tunnel.terminate ->
-        wait 1s -> kill -> wait 1s -> watchdog join 1s no pior caso com
-        SSH.exe preso no Windows). Isso fazia o operador ter que apertar
-        X duas vezes — primeiro clique congelava aguardando cleanup,
-        segundo clique fechava a janela.
-
-        Agora: FAST part + kick daemon thread e destroy() retorna em
-        <50ms. Daemon thread termina quando process exit (SSH.exe
-        orphan eh reapado no proximo startup via _reap_orphan_tunnel_on_port).
-        """
+        """Stop background services idempotently for WM_DELETE and tests."""
         if getattr(self, "_shutdown_done", False):
             return
         self._shutdown_done = True
@@ -769,50 +779,35 @@ class App(tk.Tk):
                 self._ui_task_after_id = None
         except Exception:
             pass
-
-        # SLOW phase em daemon thread — nao bloqueia destroy()
-        poller = getattr(self, "_aurum_shadow_poller", None)
-        tunnel = getattr(self, "_aurum_tunnel", None)
-        self._aurum_shadow_poller = None
-        self._aurum_tunnel = None
-        if poller is None and tunnel is None:
-            return  # nada pra limpar
-
         try:
-            from launcher_support.tunnel_registry import (
-                set_shadow_poller, set_tunnel_manager,
-            )
+            from launcher_support.tunnel_registry import set_shadow_poller, set_tunnel_manager
         except Exception:
             set_shadow_poller = None
             set_tunnel_manager = None
-
-        def _bg_cleanup() -> None:
-            if poller is not None:
+        poller = getattr(self, "_aurum_shadow_poller", None)
+        if poller is not None:
+            try:
+                poller.stop(timeout_sec=0.5)
+            except Exception:
+                pass
+            self._aurum_shadow_poller = None
+            if set_shadow_poller is not None:
                 try:
-                    poller.stop(timeout_sec=0.5)
+                    set_shadow_poller(None)
                 except Exception:
                     pass
-                if set_shadow_poller is not None:
-                    try:
-                        set_shadow_poller(None)
-                    except Exception:
-                        pass
-            if tunnel is not None:
+        tunnel = getattr(self, "_aurum_tunnel", None)
+        if tunnel is not None:
+            try:
+                tunnel.stop(timeout_sec=1.0)
+            except Exception:
+                pass
+            self._aurum_tunnel = None
+            if set_tunnel_manager is not None:
                 try:
-                    tunnel.stop(timeout_sec=1.0)
+                    set_tunnel_manager(None)
                 except Exception:
                     pass
-                if set_tunnel_manager is not None:
-                    try:
-                        set_tunnel_manager(None)
-                    except Exception:
-                        pass
-
-        import threading
-        threading.Thread(
-            target=_bg_cleanup, daemon=True,
-            name="aurum-shutdown-cleanup",
-        ).start()
 
     def destroy(self):
         self._shutdown_runtime()
@@ -1240,8 +1235,8 @@ class App(tk.Tk):
         ("sw", 192, 480),
         ("se", 728, 480),
     ]
-    _TILE_W = 340
-    _TILE_H = 200
+    _TILE_W = 280
+    _TILE_H = 150
     _TILE_DEPTH = 16
 
     _CD_CX = 460
@@ -1977,30 +1972,16 @@ class App(tk.Tk):
             self._MENU_DESIGN_H,
             self._menu_render_scale,
         )
-        # _apply_canvas_scale aligns bbox-TL to viewport-TL, which ignores
-        # the 24/18 design padding of the frame chrome and leaves content
-        # visually shifted. Re-center the bbox against the live window
-        # (same compensation splash.py applies in _render_resize). Without
-        # this, _active_tile_slots (computed below from viewport origin)
-        # ends up ~24*scale off from where tiles actually render, and any
-        # redraw via _tile_rect pulls tiles to the right.
-        live_w = max(canvas.winfo_width(), 1)
-        live_h = max(canvas.winfo_height(), 1)
-        bbox = canvas.bbox("all")
-        if bbox:
-            bbox_cx = (bbox[0] + bbox[2]) / 2
-            bbox_cy = (bbox[1] + bbox[3]) / 2
-            canvas.move("all", live_w / 2 - bbox_cx, live_h / 2 - bbox_cy)
         self._menu_viewport = viewport
         dx, dy = viewport[0], viewport[1]
         scale = self._menu_render_scale
         self._active_tile_slots = [
-            ("nw", int(round(202 * scale)) + dx, int(round(150 * scale)) + dy),
-            ("ne", int(round(718 * scale)) + dx, int(round(150 * scale)) + dy),
-            ("sw", int(round(202 * scale)) + dx, int(round(390 * scale)) + dy),
-            ("se", int(round(718 * scale)) + dx, int(round(390 * scale)) + dy),
+            ("nw", int(round(192 * scale)) + dx, int(round(182 * scale)) + dy),
+            ("ne", int(round(728 * scale)) + dx, int(round(182 * scale)) + dy),
+            ("sw", int(round(192 * scale)) + dx, int(round(340 * scale)) + dy),
+            ("se", int(round(728 * scale)) + dx, int(round(340 * scale)) + dy),
         ]
-        self._active_cd_center = (int(round(460 * scale)) + dx, int(round(270 * scale)) + dy)
+        self._active_cd_center = (int(round(460 * scale)) + dx, int(round(261 * scale)) + dy)
 
     def _menu_tile_expand(self, idx: int) -> None:
         try:
@@ -2766,13 +2747,6 @@ class App(tk.Tk):
             pct = 8.0
             tail = "background active"
             log_path = Path(info["log_file"])
-            # Engines como MILLENNIUM logam centenas de linhas por segundo
-            # durante walk-forward / monte carlo. Dispatchar set_progress
-            # por linha (via self.after(0, ...)) enfila dezenas de rebuilds
-            # do picker na main thread, travando a UI e o Windows. Batch:
-            # processa todas as linhas do chunk, mas so dispara UM
-            # set_progress por ciclo do loop (cada ~150ms), usando o ultimo
-            # pct/tail acumulado.
             while True:
                 try:
                     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -2783,12 +2757,10 @@ class App(tk.Tk):
                     chunk = ""
 
                 if chunk:
-                    saw_line = False
                     for raw in chunk.splitlines():
                         clean = raw.strip()
                         if not clean:
                             continue
-                        saw_line = True
                         next_pct, stage = self._strategies_progress_target(clean)
                         if next_pct > 0:
                             pct = max(pct, next_pct)
@@ -2798,7 +2770,6 @@ class App(tk.Tk):
                             tail = clean[:180]
                         self._strategies_inline_runs[slug]["pct"] = pct
                         self._strategies_inline_runs[slug]["tail"] = tail
-                    if saw_line:
                         try:
                             self.after(0, lambda s=slug, p=pct, t=tail: handle["set_progress"](s, p, t, True))
                         except Exception:
@@ -4203,42 +4174,21 @@ class App(tk.Tk):
     # --------------------------------------------------------------
 
     _ARB_TAB_DEFS = [
-        # (key, tab_id, label, color) — collapsed 6→3 tabs in Phase 1
-        # redesign (2026-04-22). All legacy tab ids route into these.
-        ("1", "opps",      "OPPS",       "#ffd700"),
-        ("2", "positions", "POSITIONS",  "#00ff80"),
-        ("3", "history",   "HISTORY",    "#c084fc"),
+        # (key, tab_id, label, color)
+        ("1", "cex-cex", "CEX \u2194 CEX",   "#ffd700"),
+        ("2", "dex-dex", "DEX \u2194 DEX",   "#00eaff"),
+        ("3", "cex-dex", "CEX \u2194 DEX",   "#c084fc"),
+        ("4", "basis",   "BASIS",            "#32bcad"),
+        ("5", "spot",    "SPOT \u2194 SPOT", "#ff00a0"),
+        ("6", "engine",  "ENGINE",           "#00ff80"),
     ]
 
-    # Legacy 6-tab ids routed into the new 3-tab layout (Phase 1 redesign).
-    _ARB_LEGACY_TAB_MAP = {
-        "cex-cex": "opps", "dex-dex": "opps", "cex-dex": "opps",
-        "basis": "opps", "spot": "opps",
-        "engine": "positions",
-    }
-
-    def _arbitrage_hub(self, tab: str = "opps"):
+    def _arbitrage_hub(self, tab: str = "cex-cex"):
         """Delegate to launcher_support.screens.arbitrage_hub.render.
-        Full hub (status strip + tab strip + content area + scanner +
-        refresh loop) lives there. Tab renderers (_arb_render_*) stay
-        on App and are dispatched via the app parameter.
+        Full hub (status strip + grouped tab strip + content area +
+        scanner + refresh loop) lives there. Tab renderers (_arb_render_*)
+        stay on App and are dispatched via the app parameter.
         """
-        # Route legacy tab ids to their new home
-        tab = self._ARB_LEGACY_TAB_MAP.get(tab, tab)
-        # Speed: if already on the requested tab with live widgets, just
-        # repaint from cache instead of tearing down and rebuilding the
-        # whole shell (status strip, tab strip, etc.). Saves ~40 widget
-        # destroys + re-creates per tab click.
-        current = getattr(self, "_arb_tab", None)
-        labels = getattr(self, "_arb_tab_labels", None)
-        if current == tab and labels:
-            try:
-                first = next(iter(labels.values()), None)
-                if first is not None and first.winfo_exists():
-                    self._arb_rerender_current_tab()
-                    return
-            except Exception:
-                pass
         from launcher_support.screens.arbitrage_hub import render as _render_arbitrage_hub
         _render_arbitrage_hub(self, tab=tab)
 
@@ -4270,27 +4220,22 @@ class App(tk.Tk):
                         return
                 except Exception:
                     return
-                # Skip network fetch if scanner cache is still fresh —
-                # triggered when a manual R-refresh or tab switch already
-                # kicked a scan a few seconds ago.
-                if not self._arb_scan_is_fresh():
-                    self._arb_hub_scan_async()
+                self._arb_hub_scan_async()
                 self._arb_refresh_after = self.after(delay_ms, _tick)
             self._arb_refresh_after = self.after(delay_ms, _tick)
         except Exception:
             pass
 
     def _arb_schedule_clock(self):
-        """Tick every second — updates scan staleness + engine pill."""
+        """Tick the status strip clock every second."""
         def _tick():
-            # Short-circuit if status strip widgets gone (user left hub)
-            scan_lbl = getattr(self, "_arb_scan_age", None)
-            if scan_lbl is None:
+            lbl = getattr(self, "_arb_clock", None)
+            if lbl is None:
                 return
             try:
-                if not scan_lbl.winfo_exists():
+                if not lbl.winfo_exists():
                     return
-                self._arb_update_status_strip()
+                lbl.configure(text=datetime.now().strftime("%H:%M:%S UTC"))
                 self.after(1000, _tick)
             except Exception:
                 pass
@@ -4298,58 +4243,6 @@ class App(tk.Tk):
             self.after(1000, _tick)
         except Exception:
             pass
-
-    def _arb_update_status_strip(self):
-        """Refresh scan staleness + engine pill in the hub status strip."""
-        import time as _time
-        # Scan staleness
-        scan_lbl = getattr(self, "_arb_scan_age", None)
-        if scan_lbl is not None:
-            try:
-                last = getattr(self, "_arb_last_scan_ts", 0) or 0
-                if last > 0:
-                    age = int(_time.time() - last)
-                    if age < 60:
-                        txt, fg = f"SCAN {age}s ago", GREEN if age <= 20 else AMBER
-                    else:
-                        txt, fg = f"SCAN {age // 60}m ago", RED
-                else:
-                    txt, fg = "SCAN —", DIM
-                scan_lbl.configure(text=txt, fg=fg)
-            except Exception:
-                pass
-        # Engine pill
-        pill = getattr(self, "_arb_engine_pill", None)
-        acctlbl = getattr(self, "_arb_engine_acctlbl", None)
-        ddlbl = getattr(self, "_arb_engine_ddlbl", None)
-        engine = getattr(self, "_arb_simple_engine", None)
-        if pill is not None:
-            try:
-                if engine is not None and engine.running:
-                    snap = engine.snapshot()
-                    mode = snap.get("mode", "paper").upper()
-                    pill.configure(
-                        text=f" {mode} RUN ",
-                        bg=GREEN if not snap.get("killed") else RED,
-                        fg=BG,
-                    )
-                    if acctlbl is not None:
-                        acctlbl.configure(
-                            text=f"ACCT ${snap.get('account', 0):,.0f}",
-                            fg=WHITE)
-                    if ddlbl is not None:
-                        dd = float(snap.get("drawdown_pct", 0) or 0)
-                        ddlbl.configure(
-                            text=f"DD {dd:+.2f}%",
-                            fg=RED if dd > 5 else (AMBER if dd > 1 else DIM))
-                else:
-                    pill.configure(text=" OFF ", bg=DIM, fg=BG)
-                    if acctlbl is not None:
-                        acctlbl.configure(text="", fg=DIM)
-                    if ddlbl is not None:
-                        ddlbl.configure(text="", fg=DIM)
-            except Exception:
-                pass
 
     # -- Table helper used by every tab -------------------------
     def _arb_make_table(self, parent, cols: list[tuple[str, int, str]],
@@ -4492,68 +4385,18 @@ class App(tk.Tk):
     _ARB_OI_OPTS    = [0, 50_000, 100_000, 500_000, 1_000_000]
     _ARB_RISK_OPTS  = ["HIGH", "MED", "LOW"]
     _ARB_GRADE_OPTS = ["SKIP", "MAYBE", "GO"]
-    # Phase 2 redesign: default ships with GRADE=MAYBE (≈ +WAIT), hiding
-    # SKIP noise of the day. User clicks "ALL" to see everything or
-    # "GO ONLY" to tighten.
+    # Defaults são permissivos DE PROPÓSITO — se começarmos apertado
+    # (GRADE=MAYBE, APR=20%), o usuário abre a desk e vê tabela vazia sem
+    # saber porquê. Começa relaxado, user aperta se quiser ver só o topo.
     _ARB_FILTER_DEFAULTS = {
         "min_apr": 5.0, "min_volume": 0, "min_oi": 0,
-        "risk_max": "HIGH", "grade_min": "MAYBE",
-        "exclude_risky_venues": False,
-        "realistic_only": True,
+        "risk_max": "HIGH", "grade_min": "SKIP",
     }
-
-    # Venues considered "risky" for the [NO RISKY VENUES] toggle —
-    # reliability ≤ 94 from core.arb.arb_scoring._DEFAULT_VENUE_RELIABILITY.
-    _ARB_RISKY_VENUES = frozenset({"bingx", "bitget", "paradex"})
-
-    # REALISTIC filter cutoffs. APR > 500% is almost always stale funding
-    # on a thinly-traded perp — looks juicy in the list, impossible to
-    # actually execute. Vol < $5M means >20bps slippage on a $1k position
-    # which eats the whole edge.
-    _ARB_REALISTIC_APR_MAX = 500.0
-    _ARB_REALISTIC_VOL_MIN = 5_000_000.0
 
     def _arb_filter_state(self) -> dict:
         if not hasattr(self, "_arb_filters"):
-            # First access — try loading persisted state, else defaults
-            self._arb_filters = self._arb_load_filters()
+            self._arb_filters = dict(self._ARB_FILTER_DEFAULTS)
         return self._arb_filters
-
-    @staticmethod
-    def _arb_filters_path():
-        from pathlib import Path as _P
-        return _P("data") / "arb_hub" / "filters.json"
-
-    def _arb_load_filters(self) -> dict:
-        """Load persisted filter state from disk. Falls back to defaults."""
-        import json as _json
-        base = dict(self._ARB_FILTER_DEFAULTS)
-        try:
-            path = self._arb_filters_path()
-            if path.exists():
-                raw = _json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    # Only accept keys the defaults know about — prevents
-                    # stale schema entries from polluting the state.
-                    for k, v in raw.items():
-                        if k in base:
-                            base[k] = v
-        except Exception:
-            pass
-        return base
-
-    def _arb_save_filters(self) -> None:
-        """Persist current filter state to disk (atomic write)."""
-        import json as _json
-        try:
-            path = self._arb_filters_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                _json.dumps(self._arb_filters, indent=2), encoding="utf-8")
-            tmp.replace(path)
-        except Exception:
-            pass
 
     def _arb_fmt_filter(self, key: str, val) -> str:
         if key == "min_apr":
@@ -4572,198 +4415,18 @@ class App(tk.Tk):
             return f"GRADE\u2265{val}"
         return f"{key}={val}"
 
-    def _arb_rerender_current_tab(self) -> None:
-        """Repaint the active tab from cached scan data (no network)."""
-        cache = getattr(self, "_arb_cache", None)
-        if not cache:
-            return
-        try:
-            self._arb_hub_telem_update(
-                cache.get("stats"), cache.get("top"),
-                cache.get("opps", []), cache.get("arb_cc", []),
-                cache.get("arb_dd", []), cache.get("arb_cd", []),
-                cache.get("basis", []), cache.get("spot", []))
-        except Exception:
-            pass
-
-    def _arb_set_grade_min(self, grade: str) -> None:
-        """Set grade_min filter (for [GO ONLY]/[+WAIT]/[ALL] toolbar)."""
-        self._arb_filter_state()["grade_min"] = grade
-        # Refresh chip display if visible
-        lbl = getattr(self, "_arb_filter_labels", {}).get("grade_min")
-        if lbl is not None:
-            try:
-                lbl.configure(text=f" {self._arb_fmt_filter('grade_min', grade)} ")
-            except Exception:
-                pass
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
-    def _arb_toggle_risky_venues(self) -> None:
-        state = self._arb_filter_state()
-        state["exclude_risky_venues"] = not state.get("exclude_risky_venues", False)
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
-    def _arb_toggle_realistic(self) -> None:
-        state = self._arb_filter_state()
-        state["realistic_only"] = not state.get("realistic_only", True)
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
-    def _arb_refresh_viab_toolbar(self) -> None:
-        """Repaint the top viability toolbar's active/inactive states."""
-        btns = getattr(self, "_arb_viab_btns", {})
-        if not btns:
-            return
-        state = self._arb_filter_state()
-        active = state.get("grade_min", "MAYBE")
-        palette = {
-            "GO":    (GREEN, BG),      # [GO ONLY]
-            "MAYBE": (AMBER, BG),      # [+WAIT]
-            "SKIP":  (DIM, BG),        # [ALL]
-        }
-        for key, (btn, grade) in btns.items():
-            if key == "risky":
-                continue
-            try:
-                if grade == active:
-                    fg, _bg = BG, palette[grade][0]
-                    btn.configure(fg=fg, bg=_bg)
-                else:
-                    fg, _bg = palette[grade][0], palette[grade][1]
-                    btn.configure(fg=fg, bg=_bg)
-            except Exception:
-                pass
-        risky_btn = btns.get("risky", (None,))[0]
-        if risky_btn is not None:
-            try:
-                on = state.get("exclude_risky_venues", False)
-                risky_btn.configure(
-                    text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
-                    fg=RED if on else DIM, bg=BG)
-            except Exception:
-                pass
-        real_btn = btns.get("realistic", (None,))[0]
-        if real_btn is not None:
-            try:
-                on = state.get("realistic_only", True)
-                real_btn.configure(
-                    text=f" {'[X]' if on else '[ ]'} REALISTIC ",
-                    fg=AMBER if on else DIM, bg=BG)
-            except Exception:
-                pass
-
-    def _arb_build_viab_toolbar(self, parent):
-        """Phase 2: 3-button viability toolbar + NO RISKY VENUES toggle.
-
-        Sits ABOVE the advanced filter chips. User picks a viability
-        bucket ([GO ONLY]/[+WAIT]/[ALL]) and optionally excludes venues
-        with low reliability. Simpler than the 5-chip cycling bar and
-        answers the "does this position make sense?" question directly.
-        """
-        bar = tk.Frame(parent, bg=BG)
-        bar.pack(fill="x", pady=(0, 3))
-
-        # VIAB label dropped — legend row above already establishes the
-        # semantics, and the GO/WAIT/ALL chips are self-explanatory.
-
-        state = self._arb_filter_state()
-        active = state.get("grade_min", "MAYBE")
-        self._arb_viab_btns = {}
-
-        viab_buttons = [
-            ("GO ONLY", "GO",    GREEN),
-            ("+WAIT",   "MAYBE", AMBER),
-            ("ALL",     "SKIP",  DIM),
-        ]
-        for label, grade, color in viab_buttons:
-            is_active = (grade == active)
-            fg = BG if is_active else color
-            bg = color if is_active else BG
-            btn = tk.Label(
-                bar, text=f"  {label}  ",
-                font=(FONT, 8, "bold"),
-                fg=fg, bg=bg, cursor="hand2",
-                padx=8, pady=3, bd=0, highlightthickness=0,
-            )
-            btn.pack(side="left", padx=(0, 2))
-            btn.bind("<Button-1>", lambda _e, _g=grade: self._arb_set_grade_min(_g))
-            self._arb_viab_btns[label] = (btn, grade)
-
-        # Divider
-        tk.Frame(bar, bg=BORDER, width=1, height=18).pack(
-            side="left", fill="y", padx=(10, 10))
-
-        # [NO RISKY VENUES] toggle
-        on = state.get("exclude_risky_venues", False)
-        risky_btn = tk.Label(
-            bar,
-            text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
-            font=(FONT, 8, "bold"),
-            fg=RED if on else DIM, bg=BG,
-            cursor="hand2", padx=6, pady=3,
-        )
-        risky_btn.pack(side="left")
-        risky_btn.bind("<Button-1>", lambda _e: self._arb_toggle_risky_venues())
-        self._arb_viab_btns["risky"] = (risky_btn, None)
-
-        # [REALISTIC] toggle — hides APR>500% (stale funding) and vol<$5M
-        # (can't execute without slippage eating the edge). Default ON so
-        # the first-open view is clean.
-        real_on = state.get("realistic_only", True)
-        real_btn = tk.Label(
-            bar,
-            text=f" {'[X]' if real_on else '[ ]'} REALISTIC ",
-            font=(FONT, 8, "bold"),
-            fg=AMBER if real_on else DIM, bg=BG,
-            cursor="hand2", padx=6, pady=3,
-        )
-        real_btn.pack(side="left", padx=(6, 0))
-        real_btn.bind("<Button-1>", lambda _e: self._arb_toggle_realistic())
-        self._arb_viab_btns["realistic"] = (real_btn, None)
-
     def _arb_build_filter_bar(self, parent):
         """Render the shared filter chip strip. Click a chip to cycle its value.
 
         Filters persist across tab switches via self._arb_filters. Any value
         change re-renders the active tab from the cached scan (no network).
         """
-        # Phase 2: viability toolbar on top, chips below as "advanced"
-        self._arb_build_viab_toolbar(parent)
-
-        # Phase 4: ADVANCED chips collapsed by default. Clickable toggle.
         state = self._arb_filter_state()
-        adv_container = tk.Frame(parent, bg=BG)
-        adv_container.pack(fill="x", pady=(0, 4))
-
-        header = tk.Frame(adv_container, bg=BG)
-        header.pack(fill="x")
-        advanced_expanded = getattr(self, "_arb_advanced_expanded", False)
-        arrow = "▼" if advanced_expanded else "▶"
-        toggle = tk.Label(
-            header, text=f" {arrow} ADVANCED FILTERS ",
-            font=(FONT, 7, "bold"),
-            fg=DIM, bg=BG, cursor="hand2", padx=4)
-        toggle.pack(side="left")
-
-        def _toggle_advanced(_e=None):
-            self._arb_advanced_expanded = not getattr(self, "_arb_advanced_expanded", False)
-            # Force full rebuild (not fast-path) by clearing tab labels
-            self._arb_tab_labels = None
-            self._arbitrage_hub(self._arb_tab)
-        toggle.bind("<Button-1>", _toggle_advanced)
-
-        # Early-return if collapsed — chip bar never mounted
-        if not advanced_expanded:
-            return
-
-        bar = tk.Frame(adv_container, bg=BG2)
-        bar.pack(fill="x", pady=(2, 0))
-        tk.Label(bar, text=" click pra ciclar ",
+        bar = tk.Frame(parent, bg=BG2)
+        bar.pack(fill="x", pady=(0, 4))
+        tk.Label(bar, text=" FILTERS ", font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG2).pack(side="left", padx=(4, 2))
+        tk.Label(bar, text="› click pra ciclar",
                  font=(FONT, 6), fg=DIM, bg=BG2).pack(
             side="left", padx=(0, 6))
 
@@ -4800,446 +4463,104 @@ class App(tk.Tk):
                 s[_k] = nxt
                 self._arb_filter_labels[_k].configure(
                     text=f" {self._arb_fmt_filter(_k, nxt)} ")
-                # Keep viability toolbar in sync when grade_min changes
-                if _k == "grade_min":
-                    self._arb_refresh_viab_toolbar()
-                self._arb_save_filters()
-                self._arb_rerender_current_tab()
+                # Re-render the current tab with cached data
+                cache = getattr(self, "_arb_cache", None)
+                if cache:
+                    self._arb_hub_telem_update(
+                        cache.get("stats"), cache.get("top"),
+                        cache.get("opps", []), cache.get("arb_cc", []),
+                        cache.get("arb_dd", []), cache.get("arb_cd", []),
+                        cache.get("basis", []), cache.get("spot", []))
             lbl.bind("<Button-1>", _cycle)
 
     # -- Detail pane (populated on row click) ------------------
     def _arb_build_detail_pane(self, parent):
-        """Reserve a detail panel below the table. Empty-state is just a
-        single-line hint (no separate title + body frames) so the OPPS
-        table keeps the full vertical budget until the user clicks a row.
-        Body is BG2 so _arb_show_detail's BG2 child labels render as a
-        cohesive card when populated.
-        """
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(4, 0))
+        """Reserve a detail panel below the table. Updated on row click with
+        the selected pair's factor breakdown + score."""
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 2))
+        # Title row: DETAIL + hint so the user knows this panel fills
+        # from a row click — was easy to miss as a passive label.
+        title_row = tk.Frame(parent, bg=BG); title_row.pack(fill="x")
+        tk.Label(title_row, text="DETAIL",
+                 font=(FONT, 7, "bold"), fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(title_row, text="  › clique numa linha pra inspecionar",
+                 font=(FONT, 6), fg=DIM, bg=BG).pack(side="left")
         body = tk.Frame(parent, bg=BG2)
-        body.pack(fill="x", pady=(0, 0))
-        default = tk.Label(
-            body,
-            text="  DETAIL  ›  clique numa linha pra simular posição",
-            font=(FONT, 7), fg=DIM, bg=BG2)
-        default.pack(anchor="w", padx=4, pady=(2, 2))
+        body.pack(fill="x", pady=(2, 0))
+        default = tk.Label(body,
+                           text="  (nenhuma linha selecionada — clique pra abrir)",
+                           font=(FONT, 7), fg=DIM2, bg=BG2)
+        default.pack(anchor="w", padx=6, pady=6)
         self._arb_detail_body = body
         self._arb_detail_default = default
 
-    # Size chips for the detail simulator. Matches the reasonable range
-    # for paper mode ($5k account, max 3 positions — $500 to $5k per leg).
-    _ARB_SIM_SIZES = (500.0, 1000.0, 2500.0, 5000.0)
-
-    def _arb_simulate(self, pair: dict, size_usd: float) -> dict:
-        """Project funding / fees / net for a given position size.
-
-        Formula matches SimpleArbEngine:
-          - entry fee: size × (10 + 5) / 10_000 = 0.15% at open
-          - exit fee: same 0.15% at close → RT = 30 bps
-          - funding: size × apr/100 × hours / 8760  (continuous approx
-            of 3× 8h funding payments/day × 365)
-
-        Decay scenario: 4h at full APR, then APR halves, hold to 24h.
-        Gives a concrete "what if the spread fades" number alongside
-        the "if it holds" row.
-        """
-        apr = abs(float(pair.get("net_apr") or pair.get("apr")
-                         or pair.get("basis_apr") or 0))
-        rt_fee_bps = 30.0
-        rt_fee_usd = size_usd * rt_fee_bps / 10_000.0
-
-        def _funding(hold_h: float, apr_pct: float) -> float:
-            return size_usd * (apr_pct / 100.0) * (hold_h / 8760.0)
-
-        holds = [8, 24, 72]
-        rows = []
-        for h in holds:
-            f = _funding(h, apr)
-            rows.append({
-                "hold_h": h,
-                "funding": round(f, 2),
-                "fees":    round(rt_fee_usd, 2),
-                "net":     round(f - rt_fee_usd, 2),
-            })
-        # Decay scenario: 4h @ full, 20h @ 50%, exit at 24h total
-        decay_funding = _funding(4.0, apr) + _funding(20.0, apr * 0.5)
-        decay_row = {
-            "label":   "decay→50% @4h, hold 24h",
-            "funding": round(decay_funding, 2),
-            "fees":    round(rt_fee_usd, 2),
-            "net":     round(decay_funding - rt_fee_usd, 2),
-        }
-
-        bkevn_h = round(rt_fee_bps * 87.6 / apr, 2) if apr > 0 else None
-
-        # Risk block. Liquidation distances assume exchange defaults
-        # (~20x short perp, ~25x long perp with small maintenance buffer).
-        # These are rough — real launcher doesn't set leverage here.
-        liq_short_pct = 4.5
-        liq_long_pct  = 3.5
-
-        vol = (pair.get("volume_24h")
-               or self._pair_min(pair.get("volume_24h_short"),
-                                  pair.get("volume_24h_long")) or 0)
-        vol_f = float(vol) if vol else 0.0
-        vol_ratio = vol_f / size_usd if (vol_f > 0 and size_usd > 0) else None
-        # Slippage ballpark: 10bps baseline, scales down with sqrt(ratio/10).
-        # Not a market impact model — just "small / ok / concerning" flag.
-        slippage_bps = None
-        if vol_ratio and vol_ratio > 0:
-            slippage_bps = round(10.0 / max((vol_ratio / 10.0) ** 0.5, 0.1), 2)
-
-        from core.arb.arb_scoring import _DEFAULT_VENUE_RELIABILITY
-        sv = (pair.get("short_venue") or pair.get("venue_perp")
-              or pair.get("venue_a") or "").lower()
-        lv = (pair.get("long_venue") or pair.get("venue_spot")
-              or pair.get("venue_b") or "").lower()
-
-        return {
-            "size_usd":   size_usd,
-            "apr":        apr,
-            "rt_fee_usd": round(rt_fee_usd, 2),
-            "bkevn_h":    bkevn_h,
-            "rows":       rows,
-            "decay":      decay_row,
-            "risk": {
-                "liq_short_pct": liq_short_pct,
-                "liq_long_pct":  liq_long_pct,
-                "slippage_bps":  slippage_bps,
-                "vol":           vol_f,
-                "vol_ratio":     vol_ratio,
-                "short_venue":   sv,
-                "long_venue":    lv,
-                "short_rel":     _DEFAULT_VENUE_RELIABILITY.get(sv),
-                "long_rel":      _DEFAULT_VENUE_RELIABILITY.get(lv),
-            },
-        }
-
     @timed_legacy_switch("arb_detail")
     def _arb_show_detail(self, pair: dict):
-        """Render the simulator detail pane for a selected pair.
-
-        Layout (top-down): header | status line (APR/VIAB/SCORE/BKEVN) |
-        size chips | simulation table (8h/24h/72h + decay row) | risk
-        block (liq/slip/venues) | why-line | collapsible ADVANCED factor
-        breakdown | size-aware OPEN AS PAPER button.
-        """
+        """Populate the detail pane with the factor breakdown of a pair."""
         body = getattr(self, "_arb_detail_body", None)
         if body is None:
             return
         for w in body.winfo_children():
             w.destroy()
 
-        # Track selected pair + size + ADVANCED expansion between clicks
-        self._arb_detail_pair = pair
-        if not hasattr(self, "_arb_detail_size"):
-            self._arb_detail_size = 1000.0
-        if not hasattr(self, "_arb_detail_adv"):
-            self._arb_detail_adv = False
-        size_usd = self._arb_detail_size
-
+        # Compute the factor breakdown via the same scorer used for filtering.
         try:
             from core.arb.arb_scoring import score_opp
             res = score_opp(pair)
         except Exception:
             res = None
 
-        # -- Header -----------------------------------------------
-        tk.Label(body, text=self._arb_pair_label(pair),
+        header_txt = self._arb_pair_label(pair)
+        tk.Label(body, text=header_txt,
                  font=(FONT, 9, "bold"), fg=AMBER, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(4, 1))
+                 anchor="w").pack(fill="x", padx=6, pady=(4, 2))
 
-        # -- Status line: APR / VIAB / SCORE / BKEVN --------------
-        apr_val = float(pair.get("net_apr") or pair.get("apr") or 0)
-        status = tk.Frame(body, bg=BG2); status.pack(fill="x", padx=6)
-        tk.Label(status, text=f"APR {apr_val:+.1f}%",
-                 font=(FONT, 9, "bold"),
-                 fg=GREEN if abs(apr_val) >= 50 else AMBER,
-                 bg=BG2).pack(side="left")
+        # Factor table
         if res is not None:
-            viab = getattr(res, "viab", res.grade)
-            viab_fg = (GREEN if viab == "GO" else
-                       AMBER if viab in ("WAIT", "MAYBE") else DIM)
-            tk.Label(status, text=f"  ·  {viab}",
-                     font=(FONT, 9, "bold"), fg=viab_fg, bg=BG2).pack(side="left")
-            tk.Label(status, text=f"  ·  score {res.score:.0f}",
-                     font=(FONT, 8), fg=WHITE, bg=BG2).pack(side="left")
-            be = getattr(res, "breakeven_h", None)
-            if be is not None:
-                be_fg = GREEN if be <= 24 else (AMBER if be <= 72 else DIM)
-                tk.Label(status, text=f"  ·  bkevn {be:.1f}h",
-                         font=(FONT, 8), fg=be_fg, bg=BG2).pack(side="left")
+            grid = tk.Frame(body, bg=BG2)
+            grid.pack(fill="x", padx=6, pady=(0, 4))
+            factor_rows = [
+                ("NET APR", res.factors.get("net_apr"),
+                    f"{float(pair.get('net_apr') or pair.get('apr') or 0):+.1f}%"),
+                ("VOLUME",  res.factors.get("volume"),
+                    self._fmt_vol(pair.get("volume_24h")
+                                  or self._pair_min(pair.get("volume_24h_short"),
+                                                     pair.get("volume_24h_long")))),
+                ("OI",      res.factors.get("oi"),
+                    self._fmt_vol(pair.get("open_interest")
+                                  or self._pair_min(pair.get("open_interest_short"),
+                                                     pair.get("open_interest_long")))),
+                ("RISK",    res.factors.get("risk"),   pair.get("risk", "\u2014")),
+                ("SLIP",    res.factors.get("slippage"), "\u2014"),
+                ("VENUE",   res.factors.get("venue"),
+                    self._arb_venue_label(pair)),
+            ]
+            for i, (label, score, value) in enumerate(factor_rows):
+                grid.grid_columnconfigure(1, weight=1)
+                tk.Label(grid, text=label, font=(FONT, 7, "bold"),
+                         fg=DIM, bg=BG2, width=8, anchor="w").grid(
+                    row=i, column=0, sticky="w", padx=(0, 6))
+                tk.Label(grid, text=value, font=(FONT, 8),
+                         fg=WHITE, bg=BG2, anchor="w").grid(
+                    row=i, column=1, sticky="w")
+                s_txt = "\u2014" if score is None else f"{score:.0f}/100"
+                s_fg = (GREEN if (score or 0) >= 70 else
+                        AMBER if (score or 0) >= 40 else DIM)
+                tk.Label(grid, text=s_txt, font=(FONT, 7),
+                         fg=s_fg, bg=BG2, width=10, anchor="e").grid(
+                    row=i, column=2, sticky="e")
 
-        # -- Size chips -------------------------------------------
-        size_row = tk.Frame(body, bg=BG2)
-        size_row.pack(fill="x", padx=6, pady=(6, 2))
-        tk.Label(size_row, text="SIZE", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=BG2).pack(side="left", padx=(0, 6))
-        for s in self._ARB_SIM_SIZES:
-            is_sel = abs(s - size_usd) < 0.01
-            chip = tk.Label(
-                size_row,
-                text=f"  ${int(s):,}  " if s >= 1000 else f"  ${int(s)}  ",
-                font=(FONT, 8, "bold"),
-                fg=BG if is_sel else WHITE,
-                bg=AMBER if is_sel else BG3,
-                cursor="hand2", padx=4, pady=2,
-            )
-            chip.pack(side="left", padx=(0, 3))
-            chip.bind("<Button-1>",
-                      lambda _e, _s=s: self._arb_set_detail_size(_s))
-
-        # -- Simulation table -------------------------------------
-        sim = self._arb_simulate(pair, size_usd)
-        sim_frame = tk.Frame(body, bg=BG2)
-        sim_frame.pack(fill="x", padx=6, pady=(4, 4))
-        cols = [("HOLD", 10, "w"), ("FUNDING", 10, "e"),
-                ("FEES", 9, "e"), ("NET", 10, "e")]
-        for j, (c, w, a) in enumerate(cols):
-            tk.Label(sim_frame, text=c, font=(FONT, 7, "bold"),
-                     fg=AMBER, bg=BG2, width=w, anchor=a).grid(
-                row=0, column=j, sticky=a, padx=2)
-        for i, r in enumerate(sim["rows"], start=1):
-            hold_txt = f"{r['hold_h']}h"
-            if sim["bkevn_h"] is not None and r["hold_h"] >= sim["bkevn_h"]:
-                hold_txt += "  ✓"
-            tk.Label(sim_frame, text=hold_txt, font=(FONT, 8),
-                     fg=WHITE, bg=BG2, width=10, anchor="w").grid(
-                row=i, column=0, sticky="w", padx=2)
-            tk.Label(sim_frame, text=f"+${r['funding']:.2f}",
-                     font=(FONT, 8), fg=GREEN, bg=BG2,
-                     width=10, anchor="e").grid(
-                row=i, column=1, sticky="e", padx=2)
-            tk.Label(sim_frame, text=f"-${r['fees']:.2f}",
-                     font=(FONT, 8), fg=RED, bg=BG2,
-                     width=9, anchor="e").grid(
-                row=i, column=2, sticky="e", padx=2)
-            net_fg = GREEN if r["net"] > 0 else RED
-            tk.Label(sim_frame, text=f"${r['net']:+.2f}",
-                     font=(FONT, 8, "bold"), fg=net_fg, bg=BG2,
-                     width=10, anchor="e").grid(
-                row=i, column=3, sticky="e", padx=2)
-        # Decay scenario row
-        decay_i = len(sim["rows"]) + 1
-        d = sim["decay"]
-        tk.Label(sim_frame, text=d["label"], font=(FONT, 7, "italic"),
-                 fg=DIM2, bg=BG2, width=20, anchor="w").grid(
-            row=decay_i, column=0, columnspan=2, sticky="w",
-            padx=2, pady=(3, 0))
-        tk.Label(sim_frame, text=f"-${d['fees']:.2f}",
-                 font=(FONT, 7, "italic"), fg=DIM2, bg=BG2,
-                 width=9, anchor="e").grid(
-            row=decay_i, column=2, sticky="e", padx=2, pady=(3, 0))
-        decay_fg = GREEN if d["net"] > 0 else RED
-        tk.Label(sim_frame, text=f"${d['net']:+.2f}",
-                 font=(FONT, 7, "italic"), fg=decay_fg, bg=BG2,
-                 width=10, anchor="e").grid(
-            row=decay_i, column=3, sticky="e", padx=2, pady=(3, 0))
-
-        # -- Risk block -------------------------------------------
-        tk.Frame(body, bg=BORDER, height=1).pack(
-            fill="x", padx=6, pady=(2, 2))
-        risk = sim["risk"]
-        risk_frame = tk.Frame(body, bg=BG2)
-        risk_frame.pack(fill="x", padx=6, pady=(2, 2))
-        tk.Label(risk_frame, text="RISK", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG2).grid(row=0, column=0, sticky="w",
-                                         padx=(0, 8))
-        liq_txt = (f"liq {risk['liq_short_pct']:.1f}% short · "
-                   f"{risk['liq_long_pct']:.1f}% long")
-        tk.Label(risk_frame, text=liq_txt, font=(FONT, 7),
-                 fg=DIM2, bg=BG2).grid(row=0, column=1, sticky="w")
-        if risk["slippage_bps"] is not None:
-            slip_fg = (GREEN if risk["slippage_bps"] < 5 else
-                       AMBER if risk["slippage_bps"] < 15 else RED)
-            slip_txt = (f"slip ~{risk['slippage_bps']:.1f}bps "
-                        f"(vol ratio {risk['vol_ratio']:,.0f}x)")
-        else:
-            slip_fg = DIM
-            slip_txt = "slip —"
-        tk.Label(risk_frame, text=slip_txt, font=(FONT, 7),
-                 fg=slip_fg, bg=BG2).grid(row=1, column=1, sticky="w")
-        venue_bits = []
-        for name, rel in (("short", risk["short_rel"]),
-                          ("long",  risk["long_rel"])):
-            ven = risk["short_venue"] if name == "short" else risk["long_venue"]
-            if rel is not None:
-                venue_bits.append(f"{ven} {rel:.0f}")
-            elif ven:
-                venue_bits.append(f"{ven} ?")
-        ven_fg = DIM2
-        if risk["short_rel"] and risk["long_rel"]:
-            worst = min(risk["short_rel"], risk["long_rel"])
-            ven_fg = GREEN if worst >= 97 else (AMBER if worst >= 94 else RED)
-        tk.Label(risk_frame, text="venues " + " · ".join(venue_bits),
-                 font=(FONT, 7), fg=ven_fg, bg=BG2).grid(
-            row=2, column=1, sticky="w")
-
-        # -- Why line ---------------------------------------------
-        if res is not None:
-            reason = self._arb_viab_reason(pair, res)
-            if reason:
-                tk.Label(body, text=reason,
-                         font=(FONT, 7), fg=DIM, bg=BG2,
-                         anchor="w", justify="left", wraplength=600).pack(
-                    fill="x", padx=6, pady=(2, 2))
-
-        # -- ADVANCED (collapsible factor breakdown) --------------
-        if res is not None:
-            adv_on = self._arb_detail_adv
-            adv_head = tk.Label(
-                body,
-                text=("▼ ADVANCED  (factor breakdown)" if adv_on
-                      else "▶ ADVANCED  (factor breakdown)"),
-                font=(FONT, 7), fg=DIM, bg=BG2,
-                anchor="w", cursor="hand2",
-            )
-            adv_head.pack(fill="x", padx=6, pady=(2, 0))
-            adv_head.bind(
-                "<Button-1>",
-                lambda _e: self._arb_toggle_detail_adv())
-            if adv_on:
-                adv_grid = tk.Frame(body, bg=BG2)
-                adv_grid.pack(fill="x", padx=12, pady=(2, 4))
-                factor_rows = [
-                    ("NET APR", res.factors.get("net_apr"),
-                        f"{apr_val:+.1f}%"),
-                    ("VOLUME",  res.factors.get("volume"),
-                        self._fmt_vol(pair.get("volume_24h")
-                                      or self._pair_min(pair.get("volume_24h_short"),
-                                                         pair.get("volume_24h_long")))),
-                    ("OI",      res.factors.get("oi"),
-                        self._fmt_vol(pair.get("open_interest")
-                                      or self._pair_min(pair.get("open_interest_short"),
-                                                         pair.get("open_interest_long")))),
-                    ("RISK",    res.factors.get("risk"),
-                        pair.get("risk", "—")),
-                    ("SLIP",    res.factors.get("slippage"), "—"),
-                    ("VENUE",   res.factors.get("venue"),
-                        self._arb_venue_label(pair)),
-                ]
-                for i, (label, score, value) in enumerate(factor_rows):
-                    adv_grid.grid_columnconfigure(1, weight=1)
-                    tk.Label(adv_grid, text=label, font=(FONT, 7, "bold"),
-                             fg=DIM, bg=BG2, width=8, anchor="w").grid(
-                        row=i, column=0, sticky="w", padx=(0, 6))
-                    tk.Label(adv_grid, text=value, font=(FONT, 8),
-                             fg=WHITE, bg=BG2, anchor="w").grid(
-                        row=i, column=1, sticky="w")
-                    s_txt = "—" if score is None else f"{score:.0f}/100"
-                    s_fg = (GREEN if (score or 0) >= 70 else
-                            AMBER if (score or 0) >= 40 else DIM)
-                    tk.Label(adv_grid, text=s_txt, font=(FONT, 7),
-                             fg=s_fg, bg=BG2, width=10, anchor="e").grid(
-                        row=i, column=2, sticky="e")
-
-        # -- Action bar: size-aware OPEN AS PAPER POSITION --------
-        tk.Frame(body, bg=BORDER, height=1).pack(
-            fill="x", padx=6, pady=(2, 2))
-        action = tk.Frame(body, bg=BG2)
-        action.pack(fill="x", padx=6, pady=(2, 6))
-
-        engine = getattr(self, "_arb_simple_engine", None)
-        engine_running = engine is not None and engine.running
-        size_label = (f"${int(size_usd):,}" if size_usd >= 1000
-                      else f"${int(size_usd)}")
-        if engine_running:
-            btn_text = f" OPEN AS PAPER — {size_label} "
-            btn_fg, btn_bg = BG, GREEN
-            btn_cmd = lambda _e=None, _p=pair, _s=size_usd: (
-                self._arb_open_as_paper(_p, size_usd=_s))
-        else:
-            btn_text = " START ENGINE FIRST (POSITIONS tab) "
-            btn_fg, btn_bg = DIM, BG3
-            btn_cmd = lambda _e=None: None
-        btn = tk.Label(action, text=btn_text,
-                       font=(FONT, 8, "bold"),
-                       fg=btn_fg, bg=btn_bg,
-                       cursor="hand2" if engine_running else "arrow",
-                       padx=10, pady=4)
-        btn.pack(side="left")
-        btn.bind("<Button-1>", btn_cmd)
-
-    def _arb_set_detail_size(self, size_usd: float) -> None:
-        """Size chip click - re-render detail with new size."""
-        self._arb_detail_size = float(size_usd)
-        pair = getattr(self, "_arb_detail_pair", None)
-        if pair is not None:
-            self._arb_show_detail(pair)
-
-    def _arb_toggle_detail_adv(self) -> None:
-        """ADVANCED section expand/collapse toggle."""
-        self._arb_detail_adv = not getattr(self, "_arb_detail_adv", False)
-        pair = getattr(self, "_arb_detail_pair", None)
-        if pair is not None:
-            self._arb_show_detail(pair)
-
-    def _arb_viab_reason(self, pair: dict, res) -> str:
-        """Human-readable reason for the VIAB verdict (top 2-3 factors)."""
-        viab = getattr(res, "viab", res.grade)
-        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
-        be = getattr(res, "breakeven_h", None)
-        vol_score = (res.factors.get("volume") or 0)
-        if viab == "GO":
-            parts = [f"high APR ({apr:.0f}%)"]
-            if be is not None:
-                parts.append(f"fast breakeven ({be:.1f}h)")
-            if vol_score >= 40:
-                parts.append("liquid")
-            return "  Why GO: " + ", ".join(parts)
-        if viab in ("WAIT", "MAYBE"):
-            parts = [f"APR {apr:.0f}%"]
-            if be is not None:
-                parts.append(f"bkevn {be:.1f}h")
-            if vol_score < 40:
-                parts.append("liquidity moderate")
-            return "  Why WAIT: " + ", ".join(parts)
-        # SKIP
-        reasons = []
-        if apr < 20:
-            reasons.append(f"APR too low ({apr:.0f}%)")
-        if be is not None and be > 72:
-            reasons.append(f"slow breakeven ({be:.1f}h)")
-        if vol_score < 20:
-            reasons.append("illiquid")
-        return "  Why SKIP: " + ", ".join(reasons) if reasons else ""
-
-    def _arb_open_as_paper(self, pair: dict, *, size_usd: float | None = None) -> None:
-        """Open this opp as a paper position immediately (bypass tick).
-
-        When size_usd is given, temporarily override engine.size_usd for
-        this one open so the user-chosen size from the detail chips is
-        honored. Restores the original default after so the tick loop
-        keeps opening at its configured default.
-        """
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is None or not engine.running:
-            return
-        import time as _time
-        try:
-            opp = dict(pair)
-            if "net_apr" not in opp:
-                opp["net_apr"] = opp.get("apr") or opp.get("basis_apr") or 0
-            if "short_venue" not in opp:
-                opp["short_venue"] = opp.get("venue_perp") or opp.get("venue_a") or ""
-            if "long_venue" not in opp:
-                opp["long_venue"] = opp.get("venue_spot") or opp.get("venue_b") or ""
-            if "mark_price" not in opp:
-                opp["mark_price"] = opp.get("spot_price") or opp.get("price_a") or 0
-            original_size = engine.size_usd
-            try:
-                if size_usd is not None:
-                    engine.size_usd = float(size_usd)
-                engine._open(opp, _time.time())
-            finally:
-                engine.size_usd = original_size
-            engine._persist()
-            self.after(200, lambda: self._arbitrage_hub("positions"))
-        except Exception as e:
-            import logging
-            logging.getLogger("aurum.arb_hub").warning(
-                "open_as_paper failed for %s: %s", pair.get("symbol"), e,
-                exc_info=True)
+            tk.Frame(body, bg=BORDER, height=1).pack(
+                fill="x", padx=6, pady=(2, 2))
+            sum_line = tk.Frame(body, bg=BG2)
+            sum_line.pack(fill="x", padx=6, pady=(0, 4))
+            grade_fg = (GREEN if res.grade == "GO" else
+                        AMBER if res.grade == "MAYBE" else DIM)
+            tk.Label(sum_line, text=f"SCORE {res.score:.0f}/100",
+                     font=(FONT, 9, "bold"), fg=WHITE, bg=BG2).pack(side="left")
+            tk.Label(sum_line, text=f"  GRADE {res.grade}",
+                     font=(FONT, 9, "bold"), fg=grade_fg,
+                     bg=BG2).pack(side="left", padx=(8, 0))
 
     @staticmethod
     def _pair_min(a, b):
@@ -5299,10 +4620,8 @@ class App(tk.Tk):
     def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
         """Apply user filters + scoring to each pair.
 
-        Scores via arb_scoring.score_opp — cached by (symbol, venues,
-        apr_round_1dp) with TTL = scan interval to avoid re-scoring the
-        same pair on tab switches within 15s. Falls back to APR-only
-        heuristic when scoring factors are all None.
+        Uses arb_scoring.score_opp when pair has enough fields (vol/oi), else
+        falls back to an APR-only heuristic so the table is never all-SKIP.
         Returns (pair_dict, ScoreResult) in descending score order.
         """
         from core.arb.arb_scoring import score_opp
@@ -5317,36 +4636,16 @@ class App(tk.Tk):
         risk_cap  = _R.get(risk_max, 2)
         grade_cap = _G.get(grade_min, 2)
 
-        # Score cache — TTL matches scanner cache (30s is the scan ttl,
-        # so scoring is the same for 30s regardless of tab flips).
-        import time as _time
-        cache = getattr(self, "_arb_score_cache", None)
-        if cache is None or (_time.time() - cache.get("ts", 0)) > 30.0:
-            cache = {"ts": _time.time(), "map": {}}
-            self._arb_score_cache = cache
-        cache_map = cache["map"]
-
-        exclude_risky = state.get("exclude_risky_venues", False)
-        realistic_only = state.get("realistic_only", True)
-        apr_max = self._ARB_REALISTIC_APR_MAX
-        vol_min_realistic = self._ARB_REALISTIC_VOL_MIN
-        risky_venues = self._ARB_RISKY_VENUES
         out = []
         for p in (pairs or []):
             # Cheap filters first
             apr = abs(float(p.get("net_apr") or p.get("apr") or 0))
             if apr < min_apr:
                 continue
-            # REALISTIC filter — cap APR at 500% (stale funding territory)
-            # before the other checks so we spend zero cycles on them.
-            if realistic_only and apr > apr_max:
-                continue
             vol = (p.get("volume_24h")
                    or self._pair_min(p.get("volume_24h_short"),
                                       p.get("volume_24h_long")) or 0)
             if min_volume and float(vol) < min_volume:
-                continue
-            if realistic_only and float(vol) < vol_min_realistic:
                 continue
             oi = (p.get("open_interest")
                   or self._pair_min(p.get("open_interest_short"),
@@ -5356,48 +4655,21 @@ class App(tk.Tk):
             risk = p.get("risk", "HIGH")
             if _R.get(risk, 2) > risk_cap:
                 continue
-            # [NO RISKY VENUES] toolbar toggle — drop pairs involving
-            # low-reliability venues (bingx, bitget, paradex).
-            if exclude_risky:
-                sv = (p.get("short_venue") or p.get("venue_perp") or
-                      p.get("venue_a") or "").lower()
-                lv = (p.get("long_venue") or p.get("venue_spot") or
-                      p.get("venue_b") or "").lower()
-                if sv in risky_venues or lv in risky_venues:
-                    continue
 
-            # Cache key: symbol + venues + apr rounded to 1dp (the only
-            # field that changes meaningfully between scans).
-            ckey = (
-                p.get("symbol", ""),
-                p.get("short_venue", "") or p.get("venue_perp", "") or p.get("venue_a", ""),
-                p.get("long_venue", "") or p.get("venue_spot", "") or p.get("venue_b", ""),
-                round(apr, 1),
-                p.get("_type", ""),
-            )
-            sr = cache_map.get(ckey)
-            if sr is None:
-                try:
-                    sr = score_opp(p)
-                    populated = sum(1 for v in sr.factors.values() if v is not None)
-                    if populated <= 1:
-                        sr = self._arb_score_fallback(p)
-                except Exception:
+            # Score via arb_scoring. If all non-APR factors come back None
+            # (pair dict lacks volume/oi per leg), fall back to APR-only.
+            try:
+                sr = score_opp(p)
+                populated = sum(1 for v in sr.factors.values() if v is not None)
+                if populated <= 1:
                     sr = self._arb_score_fallback(p)
-                cache_map[ckey] = sr
+            except Exception:
+                sr = self._arb_score_fallback(p)
 
             if _G.get(sr.grade, 2) > grade_cap:
                 continue
             out.append((p, sr))
-        # Sort: grade bucket (GO first), then BKEVN asc (fastest payback),
-        # then SCORE desc as tiebreaker. Fastest-to-breakeven is what
-        # actually matters — high score with 80h bkevn is a trap.
-        def _key(t):
-            _p, _sr = t
-            be = getattr(_sr, "breakeven_h", None)
-            be_val = be if be is not None else 9999.0
-            return (_G.get(_sr.grade, 2), be_val, -_sr.score)
-        out.sort(key=_key)
+        out.sort(key=lambda t: t[1].score, reverse=True)
         return out
 
     # -- Tab renderers ------------------------------------------
@@ -5409,37 +4681,139 @@ class App(tk.Tk):
         ("GRADE", 8,  "e"),
     ]
 
-    # Legacy renderers (cex_cex, dex_dex, cex_dex, basis, spot) removed
-    # in Phase 4 organize (2026-04-22). Their data now flows into the
-    # unified OPPS tab. The _arb_*_repaint/_selected fields they wrote
-    # to are no longer referenced; if you need the raw pair lists they
-    # live in self._arb_cache (populated by _arb_hub_scan_async).
+    def _arb_render_cex_cex(self, parent):
+        """CEX↔CEX tab: paired funding arb opportunities + JANE STREET
+        live positions (if the engine is running and writing snapshots)."""
+        tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
+                 font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(
+            anchor="w", pady=(0, 4))
+
+        self._arb_build_filter_bar(parent)
+        self._arb_cex_selected = []  # filtered pairs, index-aligned with table rows
+
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_cex_selected):
+                self._arb_show_detail(self._arb_cex_selected[ri])
+        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
+                                           on_click=_on_click)
+        self._arb_cex_repaint = repaint
+        repaint([])
+        self._arb_build_detail_pane(parent)
+
+        # Live JANE STREET positions (shown only if engine has a fresh snapshot)
+        try:
+            from core.arb.alchemy_state import AlchemyState
+            state = getattr(self, "_arb_alchemy_state", None)
+            if state is None:
+                state = AlchemyState()
+                self._arb_alchemy_state = state
+            snap = state.read()
+            if not snap.get("_stale", True) and snap.get("positions"):
+                tk.Label(parent, text="LIVE POSITIONS",
+                         font=(FONT, 7, "bold"), fg=AMBER,
+                         bg=BG).pack(anchor="w", pady=(6, 2))
+                pcols = [("SYM", 7, "w"), ("L/S", 10, "w"),
+                         ("PNL", 9, "e"), ("DECAY", 8, "e"), ("EXIT", 8, "e")]
+                _, p_repaint = self._arb_make_table(parent, pcols)
+                pos_rows = []
+                for p in snap.get("positions", []):
+                    pnl = p.get("pnl", 0) or 0
+                    exit_s = p.get("exit_in_s", 0) or 0
+                    h, rem = divmod(int(exit_s), 3600)
+                    m = rem // 60
+                    long_v = (p.get("long") or "")[:3].upper()
+                    short_v = (p.get("short") or "")[:3].upper()
+                    pos_rows.append([
+                        ((p.get("sym") or "\u2014")[:6], WHITE),
+                        (f"{long_v}/{short_v}", AMBER_D),
+                        (f"{pnl:+.2f}", GREEN if pnl >= 0 else RED),
+                        (f"-{p.get('edge_decay_pct', 0):.0f}%", AMBER),
+                        (f"{h}h{m:02d}" if exit_s > 0 else "\u2014", DIM),
+                    ])
+                p_repaint(pos_rows)
+        except Exception:
+            pass
+
+    def _arb_render_dex_dex(self, parent):
+        tk.Label(parent, text="DEX \u2194 DEX  \u00b7  funding diff across decentralized venues",
+                 font=(FONT, 8, "bold"), fg="#00eaff", bg=BG).pack(anchor="w", pady=(0, 4))
+        self._arb_build_filter_bar(parent)
+        self._arb_dex_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_dex_selected):
+                self._arb_show_detail(self._arb_dex_selected[ri])
+        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
+                                           on_click=_on_click)
+        self._arb_dex_repaint = repaint
+        repaint([])
+        self._arb_build_detail_pane(parent)
+
+    def _arb_render_cex_dex(self, parent):
+        tk.Label(parent, text="CEX \u2194 DEX  \u00b7  funding diff cex vs dex",
+                 font=(FONT, 8, "bold"), fg="#c084fc", bg=BG).pack(anchor="w", pady=(0, 4))
+        self._arb_build_filter_bar(parent)
+        self._arb_cdex_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_cdex_selected):
+                self._arb_show_detail(self._arb_cdex_selected[ri])
+        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
+                                           on_click=_on_click)
+        self._arb_cdex_repaint = repaint
+        repaint([])
+        self._arb_build_detail_pane(parent)
+
+    def _arb_render_basis(self, parent):
+        tk.Label(parent, text="BASIS  \u00b7  buy spot / short perp (or reverse) to lock basis",
+                 font=(FONT, 8, "bold"), fg="#32bcad", bg=BG).pack(anchor="w", pady=(0, 4))
+        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("PERP", 9, "w"),
+                ("SPOT", 9, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
+                ("BASIS", 8, "e"), ("APR", 7, "e")]
+        self._arb_basis_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_basis_selected):
+                self._arb_show_detail(self._arb_basis_selected[ri])
+        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
+        self._arb_basis_repaint = repaint
+        repaint([])
+        self._arb_build_detail_pane(parent)
+
+    def _arb_render_spot(self, parent):
+        tk.Label(parent, text="SPOT \u2194 SPOT  \u00b7  same asset, different exchange",
+                 font=(FONT, 8, "bold"), fg="#ff00a0", bg=BG).pack(anchor="w", pady=(0, 4))
+        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("VENUE A", 9, "w"),
+                ("VENUE B", 9, "w"), ("PRICE A", 11, "e"),
+                ("PRICE B", 11, "e"), ("SPREAD", 9, "e")]
+        self._arb_spot_selected = []
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_spot_selected):
+                self._arb_show_detail(self._arb_spot_selected[ri])
+        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
+        self._arb_spot_repaint = repaint
+        repaint([])
+        self._arb_build_detail_pane(parent)
 
     def _arb_render_engine(self, parent):
-        """SimpleArbEngine (in-process) controls + live risk + positions."""
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            snap = engine.snapshot()
-            running_badge = ("RUN", GREEN)
-        else:
-            snap = {
-                "mode": "—", "running": False, "killed": False,
-                "account": 0, "peak": 0, "drawdown_pct": 0,
-                "realized_pnl": 0, "unrealized_pnl": 0, "exposure_usd": 0,
-                "losses_streak": 0, "trades_count": 0, "positions": [],
-            }
-            running_badge = ("OFF", RED)
+        """JANE STREET engine controls + live risk + log tail."""
+        try:
+            from core.arb.alchemy_state import AlchemyState
+            state = getattr(self, "_arb_alchemy_state", None)
+            if state is None:
+                state = AlchemyState()
+                self._arb_alchemy_state = state
+            snap = state.read()
+        except Exception:
+            snap = {"_stale": True}
+
+        stale = snap.get("_stale", True)
+        running_badge = ("OFF", RED) if stale else ("RUN", GREEN)
 
         # Status strip (engine-specific)
         top = tk.Frame(parent, bg=BG)
         top.pack(fill="x", pady=(0, 4))
-        tk.Label(top, text="ARB ENGINE",
+        tk.Label(top, text="JANE STREET",
                  font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(top, text=f"  ·  {running_badge[0]}  ·  mode {snap.get('mode', '—')}",
+        tk.Label(top, text=f"  \u00b7  {running_badge[0]}  \u00b7  mode {snap.get('mode', '—')}",
                  font=(FONT, 8), fg=running_badge[1], bg=BG).pack(side="left")
-        if snap.get("killed"):
-            tk.Label(top, text="  ·  KILLED", font=(FONT, 8, "bold"),
-                     fg=RED, bg=BG).pack(side="left")
 
         # Live risk gauges
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
@@ -5474,6 +4848,7 @@ class App(tk.Tk):
                  font=(FONT, 7), fg=DIM, bg=BG).pack(side="left")
         for text, cmd, color in [
             ("START PAPER", lambda: self._arb_engine_start("paper"), GREEN),
+            ("START DEMO",  lambda: self._arb_engine_start("demo"),  AMBER),
             ("STOP",        self._arb_engine_stop,                    RED),
         ]:
             b = tk.Label(ctrls, text=f"  {text}  ", font=(FONT, 7, "bold"),
@@ -5481,310 +4856,51 @@ class App(tk.Tk):
             b.pack(side="left", padx=(6, 0))
             b.bind("<Button-1>", lambda _e, _c=cmd: _c())
 
-        # Live positions table (Phase 3: proper diff-updating _arb_make_table
-        # instead of tk.Text — gains colored APR/PnL, click-to-detail, etc.)
+        # Log tail (last 8 lines from most recent log)
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        tk.Label(parent, text="OPEN POSITIONS",
+        tk.Label(parent, text="LOG TAIL",
                  font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        positions = snap.get("positions", [])
-        pos_cols = [
-            ("SYM",      10, "w"),
-            ("VENUES",   18, "w"),
-            ("APR NOW",  9,  "e"),
-            ("ACCRUED",  9,  "e"),
-            ("NET P&L",  9,  "e"),
-            ("OPEN",     7,  "e"),
-        ]
-        _, pos_repaint = self._arb_make_table(parent, pos_cols)
-        if positions:
-            pos_rows = []
-            for p in positions:
-                entry_apr = float(p.get("entry_apr", 0) or 0)
-                cur_apr = float(p.get("current_apr", 0) or 0)
-                # APR decay color: RED if below 50% of entry
-                if abs(entry_apr) > 0 and abs(cur_apr) / abs(entry_apr) < 0.5:
-                    apr_fg = RED
-                elif abs(cur_apr) >= 50:
-                    apr_fg = GREEN
-                else:
-                    apr_fg = AMBER
-                accrued = float(p.get("funding_accrued", 0) or 0)
-                fees = float(p.get("fees_paid", 0) or 0)
-                # Entry fees already deducted; approximate exit fee for
-                # net-P&L preview (matches SimpleArbEngine._close math).
-                exit_fee_est = fees  # symmetric
-                net_pnl = accrued - fees - exit_fee_est
-                sv = (p.get("venue_short", "") or "")[:8]
-                lv = (p.get("venue_long", "") or "")[:8]
-                pos_rows.append([
-                    ((p.get("symbol", "") or "—")[:10], WHITE),
-                    (f"{lv}>{sv}"[:18], AMBER_D),
-                    (f"{cur_apr:+.1f}%", apr_fg),
-                    (f"${accrued:+.2f}", GREEN if accrued >= 0 else RED),
-                    (f"${net_pnl:+.2f}", GREEN if net_pnl >= 0 else RED),
-                    (f"{p.get('hours_open', 0):.1f}h", DIM),
-                ])
-            pos_repaint(pos_rows)
-        else:
-            pos_repaint([])
-            tk.Label(parent, text="  no positions open — start engine in POSITIONS tab",
-                     font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=4)
-
-        # Recent closed trades (tail, proper table)
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        tk.Label(parent, text="RECENT CLOSES",
-                 font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        closed_cols = [
-            ("SYM",     10, "w"),
-            ("REASON",  11, "w"),
-            ("HOLD",    6,  "e"),
-            ("P&L",     9,  "e"),
-        ]
-        _, closed_repaint = self._arb_make_table(parent, closed_cols)
-        recent = (snap.get("closed_recent", []) or
-                  (engine.closed[-10:] if engine is not None else []))
-        if recent:
-            closed_rows = []
-            for c in reversed(recent):
-                pnl = float(c.get("pnl", 0) or 0)
-                closed_rows.append([
-                    ((c.get("symbol", "") or "—")[:10], WHITE),
-                    ((c.get("exit_reason", "") or "")[:11], DIM),
-                    (f"{c.get('hours_open', 0):.1f}h", DIM),
-                    (f"${pnl:+.2f}", GREEN if pnl >= 0 else RED),
-                ])
-            closed_repaint(closed_rows)
-        else:
-            closed_repaint([])
-            tk.Label(parent, text="  no closes yet",
-                     font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=4)
-
-    # ═══════════════════════════════════════════════════════════
-    # Phase 1 redesign (2026-04-22): 3-tab layout
-    # ═══════════════════════════════════════════════════════════
-    # 6-column layout after organize pass (2026-04-22):
-    # Dropped TYPE (~always PERP_PERP, goes in detail) and VOL
-    # (REALISTIC filter already gates anything uninvestable, and the
-    # detail pane shows vol ratio at the actual trade size). Left with
-    # the 6 columns that actually drive the "take this or not?" call.
-    _ARB_OPPS_COLS = [
-        ("VIAB",    5,  "w"),
-        ("SYM",    11,  "w"),
-        ("VENUES", 22,  "w"),
-        ("APR",     9,  "e"),
-        ("BKEVN",   7,  "e"),
-        ("SCORE",   5,  "e"),
-    ]
-
-    def _arb_render_opps(self, parent):
-        """Unified OPPS table. All 5 legacy tabs (cex-cex / dex-dex /
-        cex-dex / basis / spot) merged here, scored + bucketed by VIAB.
-
-        Header collapses the tab title + VIAB legend into one row so
-        the table shows up within ~80px of the status strip.
-        """
-        head = tk.Frame(parent, bg=BG)
-        head.pack(fill="x", pady=(0, 3))
-        # GO / WAIT / SKIP legend inline — surfaces the triage rule
-        # without burning a second row on it. Colors match the table
-        # cells so the eye bridges legend→rows automatically.
-        tk.Label(head, text="GO", font=(FONT, 7, "bold"),
-                 fg=GREEN, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(head, text="score≥70 · bkevn≤24h · líquido",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
-        tk.Label(head, text="WAIT", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(head, text="score≥40 · bkevn≤72h OU vol moderada",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
-        tk.Label(head, text="SKIP", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(head, text="resto", font=(FONT, 7),
-                 fg=DIM2, bg=BG).pack(side="left")
-        self._arb_build_filter_bar(parent)
-        self._arb_opps_selected = []
-
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_opps_selected):
-                self._arb_show_detail(self._arb_opps_selected[ri])
-
-        _, repaint = self._arb_make_table(parent, self._ARB_OPPS_COLS,
-                                          on_click=_on_click)
-        self._arb_opps_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-    def _arb_render_positions(self, parent):
-        """Live paper engine positions + controls. Inherits body from
-        legacy _arb_render_engine — no destruction, just routed via
-        the new 3-tab layout."""
-        self._arb_render_engine(parent)
-
-    def _arb_render_history(self, parent):
-        """Closed trades log from SimpleArbEngine. Newest first, realized
-        PnL total at top. Read-only; rebuilds only when len(closed)
-        changes."""
-        engine = getattr(self, "_arb_simple_engine", None)
-        closed = (engine.closed if engine is not None else [])
-
-        total_pnl = round(sum(c.get("pnl", 0) for c in closed), 2)
-        n = len(closed)
-        header = tk.Frame(parent, bg=BG)
-        header.pack(fill="x", pady=(0, 4))
-        tk.Label(header, text="HISTORY",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(header, text=f"  ·  {n} trades closed  ·  realized ",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(side="left")
-        pnl_fg = GREEN if total_pnl >= 0 else RED
-        tk.Label(header, text=f"${total_pnl:+,.2f}",
-                 font=(FONT, 9, "bold"), fg=pnl_fg, bg=BG).pack(side="left")
-
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 6))
-
-        if not closed:
-            tk.Label(parent,
-                     text="  No closed trades yet. Start the engine in POSITIONS tab.",
-                     font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=8)
-            return
-
-        cols = [
-            ("SYM",    9,  "w"),
-            ("VENUES", 16, "w"),
-            ("REASON", 11, "w"),
-            ("HOLD",   6,  "e"),
-            ("PNL",    9,  "e"),
-        ]
-        _, repaint = self._arb_make_table(parent, cols)
-        rows = []
-        for c in reversed(closed):  # newest first
-            pnl = c.get("pnl", 0) or 0
-            pnl_fg = GREEN if pnl >= 0 else RED
-            venues = f"{c.get('venue_short','')}/{c.get('venue_long','')}"[:16]
-            rows.append([
-                (c.get("symbol", "")[:9], WHITE),
-                (venues, AMBER_D),
-                (c.get("exit_reason", "")[:11], DIM),
-                (f"{c.get('hours_open', 0):.1f}h", DIM),
-                (f"${pnl:+,.2f}", pnl_fg),
-            ])
-        repaint(rows)
-
-    def _arb_paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot):
-        """Unified OPPS painter — merges 5 opp types, applies filter+score,
-        caps at 50 rows, paints with VIAB column."""
-        repaint = getattr(self, "_arb_opps_repaint", None)
-        if repaint is None:
-            return
-
-        # Tag each type
-        tagged: list[dict] = []
-        for p in (arb_cc or []):
-            pp = dict(p); pp["_type"] = "CC"; tagged.append(pp)
-        for p in (arb_dd or []):
-            pp = dict(p); pp["_type"] = "DD"; tagged.append(pp)
-        for p in (arb_cd or []):
-            pp = dict(p); pp["_type"] = "CD"; tagged.append(pp)
-        for p in (basis or []):
-            pp = dict(p); pp["_type"] = "BS"
-            # Adapt basis to look like an arb pair for scoring
-            pp.setdefault("net_apr", pp.get("basis_apr"))
-            pp.setdefault("short_venue", pp.get("venue_perp"))
-            pp.setdefault("long_venue", pp.get("venue_spot"))
-            pp.setdefault("volume_24h_short", pp.get("volume_perp"))
-            pp.setdefault("volume_24h_long", pp.get("volume_spot"))
-            pp.setdefault("volume_24h", min(
-                pp.get("volume_perp", 0) or 0,
-                pp.get("volume_spot", 0) or 0))
-            tagged.append(pp)
-        for p in (spot or []):
-            pp = dict(p); pp["_type"] = "SP"
-            # Spot spread: convert bps to rough APR equivalent — treat
-            # as a one-shot trade (no funding cycle), so scoring is only
-            # meaningful for viewing. Use spread_bps as APR proxy.
-            pp.setdefault("net_apr", abs(pp.get("spread_bps", 0) or 0) / 100.0)
-            pp.setdefault("short_venue", pp.get("venue_a"))
-            pp.setdefault("long_venue", pp.get("venue_b"))
-            pp.setdefault("volume_24h_short", pp.get("volume_a"))
-            pp.setdefault("volume_24h_long", pp.get("volume_b"))
-            pp.setdefault("volume_24h", min(
-                pp.get("volume_a", 0) or 0,
-                pp.get("volume_b", 0) or 0))
-            tagged.append(pp)
-
-        # Apply filter+score (with cache) and render cap
-        filtered = self._arb_filter_and_score(tagged)[:50]
-        self._arb_opps_selected = [p for p, _ in filtered]
-
-        rows = []
-        for a, sr in filtered:
-            viab = getattr(sr, "viab", sr.grade)
-            if viab == "GO":
-                viab_fg = GREEN
-            elif viab in ("WAIT", "MAYBE"):
-                viab_fg = AMBER
+        log_body = tk.Text(parent, height=10, font=(FONT, 7),
+                           bg=BG2, fg=DIM, bd=0, highlightthickness=0,
+                           wrap="none")
+        log_body.pack(fill="both", expand=True, pady=(2, 0))
+        try:
+            from pathlib import Path as _P
+            logs = sorted((_P("data") / ".proc_logs").glob("janestreet_*.log"),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+            if logs:
+                with logs[0].open("r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-60:]
+                log_body.insert("end", "".join(lines))
+                log_body.see("end")
             else:
-                viab_fg = DIM
-            net_apr = float(a.get("net_apr", 0) or 0)
-            apr_fg = GREEN if abs(net_apr) >= 50 else (
-                AMBER if abs(net_apr) >= 20 else DIM)
-            be = getattr(sr, "breakeven_h", None)
-            be_txt = f"{be:.1f}h" if be is not None and be < 999 else "—"
-            be_fg = GREEN if (be is not None and be <= 24) else (
-                AMBER if (be is not None and be <= 72) else DIM)
-            short_v = (a.get("short_venue") or "")[:10].lower()
-            long_v = (a.get("long_venue") or "")[:10].lower()
-            # Long leg goes first (the one you BUY), then short. Arrow
-            # direction (→) reads naturally as "take long from here,
-            # short to there". Width 22 fits "binance → bybit" plus
-            # slack for longer venue names.
-            venues = f"{long_v} → {short_v}"[:22]
-            rows.append([
-                (viab, viab_fg),
-                ((a.get("symbol", "") or "—")[:11], WHITE),
-                (venues, AMBER_D),
-                (f"{net_apr:+.1f}%", apr_fg),
-                (be_txt, be_fg),
-                (f"{int(sr.score):>3}", DIM),
-            ])
-        repaint(rows)
+                log_body.insert("end", "  no log yet — start the engine\n")
+        except Exception as e:
+            log_body.insert("end", f"  log unavailable: {e}\n")
+        log_body.configure(state="disabled")
 
     # -- Engine control shortcuts ------------------------------
     def _arb_engine_start(self, mode: str):
-        """Start SimpleArbEngine (in-process, paper mode)."""
-        if mode == "demo":
-            # Demo/testnet requires venue auth — not supported in the simple
-            # in-process engine. Fall back to paper silently.
-            mode = "paper"
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is None:
-            from core.arb.engine import SimpleArbEngine
-            engine = SimpleArbEngine()
-            self._arb_simple_engine = engine
-        if not engine.running:
-            engine.start(mode=mode)
+        """Start JANE STREET engine in the given mode (paper/demo/live)."""
+        from core import proc
+        proc.spawn("janestreet", cli_args=["--mode", mode])
         try:
             self.after(500, lambda: self._arbitrage_hub("engine"))
         except Exception:
             pass
 
     def _arb_engine_stop(self):
-        """Stop the in-process SimpleArbEngine."""
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            engine.stop()
+        """Stop any running JANE STREET process."""
+        from core import proc
+        for p in proc.list_procs():
+            if p.get("engine") == "janestreet" and p.get("alive"):
+                proc.stop_proc(p["pid"], expected=p)
         try:
             self.after(500, lambda: self._arbitrage_hub("engine"))
         except Exception:
             pass
 
     # -- Background scan: populates status strip + active tab ----
-    _ARB_SCAN_FRESH_SECS = 10  # within this window, skip new scan
-
-    def _arb_scan_is_fresh(self) -> bool:
-        """True if last scan is within the fresh window (no need to rescan)."""
-        import time as _time
-        last = getattr(self, "_arb_last_scan_ts", 0) or 0
-        return (_time.time() - last) < self._ARB_SCAN_FRESH_SECS
-
     def _arb_hub_scan_async(self):
         """Run FundingScanner in a worker thread and push results to the UI.
 
@@ -5898,63 +5014,28 @@ class App(tk.Tk):
             pass
 
         # Cache raw results so tab switches can repaint without rescanning
-        import time as _time
-        self._arb_last_scan_ts = _time.time()
         self._arb_cache = {
             "stats": stats, "top": top, "opps": opps,
             "arb_cc": arb_cc, "arb_dd": arb_dd, "arb_cd": arb_cd,
             "basis": basis, "spot": spot,
         }
-        # Push scan age + engine state into the status strip right away
-        try:
-            self._arb_update_status_strip()
-        except Exception:
-            pass
 
-        # Route to the repaint callback for the active tab.
-        # Phase 1 redesign: unified OPPS table consolidates 5 old tabs.
-        tab = getattr(self, "_arb_tab", "opps")
-        if tab == "opps":
-            self._arb_paint_opps(arb_cc, arb_dd, arb_cd, basis, spot)
-        # positions + history tabs don't consume scanner data directly —
-        # they read from _arb_simple_engine via their render fn.
-
-        # Feed SimpleArbEngine — any tab keeps the engine ticking as long
-        # as scanner returns data. The engine only processes FUNDING opps
-        # (arb_cc + arb_cd) and enriches with per-venue 24h volume from
-        # the raw FundingOpp list.
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            try:
-                self._arb_feed_engine(engine, opps, arb_cc + arb_cd)
-            except Exception as e:
-                # Never let engine errors kill the scan loop
-                try:
-                    import logging
-                    logging.getLogger("aurum.arb_hub").warning(
-                        "engine tick failed: %s", e, exc_info=True)
-                except Exception:
-                    pass
-
-    @staticmethod
-    def _arb_feed_engine(engine, raw_opps, arb_pairs_merged):
-        """Enrich arb pairs with volume_24h per leg, then tick engine."""
-        vol_lookup: dict[tuple[str, str], float] = {}
-        for o in raw_opps:
-            try:
-                vol_lookup[(o.symbol, o.venue)] = float(o.volume_24h)
-            except Exception:
-                continue
-        enriched: list[dict] = []
-        for ap in arb_pairs_merged:
-            sym = ap.get("symbol")
-            short_v = ap.get("short_venue", "")
-            long_v = ap.get("long_venue", "")
-            ap2 = dict(ap)
-            ap2["volume_short"] = vol_lookup.get((sym, short_v), 0)
-            ap2["volume_long"] = vol_lookup.get((sym, long_v), 0)
-            enriched.append(ap2)
-        engine.tick(enriched)
+        # Route to the repaint callback for the active tab
+        tab = getattr(self, "_arb_tab", "cex-cex")
+        if tab == "cex-cex":
+            self._arb_paint_pairs(arb_cc,
+                getattr(self, "_arb_cex_repaint", None), "_arb_cex_selected")
+        elif tab == "dex-dex":
+            self._arb_paint_pairs(arb_dd,
+                getattr(self, "_arb_dex_repaint", None), "_arb_dex_selected")
+        elif tab == "cex-dex":
+            self._arb_paint_pairs(arb_cd,
+                getattr(self, "_arb_cdex_repaint", None), "_arb_cdex_selected")
+        elif tab == "basis":
+            self._arb_paint_basis(basis)
+        elif tab == "spot":
+            self._arb_paint_spot(spot)
+        # ENGINE tab doesn't consume scanner data
 
     def _arb_paint_pairs(self, pairs, repaint, selected_attr: str):
         """Render the 9-column pair table with scoring filter applied.
@@ -6552,23 +5633,12 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    # --- ENGINES — tela unificada (HISTORY / LIVE / LOGS) --------
+    # --- ENGINE LOGS (live proc list + log tail) --------------
     def _data_engines(self):
-        """Abre /engines — wrapper com chip bar HISTORY/LIVE/LOGS.
-
-        Consolida o que antes eram 3 entradas separadas no DATA CENTER
-        (RUNS HISTORY, LIVE RUNS, ENGINE LOGS) numa tela unica com a
-        mesma organizacao visual do /backtests. Os 3 sub-screens
-        originais continuam registrados, pra atalhos legacy e navegacao
-        direta (ex: live_runs -> runs_history via tecla R).
-        """
-        self._clr(); self._clear_kb()
-        if self.main.winfo_manager():
-            self.main.pack_forget()
         if hasattr(self, "screens") and getattr(self, "screens", None) is not None:
             if not self.screens_container.winfo_manager():
                 self.screens_container.pack(fill="both", expand=True)
-            self.screens.show("engines")
+            self.screens.show("engine_logs")
             try:
                 self.focus_set()
             except Exception:
@@ -8551,8 +7621,21 @@ class App(tk.Tk):
                 for run_dir in runs_root.iterdir():
                     if not run_dir.is_dir():
                         continue
-                    run_id = run_dir.name
+                    # Skip runs bugadas/incompletas — sem summary.json nem
+                    # report.html nem reports/*.json. Antes o browser
+                    # listava pastas orfas (backtest morto mid-run) com
+                    # campos "—" e clicks ficavam "travados" abrindo
+                    # detail panel sem dados. Se tem 1+ artifact, mostra.
                     summary_path = run_dir / "summary.json"
+                    report_html = run_dir / "report.html"
+                    has_artifact = (
+                        summary_path.exists()
+                        or report_html.exists()
+                        or bool(self._bt_report_candidates(run_dir))
+                    )
+                    if not has_artifact:
+                        continue
+                    run_id = run_dir.name
                     config_path = run_dir / "config.json"
                     summary = self._bt_read_json(summary_path)
                     config = self._bt_read_json(config_path)
@@ -8883,9 +7966,9 @@ class App(tk.Tk):
         lev   = g("leverage")
 
         def row(label, value, color=WHITE, bold=False):
-            r = tk.Frame(body, bg=PANEL); r.pack(fill="x", pady=0)
+            r = tk.Frame(body, bg=PANEL); r.pack(fill="x", pady=1)
             tk.Label(r, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=PANEL, width=10,
+                     fg=DIM, bg=PANEL, width=12,
                      anchor="w").pack(side="left")
             tk.Label(r, text=value,
                      font=(FONT, 8, "bold" if bold else "normal"),
@@ -9041,167 +8124,6 @@ class App(tk.Tk):
             # here in the first place.
             messagebox.showerror(
                 "Delete failed — unexpected error",
-                f"{type(e).__name__}: {e}")
-
-    def _dash_backtest_delete_all(self):
-        """Wipe TODOS os backtest runs: index.json + disk dirs referenciados.
-
-        Escopo = apenas run_dirs listados em data/index.json. Nao toca em
-        data/live/, data/millennium_shadow/, data/.proc_logs/, etc — esses
-        nao sao backtests e nao aparecem no index. Logo: essa operacao e
-        idempotente com o que a UI mostra: apagou aqui → sumiu no DATA >
-        BACKTEST RUNS e no engine picker LAST RUNS (ambos releem index.json
-        com cache por mtime — reescrever invalida).
-
-        Flow (espelha _dash_backtest_delete):
-        1. Dupla confirmacao (destrutivo).
-        2. Coletar run_dirs do index antes de zerar.
-        3. Escrever index.json = [] (atomico).
-        4. rmtree best-effort em cada run_dir (swallow OneDrive locks).
-        5. Invalidar cache local (self._bt_run_map) + refresh da lista.
-        """
-        idx_path = ROOT / "data" / "index.json"
-        try:
-            rows = json.loads(idx_path.read_text(encoding="utf-8"))
-            if not isinstance(rows, list):
-                rows = []
-        except (OSError, json.JSONDecodeError):
-            rows = []
-        total = len(rows)
-        if total == 0:
-            self.h_stat.configure(text="NOTHING TO DELETE", fg=AMBER_D)
-            self.after(1800,
-                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-            return
-        if not messagebox.askyesno(
-                "Apagar TODOS os backtests",
-                f"Voce esta prestes a apagar {total} backtest runs.\n\n"
-                f"Isso inclui:\n"
-                f"  • {total} linhas de data/index.json\n"
-                f"  • Os diretorios data/*/<run_id>/ de cada um\n\n"
-                f"Sessoes live (data/live/) NAO sao afetadas.\n"
-                f"Processos ativos NAO sao matados.\n\n"
-                f"Continuar?"):
-            return
-        if not messagebox.askyesno(
-                "Confirmar novamente",
-                f"Ultima chance. {total} runs serao removidos.\n\n"
-                f"Certeza?"):
-            return
-
-        try:
-            from core.ops.fs import robust_rmtree
-
-            # Collect (run_id, run_dir) tuples before zeroing the index.
-            _SLUG_TO_DIR = {
-                "citadel":     ROOT / "data" / "runs",
-                "bridgewater": ROOT / "data" / "bridgewater",
-                "jump":        ROOT / "data" / "jump",
-                "deshaw":      ROOT / "data" / "deshaw",
-                "renaissance": ROOT / "data" / "renaissance",
-                "janestreet":  ROOT / "data" / "janestreet",
-                "millennium":  ROOT / "data" / "millennium",
-                "twosigma":    ROOT / "data" / "twosigma",
-                "aqr":         ROOT / "data" / "aqr",
-                "kepos":       ROOT / "data" / "kepos",
-                "medallion":   ROOT / "data" / "medallion",
-                "graham":      ROOT / "data" / "graham",
-                "phi":         ROOT / "data" / "phi",
-                "ornstein":    ROOT / "data" / "ornstein",
-            }
-            targets: list[Path] = []
-            for r in rows:
-                rid = str(r.get("run_id") or "").strip()
-                if not rid:
-                    continue
-                explicit = str(r.get("run_dir") or "").strip()
-                if explicit:
-                    targets.append(Path(explicit))
-                    continue
-                eng = str(r.get("engine") or "").lower()
-                base = _SLUG_TO_DIR.get(eng, ROOT / "data" / "runs")
-                folder = rid[len(eng) + 1:] if eng and rid.startswith(f"{eng}_") else rid
-                candidate = base / folder
-                if not candidate.exists() and eng == "citadel":
-                    candidate = base / rid  # citadel keeps the prefixed form
-                targets.append(candidate)
-
-            # Step 1a: zero index.json atomically.
-            atomic_write_json(idx_path, [], indent=2)
-            self._bt_run_map = {}
-            self._bt_recent_run_id = None
-
-            # Step 1b: zero o SQLite tbm. _query_last_runs faz fallback
-            # pra data/aurum.db quando index retorna []; sem isto, o
-            # engine picker ainda mostraria as runs antigas via DB.
-            # Truncar runs + trades (trades.run_id FK-ish logico).
-            db_path = ROOT / "data" / "aurum.db"
-            if db_path.exists():
-                try:
-                    import sqlite3 as _sq
-                    _c = _sq.connect(str(db_path))
-                    try:
-                        _c.execute("DELETE FROM trades")
-                        _c.execute("DELETE FROM runs")
-                        _c.commit()
-                    finally:
-                        _c.close()
-                except Exception:
-                    # DB wipe e best-effort — se falhar, index.json ja
-                    # esta vazio e a UI principal (DATA > BACKTEST RUNS)
-                    # reflete sumico. Picker pode mostrar stale ate rodar
-                    # reconcile, mas nao e bloqueante.
-                    pass
-
-            # Step 2: rebuild list (now empty), then refresh detail panel placeholder.
-            body = self._dash_widgets.get(("bt_detail",))
-            if body is not None:
-                try:
-                    for w in body.winfo_children():
-                        w.destroy()
-                    tk.Label(body, text="\n  all runs deleted",
-                             font=(FONT, 9, "bold"), fg=DIM, bg=PANEL,
-                             justify="left").pack(anchor="w", padx=10)
-                except tk.TclError:
-                    pass
-            try:
-                self._dash_backtest_render()
-            except Exception:
-                pass
-
-            # Step 3: best-effort disk cleanup (background not needed — 400 dirs rmtree fast).
-            deleted = 0
-            deferred = 0
-            for d in targets:
-                if not d.exists():
-                    continue
-                try:
-                    if robust_rmtree(d):
-                        deleted += 1
-                    else:
-                        deferred += 1
-                except Exception:
-                    deferred += 1
-
-            # Step 4: report.
-            if deferred == 0:
-                self.h_stat.configure(text=f"DELETED {total} RUNS", fg=AMBER)
-            else:
-                self.h_stat.configure(
-                    text=f"DELETED {total} ({deferred} disk deferred)",
-                    fg=AMBER_D,
-                )
-                messagebox.showinfo(
-                    "Disk cleanup deferred",
-                    f"{deleted} diretorios apagados do disco.\n"
-                    f"{deferred} ainda segurados por OneDrive / antivirus.\n\n"
-                    f"Rode `python tools/reports/reconcile_runs.py --apply` em "
-                    f"1-2 min pra limpar o restante.")
-            self.after(3000,
-                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-        except Exception as e:
-            messagebox.showerror(
-                "Delete ALL failed — unexpected error",
                 f"{type(e).__name__}: {e}")
 
     def _dash_backtest_open(self, run_id: str):
