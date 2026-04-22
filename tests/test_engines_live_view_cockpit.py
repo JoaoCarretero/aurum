@@ -437,7 +437,7 @@ def test_load_shadow_snapshot_cached_uses_ttl_cache(monkeypatch):
     monkeypatch.setattr(
         evv,
         "_load_shadow_snapshot_sync",
-        lambda: (
+        lambda engine="millennium": (
             Path("remote://r1"),
             {"run_id": "r1", "status": "running"},
             [{"strategy": "JUMP"}],
@@ -448,7 +448,7 @@ def test_load_shadow_snapshot_cached_uses_ttl_cache(monkeypatch):
     monkeypatch.setattr(
         evv,
         "_load_shadow_snapshot_sync",
-        lambda: (
+        lambda engine="millennium": (
             Path("remote://r2"),
             {"run_id": "r2", "status": "stopped"},
             [{"strategy": "CITADEL"}],
@@ -461,9 +461,12 @@ def test_load_shadow_snapshot_cached_uses_ttl_cache(monkeypatch):
     assert second[1]["run_id"] == "r1"
 
 
-def test_engine_registry_for_sidebar_paper_mode_forces_millennium():
+def test_engine_registry_for_sidebar_paper_mode_shows_live_bucket():
     from launcher_support.engines_live_view import _engine_registry_for_sidebar
 
+    # Pre 2026-04-22: paper mode forcava so MILLENNIUM no sidebar. Com
+    # runners per-engine (citadel/jump/renaissance), sidebar passou a ser
+    # dinamico — mostra TODAS as engines nos buckets LIVE/READY.
     registry = _engine_registry_for_sidebar({
         "mode": "paper",
         "selected_slug": "citadel",
@@ -473,7 +476,10 @@ def test_engine_registry_for_sidebar_paper_mode_forces_millennium():
         },
     })
 
-    assert registry == [{"slug": "millennium", "display": "MILLENNIUM"}]
+    assert registry == [
+        {"slug": "citadel", "display": "CITADEL"},
+        {"slug": "millennium", "display": "MILLENNIUM"},
+    ]
 
 
 def test_latest_run_dir_uses_ttl_cache(tmp_path, monkeypatch):

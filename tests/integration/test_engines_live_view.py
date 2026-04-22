@@ -16,11 +16,23 @@ class TestLiveReadySlugs:
         assert "janestreet" in LIVE_READY_SLUGS
         assert "live" in LIVE_READY_SLUGS
 
+    def test_contains_jump_after_paper_shadow_smoke(self):
+        # 2026-04-22: JUMP got its own paper+shadow runner (per-engine
+        # deploy), smoke passed on VPS. live_ready flipped True.
+        from config.engines import LIVE_READY_SLUGS
+        assert "jump" in LIVE_READY_SLUGS
+
+    def test_renaissance_is_bootstrap_only(self):
+        # 2026-04-22: RENAISSANCE has a runner but OOS claim inflated ~2x.
+        # Stays live_bootstrap=True (visible in cockpit) but NOT live_ready
+        # (not vouched for production).
+        from config.engines import LIVE_READY_SLUGS, LIVE_BOOTSTRAP_SLUGS
+        assert "renaissance" not in LIVE_READY_SLUGS
+        assert "renaissance" in LIVE_BOOTSTRAP_SLUGS
+
     def test_excludes_research_engines(self):
         from config.engines import LIVE_READY_SLUGS
-        # These have backtest entrypoints but not live-validated runners.
-        assert "renaissance" not in LIVE_READY_SLUGS
-        assert "jump" not in LIVE_READY_SLUGS
+        # Engines sem runner live validado permanecem fora.
         assert "deshaw" not in LIVE_READY_SLUGS
         assert "kepos" not in LIVE_READY_SLUGS
         assert "phi" not in LIVE_READY_SLUGS
@@ -343,7 +355,7 @@ def test_render_detail_reuses_shell_for_paper_refresh(monkeypatch):
         }
 
         monkeypatch.setattr(elv, "_fetch_paper_run_id", lambda launcher, state=None: "RID")
-        monkeypatch.setattr(elv, "_active_paper_runs", lambda launcher, state=None: [])
+        monkeypatch.setattr(elv, "_active_paper_runs", lambda launcher, state=None, engine=None: [])
         monkeypatch.setattr(elv, "_fetch_paper_extras", lambda *args, **kwargs: (
             {"run_id": "RID", "status": "running", "last_tick_at": "2026-04-21T20:00:00Z"},
             [],
