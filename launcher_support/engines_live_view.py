@@ -488,13 +488,34 @@ def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict
 
 
 def _schedule_state_refresh(launcher, state) -> None:
-    refresh = (state or {}).get("refresh") if isinstance(state, dict) else None
+    """Debounced refresh scheduler, called from async worker completions.
+
+    Workers complete concurrently (cockpit runs + paper snapshot + shadow
+    snapshot), so a naive ``after(1, refresh)`` stacks three rerenders in
+    the same ms — the main loop ends up starved of user input events, so
+    the cockpit flickers and absorbs clicks on the sidebar. Coalesce via
+    a pending flag on the state dict; 150 ms gives the UI breathing room.
+    """
+    if not isinstance(state, dict):
+        return
+    refresh = state.get("refresh")
     if not callable(refresh):
         return
+    if state.get("_refresh_scheduled"):
+        return
+    state["_refresh_scheduled"] = True
+
+    def _run_refresh() -> None:
+        state["_refresh_scheduled"] = False
+        try:
+            refresh()
+        except Exception:
+            pass
+
     try:
-        launcher.after(1, refresh)
+        launcher.after(150, _run_refresh)
     except Exception:
-        pass
+        state["_refresh_scheduled"] = False
 
 
 def _load_cockpit_runs_sync() -> list[dict]:
