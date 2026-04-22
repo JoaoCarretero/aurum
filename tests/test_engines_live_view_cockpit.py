@@ -378,6 +378,58 @@ def test_fetch_shadow_snapshot_honors_selected_remote_run(monkeypatch):
     assert trades[0]["strategy"] == "JUMP"
 
 
+def test_fetch_shadow_snapshot_uses_warm_cockpit_cache_to_skip_run_catalog(monkeypatch):
+    """Picker click lag repro: quando _COCKPIT_RUNS_CACHE já tem o run_id
+    selecionado como running, NÃO devemos chamar run_catalog.get_run_summary
+    (que tem TTL de 2s e re-fetcha /v1/runs via SSH tunnel, ~900ms).
+    Devemos ir direto pro _fetch_remote_shadow_run_cached (60s per-run TTL).
+    """
+    import time
+    from launcher_support import engines_live_view as evv
+
+    # Warm cockpit cache with desk-shadow-b (60s TTL data).
+    evv._COCKPIT_RUNS_CACHE["ts"] = time.monotonic()
+    evv._COCKPIT_RUNS_CACHE["runs"] = [
+        {
+            "run_id": "2026-04-22_113405s_desk-shadow-b",
+            "engine": "millennium",
+            "mode": "shadow",
+            "status": "running",
+            "label": "desk-shadow-b",
+            "last_tick_at": "2026-04-22T16:34:18Z",
+            "novel_total": 1,
+        },
+    ]
+    evv._COCKPIT_RUNS_CACHE["loading"] = False
+
+    class _Client:
+        def get_heartbeat(self, run_id):
+            return {"run_id": run_id, "status": "running", "ticks_ok": 21}
+
+        def get_trades(self, run_id, limit=20):
+            return {"trades": [{"strategy": "JUMP", "symbol": "INJUSDT"}]}
+
+    def _should_not_be_called(*args, **kwargs):
+        raise AssertionError(
+            "run_catalog.get_run_summary called despite warm cockpit cache — "
+            "picker click is still blocking on 920ms VPS HTTP fetch"
+        )
+
+    monkeypatch.setattr(
+        evv, "_fetch_shadow_run_id",
+        lambda state=None: "2026-04-22_113405s_desk-shadow-b",
+    )
+    monkeypatch.setattr(evv.run_catalog, "get_run_summary", _should_not_be_called)
+    monkeypatch.setattr(evv.run_catalog, "latest_active_run", _should_not_be_called)
+    monkeypatch.setattr(evv, "_get_cockpit_client", lambda: _Client())
+
+    got_run_dir, hb, trades = evv._fetch_shadow_snapshot()
+
+    assert str(got_run_dir).replace("\\", "/") == "remote:/2026-04-22_113405s_desk-shadow-b"
+    assert hb["ticks_ok"] == 21
+    assert trades[0]["strategy"] == "JUMP"
+
+
 def test_load_shadow_snapshot_cached_uses_ttl_cache(monkeypatch):
     from pathlib import Path
     import launcher_support.engines_live_view as evv

@@ -660,10 +660,13 @@ class App(tk.Tk):
                         from launcher_support.engines_live_view import (
                             _load_cockpit_runs_sync,
                             _fetch_paper_extras_sync,
+                            _fetch_remote_shadow_run_sync,
                             _COCKPIT_RUNS_CACHE,
                             _COCKPIT_RUNS_LOCK,
                             _PAPER_SNAPSHOT_CACHE,
                             _PAPER_SNAPSHOT_LOCK,
+                            _REMOTE_SHADOW_RUN_CACHE,
+                            _REMOTE_SHADOW_RUN_LOCK,
                         )
                         rows = _load_cockpit_runs_sync()
                         if not rows:
@@ -673,19 +676,30 @@ class App(tk.Tk):
                             _COCKPIT_RUNS_CACHE["runs"] = list(rows)
                             _COCKPIT_RUNS_CACHE["loading"] = False
                         for row in rows:
-                            if (str(row.get("engine") or "").lower() != "millennium"
-                                    or str(row.get("mode") or "").lower() != "paper"
-                                    or str(row.get("status") or "").lower() != "running"):
-                                continue
+                            engine_ok = str(row.get("engine") or "").lower() == "millennium"
+                            status_ok = str(row.get("status") or "").lower() == "running"
+                            mode = str(row.get("mode") or "").lower()
                             rid = str(row.get("run_id") or "")
-                            if not rid:
+                            if not (engine_ok and status_ok and rid):
                                 continue
-                            try:
-                                payload = _fetch_paper_extras_sync(rid)
-                                with _PAPER_SNAPSHOT_LOCK:
-                                    _PAPER_SNAPSHOT_CACHE[rid] = (_t.monotonic(), payload)
-                            except Exception:
-                                pass
+                            if mode == "paper":
+                                try:
+                                    payload = _fetch_paper_extras_sync(rid)
+                                    with _PAPER_SNAPSHOT_LOCK:
+                                        _PAPER_SNAPSHOT_CACHE[rid] = (_t.monotonic(), payload)
+                                except Exception:
+                                    pass
+                            elif mode == "shadow":
+                                # Warm the per-run shadow cache too — sem isso
+                                # o primeiro click no picker RUNNING NOW ainda
+                                # espera o worker assíncrono terminar o fetch
+                                # inicial (heartbeat + trades via VPS).
+                                try:
+                                    payload = _fetch_remote_shadow_run_sync(rid)
+                                    with _REMOTE_SHADOW_RUN_LOCK:
+                                        _REMOTE_SHADOW_RUN_CACHE[rid] = (_t.monotonic(), payload)
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
                 threading.Thread(

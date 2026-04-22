@@ -1101,6 +1101,40 @@ def _shadow_active_slugs(*, launcher=None, state=None) -> set[str]:
 def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, dict | None, list[dict]]:
     """Return latest shadow snapshot from poller cache or cockpit API."""
     picked_run_id = _fetch_shadow_run_id(state)
+
+    # Fast-path: if _COCKPIT_RUNS_CACHE (60s TTL, background-warmed) já sabe
+    # que o run pedido está running, pula o run_catalog.list_runs_catalog —
+    # que tem TTL de só 2s e re-fetcha /v1/runs via SSH tunnel em ~900ms,
+    # travando o Tk mainloop em cada click do picker RUNNING NOW que cai
+    # fora da janela de 2s. Cockpit /v1/runs já tem os mesmos dados do VPS,
+    # então redirecionar pro cache elimina o round-trip duplicado. Só VPS
+    # runs aparecem aí; local-only runs continuam no path original.
+    cached_runs = _COCKPIT_RUNS_CACHE.get("runs") or []
+    target_row: dict | None = None
+    if picked_run_id and cached_runs:
+        target_row = next(
+            (r for r in cached_runs
+             if str(r.get("run_id") or "") == picked_run_id),
+            None,
+        )
+    elif cached_runs and not picked_run_id:
+        target_row = next(
+            (r for r in cached_runs
+             if str(r.get("engine") or "").lower() == "millennium"
+             and str(r.get("mode") or "").lower() == "shadow"
+             and str(r.get("status") or "").lower() == "running"),
+            None,
+        )
+    if target_row and str(target_row.get("status") or "").lower() == "running":
+        remote_rid = str(target_row.get("run_id") or "")
+        if remote_rid:
+            return _fetch_remote_shadow_run_cached(
+                remote_rid,
+                launcher=launcher,
+                state=state,
+                allow_sync=(launcher is None and state is None),
+            )
+
     local_row = (
         run_catalog.get_run_summary(picked_run_id, client=_get_cockpit_client())
         if picked_run_id else
