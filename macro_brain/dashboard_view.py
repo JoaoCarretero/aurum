@@ -422,21 +422,17 @@ _TICK_STATS = {"count": 0, "last_changed": 0, "last_tick_at": None}
 
 
 def _render_northstar(parent) -> None:
-    """Strip fixo no topo com 5 tiles XL (BTC/ETH/SP500/DXY/BTC.D).
+    """Ticker tape compacto no topo — 5 metricas (BTC/ETH/S&P/DXY/BTC.D)
+    em 1 linha so. Cada cell: [LABEL] VALUE +CHG%, tudo horizontal.
 
-    Cada cell: label 7pt amber + value 20pt white + change 10pt + spark
-    60px alto. Registra cada metric em _TILE_REGISTRY igual tiles normais
-    — aproveita o tick_update existente pra refresh automatico (fade +
-    candles + bounds).
-
-    Vibe Bloomberg header: 5 "north stars" sempre visiveis, independente
-    da tab ativa abaixo.
+    ~24px altura total (era 90px+ com candle). Click abre popup de drill.
+    Registra em _TILE_REGISTRY pra tick_update refrescar automatico.
     """
     from macro_brain.persistence.store import macro_series_many
 
-    bar = tk.Frame(parent, bg=BG,
+    bar = tk.Frame(parent, bg=BG2,
                    highlightbackground=AMBER, highlightthickness=1)
-    bar.pack(fill="x", pady=(4, 2))
+    bar.pack(fill="x", pady=(3, 2))
 
     specs = [
         ("BTC_SPOT",       "BTC",    "${:,.0f}"),
@@ -452,58 +448,51 @@ def _render_northstar(parent) -> None:
     except Exception:
         series_map = {}
 
-    for metric, lbl_text, fmt in specs:
+    for idx, (metric, lbl_text, fmt) in enumerate(specs):
         s = series_map.get(metric) or []
         val = s[-1].get("value") if s else None
         prev = s[-2].get("value") if len(s) > 1 else None
 
-        cell = tk.Frame(bar, bg=BG2,
-                        highlightbackground=BORDER, highlightthickness=1)
-        cell.pack(side="left", fill="both", expand=True, padx=1, pady=1)
+        # Separator vertical entre cells (exceto primeira)
+        if idx > 0:
+            tk.Frame(bar, bg=BORDER, width=1).pack(
+                side="left", fill="y", pady=3)
 
-        tk.Label(cell, text=lbl_text, font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG2, anchor="w").pack(
-            fill="x", padx=8, pady=(4, 0))
+        cell = tk.Frame(bar, bg=BG2, cursor="hand2")
+        cell.pack(side="left", fill="x", expand=True, padx=0, pady=2)
+
+        lbl = tk.Label(cell, text=lbl_text, font=(FONT, 7, "bold"),
+                       fg=AMBER, bg=BG2, cursor="hand2")
+        lbl.pack(side="left", padx=(10, 4))
 
         vs = fmt.format(val) if val is not None else "—"
-        vlbl = tk.Label(cell, text=vs, font=(FONT, 18, "bold"),
-                        fg=WHITE, bg=BG2, anchor="w")
-        vlbl.pack(fill="x", padx=8)
+        vlbl = tk.Label(cell, text=vs, font=(FONT, 9, "bold"),
+                        fg=WHITE, bg=BG2, cursor="hand2")
+        vlbl.pack(side="left")
 
         pct = _pct_change(val, prev) if val is not None else None
         ch = f"{pct:+.2f}%" if pct is not None else ""
         cc = GREEN if (pct or 0) > 0 else (RED if (pct or 0) < 0 else DIM)
-        chlbl = tk.Label(cell, text=ch, font=(FONT, 9, "bold"),
-                         fg=cc, bg=BG2, anchor="w")
-        chlbl.pack(fill="x", padx=8)
+        chlbl = tk.Label(cell, text=ch, font=(FONT, 7, "bold"),
+                         fg=cc, bg=BG2, cursor="hand2")
+        chlbl.pack(side="left", padx=(6, 10))
 
-        cv = tk.Canvas(cell, bg=BG2, height=28,
-                       highlightthickness=0, borderwidth=0)
-        cv.pack(fill="x", padx=4, pady=(0, 4))
-        # Draw initial candles (deferred — winfo_width so apos pack)
-        if s and len(s) >= 2:
-            vals = [r["value"] for r in s[-30:]
-                    if isinstance(r.get("value"), (int, float))]
-            if len(vals) >= 2:
-                cv.after(30, lambda c=cv, v=vals:
-                         _draw_spark_candles(c, v,
-                                             w=(c.winfo_width() or 150),
-                                             h=28))
-
-        # Override bg=BG2 (nao PANEL) no registry — _flash_label precisa
-        # saber pra onde voltar. Simples: tick_update usa PANEL default;
-        # aqui o label usa BG2 como cor base, entao registramos com
-        # spark_color/fmt normais mas marcamos "north_star": True pra
-        # tratar no _flash_label (abaixo).
         _TILE_REGISTRY[metric] = {
             "value": vlbl,
             "change": chlbl,
-            "spark": cv,
+            "spark": None,
             "fmt": fmt,
             "spark_color": AMBER,
             "last_val": val if isinstance(val, (int, float)) else None,
             "north_star": True,
         }
+
+        # Click-to-expand — cell inteira abre detail popup.
+        _mk, _lbl_txt, _fmt = metric, lbl_text, fmt
+        def _click(_e=None, m=_mk, l=_lbl_txt, fm=_fmt):
+            _open_tile_detail(m, l, fm)
+        for w in (cell, lbl, vlbl, chlbl):
+            w.bind("<Button-1>", _click)
 
 
 def _render_statusbar(parent) -> None:
@@ -577,12 +566,41 @@ def _statusbar_tick(changed: int) -> None:
         pass
 
 
+def _draw_detail_chart(canvas, values, color=AMBER, w=440, h=200):
+    """Line chart limpo com grid horizontal (4 linhas) + polyline AMBER.
+
+    Menos denso que candles pra drill-down de 100 bars. Gridlines dim,
+    min/max labels no canto.
+    """
+    canvas.delete("all")
+    if not values or len(values) < 2:
+        return
+    mn, mx = min(values), max(values)
+    rng = mx - mn if mx > mn else 1.0
+    pad = 6
+
+    for i in range(1, 4):
+        y = pad + (h - 2 * pad) * i / 4
+        canvas.create_line(pad, y, w - pad, y, fill=BORDER, dash=(1, 3))
+
+    pts = []
+    for i, v in enumerate(values):
+        x = pad + (w - 2 * pad) * (i / (len(values) - 1))
+        y = h - pad - (h - 2 * pad) * ((v - mn) / rng)
+        pts.append(x); pts.append(y)
+    if len(pts) >= 4:
+        canvas.create_line(*pts, fill=color, width=2, smooth=False)
+
+    canvas.create_text(w - pad, pad + 2, anchor="ne",
+                       text=f"{mx:.4g}", font=(FONT, 6), fill=DIM)
+    canvas.create_text(w - pad, h - pad - 2, anchor="se",
+                       text=f"{mn:.4g}", font=(FONT, 6), fill=DIM)
+
+
 def _open_tile_detail(metric_key: str, label: str,
                      fmt: str | None = None) -> None:
-    """Click-to-expand popup (Toplevel 420x280) com chart detalhado de
-    ate 100 barras (mini-candles grande) + min/max/last footer.
-
-    Vibe drill-down TradingView: click tile = abre janela grande.
+    """Click-to-expand popup (Toplevel 460x300) com line chart de 100
+    barras + min/avg/max/last footer.
     """
     try:
         from macro_brain.persistence.store import macro_series_many
@@ -595,13 +613,13 @@ def _open_tile_detail(metric_key: str, label: str,
         top = tk.Toplevel()
         top.title(f"{label} — {metric_key}")
         top.configure(bg=BG)
-        top.geometry("440x300")
+        top.geometry("460x300")
 
         tk.Label(top, text=f"  [ {label} · {metric_key} ]",
                  font=(FONT, 9, "bold"), fg=AMBER, bg=BG,
-                 anchor="w").pack(fill="x", padx=8, pady=(8, 4))
+                 anchor="w").pack(fill="x", padx=10, pady=(10, 4))
 
-        cv = tk.Canvas(top, bg=PANEL, width=420, height=220,
+        cv = tk.Canvas(top, bg=PANEL, width=440, height=200,
                        highlightthickness=1,
                        highlightbackground=BORDER)
         cv.pack(padx=10, pady=2)
@@ -609,24 +627,26 @@ def _open_tile_detail(metric_key: str, label: str,
         if len(vals) >= 2:
             cv.after(
                 30,
-                lambda: _draw_spark_candles(cv, vals, w=420, h=220),
+                lambda: _draw_detail_chart(cv, vals, w=440, h=200),
             )
+            avg = sum(vals) / len(vals)
             foot_text = (
-                f"  n={len(vals)}  "
-                f"min {_fmt_val(min(vals), fmt)}  "
-                f"max {_fmt_val(max(vals), fmt)}  "
+                f"  n={len(vals)}   "
+                f"min {_fmt_val(min(vals), fmt)}   "
+                f"avg {_fmt_val(avg, fmt)}   "
+                f"max {_fmt_val(max(vals), fmt)}   "
                 f"last {_fmt_val(vals[-1], fmt)}"
             )
         else:
             foot_text = f"  {label}: sem dados suficientes (n={len(vals)})"
 
-        tk.Label(top, text=foot_text, font=(FONT, 8),
+        tk.Label(top, text=foot_text, font=(FONT, 7),
                  fg=DIM, bg=BG, anchor="w").pack(
-            fill="x", padx=8, pady=(4, 4))
+            fill="x", padx=10, pady=(6, 2))
 
         tk.Label(top, text="  esc · close",
-                 font=(FONT, 7), fg=DIM2, bg=BG,
-                 anchor="w").pack(fill="x", padx=8)
+                 font=(FONT, 6), fg=DIM2, bg=BG,
+                 anchor="w").pack(fill="x", padx=10, pady=(0, 6))
 
         top.bind("<Escape>", lambda _e: top.destroy())
         top.focus_set()
@@ -657,14 +677,11 @@ def _lerp_hex(c1: str, c2: str, t: float) -> str:
 
 
 def _flash_label(lbl: tk.Label, up: bool, steps: int = 8,
-                 dur_ms: int = 480) -> None:
-    """Fade gradient no bg do value_lbl: verde/vermelho intenso → PANEL,
-    em ``steps`` quadros distribuidos em ``dur_ms``. Sensacao analogica
-    (fade out) em vez de cut abrupto.
+                 dur_ms: int = 480, base_bg: str = PANEL) -> None:
+    """Fade gradient no bg do value_lbl: verde/vermelho intenso → base_bg,
+    em ``steps`` quadros distribuidos em ``dur_ms``.
 
-    Antes (cut): bg=GREEN por 450ms, depois PANEL. Visualmente aspero.
-    Agora (fade): bg e fg interpolam de (GREEN|RED, BG) -> (PANEL, WHITE)
-    em 8 steps de ~60ms cada. Vibe TradingView/Bloomberg.
+    base_bg default PANEL (tiles normais); north-star passa BG2.
     """
     try:
         if not lbl.winfo_exists():
@@ -677,7 +694,7 @@ def _flash_label(lbl: tk.Label, up: bool, steps: int = 8,
                 return
             t = i / steps
             lbl.configure(
-                bg=_lerp_hex(src_bg, PANEL, t),
+                bg=_lerp_hex(src_bg, base_bg, t),
                 fg=_lerp_hex(src_fg, WHITE, t),
             )
             if i < steps:
@@ -770,10 +787,11 @@ def tick_update() -> int:
                 last_val = refs.get("last_val")
                 if last_val is not None and isinstance(val, (int, float)):
                     try:
+                        base_bg = BG2 if refs.get("north_star") else PANEL
                         if val > last_val:
-                            _flash_label(value_lbl, up=True)
+                            _flash_label(value_lbl, up=True, base_bg=base_bg)
                         elif val < last_val:
-                            _flash_label(value_lbl, up=False)
+                            _flash_label(value_lbl, up=False, base_bg=base_bg)
                     except Exception:
                         pass
                 refs["last_val"] = val if isinstance(val, (int, float)) else last_val
