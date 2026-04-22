@@ -24,6 +24,17 @@ from launcher_support.screens.splash_data import (
 class SplashScreen(Screen):
     # Canvas dimensions come from app._SPLASH_DESIGN_W / _H (920×640).
 
+    # Mapa status -> cor do ENGINE ROSTER. Cor e o canal primario de scan
+    # visual (row inteira pinta na cor do status), sem emojis.
+    _STATUS_COLORS = {
+        "OK":  GREEN,    # edges reais (CITADEL, JUMP)
+        "BUG": AMBER,    # inflado/bug-suspect (RENAISS, BRIDGEW)
+        "NEW": WHITE,    # em validacao OOS (PHI)
+        "TUN": AMBER_B,  # em tuning (ORNSTEIN)
+        "OFF": DIM,      # fora da bateria (TWOSIGMA, AQR)
+        "NO":  RED,      # falhou OOS (DE_SHAW, KEPOS, MEDALLION)
+    }
+
     # Top band + wordmark
     _CENTER_X = 460
     _TOP_RULE_Y = 30
@@ -319,11 +330,13 @@ class SplashScreen(Screen):
             name = entry["name"]
             status = entry["status"]
             sh = entry["sharpe"]
-            sh_txt = f"{sh:>5.2f}" if isinstance(sh, (int, float)) else "  —  "
+            sh_txt = f"{sh:>5.2f}" if isinstance(sh, (int, float)) else "  ---"
+            color = self._STATUS_COLORS.get(status, WHITE)
             canvas.create_text(
                 x, yy, anchor="w",
-                text=f"{name:<8} {status}  {sh_txt}",
-                font=(FONT, 8, "bold"), fill=WHITE, tags=("splash", f"roster-{name.lower()}"),
+                text=f"{name:<9} {status:<4} {sh_txt}",
+                font=(FONT, 8, "bold"), fill=color,
+                tags=("splash", f"roster-{name.lower()}"),
             )
 
     def _render_resize(self, _event=None) -> None:

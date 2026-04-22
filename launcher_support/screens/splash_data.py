@@ -56,17 +56,17 @@ def read_last_session(index_path: Path) -> Optional[dict]:
 # Exclui JANE_STREET (arb, não direcional), MILLENNIUM/WINTON (orchestrators)
 # e GRAHAM (arquivado).
 ENGINE_ROSTER_LAYOUT: list[tuple[str, str, str]] = [
-    ("CITADEL",     "citadel",     "✅"),
-    ("JUMP",        "jump",        "✅"),
-    ("RENAISS",     "renaissance", "⚠️"),
-    ("BRIDGEW",     "bridgewater", "⚠️"),
-    ("PHI",         "phi",         "🆕"),
-    ("ORNSTEIN",    "ornstein",    "🔧"),
-    ("TWOSIGMA",    "twosigma",    "⚪"),
-    ("AQR",         "aqr",         "⚪"),
-    ("DE_SHAW",     "deshaw",      "🔴"),
-    ("KEPOS",       "kepos",       "🔴"),
-    ("MEDALLION",   "medallion",   "🔴"),
+    ("CITADEL",     "citadel",     "OK"),
+    ("JUMP",        "jump",        "OK"),
+    ("RENAISS",     "renaissance", "BUG"),
+    ("BRIDGEW",     "bridgewater", "BUG"),
+    ("PHI",         "phi",         "NEW"),
+    ("ORNSTEIN",    "ornstein",    "TUN"),
+    ("TWOSIGMA",    "twosigma",    "OFF"),
+    ("AQR",         "aqr",         "OFF"),
+    ("DE_SHAW",     "deshaw",      "NO"),
+    ("KEPOS",       "kepos",       "NO"),
+    ("MEDALLION",   "medallion",   "NO"),
 ]
 
 

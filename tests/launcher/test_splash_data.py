@@ -107,7 +107,7 @@ def test_read_engine_roster_no_index_returns_labels_only(tmp_path):
     roster = read_engine_roster(missing)
     assert len(roster) == 11
     assert all(r["sharpe"] is None for r in roster)
-    assert all(r["status"] in {"✅", "⚠️", "🆕", "🔧", "⚪", "🔴"} for r in roster)
+    assert all(r["status"] in {"OK", "BUG", "NEW", "TUN", "OFF", "NO"} for r in roster)
 
 
 def test_splash_cache_roundtrip(tmp_path):
