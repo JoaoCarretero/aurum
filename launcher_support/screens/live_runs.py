@@ -277,6 +277,13 @@ class LiveRunsScreen(Screen):
         self._selected_run_id = run_id
         self._render_detail(run_id)
 
+    def _reload_if_still_selected(self, run_id: str) -> None:
+        """Re-render detail pane APENAS se o mesmo run_id continua
+        selecionado. Protege contra race quando operador clicou em
+        outra run durante o fetch async do heartbeat."""
+        if self._selected_run_id == run_id:
+            self._render_detail(run_id)
+
     def _render_detail(self, run_id: str) -> None:
         if self._detail_frame is None:
             return
@@ -320,13 +327,29 @@ class LiveRunsScreen(Screen):
             ("novel signals", str(run.novel or 0)),
         ])
 
-        # Health metrics vindos do cockpit heartbeat. collect_vps_runs
-        # NAO popula r.heartbeat (perf optimization pra evitar 2*N
-        # round-trips na listagem). Lazy-fetch aqui quando o operador
-        # clica numa run especifica — ~100ms via tunnel, tolerable no
-        # click-to-detail flow. Sem client_factory ou tunnel down, hb
-        # continua None e as secoes skipam silently.
-        lazy_fetch_heartbeat(run, self._client_factory)
+        # Health metrics vindos do cockpit heartbeat. Async lazy-fetch:
+        # antes bloqueava UI ate 5s em tunnel lento (audit 2026-04-22).
+        # Agora pinta detail com hb=None, dispara fetch em daemon
+        # thread, e ao completar reentra via app.after(0, _render_detail).
+        # Guard _hb_fetch_attempted evita loop infinito quando fetch
+        # falha.
+        attempted = getattr(self, "_hb_fetch_attempted", None)
+        if attempted is None:
+            attempted = set()
+            self._hb_fetch_attempted = attempted
+        if (run.heartbeat is None and run.source == "vps"
+                and self._client_factory is not None
+                and run.run_id not in attempted):
+            attempted.add(run.run_id)
+
+            def _after(_rid=run.run_id):
+                try:
+                    self.app.after(
+                        0, lambda: self._reload_if_still_selected(_rid),
+                    )
+                except Exception:
+                    pass
+            lazy_fetch_heartbeat(run, self._client_factory, on_complete=_after)
         hb = run.heartbeat or {}
         if hb.get("last_error"):
             _render_error_banner(self._detail_frame, str(hb["last_error"]))

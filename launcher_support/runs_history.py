@@ -539,6 +539,9 @@ def render_runs_history(parent: tk.Widget, launcher,
         # as secoes SCAN/HEALTH/PROBE skipam silently porque
         # collect_vps_runs nao popula r.heartbeat (perf optimization).
         "client_factory": client_factory,
+        # launcher stash — _load_detail precisa pra marshal de volta
+        # do async heartbeat fetch pra Tk main thread (launcher.after).
+        "launcher": launcher,
     }
 
     split = tk.Frame(root, bg=BG)
@@ -861,32 +864,78 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
 
 # ─── Detail pane ───────────────────────────────────────────────────
 
-def lazy_fetch_heartbeat(r: RunSummary, client_factory) -> None:
+def lazy_fetch_heartbeat(r: RunSummary, client_factory,
+                         on_complete=None) -> bool:
     """Lazy-fetch heartbeat do VPS quando operador clica numa run.
 
     `collect_vps_runs` nao popula r.heartbeat por performance (antes
     fazia 2*N round-trips). O detail pane precisa dos campos ricos
     (last_scan_*, drawdown_pct, ks_state, top_score, etc), entao aqui
-    buscamos sob demanda via cockpit `/v1/runs/{id}/heartbeat`. Muta
-    r.heartbeat in-place. Silent on failure — secoes skipam se hb
-    continuar None.
+    buscamos sob demanda via cockpit `/v1/runs/{id}/heartbeat`.
+
+    Se `on_complete` for None, fetch e SYNCRONO — caller aceita o
+    bloqueio (ate 5s em tunnel lento).
+
+    Se `on_complete` for callable, fetch roda em daemon thread;
+    retorna True se o fetch foi disparado (caller deve mostrar
+    placeholder + aguardar callback); on_complete e invocado APOS
+    r.heartbeat ser populado. CALLBACK RODA NA THREAD — caller
+    precisa marshal pra Tk main thread via `launcher.after(0, ...)`
+    dentro do callback.
+
+    Audit 2026-04-22 pegou 5s freeze no main thread quando tunnel
+    responde lento; esta versao async fecha esse gap.
     """
     if r.heartbeat is not None:
-        return  # ja populado (local/db source, ou fetch anterior)
+        if on_complete is not None:
+            on_complete()
+        return False
     if r.source != "vps" or client_factory is None:
-        return
-    try:
-        client = client_factory()
-    except Exception:
+        if on_complete is not None:
+            on_complete()
+        return False
+
+    def _fetch():
         client = None
-    if client is None:
-        return
-    try:
-        hb = client._get(f"/v1/runs/{r.run_id}/heartbeat")
-    except Exception:
+        try:
+            client = client_factory()
+        except Exception:
+            pass
         hb = None
-    if isinstance(hb, dict) and hb:
-        r.heartbeat = hb
+        if client is not None:
+            try:
+                hb = client._get(f"/v1/runs/{r.run_id}/heartbeat")
+            except Exception:
+                hb = None
+        if isinstance(hb, dict) and hb:
+            r.heartbeat = hb
+        if on_complete is not None:
+            try:
+                on_complete()
+            except Exception:
+                pass
+
+    if on_complete is None:
+        _fetch()  # sync path — preserva comportamento pre-audit
+        return True
+
+    import threading
+    threading.Thread(
+        target=_fetch, daemon=True, name=f"hb-fetch-{r.run_id[:16]}",
+    ).start()
+    return True
+
+
+def _reload_if_still_selected(r: RunSummary, state: dict) -> None:
+    """Re-render detail pane APENAS se a mesma run continua selecionada.
+
+    Protege contra race quando operador clicou em outra run durante o
+    fetch async do heartbeat — repaint errado sobrescreveria o detail
+    da run nova. Checa state["selected_run_id"] antes de agir.
+    """
+    if state.get("selected_run_id") != r.run_id:
+        return
+    _load_detail(r, state)
 
 
 def _load_detail(r: RunSummary, state: dict) -> None:
@@ -899,10 +948,31 @@ def _load_detail(r: RunSummary, state: dict) -> None:
     except Exception:
         return
 
-    # Lazy-fetch do heartbeat VPS quando necessario. Sync call —
-    # ~100ms via tunnel, tolerable no click-to-detail flow.
+    # Async lazy-fetch do heartbeat VPS. Antes era sync — congelava UI
+    # por ate 5s se tunnel respondesse lento (audit 2026-04-22).
+    # Agora: pinta detail pane imediatamente com r.heartbeat=None
+    # (secoes SCAN/HEALTH/PROBE skipam graceful), dispara fetch em
+    # daemon thread, e ao completar re-entra em _load_detail pra
+    # repintar com heartbeat populado.
     client_factory = state.get("client_factory")
-    lazy_fetch_heartbeat(r, client_factory)
+    launcher = state.get("launcher")
+    attempted = state.setdefault("_hb_fetch_attempted", set())
+    if (r.heartbeat is None and r.source == "vps"
+            and launcher is not None and r.run_id not in attempted):
+        # One-shot fetch per run — marcar ANTES de disparar pra nao
+        # entrar em loop quando fetch falhar (heartbeat fica None mas
+        # ja tentamos, nao re-dispara).
+        attempted.add(r.run_id)
+
+        def _after_fetch(_r=r, _state=state, _launcher=launcher):
+            # Marshal de volta pra Tk main thread.
+            try:
+                _launcher.after(
+                    0, lambda: _reload_if_still_selected(_r, _state),
+                )
+            except Exception:
+                pass
+        lazy_fetch_heartbeat(r, client_factory, on_complete=_after_fetch)
 
     for w in host.winfo_children():
         try:
