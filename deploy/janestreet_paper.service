@@ -1,0 +1,35 @@
+[Unit]
+Description=AURUM · JANESTREET paper runner (cross-venue funding arb, simulated)
+Documentation=https://github.com/joao/aurum.finance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum
+WorkingDirectory=/srv/aurum.finance
+
+EnvironmentFile=-/etc/aurum/janestreet.env
+Environment=PYTHONUNBUFFERED=1
+# JANESTREET paper mode: scans 13 venues, simulates basis trades, no API keys
+# required. --mode paper forces ARB_PAPER=True in engines/janestreet.py (L44).
+ExecStart=/usr/bin/python3 engines/janestreet.py --mode paper
+
+MemoryMax=1G
+CPUQuota=150%
+
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=120
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/aurum.finance/data
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aurum-janestreet-paper
+
+[Install]
+WantedBy=multi-user.target

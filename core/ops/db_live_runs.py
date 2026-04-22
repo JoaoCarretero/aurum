@@ -7,6 +7,7 @@ LiveRunsScreen UI.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +24,34 @@ _UPSERT_MUTABLE: set[str] = {
 }
 _REQUIRED_NEW: tuple[str, ...] = ("engine", "mode", "started_at", "run_dir")
 
+_MIGRATION_LOCK = threading.Lock()
+_MIGRATED_PATHS: set[str] = set()
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Apply migration_001 once per process per DB path. Idempotent.
+
+    Prevents "no such table: live_runs" crashes on a fresh aurum.db
+    (e.g. new VPS install, CI tmpdir). Safe to call on every connect:
+    schema DDL is `CREATE TABLE IF NOT EXISTS`, and the per-path set
+    short-circuits after first apply.
+    """
+    db_key = str(DB_PATH)
+    if db_key in _MIGRATED_PATHS:
+        return
+    with _MIGRATION_LOCK:
+        if db_key in _MIGRATED_PATHS:
+            return
+        from tools.maintenance.migrations import migration_001_live_runs as _mig
+        _mig.apply(conn)
+        _MIGRATED_PATHS.add(db_key)
+
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    _ensure_schema(conn)
     return conn
 
 

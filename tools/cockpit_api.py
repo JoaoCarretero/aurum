@@ -161,6 +161,32 @@ def build_app() -> FastAPI:
         _check_auth(request)
         return [_summarize_run(p) for p in find_runs(data_root)]
 
+    @app.get("/v1/live-runs")
+    def list_live_runs_endpoint(
+        request: Request,
+        mode: str | None = None,
+        engine: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ):
+        """DB-backed run state (live_runs table). Faster than filesystem
+        scan for >100 accumulated run_dirs; returns aggregate metrics
+        (tick_count, novel_count, equity) from per-tick upserts. Use
+        /v1/runs for filesystem-discovered runs with full heartbeat."""
+        _check_auth(request)
+        if limit < 1 or limit > 1000:
+            raise HTTPException(status_code=400, detail="limit must be 1..1000")
+        from core.ops import db_live_runs
+        try:
+            rows = db_live_runs.list_live_runs(
+                mode=mode, engine=engine, since=since, limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Fresh DB without schema is now auto-migrated, but guard any
+            # other sqlite error so the cockpit stays up.
+            raise HTTPException(status_code=500, detail=f"db query failed: {exc}")
+        return {"count": len(rows), "runs": rows}
+
     @app.get("/v1/runs/{run_id}")
     def run_detail(run_id: str, request: Request):
         _check_auth(request)
@@ -210,7 +236,13 @@ def build_app() -> FastAPI:
                 since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
             except ValueError:
                 raise HTTPException(status_code=400, detail="since must be ISO8601")
-        jsonl = run_dir / "reports" / "shadow_trades.jsonl"
+        # Paper runner writes reports/trades.jsonl; shadow writes
+        # reports/shadow_trades.jsonl. A given run_dir only has one of the
+        # two (paper and shadow live in separate data/ subdirs), so try
+        # shadow first (back-compat) and fall back to the paper filename.
+        jsonl_shadow = run_dir / "reports" / "shadow_trades.jsonl"
+        jsonl_paper = run_dir / "reports" / "trades.jsonl"
+        jsonl = jsonl_shadow if jsonl_shadow.exists() else jsonl_paper
         if not jsonl.exists():
             return {"run_id": run_id, "count": 0, "trades": []}
         lines = jsonl.read_text(encoding="utf-8").splitlines()

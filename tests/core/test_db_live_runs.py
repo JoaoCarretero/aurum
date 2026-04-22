@@ -17,7 +17,29 @@ def fake_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     mig.apply(conn)
     conn.close()
     monkeypatch.setattr(m, "DB_PATH", db)
+    m._MIGRATED_PATHS.discard(str(db))
     return db
+
+
+def test_auto_migration_on_fresh_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_connect() must auto-apply migration_001 on a fresh DB.
+
+    Guards the no-manual-migrate path: new VPS install, CI tmpdir, or any
+    process hitting aurum.db before the operator ran the migration script.
+    """
+    db = tmp_path / "fresh.db"
+    monkeypatch.setattr(m, "DB_PATH", db)
+    m._MIGRATED_PATHS.discard(str(db))
+    m.upsert(
+        run_id="auto_mig_run",
+        engine="citadel",
+        mode="paper",
+        started_at="2026-04-22T12:00:00Z",
+        run_dir="data/x",
+    )
+    rows = m.list_live_runs()
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == "auto_mig_run"
 
 
 def test_upsert_inserts_first_call(fake_db: Path) -> None:
