@@ -55,6 +55,12 @@ from core.key_store import KeyStoreError, load_runtime_keys
 
 log = logging.getLogger("FUNDING_SCANNER")
 
+# Shared Session — scanner runs 13 venue fetchers in parallel every CACHE_TTL
+# seconds. A single Session holds per-host urllib3 pools, so subsequent
+# passes reuse keep-alive connections instead of re-handshaking TLS on
+# every venue.
+_SESSION = requests.Session()
+
 # ─── Config ──────────────────────────────────────────────────────────────
 HTTP_TIMEOUT  = 10          # seconds per venue
 CACHE_TTL     = 30          # seconds between rescans
@@ -145,7 +151,7 @@ def _is_usdt_base(symbol: str) -> str | None:
 def fetch_hyperliquid() -> list[FundingOpp]:
     """POST https://api.hyperliquid.xyz/info  body {"type":"metaAndAssetCtxs"}
     Hourly funding, response is [meta, [asset_ctx...]]."""
-    resp = requests.post(
+    resp = _SESSION.post(
         "https://api.hyperliquid.xyz/info",
         json={"type": "metaAndAssetCtxs"},
         timeout=HTTP_TIMEOUT,
@@ -185,7 +191,7 @@ def fetch_hyperliquid() -> list[FundingOpp]:
 def fetch_dydx() -> list[FundingOpp]:
     """GET https://indexer.dydx.trade/v4/perpetualMarkets
     8h funding window."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://indexer.dydx.trade/v4/perpetualMarkets",
         timeout=HTTP_TIMEOUT,
     )
@@ -221,7 +227,7 @@ def fetch_paradex() -> list[FundingOpp]:
     ``volume_24h`` field is already in USD quote units; ``open_interest``
     is in base units (multiply by mark). Paradex settles 8-hour funding.
     """
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://api.prod.paradex.trade/v1/markets/summary?market=ALL",
         timeout=HTTP_TIMEOUT,
     )
@@ -260,9 +266,9 @@ def _fetch_binance_style(base_url: str, venue: str) -> list[FundingOpp]:
     """Binance / BingX share the same /premiumIndex batch shape:
        [{symbol, markPrice, lastFundingRate, nextFundingTime}, ...]"""
     # premiumIndex gives funding rate; 24hr gives volume
-    pi = requests.get(f"{base_url}/fapi/v1/premiumIndex", timeout=HTTP_TIMEOUT)
+    pi = _SESSION.get(f"{base_url}/fapi/v1/premiumIndex", timeout=HTTP_TIMEOUT)
     pi.raise_for_status()
-    ti = requests.get(f"{base_url}/fapi/v1/ticker/24hr", timeout=HTTP_TIMEOUT)
+    ti = _SESSION.get(f"{base_url}/fapi/v1/ticker/24hr", timeout=HTTP_TIMEOUT)
     ti.raise_for_status()
     vol_map = {row["symbol"]: float(row.get("quoteVolume") or 0.0)
                for row in (ti.json() or []) if isinstance(row, dict)}
@@ -304,14 +310,14 @@ def fetch_bingx() -> list[FundingOpp]:
     """BingX Perpetual Futures — funding from /premiumIndex, volume merged
     in from /ticker (quoteVolume). Two calls, joined by symbol."""
     base = "https://open-api.bingx.com"
-    pi = requests.get(
+    pi = _SESSION.get(
         f"{base}/openApi/swap/v2/quote/premiumIndex",
         timeout=HTTP_TIMEOUT,
     )
     pi.raise_for_status()
     funding_rows = (pi.json() or {}).get("data") or []
 
-    ti = requests.get(
+    ti = _SESSION.get(
         f"{base}/openApi/swap/v2/quote/ticker",
         timeout=HTTP_TIMEOUT,
     )
@@ -349,7 +355,7 @@ def fetch_bingx() -> list[FundingOpp]:
 
 def fetch_bybit() -> list[FundingOpp]:
     """Bybit V5 tickers (linear) — single batch call with fundingRate inline."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://api.bybit.com/v5/market/tickers?category=linear",
         timeout=HTTP_TIMEOUT,
     )
@@ -385,7 +391,7 @@ def fetch_gate() -> list[FundingOpp]:
     """Gate.io USDT perpetual tickers — single batch call that has funding
     rate, mark price and 24h quote volume inline. The contracts endpoint
     carries funding_rate too but lacks volume; tickers has both."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://api.gateio.ws/api/v4/futures/usdt/tickers",
         timeout=HTTP_TIMEOUT,
     )
@@ -421,7 +427,7 @@ def fetch_gate() -> list[FundingOpp]:
 
 def fetch_bitget() -> list[FundingOpp]:
     """Bitget V2 mix tickers — USDT-FUTURES batch with fundingRate."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://api.bitget.com/api/v2/mix/market/tickers"
         "?productType=USDT-FUTURES",
         timeout=HTTP_TIMEOUT,
@@ -459,7 +465,7 @@ def fetch_gmx() -> list[FundingOpp]:
     GMX v2 Arbitrum perpetuals.  Rates are in wei (1e30 divisor) per second;
     we normalise to per-hour.  netRateLong / netRateShort give the dominant
     direction — we take the one with higher absolute value as the signal."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://arbitrum-api.gmxinfra.io/markets/info",
         timeout=HTTP_TIMEOUT,
     )
@@ -538,7 +544,7 @@ def fetch_vertex() -> list[FundingOpp]:
     body: {"funding_rates": {"product_ids": [...]}}
     Rates as x18 strings (divide by 1e18). 8h interval."""
     product_ids = list(_VERTEX_PRODUCTS.keys())
-    resp = requests.post(
+    resp = _SESSION.post(
         "https://archive.prod.vertexprotocol.com/v1/indexer",
         json={"funding_rates": {"product_ids": product_ids}},
         timeout=HTTP_TIMEOUT,
@@ -577,7 +583,7 @@ def fetch_vertex() -> list[FundingOpp]:
 def fetch_aevo() -> list[FundingOpp]:
     """GET https://api.aevo.xyz/funding
     Simple list of {instrument_name, funding_rate, ...}. 1h interval."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://api.aevo.xyz/funding",
         timeout=HTTP_TIMEOUT,
     )
@@ -618,7 +624,7 @@ def fetch_drift() -> list[FundingOpp]:
     """GET https://data.api.drift.trade/fundingRates?limit=50
     Solana-based Drift Protocol perps. 1h funding.
     Deduplicates by symbol, keeping the latest entry by ``ts``."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://data.api.drift.trade/fundingRates?limit=50",
         timeout=HTTP_TIMEOUT,
     )
@@ -666,7 +672,7 @@ def fetch_apex() -> list[FundingOpp]:
     """GET https://omni.apex.exchange/api/v3/ticker
     ApeX Pro StarkEx perpetuals. 1h funding.
     Volume from ``volume24h`` or ``turnover24h``, OI from ``openInterest``."""
-    resp = requests.get(
+    resp = _SESSION.get(
         "https://omni.apex.exchange/api/v3/ticker",
         timeout=HTTP_TIMEOUT,
     )
@@ -712,7 +718,7 @@ def fetch_apex() -> list[FundingOpp]:
 
 def fetch_binance_spot() -> list[SpotPrice]:
     """GET https://api.binance.com/api/v3/ticker/24hr"""
-    resp = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=HTTP_TIMEOUT)
+    resp = _SESSION.get("https://api.binance.com/api/v3/ticker/24hr", timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
     out: list[SpotPrice] = []
     for t in resp.json():
@@ -732,7 +738,7 @@ def fetch_binance_spot() -> list[SpotPrice]:
 
 def fetch_bybit_spot() -> list[SpotPrice]:
     """GET https://api.bybit.com/v5/market/tickers?category=spot"""
-    resp = requests.get("https://api.bybit.com/v5/market/tickers",
+    resp = _SESSION.get("https://api.bybit.com/v5/market/tickers",
                         params={"category": "spot"}, timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
     tickers = (resp.json().get("result") or {}).get("list") or []
@@ -1066,7 +1072,7 @@ def maybe_alert_telegram(opps: list[FundingOpp],
             f"Risk: {opp.risk}"
         )
         try:
-            r = requests.post(
+            r = _SESSION.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": msg,
                       "disable_web_page_preview": True},
