@@ -635,11 +635,19 @@ class App(tk.Tk):
             try:
                 def _warm_cockpit_caches() -> None:
                     import time as _t
-                    # SSH tunnel starts async 25ms after boot (typical up time
-                    # 1–3s). Firing the HTTP fetch before UP => connection
-                    # refused => cache filled with []. Poll up to 15s for the
-                    # tunnel to report UP; bail out if it never does (next
-                    # click triggers a fresh fetch anyway).
+                    from pathlib import Path as _P
+                    from datetime import datetime as _dt
+                    _log_path = _P(__file__).resolve().parent / "data" / ".cockpit_timing.log"
+
+                    def _wlog(msg: str) -> None:
+                        try:
+                            _log_path.parent.mkdir(parents=True, exist_ok=True)
+                            with open(_log_path, "a", encoding="utf-8") as _f:
+                                _f.write(f"{_dt.now().strftime('%H:%M:%S.%f')[:-3]} WARMUP {msg}\n")
+                        except Exception:
+                            pass
+
+                    _wlog(f"start tunnel_ref={'present' if tunnel_ref else 'NONE'}")
                     if tunnel_ref is not None:
                         deadline = _t.monotonic() + 15.0
                         while _t.monotonic() < deadline:
@@ -651,7 +659,9 @@ class App(tk.Tk):
                                 pass
                             _t.sleep(0.2)
                         else:
+                            _wlog("tunnel never UP — abort")
                             return
+                        _wlog("tunnel UP")
                     try:
                         from launcher_support.engines_live_view import (
                             _load_cockpit_runs_sync,
@@ -662,17 +672,14 @@ class App(tk.Tk):
                             _PAPER_SNAPSHOT_LOCK,
                         )
                         rows = _load_cockpit_runs_sync()
+                        _wlog(f"_load_cockpit_runs_sync -> {len(rows) if rows else 0} rows")
                         if not rows:
-                            # Tunnel up but HTTP still failed — leave cache
-                            # untouched so the normal async worker path
-                            # retries on the next click.
                             return
                         with _COCKPIT_RUNS_LOCK:
                             _COCKPIT_RUNS_CACHE["ts"] = _t.monotonic()
                             _COCKPIT_RUNS_CACHE["runs"] = list(rows)
                             _COCKPIT_RUNS_CACHE["loading"] = False
-                        # Preload snapshot for every running paper instance so
-                        # the multi-instance picker has data on first paint.
+                        _wlog(f"cache populated with {len(rows)} runs")
                         for row in rows:
                             if (str(row.get("engine") or "").lower() != "millennium"
                                     or str(row.get("mode") or "").lower() != "paper"
@@ -687,8 +694,9 @@ class App(tk.Tk):
                                     _PAPER_SNAPSHOT_CACHE[rid] = (_t.monotonic(), payload)
                             except Exception:
                                 pass
-                    except Exception:
-                        pass
+                        _wlog("DONE")
+                    except Exception as _e:
+                        _wlog(f"outer exception: {_e}")
                 threading.Thread(
                     target=_warm_cockpit_caches,
                     name="aurum-cockpit-cache-warmup",
