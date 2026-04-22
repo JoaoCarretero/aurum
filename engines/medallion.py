@@ -928,7 +928,7 @@ def main() -> int:
     tf_min = max(1, _TF_MINUTES.get(interval, 15))
     n_candles = scan_days * 24 * 60 // tf_min
 
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
     run_id = f"medallion_{stamp}"
     from config.paths import DATA_DIR
     run_dir = DATA_DIR / "medallion" / run_id

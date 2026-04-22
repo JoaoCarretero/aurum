@@ -377,6 +377,12 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Run only the named variant(s). May be passed multiple times.",
     )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Parallel workers for engine subprocess runs (default 1 = sequential).",
+    )
     return ap.parse_args()
 
 
@@ -572,9 +578,18 @@ def execute_run(spec: EngineSpec, variant: str, overrides: dict[str, Any], windo
     (logs_dir / f"{tag}.stdout.txt").write_text(proc.stdout or "", encoding="utf-8")
     (logs_dir / f"{tag}.stderr.txt").write_text(proc.stderr or "", encoding="utf-8")
 
-    run_dir = _find_new_run_dir(engine_dir, before, started_at)
     stdout = proc.stdout or ""
     stderr = proc.stderr or ""
+    # Prefer extracting run_id directly from stdout (race-safe for parallel runs)
+    run_dir = None
+    import re as _re
+    m = _re.search(r"summary \((\S+?)\)", stdout)
+    if m:
+        candidate = engine_dir / m.group(1)
+        if candidate.exists():
+            run_dir = candidate
+    if run_dir is None:
+        run_dir = _find_new_run_dir(engine_dir, before, started_at)
     combined_output = f"{stdout}\n{stderr}"
 
     def _is_soft_exit() -> bool:
@@ -825,8 +840,31 @@ def main() -> int:
     results = load_existing_results(out_root)
     for name, _ in variants:
         results.setdefault(name, {})
-    for variant, overrides in variants:
-        for window in build_windows(spec, args.phase):
+
+    jobs: list[tuple[str, dict[str, Any], WindowSpec]] = [
+        (variant, overrides, window)
+        for variant, overrides in variants
+        for window in build_windows(spec, args.phase)
+    ]
+
+    if args.workers and args.workers > 1 and len(jobs) > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        print(f"[{spec.display}] running {len(jobs)} jobs with {args.workers} parallel workers")
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            fut_map = {
+                ex.submit(execute_run, spec, variant, overrides, window, args.python, out_root): (variant, window.name)
+                for variant, overrides, window in jobs
+            }
+            for fut in as_completed(fut_map):
+                variant, wname = fut_map[fut]
+                try:
+                    results[variant][wname] = fut.result()
+                    print(f"[{spec.display}] done {variant}/{wname}")
+                except Exception as exc:
+                    print(f"[{spec.display}] FAIL {variant}/{wname}: {exc}")
+                    raise
+    else:
+        for variant, overrides, window in jobs:
             print(f"[{spec.display}] {variant} / {window.name} ...")
             results[variant][window.name] = execute_run(spec, variant, overrides, window, args.python, out_root)
 

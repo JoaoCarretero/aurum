@@ -10,7 +10,7 @@ the trading style each engine implements.
 
 ENGINES = {
     "citadel":     {"script": "engines/citadel.py",      "display": "CITADEL",     "desc": "Cross-timeframe momentum with fractal confirmation",       "module": "BACKTEST", "stage": "validated",          "sort_weight": 10,  "live_ready": True},
-    "renaissance": {"script": "engines/renaissance.py",  "display": "RENAISSANCE", "desc": "Harmonic pattern recognition with Bayesian scoring",      "module": "BACKTEST", "stage": "research",           "sort_weight": 50,  "live_ready": False},
+    "renaissance": {"script": "engines/renaissance.py",  "display": "RENAISSANCE", "desc": "Harmonic pattern recognition with Bayesian scoring · OOS Sharpe 2.42 BEAR 2022 confirmado (audit 2026-04-16)", "module": "BACKTEST", "stage": "validated",          "sort_weight": 50,  "live_ready": False},
     "jump":        {"script": "engines/jump.py",         "display": "JUMP",        "desc": "Order-flow microstructure with CVD divergence",           "module": "BACKTEST", "stage": "research",           "sort_weight": 40,  "live_ready": False},
     "bridgewater": {"script": "engines/bridgewater.py",  "display": "BRIDGEWATER", "desc": "Cross-sectional sentiment contrarian",                    "module": "BACKTEST", "stage": "quarantined",        "sort_weight": 20,  "live_ready": False},
     "deshaw":      {"script": "engines/deshaw.py",       "display": "DE SHAW",     "desc": "Engle-Granger pairs statistical arbitrage",               "module": "BACKTEST", "stage": "experimental",       "sort_weight": 30,  "live_ready": False},
@@ -22,7 +22,8 @@ ENGINES = {
     "graham":      {"script": "engines/graham.py",       "display": "GRAHAM",      "desc": "Endogenous momentum with Hawkes regime gate",             "module": "BACKTEST", "stage": "experimental",       "sort_weight": 74,  "live_ready": False},
     "medallion":   {"script": "engines/medallion.py",    "display": "MEDALLION",   "desc": "Short-horizon ensemble with Kelly sizing",                "module": "BACKTEST", "stage": "experimental",       "sort_weight": 76,  "live_ready": False},
     "phi":         {"script": "engines/phi.py",          "display": "PHI",         "desc": "Fibonacci confluence at 0.618 retracement",               "module": "BACKTEST", "stage": "research",           "sort_weight": 78,  "live_ready": False},
-    "ornstein":    {"script": "engines/ornstein.py",     "display": "ORNSTEIN",    "desc": "Mean-reversion with O-U / Hurst / ADF / VR battery",      "module": "BACKTEST", "stage": "research",           "sort_weight": 79,  "live_ready": False},
+    "ornstein":    {"script": "engines/ornstein.py",     "display": "ORNSTEIN",    "desc": "Mean-reversion research lane archived after anti-overfit revalidation", "module": "BACKTEST", "stage": "experimental",       "sort_weight": 79,  "live_ready": False},
+    "supertrend_futures": {"script": "engines/supertrend_futures.py", "display": "SUPERTREND FUT", "desc": "Triple-Supertrend confluence (port FSupertrendStrategy, 1h TF) — archived 2026-04-22 pós-audit: 9/9 configs Sharpe negativo em train 24m", "module": "BACKTEST", "stage": "experimental", "sort_weight": 81,  "live_ready": False},
     "winton":      {"script": "core/chronos.py",         "display": "WINTON",      "desc": "Time-series regime suite (HMM, GARCH, Hurst)",            "module": "TOOLS",    "stage": "research",           "sort_weight": 110, "live_ready": False},
     "live":        {"script": "engines/live.py",         "display": "LIVE",        "desc": "Live execution — paper / demo / testnet / real",          "module": "LIVE",     "stage": "validated",          "sort_weight": 80,  "live_ready": True},
 }
@@ -64,8 +65,10 @@ LIVE_BOOTSTRAP_SLUGS = frozenset(k for k, v in ENGINES.items() if v.get("live_bo
 EXPERIMENTAL_SLUGS: frozenset[str] = frozenset({
     "deshaw",    # oos_sharpe=-1.73 BEAR 2022 (cointegração quebra em regime shifts). Smoke last-360d: -1.9 Sharpe / 2.0 MC / 2/6 overfit.
     "graham",    # arquivado per docstring (4h overfit)
+    "ornstein",  # 2026-04-21 salvage round: strict filter still zeroed sample; exploratory sample opened with Sharpe -31.98. Archive stands.
     "kepos",     # Smoke last-360d 2026-04-17 pós-fixes completos (cost asymmetry + eta 0.95→0.75 + sustained 10→5 + k_sigma 2.0→1.0): 164 trades, Sharpe -2.08, ROI -36%, MDD 46%. Rodável mas "fade extensions" thesis sem edge em mercado atual.
-    "medallion", # Smoke last-360d 2026-04-17 pós-fix cost asymmetry: Sharpe -3.69, ROI -35%, MDD 35%. Grid-best in-sample foi overfit canônico (Codex audit flag).
+    "medallion", # 2026-04-22 protocolo 8-passos completo (8 configs × 3 windows bluechip 15m): train gate PASS (Sharpe 1.96 best, DSR p=1.0), mas 8/8 configs NEGATIVOS em test (-3.4 a -4.8) e holdout (-1.8 a -3.0). Overfit canônico. Ver docs/engines/medallion/audit_verdict.md.
+    "supertrend_futures", # 2026-04-22 overfit audit: 9/9 configs Sharpe train negativo (2022-2024, 5 majors, 1h), best deflated -0.346, DSR p=0. Engine trigger-happy em exit (141/150 supertrend_flip), whipsaw fatal. Falhou train gate, nunca chegou a test/holdout.
 })
 
 # Process-manager names are still legacy in some UI/API surfaces. Keep the
@@ -140,6 +143,11 @@ PROC_ENGINES = {
         "script": ENGINES["medallion"]["script"],
         "display": "MEDALLION",
         "canonical": "medallion",
+    },
+    "supertrend_futures": {
+        "script": ENGINES["supertrend_futures"]["script"],
+        "display": "SUPERTREND FUT",
+        "canonical": "supertrend_futures",
     },
     "prefetch": {
         "script": "tools/capture/prefetch.py",
