@@ -27,6 +27,10 @@ _BINANCE_FAPI = "https://fapi.binance.com"
 _FNG_URL      = "https://api.alternative.me/fng/"
 _HTTP_TIMEOUT = 5
 
+# Shared Session — dashboard re-fires 4 parallel fetches per refresh.
+# One Session keeps per-host pools alive across refreshes.
+_SESSION = requests.Session()
+
 
 class MarketDataFetcher:
     """Thread-safe fetcher: writes happen in worker thread, reads via snapshot()."""
@@ -80,7 +84,7 @@ class MarketDataFetcher:
     def _fetch_tickers(self) -> None:
         """One bulk call for every 24h ticker, then filter for tracked symbols."""
         try:
-            r = requests.get(f"{_BINANCE_FAPI}/fapi/v1/ticker/24hr",
+            r = _SESSION.get(f"{_BINANCE_FAPI}/fapi/v1/ticker/24hr",
                              timeout=_HTTP_TIMEOUT)
             if r.status_code != 200:
                 with self._lock:
@@ -113,7 +117,7 @@ class MarketDataFetcher:
     def _fetch_funding(self) -> None:
         """Bulk premium index (lastFundingRate) for every symbol — filter locally."""
         try:
-            r = requests.get(f"{_BINANCE_FAPI}/fapi/v1/premiumIndex",
+            r = _SESSION.get(f"{_BINANCE_FAPI}/fapi/v1/premiumIndex",
                              timeout=_HTTP_TIMEOUT)
             if r.status_code != 200:
                 with self._lock:
@@ -140,7 +144,7 @@ class MarketDataFetcher:
     def _fetch_fear_greed(self) -> None:
         """alternative.me Fear & Greed Index (latest value)."""
         try:
-            r = requests.get(_FNG_URL, params={"limit": 1}, timeout=_HTTP_TIMEOUT)
+            r = _SESSION.get(_FNG_URL, params={"limit": 1}, timeout=_HTTP_TIMEOUT)
             if r.status_code != 200:
                 with self._lock:
                     self.errors["fear_greed"] = f"HTTP {r.status_code}"
@@ -162,7 +166,7 @@ class MarketDataFetcher:
     def _fetch_ls_ratio(self) -> None:
         """BTCUSDT global long/short account ratio (5 minute window)."""
         try:
-            r = requests.get(
+            r = _SESSION.get(
                 f"{_BINANCE_FAPI}/futures/data/globalLongShortAccountRatio",
                 params={"symbol": "BTCUSDT", "period": "5m", "limit": 1},
                 timeout=_HTTP_TIMEOUT,
