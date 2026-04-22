@@ -23,22 +23,6 @@ import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
-from datetime import datetime
-
-
-# TEMP DIAGNOSTIC — multi-instance picker visibility. Remove after fix.
-_DIAG_LOG = Path(__file__).resolve().parent.parent / "data" / ".cockpit_timing.log"
-
-
-def _dlog(msg: str) -> None:
-    try:
-        _DIAG_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(_DIAG_LOG, "a", encoding="utf-8") as f:
-            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            f.write(f"{ts} {msg}\n")
-    except Exception:
-        pass
-
 
 from core.ops.python_runtime import preferred_python_executable
 from core.ops import run_catalog
@@ -2398,14 +2382,15 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     """
     name = meta.get("display", slug.upper())
 
-    active_runs = _active_shadow_runs(launcher=launcher, state=state)
-    if len(active_runs) >= 2:
-        _render_run_instance_picker(
+    # Cross-mode picker (same as paper): show every paper + shadow
+    # instance of this engine in one row with mode badges.
+    engine_runs = _active_engine_runs(slug, launcher=launcher, state=state)
+    if len(engine_runs) >= 2:
+        _render_engine_instance_picker(
             parent,
-            active_runs=active_runs,
+            active_runs=engine_runs,
             state=state,
             launcher=launcher,
-            state_key="selected_shadow_run_id",
         )
 
     run_dir, hb, trades = _fetch_shadow_snapshot(launcher=launcher, state=state)
@@ -2820,14 +2805,24 @@ def _render_run_instance_picker(
     state_key: str,
     title: str = "INSTANCES:",
 ) -> None:
-    # Institutional tab strip — high contrast so the operator actually
-    # notices it. Previous version used font 7 + DIM on PANEL, which
-    # was nearly invisible next to the live panels below it.
-    row = tk.Frame(parent, bg=BG2, highlightbackground=AMBER,
-                   highlightthickness=1)
-    row.pack(fill="x", padx=0, pady=(0, 4))
-    tk.Label(row, text=title, fg=AMBER, bg=BG2,
-             font=(FONT, 9, "bold")).pack(side="left", padx=(10, 6), pady=6)
+    # "RUNNING NOW" strip — horizontal tab bar above the detail pane.
+    # Matches the master-list bucket aesthetic: amber rule + caps heading,
+    # clickable tabs showing label / source / tick count / live indicator.
+    container = tk.Frame(parent, bg=BG)
+    container.pack(fill="x", padx=0, pady=(0, 6))
+
+    header = tk.Frame(container, bg=BG)
+    header.pack(fill="x", padx=0, pady=(0, 0))
+    tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
+    tk.Label(header, text="RUNNING NOW", font=(FONT, 7, "bold"),
+             fg=AMBER, bg=BG).pack(side="left")
+    tk.Label(header, text=f"  ·  {len(active_runs)}", font=(FONT, 7),
+             fg=DIM, bg=BG).pack(side="left")
+    tk.Frame(container, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
+
+    row = tk.Frame(container, bg=BG)
+    row.pack(fill="x")
+
     current = state.get(state_key)
     effective = current if current and any(
         r.get("run_id") == current for r in active_runs
@@ -2846,21 +2841,30 @@ def _render_run_instance_picker(
         source_tag = "VPS" if source == "vps" else "LOCAL"
         ticks = r.get("ticks_ok", 0)
         is_active = rid == effective
-        tag_bg = AMBER if is_active else BG3
-        tag_fg = BG if is_active else WHITE
-        border_color = AMBER if is_active else BORDER
-        tag = tk.Label(
-            row,
-            text=f"  {label}  ·  {source_tag}  ·  {ticks} tk  ",
-            fg=tag_fg, bg=tag_bg,
-            font=(FONT, 9, "bold"),
-            padx=4, pady=4,
+        tab_bg = BG2 if is_active else BG
+        tab_fg = AMBER if is_active else WHITE
+        border = AMBER if is_active else BORDER
+
+        tab = tk.Frame(
+            row, bg=tab_bg,
+            highlightbackground=border, highlightthickness=1,
             cursor="hand2",
-            highlightbackground=border_color,
-            highlightthickness=1,
         )
-        tag.pack(side="left", padx=(0, 2), pady=4)
-        tag.bind("<Button-1>", _make_click(rid))
+        tab.pack(side="left", padx=(0, 6), pady=(0, 2))
+
+        dot = "●" if is_active else "○"
+        tk.Label(tab, text=dot, fg=GREEN if is_active else DIM,
+                 bg=tab_bg, font=(FONT, 9, "bold"),
+                 padx=(8 if is_active else 8)).pack(side="left", padx=(6, 0), pady=6)
+        tk.Label(tab, text=label, fg=tab_fg, bg=tab_bg,
+                 font=(FONT, 9, "bold"), padx=4).pack(side="left", padx=(4, 0), pady=6)
+        tk.Label(tab, text=f"{source_tag}", fg=DIM if is_active else DIM2,
+                 bg=tab_bg, font=(FONT, 7)).pack(side="left", padx=(6, 0), pady=6)
+        tk.Label(tab, text=f"  {ticks} tk  ", fg=tab_fg, bg=tab_bg,
+                 font=(FONT, 8)).pack(side="left", padx=(6, 8), pady=6)
+
+        for w in (tab,) + tuple(tab.winfo_children()):
+            w.bind("<Button-1>", _make_click(rid))
 
 
 def _render_paper_instance_picker(parent, active_runs: list[dict],
@@ -2873,6 +2877,116 @@ def _render_paper_instance_picker(parent, active_runs: list[dict],
         launcher=launcher,
         state_key="selected_paper_run_id",
     )
+
+
+def _active_engine_runs(slug: str, *, launcher=None, state=None) -> list[dict]:
+    """All live runs (paper + shadow) for a given engine slug, newest first.
+
+    Lets the operator click an engine (e.g. MILLENNIUM) and see every
+    instance running across both modes at once — paper desk-paper-a,
+    shadow desk-shadow-b, etc. Each entry carries its ``mode`` so the
+    picker can badge it and the click handler can swap state["mode"]
+    before focusing the run.
+    """
+    paper = _active_paper_runs(launcher, state)
+    for r in paper:
+        r.setdefault("mode", "paper")
+    shadow = _active_shadow_runs(launcher=launcher, state=state)
+    for r in shadow:
+        r.setdefault("mode", "shadow")
+    combined = list(paper) + list(shadow)
+    # Filter by engine slug when available. MILLENNIUM-orchestrated runs
+    # surface ``millennium`` in the _raw payload; leave the filter lenient
+    # so non-labelled rows (legacy) still render.
+    if slug:
+        want = slug.lower()
+        combined = [
+            r for r in combined
+            if (str(r.get("engine") or r.get("_raw", {}).get("engine") or slug).lower() == want)
+        ]
+    combined.sort(key=lambda r: (str(r.get("mode") or ""), str(r.get("label") or "")))
+    return combined
+
+
+def _render_engine_instance_picker(
+    parent,
+    *,
+    active_runs: list[dict],
+    state: dict,
+    launcher,
+) -> None:
+    """RUNNING NOW strip showing every paper + shadow instance of the
+    currently-selected engine. Click to swap mode + focus the run.
+    """
+    if not active_runs:
+        return
+
+    container = tk.Frame(parent, bg=BG)
+    container.pack(fill="x", padx=0, pady=(0, 6))
+
+    header = tk.Frame(container, bg=BG)
+    header.pack(fill="x")
+    tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
+    tk.Label(header, text="RUNNING NOW", font=(FONT, 7, "bold"),
+             fg=AMBER, bg=BG).pack(side="left")
+    tk.Label(header, text=f"  ·  {len(active_runs)}", font=(FONT, 7),
+             fg=DIM, bg=BG).pack(side="left")
+    tk.Frame(container, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
+
+    row = tk.Frame(container, bg=BG)
+    row.pack(fill="x")
+
+    current_mode = state.get("mode")
+    current_paper = state.get("selected_paper_run_id")
+    current_shadow = state.get("selected_shadow_run_id")
+
+    def _make_click(rid: str, target_mode: str):
+        def _click(_event=None):
+            if target_mode == "paper":
+                state["selected_paper_run_id"] = rid
+            elif target_mode == "shadow":
+                state["selected_shadow_run_id"] = rid
+            set_mode = state.get("set_mode")
+            if target_mode != current_mode and callable(set_mode):
+                set_mode(target_mode)
+            else:
+                _render_detail(state, launcher)
+        return _click
+
+    for r in active_runs:
+        rid = r.get("run_id") or ""
+        label = r.get("label") or (f"#{rid.split('_')[-1][:6]}" if rid else "?")
+        mode = str(r.get("mode") or "").lower()
+        ticks = r.get("ticks_ok", 0)
+        is_active = (
+            mode == current_mode
+            and rid == (current_paper if mode == "paper" else current_shadow)
+        )
+        mode_color = _MODE_COLORS.get(mode, CYAN)
+        tab_bg = BG2 if is_active else BG
+        tab_fg = mode_color if is_active else WHITE
+        border = mode_color if is_active else BORDER
+
+        tab = tk.Frame(
+            row, bg=tab_bg,
+            highlightbackground=border, highlightthickness=1,
+            cursor="hand2",
+        )
+        tab.pack(side="left", padx=(0, 6), pady=(0, 2))
+
+        dot = "●" if is_active else "○"
+        tk.Label(tab, text=dot, fg=GREEN if is_active else DIM,
+                 bg=tab_bg, font=(FONT, 10, "bold")).pack(
+            side="left", padx=(8, 0), pady=6)
+        tk.Label(tab, text=mode.upper(), fg=mode_color, bg=tab_bg,
+                 font=(FONT, 7, "bold")).pack(side="left", padx=(8, 0), pady=6)
+        tk.Label(tab, text=label, fg=tab_fg, bg=tab_bg,
+                 font=(FONT, 9, "bold")).pack(side="left", padx=(6, 0), pady=6)
+        tk.Label(tab, text=f"{ticks} tk", fg=DIM if is_active else DIM2,
+                 bg=tab_bg, font=(FONT, 8)).pack(side="left", padx=(8, 8), pady=6)
+
+        for w in (tab,) + tuple(tab.winfo_children()):
+            w.bind("<Button-1>", _make_click(rid, mode))
 
 
 def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
@@ -2938,9 +3052,6 @@ def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
 
     matches = list(matches_by_id.values())
     matches.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
-    _dlog(f"_active_mode_runs({mode}) cached_runs={len(cached_runs)} "
-          f"vps_has_mode={vps_has_runs_for_mode} returned={len(matches)}: "
-          f"{[(m.get('label'), m.get('source')) for m in matches]}")
     return matches
 
 
@@ -3189,12 +3300,17 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     # pick which one to render. Selection persists in
     # state["selected_paper_run_id"]
     # so the next refresh cycle keeps the same run in focus.
-    active_runs = _active_paper_runs(launcher, state)
-    _dlog(f"_render_detail_paper: active_runs={len(active_runs)} "
-          f"picker={'YES' if len(active_runs) >= 2 else 'no'} "
-          f"labels={[r.get('label') for r in active_runs]}")
-    if len(active_runs) >= 2:
-        _render_paper_instance_picker(parent, active_runs, state, launcher)
+    # Cross-mode picker: show every paper + shadow instance of this
+    # engine. Clicking a shadow tab swaps mode transparently. Only
+    # surfaces when there are 2+ running instances to pick from.
+    engine_runs = _active_engine_runs(slug, launcher=launcher, state=state)
+    if len(engine_runs) >= 2:
+        _render_engine_instance_picker(
+            parent,
+            active_runs=engine_runs,
+            state=state,
+            launcher=launcher,
+        )
 
     # Discover which paper run_id the detail pane should render
     run_id = _fetch_paper_run_id(launcher, state)
