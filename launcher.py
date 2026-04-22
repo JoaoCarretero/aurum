@@ -741,7 +741,20 @@ class App(tk.Tk):
         ).start()
 
     def _shutdown_runtime(self) -> None:
-        """Stop background services idempotently for WM_DELETE and tests."""
+        """Stop background services idempotently for WM_DELETE and tests.
+
+        Fase FAST (sync, ~10ms): flags + after_cancel. Tudo que e cheap.
+        Fase SLOW (daemon thread): poller.stop + tunnel.stop. Antes rodava
+        sync e bloqueava o close button por ate 3s (tunnel.terminate ->
+        wait 1s -> kill -> wait 1s -> watchdog join 1s no pior caso com
+        SSH.exe preso no Windows). Isso fazia o operador ter que apertar
+        X duas vezes — primeiro clique congelava aguardando cleanup,
+        segundo clique fechava a janela.
+
+        Agora: FAST part + kick daemon thread e destroy() retorna em
+        <50ms. Daemon thread termina quando process exit (SSH.exe
+        orphan eh reapado no proximo startup via _reap_orphan_tunnel_on_port).
+        """
         if getattr(self, "_shutdown_done", False):
             return
         self._shutdown_done = True
@@ -756,35 +769,50 @@ class App(tk.Tk):
                 self._ui_task_after_id = None
         except Exception:
             pass
+
+        # SLOW phase em daemon thread — nao bloqueia destroy()
+        poller = getattr(self, "_aurum_shadow_poller", None)
+        tunnel = getattr(self, "_aurum_tunnel", None)
+        self._aurum_shadow_poller = None
+        self._aurum_tunnel = None
+        if poller is None and tunnel is None:
+            return  # nada pra limpar
+
         try:
-            from launcher_support.tunnel_registry import set_shadow_poller, set_tunnel_manager
+            from launcher_support.tunnel_registry import (
+                set_shadow_poller, set_tunnel_manager,
+            )
         except Exception:
             set_shadow_poller = None
             set_tunnel_manager = None
-        poller = getattr(self, "_aurum_shadow_poller", None)
-        if poller is not None:
-            try:
-                poller.stop(timeout_sec=0.5)
-            except Exception:
-                pass
-            self._aurum_shadow_poller = None
-            if set_shadow_poller is not None:
+
+        def _bg_cleanup() -> None:
+            if poller is not None:
                 try:
-                    set_shadow_poller(None)
+                    poller.stop(timeout_sec=0.5)
                 except Exception:
                     pass
-        tunnel = getattr(self, "_aurum_tunnel", None)
-        if tunnel is not None:
-            try:
-                tunnel.stop(timeout_sec=1.0)
-            except Exception:
-                pass
-            self._aurum_tunnel = None
-            if set_tunnel_manager is not None:
+                if set_shadow_poller is not None:
+                    try:
+                        set_shadow_poller(None)
+                    except Exception:
+                        pass
+            if tunnel is not None:
                 try:
-                    set_tunnel_manager(None)
+                    tunnel.stop(timeout_sec=1.0)
                 except Exception:
                     pass
+                if set_tunnel_manager is not None:
+                    try:
+                        set_tunnel_manager(None)
+                    except Exception:
+                        pass
+
+        import threading
+        threading.Thread(
+            target=_bg_cleanup, daemon=True,
+            name="aurum-shutdown-cleanup",
+        ).start()
 
     def destroy(self):
         self._shutdown_runtime()
