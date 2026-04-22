@@ -4471,11 +4471,19 @@ class App(tk.Tk):
         "min_apr": 5.0, "min_volume": 0, "min_oi": 0,
         "risk_max": "HIGH", "grade_min": "MAYBE",
         "exclude_risky_venues": False,
+        "realistic_only": True,
     }
 
     # Venues considered "risky" for the [NO RISKY VENUES] toggle —
     # reliability ≤ 94 from core.arb.arb_scoring._DEFAULT_VENUE_RELIABILITY.
     _ARB_RISKY_VENUES = frozenset({"bingx", "bitget", "paradex"})
+
+    # REALISTIC filter cutoffs. APR > 500% is almost always stale funding
+    # on a thinly-traded perp — looks juicy in the list, impossible to
+    # actually execute. Vol < $5M means >20bps slippage on a $1k position
+    # which eats the whole edge.
+    _ARB_REALISTIC_APR_MAX = 500.0
+    _ARB_REALISTIC_VOL_MIN = 5_000_000.0
 
     def _arb_filter_state(self) -> dict:
         if not hasattr(self, "_arb_filters"):
@@ -4571,6 +4579,13 @@ class App(tk.Tk):
         self._arb_save_filters()
         self._arb_rerender_current_tab()
 
+    def _arb_toggle_realistic(self) -> None:
+        state = self._arb_filter_state()
+        state["realistic_only"] = not state.get("realistic_only", True)
+        self._arb_refresh_viab_toolbar()
+        self._arb_save_filters()
+        self._arb_rerender_current_tab()
+
     def _arb_refresh_viab_toolbar(self) -> None:
         """Repaint the top viability toolbar's active/inactive states."""
         btns = getattr(self, "_arb_viab_btns", {})
@@ -4602,6 +4617,15 @@ class App(tk.Tk):
                 risky_btn.configure(
                     text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
                     fg=RED if on else DIM, bg=BG)
+            except Exception:
+                pass
+        real_btn = btns.get("realistic", (None,))[0]
+        if real_btn is not None:
+            try:
+                on = state.get("realistic_only", True)
+                real_btn.configure(
+                    text=f" {'[X]' if on else '[ ]'} REALISTIC ",
+                    fg=AMBER if on else DIM, bg=BG)
             except Exception:
                 pass
 
@@ -4658,6 +4682,21 @@ class App(tk.Tk):
         risky_btn.pack(side="left")
         risky_btn.bind("<Button-1>", lambda _e: self._arb_toggle_risky_venues())
         self._arb_viab_btns["risky"] = (risky_btn, None)
+
+        # [REALISTIC] toggle — hides APR>500% (stale funding) and vol<$5M
+        # (can't execute without slippage eating the edge). Default ON so
+        # the first-open view is clean.
+        real_on = state.get("realistic_only", True)
+        real_btn = tk.Label(
+            bar,
+            text=f" {'[X]' if real_on else '[ ]'} REALISTIC ",
+            font=(FONT, 8, "bold"),
+            fg=AMBER if real_on else DIM, bg=BG,
+            cursor="hand2", padx=6, pady=3,
+        )
+        real_btn.pack(side="left", padx=(6, 0))
+        real_btn.bind("<Button-1>", lambda _e: self._arb_toggle_realistic())
+        self._arb_viab_btns["realistic"] = (real_btn, None)
 
     def _arb_build_filter_bar(self, parent):
         """Render the shared filter chip strip. Click a chip to cycle its value.
@@ -4761,114 +4800,353 @@ class App(tk.Tk):
         self._arb_detail_body = body
         self._arb_detail_default = default
 
+    # Size chips for the detail simulator. Matches the reasonable range
+    # for paper mode ($5k account, max 3 positions — $500 to $5k per leg).
+    _ARB_SIM_SIZES = (500.0, 1000.0, 2500.0, 5000.0)
+
+    def _arb_simulate(self, pair: dict, size_usd: float) -> dict:
+        """Project funding / fees / net for a given position size.
+
+        Formula matches SimpleArbEngine:
+          - entry fee: size × (10 + 5) / 10_000 = 0.15% at open
+          - exit fee: same 0.15% at close → RT = 30 bps
+          - funding: size × apr/100 × hours / 8760  (continuous approx
+            of 3× 8h funding payments/day × 365)
+
+        Decay scenario: 4h at full APR, then APR halves, hold to 24h.
+        Gives a concrete "what if the spread fades" number alongside
+        the "if it holds" row.
+        """
+        apr = abs(float(pair.get("net_apr") or pair.get("apr")
+                         or pair.get("basis_apr") or 0))
+        rt_fee_bps = 30.0
+        rt_fee_usd = size_usd * rt_fee_bps / 10_000.0
+
+        def _funding(hold_h: float, apr_pct: float) -> float:
+            return size_usd * (apr_pct / 100.0) * (hold_h / 8760.0)
+
+        holds = [8, 24, 72]
+        rows = []
+        for h in holds:
+            f = _funding(h, apr)
+            rows.append({
+                "hold_h": h,
+                "funding": round(f, 2),
+                "fees":    round(rt_fee_usd, 2),
+                "net":     round(f - rt_fee_usd, 2),
+            })
+        # Decay scenario: 4h @ full, 20h @ 50%, exit at 24h total
+        decay_funding = _funding(4.0, apr) + _funding(20.0, apr * 0.5)
+        decay_row = {
+            "label":   "decay→50% @4h, hold 24h",
+            "funding": round(decay_funding, 2),
+            "fees":    round(rt_fee_usd, 2),
+            "net":     round(decay_funding - rt_fee_usd, 2),
+        }
+
+        bkevn_h = round(rt_fee_bps * 87.6 / apr, 2) if apr > 0 else None
+
+        # Risk block. Liquidation distances assume exchange defaults
+        # (~20x short perp, ~25x long perp with small maintenance buffer).
+        # These are rough — real launcher doesn't set leverage here.
+        liq_short_pct = 4.5
+        liq_long_pct  = 3.5
+
+        vol = (pair.get("volume_24h")
+               or self._pair_min(pair.get("volume_24h_short"),
+                                  pair.get("volume_24h_long")) or 0)
+        vol_f = float(vol) if vol else 0.0
+        vol_ratio = vol_f / size_usd if (vol_f > 0 and size_usd > 0) else None
+        # Slippage ballpark: 10bps baseline, scales down with sqrt(ratio/10).
+        # Not a market impact model — just "small / ok / concerning" flag.
+        slippage_bps = None
+        if vol_ratio and vol_ratio > 0:
+            slippage_bps = round(10.0 / max((vol_ratio / 10.0) ** 0.5, 0.1), 2)
+
+        from core.arb.arb_scoring import _DEFAULT_VENUE_RELIABILITY
+        sv = (pair.get("short_venue") or pair.get("venue_perp")
+              or pair.get("venue_a") or "").lower()
+        lv = (pair.get("long_venue") or pair.get("venue_spot")
+              or pair.get("venue_b") or "").lower()
+
+        return {
+            "size_usd":   size_usd,
+            "apr":        apr,
+            "rt_fee_usd": round(rt_fee_usd, 2),
+            "bkevn_h":    bkevn_h,
+            "rows":       rows,
+            "decay":      decay_row,
+            "risk": {
+                "liq_short_pct": liq_short_pct,
+                "liq_long_pct":  liq_long_pct,
+                "slippage_bps":  slippage_bps,
+                "vol":           vol_f,
+                "vol_ratio":     vol_ratio,
+                "short_venue":   sv,
+                "long_venue":    lv,
+                "short_rel":     _DEFAULT_VENUE_RELIABILITY.get(sv),
+                "long_rel":      _DEFAULT_VENUE_RELIABILITY.get(lv),
+            },
+        }
+
     @timed_legacy_switch("arb_detail")
     def _arb_show_detail(self, pair: dict):
-        """Populate the detail pane with the factor breakdown of a pair."""
+        """Render the simulator detail pane for a selected pair.
+
+        Layout (top-down): header | status line (APR/VIAB/SCORE/BKEVN) |
+        size chips | simulation table (8h/24h/72h + decay row) | risk
+        block (liq/slip/venues) | why-line | collapsible ADVANCED factor
+        breakdown | size-aware OPEN AS PAPER button.
+        """
         body = getattr(self, "_arb_detail_body", None)
         if body is None:
             return
         for w in body.winfo_children():
             w.destroy()
 
-        # Compute the factor breakdown via the same scorer used for filtering.
+        # Track selected pair + size + ADVANCED expansion between clicks
+        self._arb_detail_pair = pair
+        if not hasattr(self, "_arb_detail_size"):
+            self._arb_detail_size = 1000.0
+        if not hasattr(self, "_arb_detail_adv"):
+            self._arb_detail_adv = False
+        size_usd = self._arb_detail_size
+
         try:
             from core.arb.arb_scoring import score_opp
             res = score_opp(pair)
         except Exception:
             res = None
 
-        header_txt = self._arb_pair_label(pair)
-        tk.Label(body, text=header_txt,
+        # -- Header -----------------------------------------------
+        tk.Label(body, text=self._arb_pair_label(pair),
                  font=(FONT, 9, "bold"), fg=AMBER, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(4, 2))
+                 anchor="w").pack(fill="x", padx=6, pady=(4, 1))
 
-        # Factor table
+        # -- Status line: APR / VIAB / SCORE / BKEVN --------------
+        apr_val = float(pair.get("net_apr") or pair.get("apr") or 0)
+        status = tk.Frame(body, bg=BG2); status.pack(fill="x", padx=6)
+        tk.Label(status, text=f"APR {apr_val:+.1f}%",
+                 font=(FONT, 9, "bold"),
+                 fg=GREEN if abs(apr_val) >= 50 else AMBER,
+                 bg=BG2).pack(side="left")
         if res is not None:
-            grid = tk.Frame(body, bg=BG2)
-            grid.pack(fill="x", padx=6, pady=(0, 4))
-            factor_rows = [
-                ("NET APR", res.factors.get("net_apr"),
-                    f"{float(pair.get('net_apr') or pair.get('apr') or 0):+.1f}%"),
-                ("VOLUME",  res.factors.get("volume"),
-                    self._fmt_vol(pair.get("volume_24h")
-                                  or self._pair_min(pair.get("volume_24h_short"),
-                                                     pair.get("volume_24h_long")))),
-                ("OI",      res.factors.get("oi"),
-                    self._fmt_vol(pair.get("open_interest")
-                                  or self._pair_min(pair.get("open_interest_short"),
-                                                     pair.get("open_interest_long")))),
-                ("RISK",    res.factors.get("risk"),   pair.get("risk", "\u2014")),
-                ("SLIP",    res.factors.get("slippage"), "\u2014"),
-                ("VENUE",   res.factors.get("venue"),
-                    self._arb_venue_label(pair)),
-            ]
-            for i, (label, score, value) in enumerate(factor_rows):
-                grid.grid_columnconfigure(1, weight=1)
-                tk.Label(grid, text=label, font=(FONT, 7, "bold"),
-                         fg=DIM, bg=BG2, width=8, anchor="w").grid(
-                    row=i, column=0, sticky="w", padx=(0, 6))
-                tk.Label(grid, text=value, font=(FONT, 8),
-                         fg=WHITE, bg=BG2, anchor="w").grid(
-                    row=i, column=1, sticky="w")
-                s_txt = "\u2014" if score is None else f"{score:.0f}/100"
-                s_fg = (GREEN if (score or 0) >= 70 else
-                        AMBER if (score or 0) >= 40 else DIM)
-                tk.Label(grid, text=s_txt, font=(FONT, 7),
-                         fg=s_fg, bg=BG2, width=10, anchor="e").grid(
-                    row=i, column=2, sticky="e")
-
-            tk.Frame(body, bg=BORDER, height=1).pack(
-                fill="x", padx=6, pady=(2, 2))
-            sum_line = tk.Frame(body, bg=BG2)
-            sum_line.pack(fill="x", padx=6, pady=(0, 4))
             viab = getattr(res, "viab", res.grade)
             viab_fg = (GREEN if viab == "GO" else
                        AMBER if viab in ("WAIT", "MAYBE") else DIM)
-            grade_fg = (GREEN if res.grade == "GO" else
-                        AMBER if res.grade == "MAYBE" else DIM)
-            tk.Label(sum_line, text=f"VIAB {viab}",
-                     font=(FONT, 10, "bold"), fg=viab_fg, bg=BG2).pack(side="left")
-            tk.Label(sum_line, text=f"  ·  SCORE {res.score:.0f}/100",
-                     font=(FONT, 9), fg=WHITE, bg=BG2).pack(side="left")
+            tk.Label(status, text=f"  ·  {viab}",
+                     font=(FONT, 9, "bold"), fg=viab_fg, bg=BG2).pack(side="left")
+            tk.Label(status, text=f"  ·  score {res.score:.0f}",
+                     font=(FONT, 8), fg=WHITE, bg=BG2).pack(side="left")
             be = getattr(res, "breakeven_h", None)
             if be is not None:
                 be_fg = GREEN if be <= 24 else (AMBER if be <= 72 else DIM)
-                tk.Label(sum_line, text=f"  ·  BKEVN {be:.1f}h",
-                         font=(FONT, 9), fg=be_fg, bg=BG2).pack(side="left")
+                tk.Label(status, text=f"  ·  bkevn {be:.1f}h",
+                         font=(FONT, 8), fg=be_fg, bg=BG2).pack(side="left")
 
-            # "Why GO/WAIT/SKIP" reason line — surfaces the top 2-3
-            # factors (positive if GO/WAIT, negative if SKIP) so the
-            # user understands the verdict at a glance.
+        # -- Size chips -------------------------------------------
+        size_row = tk.Frame(body, bg=BG2)
+        size_row.pack(fill="x", padx=6, pady=(6, 2))
+        tk.Label(size_row, text="SIZE", font=(FONT, 7, "bold"),
+                 fg=DIM, bg=BG2).pack(side="left", padx=(0, 6))
+        for s in self._ARB_SIM_SIZES:
+            is_sel = abs(s - size_usd) < 0.01
+            chip = tk.Label(
+                size_row,
+                text=f"  ${int(s):,}  " if s >= 1000 else f"  ${int(s)}  ",
+                font=(FONT, 8, "bold"),
+                fg=BG if is_sel else WHITE,
+                bg=AMBER if is_sel else BG3,
+                cursor="hand2", padx=4, pady=2,
+            )
+            chip.pack(side="left", padx=(0, 3))
+            chip.bind("<Button-1>",
+                      lambda _e, _s=s: self._arb_set_detail_size(_s))
+
+        # -- Simulation table -------------------------------------
+        sim = self._arb_simulate(pair, size_usd)
+        sim_frame = tk.Frame(body, bg=BG2)
+        sim_frame.pack(fill="x", padx=6, pady=(4, 4))
+        cols = [("HOLD", 10, "w"), ("FUNDING", 10, "e"),
+                ("FEES", 9, "e"), ("NET", 10, "e")]
+        for j, (c, w, a) in enumerate(cols):
+            tk.Label(sim_frame, text=c, font=(FONT, 7, "bold"),
+                     fg=AMBER, bg=BG2, width=w, anchor=a).grid(
+                row=0, column=j, sticky=a, padx=2)
+        for i, r in enumerate(sim["rows"], start=1):
+            hold_txt = f"{r['hold_h']}h"
+            if sim["bkevn_h"] is not None and r["hold_h"] >= sim["bkevn_h"]:
+                hold_txt += "  ✓"
+            tk.Label(sim_frame, text=hold_txt, font=(FONT, 8),
+                     fg=WHITE, bg=BG2, width=10, anchor="w").grid(
+                row=i, column=0, sticky="w", padx=2)
+            tk.Label(sim_frame, text=f"+${r['funding']:.2f}",
+                     font=(FONT, 8), fg=GREEN, bg=BG2,
+                     width=10, anchor="e").grid(
+                row=i, column=1, sticky="e", padx=2)
+            tk.Label(sim_frame, text=f"-${r['fees']:.2f}",
+                     font=(FONT, 8), fg=RED, bg=BG2,
+                     width=9, anchor="e").grid(
+                row=i, column=2, sticky="e", padx=2)
+            net_fg = GREEN if r["net"] > 0 else RED
+            tk.Label(sim_frame, text=f"${r['net']:+.2f}",
+                     font=(FONT, 8, "bold"), fg=net_fg, bg=BG2,
+                     width=10, anchor="e").grid(
+                row=i, column=3, sticky="e", padx=2)
+        # Decay scenario row
+        decay_i = len(sim["rows"]) + 1
+        d = sim["decay"]
+        tk.Label(sim_frame, text=d["label"], font=(FONT, 7, "italic"),
+                 fg=DIM2, bg=BG2, width=20, anchor="w").grid(
+            row=decay_i, column=0, columnspan=2, sticky="w",
+            padx=2, pady=(3, 0))
+        tk.Label(sim_frame, text=f"-${d['fees']:.2f}",
+                 font=(FONT, 7, "italic"), fg=DIM2, bg=BG2,
+                 width=9, anchor="e").grid(
+            row=decay_i, column=2, sticky="e", padx=2, pady=(3, 0))
+        decay_fg = GREEN if d["net"] > 0 else RED
+        tk.Label(sim_frame, text=f"${d['net']:+.2f}",
+                 font=(FONT, 7, "italic"), fg=decay_fg, bg=BG2,
+                 width=10, anchor="e").grid(
+            row=decay_i, column=3, sticky="e", padx=2, pady=(3, 0))
+
+        # -- Risk block -------------------------------------------
+        tk.Frame(body, bg=BORDER, height=1).pack(
+            fill="x", padx=6, pady=(2, 2))
+        risk = sim["risk"]
+        risk_frame = tk.Frame(body, bg=BG2)
+        risk_frame.pack(fill="x", padx=6, pady=(2, 2))
+        tk.Label(risk_frame, text="RISK", font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG2).grid(row=0, column=0, sticky="w",
+                                         padx=(0, 8))
+        liq_txt = (f"liq {risk['liq_short_pct']:.1f}% short · "
+                   f"{risk['liq_long_pct']:.1f}% long")
+        tk.Label(risk_frame, text=liq_txt, font=(FONT, 7),
+                 fg=DIM2, bg=BG2).grid(row=0, column=1, sticky="w")
+        if risk["slippage_bps"] is not None:
+            slip_fg = (GREEN if risk["slippage_bps"] < 5 else
+                       AMBER if risk["slippage_bps"] < 15 else RED)
+            slip_txt = (f"slip ~{risk['slippage_bps']:.1f}bps "
+                        f"(vol ratio {risk['vol_ratio']:,.0f}x)")
+        else:
+            slip_fg = DIM
+            slip_txt = "slip —"
+        tk.Label(risk_frame, text=slip_txt, font=(FONT, 7),
+                 fg=slip_fg, bg=BG2).grid(row=1, column=1, sticky="w")
+        venue_bits = []
+        for name, rel in (("short", risk["short_rel"]),
+                          ("long",  risk["long_rel"])):
+            ven = risk["short_venue"] if name == "short" else risk["long_venue"]
+            if rel is not None:
+                venue_bits.append(f"{ven} {rel:.0f}")
+            elif ven:
+                venue_bits.append(f"{ven} ?")
+        ven_fg = DIM2
+        if risk["short_rel"] and risk["long_rel"]:
+            worst = min(risk["short_rel"], risk["long_rel"])
+            ven_fg = GREEN if worst >= 97 else (AMBER if worst >= 94 else RED)
+        tk.Label(risk_frame, text="venues " + " · ".join(venue_bits),
+                 font=(FONT, 7), fg=ven_fg, bg=BG2).grid(
+            row=2, column=1, sticky="w")
+
+        # -- Why line ---------------------------------------------
+        if res is not None:
             reason = self._arb_viab_reason(pair, res)
             if reason:
                 tk.Label(body, text=reason,
                          font=(FONT, 7), fg=DIM, bg=BG2,
                          anchor="w", justify="left", wraplength=600).pack(
-                    fill="x", padx=6, pady=(2, 4))
+                    fill="x", padx=6, pady=(2, 2))
 
-            # Action bar — OPEN AS PAPER POSITION
-            tk.Frame(body, bg=BORDER, height=1).pack(
-                fill="x", padx=6, pady=(2, 2))
-            action = tk.Frame(body, bg=BG2)
-            action.pack(fill="x", padx=6, pady=(2, 6))
+        # -- ADVANCED (collapsible factor breakdown) --------------
+        if res is not None:
+            adv_on = self._arb_detail_adv
+            adv_head = tk.Label(
+                body,
+                text=("▼ ADVANCED  (factor breakdown)" if adv_on
+                      else "▶ ADVANCED  (factor breakdown)"),
+                font=(FONT, 7), fg=DIM, bg=BG2,
+                anchor="w", cursor="hand2",
+            )
+            adv_head.pack(fill="x", padx=6, pady=(2, 0))
+            adv_head.bind(
+                "<Button-1>",
+                lambda _e: self._arb_toggle_detail_adv())
+            if adv_on:
+                adv_grid = tk.Frame(body, bg=BG2)
+                adv_grid.pack(fill="x", padx=12, pady=(2, 4))
+                factor_rows = [
+                    ("NET APR", res.factors.get("net_apr"),
+                        f"{apr_val:+.1f}%"),
+                    ("VOLUME",  res.factors.get("volume"),
+                        self._fmt_vol(pair.get("volume_24h")
+                                      or self._pair_min(pair.get("volume_24h_short"),
+                                                         pair.get("volume_24h_long")))),
+                    ("OI",      res.factors.get("oi"),
+                        self._fmt_vol(pair.get("open_interest")
+                                      or self._pair_min(pair.get("open_interest_short"),
+                                                         pair.get("open_interest_long")))),
+                    ("RISK",    res.factors.get("risk"),
+                        pair.get("risk", "—")),
+                    ("SLIP",    res.factors.get("slippage"), "—"),
+                    ("VENUE",   res.factors.get("venue"),
+                        self._arb_venue_label(pair)),
+                ]
+                for i, (label, score, value) in enumerate(factor_rows):
+                    adv_grid.grid_columnconfigure(1, weight=1)
+                    tk.Label(adv_grid, text=label, font=(FONT, 7, "bold"),
+                             fg=DIM, bg=BG2, width=8, anchor="w").grid(
+                        row=i, column=0, sticky="w", padx=(0, 6))
+                    tk.Label(adv_grid, text=value, font=(FONT, 8),
+                             fg=WHITE, bg=BG2, anchor="w").grid(
+                        row=i, column=1, sticky="w")
+                    s_txt = "—" if score is None else f"{score:.0f}/100"
+                    s_fg = (GREEN if (score or 0) >= 70 else
+                            AMBER if (score or 0) >= 40 else DIM)
+                    tk.Label(adv_grid, text=s_txt, font=(FONT, 7),
+                             fg=s_fg, bg=BG2, width=10, anchor="e").grid(
+                        row=i, column=2, sticky="e")
 
-            engine = getattr(self, "_arb_simple_engine", None)
-            engine_running = engine is not None and engine.running
-            if engine_running:
-                btn_text = " OPEN AS PAPER POSITION "
-                btn_fg, btn_bg = BG, GREEN
-                btn_cmd = lambda _e=None, _p=pair: self._arb_open_as_paper(_p)
-            else:
-                btn_text = " START ENGINE FIRST (POSITIONS tab) "
-                btn_fg, btn_bg = DIM, BG3
-                btn_cmd = lambda _e=None: None
-            btn = tk.Label(action, text=btn_text,
-                           font=(FONT, 8, "bold"),
-                           fg=btn_fg, bg=btn_bg,
-                           cursor="hand2" if engine_running else "arrow",
-                           padx=10, pady=4)
-            btn.pack(side="left")
-            btn.bind("<Button-1>", btn_cmd)
+        # -- Action bar: size-aware OPEN AS PAPER POSITION --------
+        tk.Frame(body, bg=BORDER, height=1).pack(
+            fill="x", padx=6, pady=(2, 2))
+        action = tk.Frame(body, bg=BG2)
+        action.pack(fill="x", padx=6, pady=(2, 6))
+
+        engine = getattr(self, "_arb_simple_engine", None)
+        engine_running = engine is not None and engine.running
+        size_label = (f"${int(size_usd):,}" if size_usd >= 1000
+                      else f"${int(size_usd)}")
+        if engine_running:
+            btn_text = f" OPEN AS PAPER — {size_label} "
+            btn_fg, btn_bg = BG, GREEN
+            btn_cmd = lambda _e=None, _p=pair, _s=size_usd: (
+                self._arb_open_as_paper(_p, size_usd=_s))
+        else:
+            btn_text = " START ENGINE FIRST (POSITIONS tab) "
+            btn_fg, btn_bg = DIM, BG3
+            btn_cmd = lambda _e=None: None
+        btn = tk.Label(action, text=btn_text,
+                       font=(FONT, 8, "bold"),
+                       fg=btn_fg, bg=btn_bg,
+                       cursor="hand2" if engine_running else "arrow",
+                       padx=10, pady=4)
+        btn.pack(side="left")
+        btn.bind("<Button-1>", btn_cmd)
+
+    def _arb_set_detail_size(self, size_usd: float) -> None:
+        """Size chip click - re-render detail with new size."""
+        self._arb_detail_size = float(size_usd)
+        pair = getattr(self, "_arb_detail_pair", None)
+        if pair is not None:
+            self._arb_show_detail(pair)
+
+    def _arb_toggle_detail_adv(self) -> None:
+        """ADVANCED section expand/collapse toggle."""
+        self._arb_detail_adv = not getattr(self, "_arb_detail_adv", False)
+        pair = getattr(self, "_arb_detail_pair", None)
+        if pair is not None:
+            self._arb_show_detail(pair)
 
     def _arb_viab_reason(self, pair: dict, res) -> str:
         """Human-readable reason for the VIAB verdict (top 2-3 factors)."""
@@ -4900,14 +5178,19 @@ class App(tk.Tk):
             reasons.append("illiquid")
         return "  Why SKIP: " + ", ".join(reasons) if reasons else ""
 
-    def _arb_open_as_paper(self, pair: dict) -> None:
-        """Open this opp as a paper position immediately (bypass tick)."""
+    def _arb_open_as_paper(self, pair: dict, *, size_usd: float | None = None) -> None:
+        """Open this opp as a paper position immediately (bypass tick).
+
+        When size_usd is given, temporarily override engine.size_usd for
+        this one open so the user-chosen size from the detail chips is
+        honored. Restores the original default after so the tick loop
+        keeps opening at its configured default.
+        """
         engine = getattr(self, "_arb_simple_engine", None)
         if engine is None or not engine.running:
             return
         import time as _time
         try:
-            # Ensure the pair has the keys SimpleArbEngine._open expects
             opp = dict(pair)
             if "net_apr" not in opp:
                 opp["net_apr"] = opp.get("apr") or opp.get("basis_apr") or 0
@@ -4917,9 +5200,14 @@ class App(tk.Tk):
                 opp["long_venue"] = opp.get("venue_spot") or opp.get("venue_b") or ""
             if "mark_price" not in opp:
                 opp["mark_price"] = opp.get("spot_price") or opp.get("price_a") or 0
-            engine._open(opp, _time.time())
+            original_size = engine.size_usd
+            try:
+                if size_usd is not None:
+                    engine.size_usd = float(size_usd)
+                engine._open(opp, _time.time())
+            finally:
+                engine.size_usd = original_size
             engine._persist()
-            # Nudge the hub to refresh to show the new position
             self.after(200, lambda: self._arbitrage_hub("positions"))
         except Exception as e:
             import logging
@@ -5013,6 +5301,9 @@ class App(tk.Tk):
         cache_map = cache["map"]
 
         exclude_risky = state.get("exclude_risky_venues", False)
+        realistic_only = state.get("realistic_only", True)
+        apr_max = self._ARB_REALISTIC_APR_MAX
+        vol_min_realistic = self._ARB_REALISTIC_VOL_MIN
         risky_venues = self._ARB_RISKY_VENUES
         out = []
         for p in (pairs or []):
@@ -5020,10 +5311,16 @@ class App(tk.Tk):
             apr = abs(float(p.get("net_apr") or p.get("apr") or 0))
             if apr < min_apr:
                 continue
+            # REALISTIC filter — cap APR at 500% (stale funding territory)
+            # before the other checks so we spend zero cycles on them.
+            if realistic_only and apr > apr_max:
+                continue
             vol = (p.get("volume_24h")
                    or self._pair_min(p.get("volume_24h_short"),
                                       p.get("volume_24h_long")) or 0)
             if min_volume and float(vol) < min_volume:
+                continue
+            if realistic_only and float(vol) < vol_min_realistic:
                 continue
             oi = (p.get("open_interest")
                   or self._pair_min(p.get("open_interest_short"),
@@ -5066,7 +5363,15 @@ class App(tk.Tk):
             if _G.get(sr.grade, 2) > grade_cap:
                 continue
             out.append((p, sr))
-        out.sort(key=lambda t: t[1].score, reverse=True)
+        # Sort: grade bucket (GO first), then BKEVN asc (fastest payback),
+        # then SCORE desc as tiebreaker. Fastest-to-breakeven is what
+        # actually matters — high score with 80h bkevn is a trap.
+        def _key(t):
+            _p, _sr = t
+            be = getattr(_sr, "breakeven_h", None)
+            be_val = be if be is not None else 9999.0
+            return (_G.get(_sr.grade, 2), be_val, -_sr.score)
+        out.sort(key=_key)
         return out
 
     # -- Tab renderers ------------------------------------------
