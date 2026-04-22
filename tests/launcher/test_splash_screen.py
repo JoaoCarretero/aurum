@@ -64,12 +64,12 @@ def test_splash_draws_five_tiles(gui_root, fake_app, fake_conn):
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
     s.mount()
     s.on_enter()
-    # 5 panels = STATUS, RISK, MARKET PULSE, LAST SESSION, ENGINE ROSTER
+    # 5 panels = STATUS, RISK, MACRO BRAIN, LAST SESSION, ENGINE ROSTER
     assert fake_app._draw_panel.call_count == 5
     titles = [call.kwargs.get("title", "") for call in fake_app._draw_panel.call_args_list]
     assert "STATUS" in titles
     assert "RISK" in titles
-    assert "MARKET PULSE" in titles
+    assert "MACRO BRAIN" in titles
     assert "LAST SESSION" in titles
     assert "ENGINE ROSTER" in titles
 
@@ -134,34 +134,46 @@ def test_splash_renders_with_missing_index_json(gui_root, fake_app, fake_conn, t
 
 
 @pytest.mark.gui
-def test_splash_apply_live_data_updates_tagged_value(gui_root, fake_app, fake_conn):
+def test_splash_renders_macro_brain_tile_with_stubbed_reader(gui_root, fake_app, fake_conn, monkeypatch):
+    """Stub read_macro_brain → tile mostra regime colorido + thesis formatado."""
+    import launcher_support.screens.splash as splash_mod
+    monkeypatch.setattr(splash_mod, "read_macro_brain", lambda: {
+        "regime":      "RISK ON",
+        "regime_raw":  "risk_on",
+        "confidence":  0.6,
+        "why":         "DXY-z -1.73",
+        "thesis":      "LONG BTC",
+        "thesis_conf": 0.55,
+        "idea":        "F&G 21 contrarian",
+    })
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
     s.mount()
     s.on_enter()
-    s._apply_live_data({"btc": ("67,240 +2.30% ▲", "#00ff00")})
-    items = s.canvas.find_withtag("tile-btc-value")
-    assert items, "tile-btc-value tag must exist on canvas"
-    assert s.canvas.itemcget(items[0], "text") == "67,240 +2.30% ▲"
+    texts = [
+        s.canvas.itemcget(item, "text")
+        for item in s.canvas.find_withtag("splash")
+        if s.canvas.type(item) == "text"
+    ]
+    # Regime com confidence append: "RISK ON 60%"
+    assert any("RISK ON 60%" in t for t in texts)
+    # Thesis com confidence: "LONG BTC 0.55"
+    assert any("LONG BTC 0.55" in t for t in texts)
+    # Why substring
+    assert any("DXY-z -1.73" in t for t in texts)
 
 
 @pytest.mark.gui
-def test_splash_cancel_event_set_on_exit(gui_root, fake_app, fake_conn):
+def test_splash_macro_brain_fallback_when_reader_returns_none(gui_root, fake_app, fake_conn, monkeypatch):
+    """read_macro_brain None → tile mostra FLAT/awaiting signal, no crash."""
+    import launcher_support.screens.splash as splash_mod
+    monkeypatch.setattr(splash_mod, "read_macro_brain", lambda: None)
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
     s.mount()
     s.on_enter()
-    assert s._cancel_event is not None
-    assert not s._cancel_event.is_set()
-    s.on_exit()
-    assert s._cancel_event.is_set()
-
-
-@pytest.mark.gui
-def test_splash_apply_live_data_noop_after_cancel(gui_root, fake_app, fake_conn):
-    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
-    s.mount()
-    s.on_enter()
-    before = s.canvas.itemcget(s.canvas.find_withtag("tile-btc-value")[0], "text")
-    s._cancel_event.set()
-    s._apply_live_data({"btc": ("SHOULD_NOT_APPLY", "#fff")})
-    after = s.canvas.itemcget(s.canvas.find_withtag("tile-btc-value")[0], "text")
-    assert after == before
+    texts = [
+        s.canvas.itemcget(item, "text")
+        for item in s.canvas.find_withtag("splash")
+        if s.canvas.type(item) == "text"
+    ]
+    assert any("FLAT" in t for t in texts)
+    assert any("awaiting signal" in t for t in texts)
