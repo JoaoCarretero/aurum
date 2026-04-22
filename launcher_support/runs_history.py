@@ -592,42 +592,48 @@ def pause_runs_history(root: tk.Widget, launcher) -> None:
 
 
 def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
-    hdr = tk.Frame(parent, bg=BG)
-    hdr.pack(fill="x", padx=10, pady=(8, 2))
-    tk.Label(hdr, text="RUNS HISTORY", fg=AMBER, bg=BG,
-             font=(FONT, 9, "bold")).pack(side="left")
-    tk.Label(hdr, text="  ·  local + VPS, newest first",
-             fg=DIM, bg=BG, font=(FONT, 7)).pack(side="left")
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(1, 4))
-
-    # Filter chips
+    # Titulo "RUNS HISTORY" removido daqui — quando dentro do wrapper
+    # /engines, o header ENGINES + chip bar HISTORY/LIVE/LOGS ja deixa
+    # claro o que a tela mostra. O subtitulo "local + VPS, newest first"
+    # tambem vira obvio pelos valores da coluna SRC (local/db/vps).
+    #
+    # Ordem reorganizada: filter chips primeiro (mesmo estilo visual
+    # de LIVE/LOGS pra consistencia cross-aba), dai column headers
+    # direto — sem labels redundantes ("MODE" label apagado, chips
+    # "ALL/SHADOW/PAPER" sao auto-explicativos).
+    current = state.get("filter_mode", "all")
     f_row = tk.Frame(parent, bg=BG)
-    f_row.pack(fill="x", padx=10, pady=(0, 4))
-    tk.Label(f_row, text="MODE", fg=DIM2, bg=BG,
-             font=(FONT, 6, "bold")).pack(side="left")
-    for label in ("ALL", "SHADOW", "PAPER"):
+    f_row.pack(fill="x", padx=10, pady=(8, 6))
+    for idx, label in enumerate(("ALL", "SHADOW", "PAPER"), start=1):
         key = label.lower()
+        is_active = (current == "all" and key == "all") or (current == key)
 
         def _pick(_e=None, _k=key):
             state["filter_mode"] = "all" if _k == "all" else _k
             fn = state.get("refresh_fn")
             if fn:
                 fn()
-        chip = tk.Label(f_row, text=f" {label} ", fg=WHITE, bg=BG3,
-                        font=(FONT, 6, "bold"), cursor="hand2",
-                        padx=5, pady=1)
-        chip.pack(side="left", padx=(4, 0))
+        chip = tk.Label(
+            f_row, text=f" {idx}:{label} ",
+            font=(FONT, 7, "bold"),
+            fg=AMBER_D if is_active else DIM,
+            bg=BG3 if is_active else BG,
+            cursor="hand2", padx=5, pady=2,
+        )
+        chip.pack(side="left", padx=(0, 3))
         chip.bind("<Button-1>", _pick)
+
+    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
 
     # Column header
     cols = _COLUMNS
     col_hdr = tk.Frame(parent, bg=BG)
-    col_hdr.pack(fill="x", padx=10, pady=(4, 0))
+    col_hdr.pack(fill="x", padx=10, pady=(6, 2))
     for label, w in cols:
-        tk.Label(col_hdr, text=label, fg=DIM2, bg=BG,
-                 font=(FONT, 6, "bold"), width=w,
+        tk.Label(col_hdr, text=label, fg=DIM, bg=BG,
+                 font=(FONT, 7, "bold"), width=w,
                  anchor="w").pack(side="left", padx=(2, 0))
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10)
+    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
 
 
 _COLUMNS = [
@@ -656,15 +662,13 @@ def _refresh_runs(state: dict, launcher,
     except Exception:
         return
 
-    # Clear
-    for w in wrap.winfo_children():
-        try:
-            w.destroy()
-        except Exception:
-            pass
-
-    # Local disk + DB index are cheap enough to paint sync. VPS is HTTP —
-    # kick a daemon thread for it so the table appears immediately.
+    # Antes: destroy-all aqui + _paint_rows(local) + _paint_rows(merged)
+    # quando VPS retornava = 3 ciclos destroy/rebuild por tick (5s),
+    # causando blink a cada refresh.
+    # Agora: sem destroy pre-paint — _paint_rows() sozinho ja faz
+    # destroy+rebuild atomico quando novos dados chegam. Local+DB
+    # sync paint primeiro (conteudo antigo sai so no momento do
+    # swap), VPS async paint depois quando chegar.
     local = collect_local_runs()
     db_rows = collect_db_runs(limit=500)
 
@@ -681,6 +685,21 @@ def _refresh_runs(state: dict, launcher,
             vps = []
         merged = merge_runs(local, vps, db_rows)
         def _apply_vps_rows():
+            # Dedup guard: compara run_id + status + roi_pct bucket.
+            # Antes comparava so run_id → status transition (running→
+            # stopped) nao triggava repaint e o dot color continuava
+            # verde com processo ja morto. Incluindo status + roi bucket
+            # apanha as mudancas visiveis sem forcar repaint por
+            # floating point noise na equity.
+            def _sig(rows):
+                return tuple(
+                    (r.run_id, r.status,
+                     None if r.roi_pct is None else round(r.roi_pct, 2))
+                    for r in rows
+                )
+            prev = state.get("rows") or []
+            if _sig(prev) == _sig(merged):
+                return
             state["rows"] = merged
             _paint_rows(state)
         try:
@@ -697,10 +716,20 @@ def _refresh_runs(state: dict, launcher,
     else:
         _fetch_vps()
 
-    # Paint the local-only view immediately so user sees something while
-    # the VPS call is in flight.
-    state["rows"] = merge_runs(local, [], db_rows)
-    _paint_rows(state)
+    # Paint local+DB primeiro — mesmo guard de status/roi pra apanhar
+    # running→stopped sem depender do VPS chegar.
+    new_local = merge_runs(local, [], db_rows)
+
+    def _sig_local(rows):
+        return tuple(
+            (r.run_id, r.status,
+             None if r.roi_pct is None else round(r.roi_pct, 2))
+            for r in rows
+        )
+    prev = state.get("rows") or []
+    if _sig_local(prev) != _sig_local(new_local):
+        state["rows"] = new_local
+        _paint_rows(state)
 
 
 def _paint_rows(state: dict) -> None:
@@ -856,52 +885,57 @@ def _render_detail_header(parent: tk.Widget, r: RunSummary) -> None:
 
 
 def _render_detail_telemetry(parent: tk.Widget, r: RunSummary) -> None:
-    strip = tk.Frame(parent, bg=PANEL)
-    strip.pack(fill="x", pady=(6, 2))
+    # Formato alinhado com live_runs._detail_section: header AMBER_D 7
+    # bold + divider + linhas label width=10 / value. Antes usava _cell
+    # com grid de 6 boxes bordados que ocupava largura excessiva e
+    # destoava dos outros detail panels.
     running = r.status == "running"
     dur = fmt_duration(r.started_at, r.stopped_at, r.last_tick_at, running)
-    cells = [
-        ("STARTED", fmt_started(r.started_at), WHITE),
-        ("DURATION", dur, WHITE),
-        ("TICKS OK", "—" if r.ticks_ok is None else str(r.ticks_ok),
+    rows = [
+        ("started", fmt_started(r.started_at), WHITE),
+        ("duration", dur, WHITE),
+        ("ticks ok", "—" if r.ticks_ok is None else str(r.ticks_ok),
          GREEN if (r.ticks_ok or 0) > 0 else DIM2),
-        ("FAIL", "—" if r.ticks_fail is None else str(r.ticks_fail),
+        ("ticks fail", "—" if r.ticks_fail is None else str(r.ticks_fail),
          RED if (r.ticks_fail or 0) > 0 else DIM2),
-        ("SIGNALS", "—" if r.novel is None else str(r.novel),
+        ("signals", "—" if r.novel is None else str(r.novel),
          AMBER_B if (r.novel or 0) > 0 else DIM2),
-        ("TRADES", "—" if r.trades_closed is None else str(r.trades_closed),
+        ("trades", "—" if r.trades_closed is None else str(r.trades_closed),
          WHITE),
     ]
-    for label, value, color in cells:
-        _cell(strip, label, str(value), color)
+    _detail_section(parent, "TELEMETRY", rows)
 
 
-def _cell(parent: tk.Widget, label: str, value: str, color: str) -> None:
-    cell = tk.Frame(parent, bg=BG, highlightbackground=BORDER,
-                    highlightthickness=1)
-    cell.pack(side="left", fill="both", expand=True, padx=(0, 3))
-    tk.Label(cell, text=label.upper(), fg=DIM2, bg=BG,
-             font=(FONT, 6, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
-    tk.Label(cell, text=value, fg=color, bg=BG,
-             font=(FONT, 10, "bold")).pack(anchor="w", padx=6, pady=(0, 4))
+def _detail_section(parent: tk.Widget, title: str,
+                    rows: list[tuple[str, str, str]]) -> None:
+    """Section com header AMBER_D 7 bold + divider + linhas label/value."""
+    tk.Label(parent, text=title,
+             font=(FONT, 7, "bold"), fg=AMBER_D, bg=PANEL,
+             anchor="w").pack(anchor="w", pady=(8, 2))
+    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x")
+    for k, v, color in rows:
+        row = tk.Frame(parent, bg=PANEL)
+        row.pack(fill="x", pady=0)
+        tk.Label(row, text=k, font=(FONT, 7, "bold"),
+                 fg=DIM, bg=PANEL, anchor="w", width=10).pack(side="left")
+        tk.Label(row, text=str(v), font=(FONT, 8),
+                 fg=color, bg=PANEL, anchor="w").pack(side="left")
 
 
 def _render_detail_equity_metrics(parent: tk.Widget, r: RunSummary) -> None:
     if r.equity is None and r.initial_balance is None:
         return
-    box = tk.Frame(parent, bg=PANEL)
-    box.pack(fill="x", pady=(6, 2))
-    _section(box, "ACCOUNT")
-    row = tk.Frame(box, bg=PANEL)
-    row.pack(fill="x", pady=(2, 2))
     initial = r.initial_balance or r.equity or 0.0
     eq_color = (GREEN if (r.equity or 0) >= initial else
                 (RED if (r.equity or 0) < initial else WHITE))
     roi_color = (GREEN if (r.roi_pct or 0) > 0 else
                  (RED if (r.roi_pct or 0) < 0 else DIM))
-    _cell(row, "INITIAL", fmt_equity(initial), WHITE)
-    _cell(row, "EQUITY", fmt_equity(r.equity), eq_color)
-    _cell(row, "ROI", fmt_roi(r.roi_pct), roi_color)
+    rows = [
+        ("initial", fmt_equity(initial), WHITE),
+        ("equity", fmt_equity(r.equity), eq_color),
+        ("roi", fmt_roi(r.roi_pct), roi_color),
+    ]
+    _detail_section(parent, "ACCOUNT", rows)
 
 
 def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:

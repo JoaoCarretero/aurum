@@ -35,53 +35,60 @@ def render_screen(app, host: tk.Misc, *, on_escape) -> None:
     app._eng_historical_cache = None
     app._eng_historical_cache_ts = 0.0
     app._eng_refresh_generation = 0
+    app._eng_last_sig = None
 
     outer = tk.Frame(host, bg=BG)
-    outer.pack(fill="both", expand=True, padx=28, pady=18)
+    # Quando dentro do wrapper /engines, o header + chip bar ja estao
+    # pintados pelo EnginesScreen — zera o padding top externo e pula
+    # o bloco de titulo abaixo pra evitar duplicacao visual.
+    _embedded = bool(getattr(app, "_engines_tab_active", False))
+    outer.pack(fill="both", expand=True,
+               padx=(28 if not _embedded else 0),
+               pady=(18 if not _embedded else 0))
 
-    head = tk.Frame(outer, bg=BG)
-    head.pack(fill="x", pady=(0, 12))
-    strip = tk.Frame(head, bg=BG)
-    strip.pack(fill="x")
-    tk.Frame(strip, bg=AMBER, width=4, height=28).pack(side="left", padx=(0, 8))
-    title_wrap = tk.Frame(strip, bg=BG)
-    title_wrap.pack(side="left", fill="x", expand=True)
-    tk.Label(title_wrap, text="ENGINE LOGS", font=(FONT, 14, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-    tk.Label(
-        title_wrap,
-        text="Running and recent engines with live log tail and verified stop control",
-        font=(FONT, 8),
-        fg=DIM,
-        bg=BG,
-        anchor="w",
-    ).pack(anchor="w", pady=(3, 0))
-    tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
+    if not _embedded:
+        head = tk.Frame(outer, bg=BG)
+        head.pack(fill="x", pady=(0, 12))
+        strip = tk.Frame(head, bg=BG)
+        strip.pack(fill="x")
+        tk.Frame(strip, bg=AMBER, width=4, height=28).pack(side="left", padx=(0, 8))
+        title_wrap = tk.Frame(strip, bg=BG)
+        title_wrap.pack(side="left", fill="x", expand=True)
+        tk.Label(title_wrap, text="ENGINE LOGS", font=(FONT, 14, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
+        tk.Label(
+            title_wrap,
+            text="Processos ativos e recentes com tail de log em tempo real e controle de stop verificado",
+            font=(FONT, 8),
+            fg=DIM,
+            bg=BG,
+            anchor="w",
+        ).pack(anchor="w", pady=(3, 0))
+        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 12))
 
     split = tk.Frame(outer, bg=BG)
     split.pack(fill="both", expand=True)
 
-    left = tk.Frame(split, bg=BG, width=420, highlightbackground=DIM2, highlightthickness=1)
+    left = tk.Frame(split, bg=BG, width=460, highlightbackground=DIM2, highlightthickness=1)
     left.pack(side="left", fill="y", padx=(0, 8))
     left.pack_propagate(False)
 
-    tk.Label(left, text="PROCS", font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", pady=(0, 4))
-    hrow = tk.Frame(left, bg=BG)
-    hrow.pack(fill="x")
-    for label, width in [("STATE", 6), ("ENGINE", 9), ("MODE", 6), ("SRC", 5), ("STARTED", 12), ("UP", 6), ("SIG", 4)]:
-        tk.Label(hrow, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG, width=width, anchor="w").pack(side="left")
-    tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
-
+    # Ordem reorganizada (anti-padrao antigo tinha PROCS title + headers
+    # + FILTER nessa ordem — filter no meio confundia). Agora:
+    #   1. FILTER (chips) — determina quais procs entram na lista
+    #   2. Coluna headers — esquema fixo da lista abaixo
+    #   3. List wrap (scrollable)
+    #   4. Actions row (SPAWN / STOP / PURGE / REFRESH)
     filter_row = tk.Frame(left, bg=BG)
-    filter_row.pack(fill="x", pady=(2, 6))
-    tk.Label(filter_row, text="FILTER", font=(FONT, 6, "bold"), fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
+    filter_row.pack(fill="x", padx=8, pady=(6, 8))
     for idx, (tab_label, filter_name) in enumerate(
-        [("ALL", "all"), ("SHADOW", "shadow"), ("PAPER", "paper"), ("DEMO", "demo"), ("TESTNET", "testnet"), ("LIVE", "live")],
+        [("ALL", "all"), ("SHADOW", "shadow"), ("PAPER", "paper"),
+         ("DEMO", "demo"), ("TESTNET", "testnet"), ("LIVE", "live")],
         start=1,
     ):
         tab = tk.Label(
             filter_row,
             text=f" {idx}:{tab_label} ",
-            font=(FONT, 6, "bold"),
+            font=(FONT, 7, "bold"),
             fg=AMBER_D if app._eng_mode_filter == filter_name else DIM,
             bg=BG3 if app._eng_mode_filter == filter_name else BG,
             cursor="hand2",
@@ -93,12 +100,31 @@ def render_screen(app, host: tk.Misc, *, on_escape) -> None:
         app._eng_filter_tabs[filter_name] = tab
         app._kb(f"<Key-{idx}>", lambda f=filter_name: app._eng_set_mode_filter(f))
 
+    tk.Frame(left, bg=DIM2, height=1).pack(fill="x")
+
+    # Column headers — larguras alinhadas com render_row (widths 6/11/7/5/13/6/4)
+    hrow = tk.Frame(left, bg=BG)
+    hrow.pack(fill="x", padx=8, pady=(6, 2))
+    for label, width in [("STATE", 6), ("ENGINE", 11), ("MODE", 7),
+                         ("SRC", 5), ("STARTED", 13), ("UP", 6), ("SIG", 4)]:
+        tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
+                 fg=DIM, bg=BG, width=width, anchor="w").pack(side="left")
+    tk.Frame(left, bg=DIM2, height=1).pack(fill="x", padx=8)
+
     list_wrap = tk.Frame(left, bg=BG)
-    list_wrap.pack(fill="both", expand=True)
+    list_wrap.pack(fill="both", expand=True, padx=8, pady=(2, 0))
     app._eng_list_wrap = list_wrap
 
+    # Actions row — agrupado por intencao pra nao misturar construtivo
+    # com destrutivo.  Layout:
+    #
+    #   [ SPAWN > ]  ........................  [ REFRESH | PURGE | STOP ]
+    #
+    # SPAWN fica a esquerda (primary construtivo, verde). Os 3 da direita
+    # vao em ordem crescente de risco: REFRESH (neutro) -> PURGE (limpa
+    # zombies) -> STOP (mata pid selecionado).
     actions_l = tk.Frame(left, bg=BG)
-    actions_l.pack(fill="x", pady=(6, 0))
+    actions_l.pack(fill="x", padx=8, pady=(8, 6))
 
     def _do_stop():
         pid = app._eng_selected_pid
@@ -167,15 +193,26 @@ def render_screen(app, host: tk.Misc, *, on_escape) -> None:
         finally:
             menu.grab_release()
 
-    spawn_btn = tk.Label(actions_l, text="  SPAWN >  ", font=(FONT, 7, "bold"), fg=GREEN, bg=BG3, cursor="hand2", padx=6, pady=3)
-    spawn_btn.pack(side="left", padx=(0, 6))
+    spawn_btn = tk.Label(actions_l, text="  SPAWN >  ",
+                         font=(FONT, 7, "bold"), fg=GREEN, bg=BG3,
+                         cursor="hand2", padx=8, pady=4)
+    spawn_btn.pack(side="left")
     spawn_btn.bind("<Button-1>", _popup_spawn)
     spawn_btn.bind("<Enter>", lambda _e: spawn_btn.configure(bg=GREEN, fg=BG))
     spawn_btn.bind("<Leave>", lambda _e: spawn_btn.configure(bg=BG3, fg=GREEN))
 
-    for label, cmd, color in [("STOP", _do_stop, RED), ("PURGE", _do_purge, AMBER_D), ("REFRESH", lambda: app._eng_refresh(), AMBER)]:
-        btn = tk.Label(actions_l, text=f"  {label}  ", font=(FONT, 7, "bold"), fg=color, bg=BG3, cursor="hand2", padx=6, pady=3)
-        btn.pack(side="left", padx=2)
+    # Side direito: REFRESH (neutro amber) -> PURGE (cleanup amber_d)
+    # -> STOP (destrutivo vermelho). Pack em reverse (side=right) pra
+    # STOP ficar o mais a direita, isolado visualmente.
+    for label, cmd, color in [
+        ("STOP", _do_stop, RED),
+        ("PURGE", _do_purge, AMBER_D),
+        ("REFRESH", lambda: app._eng_refresh(), AMBER),
+    ]:
+        btn = tk.Label(actions_l, text=f"  {label}  ",
+                       font=(FONT, 7, "bold"), fg=color, bg=BG3,
+                       cursor="hand2", padx=8, pady=4)
+        btn.pack(side="right", padx=(3, 0))
         btn.bind("<Button-1>", lambda _e, c=cmd: c())
 
     right = tk.Frame(split, bg=BG3, highlightbackground=DIM2, highlightthickness=1)
@@ -254,22 +291,14 @@ def refresh_list(app) -> None:
     generation = int(getattr(app, "_eng_refresh_generation", 0)) + 1
     app._eng_refresh_generation = generation
 
-    for child in app._eng_list_wrap.winfo_children():
-        try:
-            child.destroy()
-        except Exception:
-            pass
-
+    # Antes havia destroy-all + "LOADING" placeholder aqui, seguido de
+    # destroy-all de novo quando o worker async retornava. Isso causava
+    # flicker visivel (blink preto + flash de loading) a cada refresh
+    # acionado por botao ou filtro. Agora mantem-se o conteudo antigo
+    # no canvas ate o worker retornar; o swap e unico e instantaneo
+    # em _apply(). Como feedback visual de "recarregando", o h_stat do
+    # launcher ja indica "LIVE" quando estavel — basta deixar.
     refresh_filter_tabs(app)
-    filt_label = app._eng_mode_filter.upper() if app._eng_mode_filter != "all" else "ALL ENGINES"
-    tk.Label(
-        app._eng_list_wrap,
-        text=f"  ...  LOADING  |  {filt_label}",
-        font=(FONT, 7, "bold"),
-        fg=AMBER_D,
-        bg=BG,
-        anchor="w",
-    ).pack(fill="x", pady=(2, 2))
 
     def _worker(gen: int, mode_filter: str) -> None:
         try:
@@ -300,6 +329,44 @@ def refresh_list(app) -> None:
                     return
             except Exception:
                 return
+
+            # Dedup guard — evita o flicker de "some tudo, volta tudo" a
+            # cada 2s quando o conteudo visivel nao mudou. Assinatura
+            # captura apenas campos que o operador ve (rid/pid/alive/
+            # novel), NAO uptime — uptime avanca todo tick e forcaria
+            # rebuild constante. Inclui error_text + mode_filter pra
+            # distinguir transicoes entre filtros com proc sets iguais.
+            def _sig(procs):
+                out = []
+                for p in procs:
+                    rid = p.get("run_id") or p.get("_run_id") or p.get("log_file") or ""
+                    hb = p.get("_heartbeat") or {}
+                    novel = hb.get("novel_since_prime")
+                    if novel is None:
+                        novel = hb.get("novel_total")
+                    out.append((
+                        str(rid), p.get("pid"),
+                        bool(p.get("alive")),
+                        str(p.get("engine", "")),
+                        novel,
+                    ))
+                return tuple(out)
+
+            new_sig = (
+                _sig(running),
+                _sig(stopped),
+                str(error_text or ""),
+                app._eng_mode_filter,
+                # _eng_selected_key incluido: clicar pra selecionar row
+                # mesmo sem mudanca de conteudo precisa repintar pra
+                # aplicar o highlight BG3 na linha nova.
+                getattr(app, "_eng_selected_key", None),
+            )
+            if new_sig == getattr(app, "_eng_last_sig", None):
+                # Nada mudou — skip destroy/rebuild completo.
+                refresh_filter_tabs(app)
+                return
+            app._eng_last_sig = new_sig
 
             for child in app._eng_list_wrap.winfo_children():
                 try:
