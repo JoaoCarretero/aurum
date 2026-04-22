@@ -1224,27 +1224,36 @@ def _render_master_list(state, launcher):
     procs = _list_procs_cached()
     running = running_slugs_from_procs(procs)
 
-    # No modo SHADOW, so engines com shadow run visivel no poller
-    # aparecem. Quando nao ha nenhum, todos os buckets ficam vazios e
-    # a detail pane renderiza seu empty-state dedicado.
-    is_shadow_mode = state.get("mode") == "shadow"
-    shadow_slugs = _shadow_active_slugs(launcher=launcher, state=state) if is_shadow_mode else set()
-
-    # VPS-backed modes (shadow, paper) — merge running set with cockpit
-    # runs so the RUNNING counter up top reflects real state of the
-    # VPS, not just local processes (which are usually 0 for these
-    # modes). Query is best-effort; failures keep the local-proc count.
+    # VPS-backed modes (shadow, paper): popular running set PRIMEIRO pra
+    # garantir que _COCKPIT_RUNS_CACHE está quente antes de calcular
+    # shadow_slugs. Ordem anterior travava CITADEL/JUMP/RENAISSANCE no
+    # render inicial porque _shadow_active_slugs lia cache vazio e
+    # retornava so {millennium} do poller legado — filtrando outras
+    # engines visíveis do LIVE bucket. (2026-04-22 fix.)
     current_mode = state.get("mode")
     if current_mode in ("shadow", "paper"):
+        # Sync load na primeira chamada: sem isso, _COCKPIT_RUNS_CACHE fica
+        # vazio no primeiro render e CITADEL/JUMP/RENAISSANCE nao aparecem
+        # no LIVE bucket até o worker assíncrono popular o cache. Com
+        # allow_sync=True, o primeiro render espera a resposta (~500ms)
+        # mas ja mostra tudo certo. Subsequentes usam o cache TTL=60s.
+        cache_is_empty = _COCKPIT_RUNS_CACHE.get("runs") is None
         vps_running = _vps_running_slugs(
             mode=current_mode,
             launcher=launcher,
             state=state,
+            allow_sync=cache_is_empty,
         )
         if vps_running:
             running = {**running, **{slug: {"status": "running", "alive": True,
                                             "source": "vps"}
                                      for slug in vps_running}}
+
+    # No modo SHADOW, so engines com shadow run visivel no poller
+    # aparecem. Agora lê _COCKPIT_RUNS_CACHE (populado acima) pra cobrir
+    # todas as shadows rodando (poller legado so segue uma).
+    is_shadow_mode = current_mode == "shadow"
+    shadow_slugs = _shadow_active_slugs(launcher=launcher, state=state) if is_shadow_mode else set()
 
     live_items: list[tuple[str, dict, dict]] = []
     ready_items: list[tuple[str, dict]] = []
