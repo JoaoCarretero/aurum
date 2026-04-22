@@ -70,6 +70,7 @@ class SplashScreen(Screen):
         self._cache_path = Path("data/splash_cache.json")
 
     def build(self) -> None:
+        """Cria frame + canvas. Todo desenho acontece em on_enter."""
         frame = tk.Frame(self.container, bg=BG)
         frame.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(
@@ -80,26 +81,6 @@ class SplashScreen(Screen):
             height=self._design_h,
         )
         self.canvas.pack(fill="both", expand=True)
-
-        canvas = self.canvas
-        canvas.create_line(
-            self._RULE_X1, self._TOP_RULE_Y, self._RULE_X2, self._TOP_RULE_Y,
-            fill=AMBER_D, width=1,
-        )
-        canvas.create_line(
-            self._RULE_X1, self._BOTTOM_RULE_Y, self._RULE_X2, self._BOTTOM_RULE_Y,
-            fill=DIM2, width=1,
-        )
-        self._draw_wordmark(canvas)
-        canvas.create_text(
-            self._CENTER_X,
-            486,
-            anchor="center",
-            text="[ ENTER TO ACCESS DESK ]_",
-            font=(FONT, 11, "bold"),
-            fill=AMBER_B,
-            tags="prompt2",
-        )
 
     def on_enter(self, **kwargs: Any) -> None:
         del kwargs
