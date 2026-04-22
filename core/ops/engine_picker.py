@@ -1327,55 +1327,126 @@ def render(
                  ).pack(fill="x", pady=(0, 2))
 
     def _paint_brief(host, t: EngineTrack):
-        """Research brief — institutional layout (moved from OVERVIEW).
+        """BRIEF — self-explanatory research dossier.
 
-        Sections render top-to-bottom in this fixed order:
-          1. STRATEGY   — one-paragraph description
-          2. METHOD     — numbered pipeline of steps
-          3. EDGE · RISK — two terse tagged blocks
-          4. EQUITY     — cumulative return curve
-          5. RATIONALE  — extended thesis (optional deep-dive)
+        Restruturado pra responder de cima pra baixo: "what does this
+        engine do?", "how does it decide?", "what's the math?", "what
+        params?", "what's the edge/risk?". Puxa de BRIEFINGS (narrativa)
+        + BRIEFINGS_V2 (formulas, params, invariants) via _brief_for
+        merge em launcher_support.screens.strategies.
 
-        Design notes:
-          - Values left-aligned; headers 7pt amber bold; body 8pt white/dim
-          - Accent bars are 1-2px DIM2, never thick or colored
-          - Edge/Risk use a single-pixel top rule instead of filled bars
+        Sections:
+          1. ONE-LINER  — technical summary (BRIEFINGS_V2.one_liner)
+          2. WHAT       — plain-language description (BRIEFINGS.what)
+          3. HOW IT ENTERS — numbered decision pipeline (BRIEFINGS.logic)
+          4. MATH       — formulas com subtitles (BRIEFINGS_V2.formulas)
+          5. PARAMS     — tabela name/default/effect (BRIEFINGS_V2.params_tech)
+          6. EDGE · RISK — two terse cards (BRIEFINGS.edge/.risk)
+          7. INVARIANTS — pre-conditions (BRIEFINGS_V2.invariants)
         """
         sbody = _scrollable(host)
         brief = t.brief or {}
 
-        # ── 1. STRATEGY ─────────────────────────────────────────
-        _section(sbody, "STRATEGY")
+        # ── 1. ONE-LINER — 1-sentence technical summary ─────────
+        one_liner = brief.get("one_liner")
+        if one_liner:
+            hero = tk.Frame(sbody, bg=PANEL)
+            hero.pack(fill="x", pady=(0, 4))
+            tk.Frame(hero, bg=AMBER, width=2).pack(side="left", fill="y")
+            tk.Label(hero, text=one_liner, font=(FONT, 9, "bold"),
+                     fg=AMBER, bg=PANEL, wraplength=550,
+                     justify="left", anchor="w"
+                     ).pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        # ── 2. WHAT — plain-language description ────────────────
         what = brief.get("what")
         if what:
-            tk.Label(sbody, text=what, font=(FONT, 9), fg=WHITE, bg=PANEL,
+            _section(sbody, "WHAT IT DOES")
+            tk.Label(sbody, text=what, font=(FONT, 8), fg=WHITE, bg=PANEL,
                      wraplength=560, justify="left", anchor="w"
-                     ).pack(fill="x", pady=(0, 10))
-        else:
-            tk.Label(sbody, text="No strategy description available.",
+                     ).pack(fill="x", pady=(0, 8))
+        elif not one_liner:
+            tk.Label(sbody, text="No description available.",
                      font=(FONT, 8, "italic"), fg=DIM2, bg=PANEL,
-                     anchor="w").pack(fill="x", pady=(0, 10))
+                     anchor="w").pack(fill="x", pady=(0, 8))
 
-        # ── 2. METHOD (pipeline) ────────────────────────────────
+        # ── 3. HOW IT DECIDES — numbered entry logic ────────────
         logic = brief.get("logic")
         if logic:
-            _section(sbody, "METHOD")
+            _section(sbody, "HOW IT DECIDES")
             for i, step in enumerate(logic, start=1):
                 r = tk.Frame(sbody, bg=PANEL)
                 r.pack(fill="x", pady=1)
-                tk.Label(r, text=f"  {i:02d}", font=(FONT, 7),
-                         fg=DIM, bg=PANEL, width=4,
+                tk.Label(r, text=f"  {i:02d}", font=(FONT, 7, "bold"),
+                         fg=AMBER, bg=PANEL, width=4,
                          anchor="w").pack(side="left")
                 tk.Label(r, text=step, font=(FONT, 8),
                          fg=WHITE, bg=PANEL, anchor="w",
                          wraplength=510, justify="left"
                          ).pack(side="left", fill="x", expand=True)
+            tk.Frame(sbody, bg=PANEL, height=6).pack()  # spacer
 
-        # ── 3. EDGE · RISK ──────────────────────────────────────
+        # ── 4. MATH — formulas com contexto ─────────────────────
+        formulas = brief.get("formulas") or []
+        if formulas:
+            _section(sbody, "ENTRY MATH")
+            tk.Label(sbody,
+                     text="Formulas que o engine avalia em cada barra:",
+                     font=(FONT, 7, "italic"), fg=DIM2, bg=PANEL,
+                     anchor="w").pack(fill="x", pady=(0, 2))
+            for fm in formulas:
+                row = tk.Frame(sbody, bg=BG2,
+                               highlightbackground=BORDER,
+                               highlightthickness=1)
+                row.pack(fill="x", pady=1)
+                tk.Label(row, text="  ƒ", font=(FONT, 8, "bold"),
+                         fg=AMBER, bg=BG2).pack(side="left", padx=(6, 2))
+                tk.Label(row, text=str(fm), font=(FONT, 8),
+                         fg=WHITE, bg=BG2, anchor="w",
+                         wraplength=520, justify="left"
+                         ).pack(side="left", fill="x", expand=True,
+                                padx=(0, 6), pady=3)
+            tk.Frame(sbody, bg=PANEL, height=6).pack()
+
+        # ── 5. PARAMETERS — name | default | effect ────────────
+        params_tech = brief.get("params_tech") or []
+        if params_tech:
+            _section(sbody, "PARAMETERS")
+            # Header row
+            hdr = tk.Frame(sbody, bg=PANEL)
+            hdr.pack(fill="x")
+            for txt, w_ in (("NAME", 20), ("DEFAULT", 10), ("EFFECT", 40)):
+                tk.Label(hdr, text=txt, font=(FONT, 6, "bold"),
+                         fg=DIM, bg=PANEL, width=w_, anchor="w"
+                         ).pack(side="left", padx=(2, 0))
+            tk.Frame(sbody, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
+
+            for p in params_tech:
+                row = tk.Frame(sbody, bg=PANEL)
+                row.pack(fill="x", pady=0)
+                tk.Label(row, text=str(p.get("name", "—")),
+                         font=(FONT, 8, "bold"), fg=AMBER_H, bg=PANEL,
+                         width=20, anchor="w"
+                         ).pack(side="left", padx=(2, 0))
+                default_txt = f"{p.get('default', '—')}"
+                unit = p.get("unit") or ""
+                if unit and unit != "—":
+                    default_txt = f"{default_txt} {unit}"
+                tk.Label(row, text=default_txt,
+                         font=(FONT, 8), fg=WHITE, bg=PANEL,
+                         width=10, anchor="w"
+                         ).pack(side="left", padx=(2, 0))
+                tk.Label(row, text=str(p.get("effect", "—")),
+                         font=(FONT, 8), fg=DIM2, bg=PANEL,
+                         anchor="w", wraplength=400, justify="left"
+                         ).pack(side="left", fill="x", expand=True, padx=(2, 0))
+            tk.Frame(sbody, bg=PANEL, height=6).pack()
+
+        # ── 6. EDGE · RISK — two terse cards ───────────────────
         if brief.get("edge") or brief.get("risk"):
             _section(sbody, "EDGE · RISK")
             cards = tk.Frame(sbody, bg=PANEL)
-            cards.pack(fill="x", pady=(2, 10))
+            cards.pack(fill="x", pady=(2, 8))
 
             def _card(parent, tag, tag_fg, body_text, body_fg, left_pad):
                 card = tk.Frame(parent, bg=PANEL,
@@ -1398,27 +1469,24 @@ def render(
             if brief.get("risk"):
                 _card(cards, "RISK", RED, brief["risk"], DIM2, 1)
 
-        # ── 4. EQUITY ───────────────────────────────────────────
-        _section(sbody, "EQUITY")
-        cv = tk.Canvas(sbody, bg=PANEL, highlightthickness=1,
-                       highlightbackground=BORDER, height=80)
-        cv.pack(fill="x", pady=(0, 10))
-        series = t.equity_series
-        if series and len(series) >= 2:
-            cv.after(20, lambda s=series: _draw_spark(cv, s, AMBER))
-        else:
-            cv.after(20, lambda: cv.create_text(
-                (cv.winfo_width() or 400) // 2, 40,
-                text="no data available",
-                font=(FONT, 8), fill=DIM))
-
-        # ── 5. RATIONALE (deep thesis) ─────────────────────────
-        if brief.get("philosophy"):
-            _section(sbody, "RATIONALE")
-            tk.Label(sbody, text=brief["philosophy"],
-                     font=(FONT, 8), fg=DIM2, bg=PANEL,
-                     wraplength=560, justify="left", anchor="w"
-                     ).pack(fill="x", pady=(0, 6))
+        # ── 7. INVARIANTS — pre-conditions / safety guarantees ──
+        invariants = brief.get("invariants") or []
+        if invariants:
+            _section(sbody, "INVARIANTS")
+            tk.Label(sbody,
+                     text="Pre-condicoes que o engine garante em cada trade:",
+                     font=(FONT, 7, "italic"), fg=DIM2, bg=PANEL,
+                     anchor="w").pack(fill="x", pady=(0, 2))
+            for inv in invariants:
+                r = tk.Frame(sbody, bg=PANEL)
+                r.pack(fill="x", pady=1)
+                tk.Label(r, text="  ✓", font=(FONT, 8, "bold"),
+                         fg=GREEN, bg=PANEL, width=3,
+                         anchor="w").pack(side="left")
+                tk.Label(r, text=str(inv), font=(FONT, 8),
+                         fg=DIM2, bg=PANEL, anchor="w",
+                         wraplength=520, justify="left"
+                         ).pack(side="left", fill="x", expand=True)
 
     def _paint_config(host, t: EngineTrack):
         """LAB chip — the research workspace.

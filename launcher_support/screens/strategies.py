@@ -17,7 +17,7 @@ from core.ui.ui_palette import (
     DIM, FONT,
     GREEN, RED, TILE_RESEARCH,
 )
-from launcher_support.briefings import BRIEFINGS
+from launcher_support.briefings import BRIEFINGS, BRIEFINGS_V2
 
 
 # Edge-engines explicit list — Sharpe OOS positivo confirmado (CITADEL,
@@ -235,8 +235,24 @@ def render(app, filter_group: str | None = None):
         return _stop
 
     def _brief_for(_slug, meta):
+        """Merge BRIEFINGS (narrative) + BRIEFINGS_V2 (tecnico) num unico
+        dict pro picker. V2 acrescenta formulas, params tecnicos e
+        invariants que o chip BRIEF renderiza como math/entry explicito.
+        """
         name = meta.get("display", _slug.upper())
-        return BRIEFINGS.get(name)
+        narrative = BRIEFINGS.get(name, {})
+        tech = BRIEFINGS_V2.get(name, {})
+        if not narrative and not tech:
+            return None
+        merged = dict(narrative)
+        if tech:
+            merged["one_liner"]    = tech.get("one_liner")
+            merged["formulas"]     = tech.get("formulas")
+            merged["params_tech"]  = tech.get("params")
+            merged["invariants"]   = tech.get("invariants")
+            merged["pseudocode"]   = tech.get("pseudocode")
+            merged["source_files"] = tech.get("source_files")
+        return merged
 
     tracks = ep.build_tracks_from_registry(
         ENGINES, on_run_for=_run_for, on_stop_for=_stop_for, brief_for=_brief_for,
