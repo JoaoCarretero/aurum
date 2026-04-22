@@ -755,8 +755,39 @@ def _paint_rows(state: dict) -> None:
                  font=(FONT, 7, "italic")).pack(anchor="w", pady=8, padx=12)
         return
 
-    for r in rows[:60]:
-        _render_run_row(wrap, r, state)
+    # Separa LIVE (running) em cima de FINISHED (stopped/failed/unknown).
+    # Operador pediu "separe as live runs e as runs que ja rodaram,
+    # separado pra nao confundir". Cabecalhos dim + contadores.
+    running_rows = [r for r in rows if str(r.status).lower() == "running"]
+    finished_rows = [r for r in rows if str(r.status).lower() != "running"]
+
+    if running_rows:
+        _render_list_section_header(
+            wrap, "● LIVE", len(running_rows), color=GREEN,
+        )
+        for r in running_rows[:20]:
+            _render_run_row(wrap, r, state)
+
+    if finished_rows:
+        if running_rows:
+            tk.Frame(wrap, bg=BG, height=6).pack(fill="x")
+        _render_list_section_header(
+            wrap, "○ FINISHED", len(finished_rows), color=DIM,
+        )
+        for r in finished_rows[:60]:
+            _render_run_row(wrap, r, state)
+
+
+def _render_list_section_header(parent: tk.Widget, title: str,
+                                 count: int, color: str) -> None:
+    """Section header separando LIVE / FINISHED no list pane."""
+    hdr = tk.Frame(parent, bg=BG)
+    hdr.pack(fill="x", padx=10, pady=(6, 2))
+    tk.Label(hdr, text=title, font=(FONT, 7, "bold"),
+             fg=color, bg=BG).pack(side="left")
+    tk.Label(hdr, text=f"  ·  {count}", font=(FONT, 7),
+             fg=DIM2, bg=BG).pack(side="left")
+    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(1, 2))
 
 
 def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
