@@ -13,8 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from config.paths import DATA_DIR
+from core.ui.scroll import bind_mousewheel
 from core.ui.ui_palette import AMBER, AMBER_D, BG, BG3, BORDER, DIM, DIM2, FONT, PANEL, WHITE
 from launcher_support.screens.base import Screen
+from launcher_support.runs_history import (
+    _render_detail_health, _render_detail_probe, _render_detail_scan,
+    _render_error_banner,
+)
 from core import db_live_runs
 from core.ops import run_catalog
 
@@ -58,9 +63,15 @@ class LiveRunsScreen(Screen):
     _TTL_SEC = 3.0
     _MODES = ("all", "live", "paper", "shadow", "demo", "testnet")
 
-    def __init__(self, parent: tk.Misc, app: Any):
+    def __init__(self, parent: tk.Misc, app: Any,
+                 client_factory: Any = None):
         super().__init__(parent)
         self.app = app
+        # client_factory() -> cockpit client ou None. Quando passado,
+        # _fetch_runs puxa tambem os heartbeats do VPS (permitindo
+        # renderizar SCAN/HEALTH/PROBE no detail pane). Sem factory,
+        # fica em modo local-only como antes — sem regressao.
+        self._client_factory = client_factory
         self._mode_filter: str = "all"
         self._list_cache: tuple[float, str, list[dict]] | None = None
         self._selected_run_id: str | None = None
@@ -136,16 +147,7 @@ class LiveRunsScreen(Screen):
         list_sb.pack(side="right", fill="y")
         self._list_canvas = list_canvas
 
-        def _list_wheel(event: tk.Event) -> None:
-            try:
-                list_canvas.yview_scroll(-1 * (event.delta // 120), "units")
-            except Exception:
-                pass
-
-        self._bind(list_canvas, "<Enter>",
-                   lambda _e: list_canvas.bind_all("<MouseWheel>", _list_wheel))
-        self._bind(list_canvas, "<Leave>",
-                   lambda _e: list_canvas.unbind_all("<MouseWheel>"))
+        bind_mousewheel(list_canvas)
 
         right = tk.Frame(
             split, bg=PANEL, highlightbackground=BORDER, highlightthickness=1,
@@ -208,7 +210,19 @@ class LiveRunsScreen(Screen):
                 (now - cache[0]) < self._TTL_SEC:
             return cache[2]
         mode = None if self._mode_filter == "all" else self._mode_filter
-        runs = run_catalog.list_runs_catalog(mode=mode, client=None, limit_db=500)
+        # client_factory() pode retornar None (tunnel down) — nesse caso
+        # list_runs_catalog segue so com local+DB e nao renderiza SCAN/
+        # HEALTH/PROBE no detail (heartbeat fica None). Sem crash, sem
+        # regressao — modo graceful degradation quando VPS esta offline.
+        client = None
+        if self._client_factory is not None:
+            try:
+                client = self._client_factory()
+            except Exception:
+                client = None
+        runs = run_catalog.list_runs_catalog(
+            mode=mode, client=client, limit_db=500,
+        )
         self._list_cache = (now, self._mode_filter, runs)
         return runs
 
@@ -305,6 +319,20 @@ class LiveRunsScreen(Screen):
             ("ticks", str(run.ticks_ok or 0)),
             ("novel signals", str(run.novel or 0)),
         ])
+
+        # Health metrics vindos do cockpit heartbeat. Quando o tunnel
+        # VPS esta up, run.heartbeat traz campos ricos — renderiza SCAN
+        # (funil scanned/dedup/stale/live/opened), HEALTH (drawdown/
+        # ks_state/primed/tick cadence), PROBE DIAGNOSTIC (so pra engine
+        # probe). Error banner em vermelho no topo se last_error nao
+        # null. Os renderers sao reusados de runs_history pra garantir
+        # visual identico cross-view.
+        hb = run.heartbeat or {}
+        if hb.get("last_error"):
+            _render_error_banner(self._detail_frame, str(hb["last_error"]))
+        _render_detail_scan(self._detail_frame, run)
+        _render_detail_health(self._detail_frame, run)
+        _render_detail_probe(self._detail_frame, run)
 
         actions = tk.Frame(self._detail_frame, bg=PANEL)
         actions.pack(fill="x", pady=(10, 0))

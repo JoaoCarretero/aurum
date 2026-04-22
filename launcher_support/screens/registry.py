@@ -19,6 +19,7 @@ def register_default_screens(
     from launcher_support.screens.data_reports import DataReportsScreen
     from launcher_support.screens.deploy_pipeline import DeployPipelineScreen
     from launcher_support.screens.engine_logs import EngineLogsScreen
+    from launcher_support.screens.engines import EnginesScreen
     from launcher_support.screens.engines_live import EnginesLiveScreen
     from launcher_support.screens.live_runs import LiveRunsScreen
     from launcher_support.screens.macro_brain import MacroBrainScreen
@@ -89,11 +90,35 @@ def register_default_screens(
     )
     manager.register(
         "live_runs",
-        lambda parent: LiveRunsScreen(parent=parent, app=app),
+        lambda parent: LiveRunsScreen(
+            parent=parent, app=app,
+            client_factory=__import__(
+                "launcher_support.engines_live_view",
+                fromlist=["_get_cockpit_client"],
+            )._get_cockpit_client,
+        ),
     )
     manager.register(
         "runs_history",
         lambda parent: RunsHistoryScreen(
+            parent=parent,
+            app=app,
+            client_factory=__import__(
+                "launcher_support.engines_live_view",
+                fromlist=["_get_cockpit_client"],
+            )._get_cockpit_client,
+        ),
+    )
+    # Unified /engines — chip bar: HISTORY / LIVE / LOGS.
+    # EnginesScreen reusa render_runs_history / LiveRunsScreen /
+    # engine_logs_view.render_screen. Os 3 screens individuais
+    # (engine_logs, live_runs, runs_history) continuam registrados
+    # porque outros paths (ex: splash quick-links, tecla R de live_runs
+    # -> runs_history) ainda navegam direto pra eles. Esta entrada
+    # unificada e o ponto de entrada primario via DATA CENTER.
+    manager.register(
+        "engines",
+        lambda parent: EnginesScreen(
             parent=parent,
             app=app,
             client_factory=__import__(
