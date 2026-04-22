@@ -2384,7 +2384,9 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
 
     # Cross-mode picker (same as paper): show every paper + shadow
     # instance of this engine in one row with mode badges.
-    engine_runs = _active_engine_runs(slug, launcher=launcher, state=state)
+    engine_runs = _active_engine_runs(
+        slug, launcher=launcher, state=state, mode=state.get("mode"),
+    )
     if len(engine_runs) >= 2:
         _render_engine_instance_picker(
             parent,
@@ -2879,21 +2881,31 @@ def _render_paper_instance_picker(parent, active_runs: list[dict],
     )
 
 
-def _active_engine_runs(slug: str, *, launcher=None, state=None) -> list[dict]:
-    """All live runs (paper + shadow) for a given engine slug, newest first.
+def _active_engine_runs(
+    slug: str,
+    *,
+    launcher=None,
+    state=None,
+    mode: str | None = None,
+) -> list[dict]:
+    """Live runs for a given engine slug, newest first.
 
-    Lets the operator click an engine (e.g. MILLENNIUM) and see every
-    instance running across both modes at once — paper desk-paper-a,
-    shadow desk-shadow-b, etc. Each entry carries its ``mode`` so the
-    picker can badge it and the click handler can swap state["mode"]
-    before focusing the run.
+    ``mode`` filters the list: "paper" → only paper instances, "shadow"
+    → only shadow instances, ``None`` → both (cross-mode picker).
+    Operator feedback: each mode panel (paper/shadow) should list only
+    its own instances so the menu stays focused — the cross-mode badge
+    view was confusing when navigating.
     """
-    paper = _active_paper_runs(launcher, state)
-    for r in paper:
-        r.setdefault("mode", "paper")
-    shadow = _active_shadow_runs(launcher=launcher, state=state)
-    for r in shadow:
-        r.setdefault("mode", "shadow")
+    paper: list[dict] = []
+    shadow: list[dict] = []
+    if mode in (None, "paper"):
+        paper = _active_paper_runs(launcher, state)
+        for r in paper:
+            r.setdefault("mode", "paper")
+    if mode in (None, "shadow"):
+        shadow = _active_shadow_runs(launcher=launcher, state=state)
+        for r in shadow:
+            r.setdefault("mode", "shadow")
     combined = list(paper) + list(shadow)
     # Filter by engine slug when available. MILLENNIUM-orchestrated runs
     # surface ``millennium`` in the _raw payload; leave the filter lenient
@@ -3322,7 +3334,9 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     # Cross-mode picker: show every paper + shadow instance of this
     # engine. Clicking a shadow tab swaps mode transparently. Only
     # surfaces when there are 2+ running instances to pick from.
-    engine_runs = _active_engine_runs(slug, launcher=launcher, state=state)
+    engine_runs = _active_engine_runs(
+        slug, launcher=launcher, state=state, mode=state.get("mode"),
+    )
     if len(engine_runs) >= 2:
         _render_engine_instance_picker(
             parent,
