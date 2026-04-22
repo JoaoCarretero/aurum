@@ -70,14 +70,17 @@ _STAGE_STYLE: dict[str, tuple[str, str]] = {
     "quarantined": ("QUARANTINED", HAZARD),
 }
 _PROCS_CACHE: dict[str, object] = {"ts": 0.0, "rows": []}
-# TTLs raised from 2s → 5s after operator reported flicker: every worker
-# completion scheduled a refresh, and with 3 workers (cockpit runs +
-# paper snapshot + shadow snapshot) completing on staggered 2s TTLs the
-# master list rebuilt effectively continuously. 5s keeps the UI fresh
-# enough for a 15m tick system while giving the tk main loop room.
-_COCKPIT_RUNS_CACHE_TTL_S = 5.0
-_PAPER_SNAPSHOT_CACHE_TTL_S = 5.0
-_SHADOW_SNAPSHOT_CACHE_TTL_S = 5.0
+# TTLs raised to 60s. The paper/shadow runners tick every 15 min —
+# rendering the detail pane more than once per minute gives the operator
+# zero new information (heartbeat, equity, positions all update per-tick).
+# Lower TTLs caused worker-driven rebuilds at 5s intervals: each cache
+# miss fired a worker, the worker's completion scheduled a refresh, the
+# refresh's sig-check saw new data (equity bumped by 0.01), rebuild of the
+# whole detail pane fired. Net effect: 500-1000ms UI stall every few
+# seconds. 60s matches the "inspect once per minute is enough" contract.
+_COCKPIT_RUNS_CACHE_TTL_S = 60.0
+_PAPER_SNAPSHOT_CACHE_TTL_S = 60.0
+_SHADOW_SNAPSHOT_CACHE_TTL_S = 60.0
 _COCKPIT_RUNS_CACHE: dict[str, object] = {"ts": 0.0, "runs": None, "loading": False}
 _COCKPIT_RUNS_LOCK = threading.Lock()
 _PAPER_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[dict | None, list[dict], list[float], dict | None]]] = {}
@@ -2501,7 +2504,7 @@ def _schedule_shadow_refresh(launcher, state) -> None:
         except Exception:
             pass
     try:
-        aid = launcher.after(8000,
+        aid = launcher.after(60000,
                              lambda: _refresh_shadow_detail(launcher, state))
         state["shadow_refresh_aid"] = aid
     except Exception:
@@ -3235,7 +3238,7 @@ def _schedule_paper_refresh(launcher, state) -> None:
         except Exception:
             pass
     try:
-        aid = launcher.after(8000,
+        aid = launcher.after(60000,
                              lambda: _refresh_paper_detail(launcher, state))
         state["paper_refresh_aid"] = aid
     except Exception:
