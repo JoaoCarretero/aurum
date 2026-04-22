@@ -181,9 +181,13 @@ def _score_slippage(opp: dict, pos_size_ref: float) -> float | None:
 
 def _score_venue(opp: dict, venue_reliability: dict[str, float]) -> float | None:
     """Venue reliability lookup → linear: ≤90→0, ≥99→100."""
-    # For pairs, use the worst (lowest reliability) venue
+    # For pairs, use the worst (lowest reliability) venue. Accept both
+    # short_venue/long_venue (arb_pairs output) and venue_short/venue_long
+    # (legacy/basis output).
     venues = []
-    for key in ("venue", "venue_short", "venue_long"):
+    for key in ("venue", "short_venue", "long_venue",
+                "venue_short", "venue_long",
+                "venue_perp", "venue_spot", "venue_a", "venue_b"):
         v = opp.get(key)
         if v:
             venues.append(str(v).lower())
@@ -242,11 +246,50 @@ def _weighted_score(factor_scores: dict[str, float | None], weights: dict[str, f
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
+# Default round-trip fees (both legs, both sides) used when computing
+# breakeven hours at the scorer level. Matches SimpleArbEngine defaults
+# of 10 bps entry_fee + 5 bps slippage × 2 (open + close) = 30 bps RT.
+_DEFAULT_RT_FEE_BPS = 30.0
+
+
+def _breakeven_hours(opp: dict, rt_fee_bps: float = _DEFAULT_RT_FEE_BPS) -> float | None:
+    """Hours to recover round-trip fees at this opp's current APR.
+
+    bkevn_h = fee_bps * 8760 / (100 * net_apr)
+            = fee_bps * 87.6 / net_apr   (APR in %)
+    """
+    apr = opp.get("net_apr") or opp.get("apr") or opp.get("basis_apr")
+    if apr is None:
+        return None
+    a = abs(float(apr))
+    if a <= 0:
+        return None
+    return round(rt_fee_bps * 87.6 / a, 2)
+
+
+def _viab(score: float, breakeven_h: float | None, vol_score: float | None) -> str:
+    """GO / WAIT / SKIP from composite signal.
+
+    GO   = score >= 70  AND bkevn <= 24h   AND vol_score >= 40
+    WAIT = score >= 40  AND (bkevn <= 72h  OR  vol_score >= 20)
+    SKIP = anything else
+    """
+    vol = vol_score if vol_score is not None else 0.0
+    be = breakeven_h if breakeven_h is not None else 9999.0
+    if score >= 70 and be <= 24.0 and vol >= 40.0:
+        return "GO"
+    if score >= 40 and (be <= 72.0 or vol >= 20.0):
+        return "WAIT"
+    return "SKIP"
+
+
 @dataclass
 class ScoreResult:
     """Result of scoring a single opportunity."""
     score:   float          # 0-100
-    grade:   str            # GO / MAYBE / SKIP
+    grade:   str            # GO / MAYBE / SKIP (legacy)
+    viab:    str = "SKIP"   # GO / WAIT / SKIP (new — viability flag)
+    breakeven_h: float | None = None
     factors: dict = field(default_factory=dict)  # per-factor raw scores (0-100 or None)
 
 
@@ -258,7 +301,7 @@ def score_opp(opp: dict, cfg: dict | None = None) -> ScoreResult:
         cfg: optional config overrides (weights, thresholds, venue_reliability, pos_size_ref).
 
     Returns:
-        ScoreResult with score (0-100), grade, and factors breakdown.
+        ScoreResult with score (0-100), grade, viab, breakeven_h, and factors breakdown.
     """
     resolved = _resolve_cfg(cfg)
     weights          = resolved["weights"]
@@ -275,10 +318,18 @@ def score_opp(opp: dict, cfg: dict | None = None) -> ScoreResult:
         "venue":    _score_venue(opp, venue_reliability),
     }
 
-    score  = _weighted_score(factor_scores, weights)
-    grade  = _grade(score, thresholds)
+    score = _weighted_score(factor_scores, weights)
+    grade = _grade(score, thresholds)
+    be = _breakeven_hours(opp)
+    viab = _viab(score, be, factor_scores.get("volume"))
 
-    return ScoreResult(score=round(score, 2), grade=grade, factors=factor_scores)
+    return ScoreResult(
+        score=round(score, 2),
+        grade=grade,
+        viab=viab,
+        breakeven_h=be,
+        factors=factor_scores,
+    )
 
 
 def score_batch(opps: list[dict], cfg: dict | None = None) -> list[ScoreResult]:

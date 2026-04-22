@@ -86,22 +86,13 @@ def render(app, tab: str = "cex-cex"):
              fg=DIM, bg=BG).pack(side="right", padx=(0, 8))
 
     # -- Tab strip --
-    # Same grouping pattern as Macro Brain: three functional buckets
-    # rendered with a heading above and a bronze vertical rule between
-    # them. Same HL2 chip styling (bracket-prefixed, solid amber when
-    # active, flat BG with dim text when idle, BG3/WHITE on hover).
-    # Keys 1-6 preserved.
-    arb_group_of = {
-        "cex-cex": "PAIRS", "dex-dex": "PAIRS", "cex-dex": "PAIRS",
-        "basis": "RATES", "spot": "RATES",
-        "engine": "EXECUTE",
-    }
-    grouped_tabs: list[tuple[str, list[tuple[str, str, str]]]] = []
-    for key, tid, label, _color in app._ARB_TAB_DEFS:
-        g = arb_group_of.get(tid, "OTHER")
-        if not grouped_tabs or grouped_tabs[-1][0] != g:
-            grouped_tabs.append((g, []))
-        grouped_tabs[-1][1].append((key, tid, label))
+    # Phase 1 redesign (2026-04-22): 3 tabs in a single row, no groups.
+    # Simpler info architecture: OPPS (all opportunities, unified) /
+    # POSITIONS (paper engine live) / HISTORY (closed trades).
+    # Keys 1-3 only.
+    grouped_tabs: list[tuple[str, list[tuple[str, str, str]]]] = [
+        ("", [(key, tid, label) for key, tid, label, _ in app._ARB_TAB_DEFS])
+    ]
 
     tabs_frame = tk.Frame(outer, bg=BG)
     tabs_frame.pack(fill="x", padx=16, pady=(2, 0))
@@ -117,11 +108,12 @@ def render(app, tab: str = "cex-cex"):
 
         g_box = tk.Frame(tabs_frame, bg=BG)
         g_box.pack(side="left", padx=(0, 2))
-        tk.Label(
-            g_box, text=group_name,
-            font=(FONT, 6, "bold"), fg=AMBER, bg=BG,
-            anchor="w", padx=4,
-        ).pack(fill="x", pady=(0, 2))
+        if group_name:
+            tk.Label(
+                g_box, text=group_name,
+                font=(FONT, 6, "bold"), fg=AMBER, bg=BG,
+                anchor="w", padx=4,
+            ).pack(fill="x", pady=(0, 2))
 
         g_row = tk.Frame(g_box, bg=BG)
         g_row.pack(fill="x")
@@ -168,16 +160,13 @@ def render(app, tab: str = "cex-cex"):
     app._kb("<Key-r>",
             lambda: app._arbitrage_hub(app._arb_tab))
 
-    # Route to the tab renderer
+    # Route to the tab renderer (Phase 1 redesign: 3-tab layout)
     render_map = {
-        "cex-cex": app._arb_render_cex_cex,
-        "dex-dex": app._arb_render_dex_dex,
-        "cex-dex": app._arb_render_cex_dex,
-        "basis": app._arb_render_basis,
-        "spot": app._arb_render_spot,
-        "engine": app._arb_render_engine,
+        "opps":      app._arb_render_opps,
+        "positions": app._arb_render_positions,
+        "history":   app._arb_render_history,
     }
-    render_fn = render_map.get(tab, app._arb_render_cex_cex)
+    render_fn = render_map.get(tab, app._arb_render_opps)
     render_fn(content)
 
     # If we have cached scan data from the previous tab visit, repaint

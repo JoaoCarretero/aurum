@@ -325,7 +325,10 @@ PERIODS_UI = [
 _BT_COLS: list[tuple[str, int]] = [
     ("DATE / TIME",  19),
     ("STRATEGY",     14),
-    ("TF",            5),
+    # TF: 5 → 6 chars. "15m"/"1h"/"4h" cabem facil em 5, mas
+    # a coluna encostava no DAYS; 6 da respiro visual e fica
+    # na mesma largura da coluna DAYS/TRADES — visual mais consistente.
+    ("TF",            6),
     ("DAYS",          5),
     ("BASKET",       10),
     ("RUN",          14),
@@ -1209,8 +1212,8 @@ class App(tk.Tk):
         ("sw", 192, 480),
         ("se", 728, 480),
     ]
-    _TILE_W = 320
-    _TILE_H = 170
+    _TILE_W = 340
+    _TILE_H = 200
     _TILE_DEPTH = 16
 
     _CD_CX = 460
@@ -1946,16 +1949,30 @@ class App(tk.Tk):
             self._MENU_DESIGN_H,
             self._menu_render_scale,
         )
+        # _apply_canvas_scale aligns bbox-TL to viewport-TL, which ignores
+        # the 24/18 design padding of the frame chrome and leaves content
+        # visually shifted. Re-center the bbox against the live window
+        # (same compensation splash.py applies in _render_resize). Without
+        # this, _active_tile_slots (computed below from viewport origin)
+        # ends up ~24*scale off from where tiles actually render, and any
+        # redraw via _tile_rect pulls tiles to the right.
+        live_w = max(canvas.winfo_width(), 1)
+        live_h = max(canvas.winfo_height(), 1)
+        bbox = canvas.bbox("all")
+        if bbox:
+            bbox_cx = (bbox[0] + bbox[2]) / 2
+            bbox_cy = (bbox[1] + bbox[3]) / 2
+            canvas.move("all", live_w / 2 - bbox_cx, live_h / 2 - bbox_cy)
         self._menu_viewport = viewport
         dx, dy = viewport[0], viewport[1]
         scale = self._menu_render_scale
         self._active_tile_slots = [
-            ("nw", int(round(192 * scale)) + dx, int(round(182 * scale)) + dy),
-            ("ne", int(round(728 * scale)) + dx, int(round(182 * scale)) + dy),
-            ("sw", int(round(192 * scale)) + dx, int(round(340 * scale)) + dy),
-            ("se", int(round(728 * scale)) + dx, int(round(340 * scale)) + dy),
+            ("nw", int(round(202 * scale)) + dx, int(round(150 * scale)) + dy),
+            ("ne", int(round(718 * scale)) + dx, int(round(150 * scale)) + dy),
+            ("sw", int(round(202 * scale)) + dx, int(round(390 * scale)) + dy),
+            ("se", int(round(718 * scale)) + dx, int(round(390 * scale)) + dy),
         ]
-        self._active_cd_center = (int(round(460 * scale)) + dx, int(round(261 * scale)) + dy)
+        self._active_cd_center = (int(round(460 * scale)) + dx, int(round(270 * scale)) + dy)
 
     def _menu_tile_expand(self, idx: int) -> None:
         try:
@@ -2721,6 +2738,13 @@ class App(tk.Tk):
             pct = 8.0
             tail = "background active"
             log_path = Path(info["log_file"])
+            # Engines como MILLENNIUM logam centenas de linhas por segundo
+            # durante walk-forward / monte carlo. Dispatchar set_progress
+            # por linha (via self.after(0, ...)) enfila dezenas de rebuilds
+            # do picker na main thread, travando a UI e o Windows. Batch:
+            # processa todas as linhas do chunk, mas so dispara UM
+            # set_progress por ciclo do loop (cada ~150ms), usando o ultimo
+            # pct/tail acumulado.
             while True:
                 try:
                     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -2731,10 +2755,12 @@ class App(tk.Tk):
                     chunk = ""
 
                 if chunk:
+                    saw_line = False
                     for raw in chunk.splitlines():
                         clean = raw.strip()
                         if not clean:
                             continue
+                        saw_line = True
                         next_pct, stage = self._strategies_progress_target(clean)
                         if next_pct > 0:
                             pct = max(pct, next_pct)
@@ -2744,6 +2770,7 @@ class App(tk.Tk):
                             tail = clean[:180]
                         self._strategies_inline_runs[slug]["pct"] = pct
                         self._strategies_inline_runs[slug]["tail"] = tail
+                    if saw_line:
                         try:
                             self.after(0, lambda s=slug, p=pct, t=tail: handle["set_progress"](s, p, t, True))
                         except Exception:
@@ -4148,21 +4175,28 @@ class App(tk.Tk):
     # --------------------------------------------------------------
 
     _ARB_TAB_DEFS = [
-        # (key, tab_id, label, color)
-        ("1", "cex-cex", "CEX \u2194 CEX",   "#ffd700"),
-        ("2", "dex-dex", "DEX \u2194 DEX",   "#00eaff"),
-        ("3", "cex-dex", "CEX \u2194 DEX",   "#c084fc"),
-        ("4", "basis",   "BASIS",            "#32bcad"),
-        ("5", "spot",    "SPOT \u2194 SPOT", "#ff00a0"),
-        ("6", "engine",  "ENGINE",           "#00ff80"),
+        # (key, tab_id, label, color) — collapsed 6→3 tabs in Phase 1
+        # redesign (2026-04-22). All legacy tab ids route into these.
+        ("1", "opps",      "OPPS",       "#ffd700"),
+        ("2", "positions", "POSITIONS",  "#00ff80"),
+        ("3", "history",   "HISTORY",    "#c084fc"),
     ]
 
-    def _arbitrage_hub(self, tab: str = "cex-cex"):
+    # Legacy 6-tab ids routed into the new 3-tab layout (Phase 1 redesign).
+    _ARB_LEGACY_TAB_MAP = {
+        "cex-cex": "opps", "dex-dex": "opps", "cex-dex": "opps",
+        "basis": "opps", "spot": "opps",
+        "engine": "positions",
+    }
+
+    def _arbitrage_hub(self, tab: str = "opps"):
         """Delegate to launcher_support.screens.arbitrage_hub.render.
-        Full hub (status strip + grouped tab strip + content area +
-        scanner + refresh loop) lives there. Tab renderers (_arb_render_*)
-        stay on App and are dispatched via the app parameter.
+        Full hub (status strip + tab strip + content area + scanner +
+        refresh loop) lives there. Tab renderers (_arb_render_*) stay
+        on App and are dispatched via the app parameter.
         """
+        # Route legacy tab ids to their new home
+        tab = self._ARB_LEGACY_TAB_MAP.get(tab, tab)
         from launcher_support.screens.arbitrage_hub import render as _render_arbitrage_hub
         _render_arbitrage_hub(self, tab=tab)
 
@@ -4594,8 +4628,10 @@ class App(tk.Tk):
     def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
         """Apply user filters + scoring to each pair.
 
-        Uses arb_scoring.score_opp when pair has enough fields (vol/oi), else
-        falls back to an APR-only heuristic so the table is never all-SKIP.
+        Scores via arb_scoring.score_opp — cached by (symbol, venues,
+        apr_round_1dp) with TTL = scan interval to avoid re-scoring the
+        same pair on tab switches within 15s. Falls back to APR-only
+        heuristic when scoring factors are all None.
         Returns (pair_dict, ScoreResult) in descending score order.
         """
         from core.arb.arb_scoring import score_opp
@@ -4609,6 +4645,15 @@ class App(tk.Tk):
         _G = {"GO": 0, "MAYBE": 1, "SKIP": 2}
         risk_cap  = _R.get(risk_max, 2)
         grade_cap = _G.get(grade_min, 2)
+
+        # Score cache — TTL matches scanner cache (30s is the scan ttl,
+        # so scoring is the same for 30s regardless of tab flips).
+        import time as _time
+        cache = getattr(self, "_arb_score_cache", None)
+        if cache is None or (_time.time() - cache.get("ts", 0)) > 30.0:
+            cache = {"ts": _time.time(), "map": {}}
+            self._arb_score_cache = cache
+        cache_map = cache["map"]
 
         out = []
         for p in (pairs or []):
@@ -4630,15 +4675,25 @@ class App(tk.Tk):
             if _R.get(risk, 2) > risk_cap:
                 continue
 
-            # Score via arb_scoring. If all non-APR factors come back None
-            # (pair dict lacks volume/oi per leg), fall back to APR-only.
-            try:
-                sr = score_opp(p)
-                populated = sum(1 for v in sr.factors.values() if v is not None)
-                if populated <= 1:
+            # Cache key: symbol + venues + apr rounded to 1dp (the only
+            # field that changes meaningfully between scans).
+            ckey = (
+                p.get("symbol", ""),
+                p.get("short_venue", "") or p.get("venue_perp", "") or p.get("venue_a", ""),
+                p.get("long_venue", "") or p.get("venue_spot", "") or p.get("venue_b", ""),
+                round(apr, 1),
+                p.get("_type", ""),
+            )
+            sr = cache_map.get(ckey)
+            if sr is None:
+                try:
+                    sr = score_opp(p)
+                    populated = sum(1 for v in sr.factors.values() if v is not None)
+                    if populated <= 1:
+                        sr = self._arb_score_fallback(p)
+                except Exception:
                     sr = self._arb_score_fallback(p)
-            except Exception:
-                sr = self._arb_score_fallback(p)
+                cache_map[ckey] = sr
 
             if _G.get(sr.grade, 2) > grade_cap:
                 continue
@@ -4767,27 +4822,30 @@ class App(tk.Tk):
         self._arb_build_detail_pane(parent)
 
     def _arb_render_engine(self, parent):
-        """JANE STREET engine controls + live risk + log tail."""
-        try:
-            from core.arb.alchemy_state import AlchemyState
-            state = getattr(self, "_arb_alchemy_state", None)
-            if state is None:
-                state = AlchemyState()
-                self._arb_alchemy_state = state
-            snap = state.read()
-        except Exception:
-            snap = {"_stale": True}
-
-        stale = snap.get("_stale", True)
-        running_badge = ("OFF", RED) if stale else ("RUN", GREEN)
+        """SimpleArbEngine (in-process) controls + live risk + positions."""
+        engine = getattr(self, "_arb_simple_engine", None)
+        if engine is not None and engine.running:
+            snap = engine.snapshot()
+            running_badge = ("RUN", GREEN)
+        else:
+            snap = {
+                "mode": "—", "running": False, "killed": False,
+                "account": 0, "peak": 0, "drawdown_pct": 0,
+                "realized_pnl": 0, "unrealized_pnl": 0, "exposure_usd": 0,
+                "losses_streak": 0, "trades_count": 0, "positions": [],
+            }
+            running_badge = ("OFF", RED)
 
         # Status strip (engine-specific)
         top = tk.Frame(parent, bg=BG)
         top.pack(fill="x", pady=(0, 4))
-        tk.Label(top, text="JANE STREET",
+        tk.Label(top, text="ARB ENGINE",
                  font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(top, text=f"  \u00b7  {running_badge[0]}  \u00b7  mode {snap.get('mode', '—')}",
+        tk.Label(top, text=f"  ·  {running_badge[0]}  ·  mode {snap.get('mode', '—')}",
                  font=(FONT, 8), fg=running_badge[1], bg=BG).pack(side="left")
+        if snap.get("killed"):
+            tk.Label(top, text="  ·  KILLED", font=(FONT, 8, "bold"),
+                     fg=RED, bg=BG).pack(side="left")
 
         # Live risk gauges
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
@@ -4822,7 +4880,6 @@ class App(tk.Tk):
                  font=(FONT, 7), fg=DIM, bg=BG).pack(side="left")
         for text, cmd, color in [
             ("START PAPER", lambda: self._arb_engine_start("paper"), GREEN),
-            ("START DEMO",  lambda: self._arb_engine_start("demo"),  AMBER),
             ("STOP",        self._arb_engine_stop,                    RED),
         ]:
             b = tk.Label(ctrls, text=f"  {text}  ", font=(FONT, 7, "bold"),
@@ -4830,45 +4887,244 @@ class App(tk.Tk):
             b.pack(side="left", padx=(6, 0))
             b.bind("<Button-1>", lambda _e, _c=cmd: _c())
 
-        # Log tail (last 8 lines from most recent log)
+        # Live positions table
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        tk.Label(parent, text="LOG TAIL",
+        tk.Label(parent, text="OPEN POSITIONS",
                  font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        log_body = tk.Text(parent, height=10, font=(FONT, 7),
+        pos_body = tk.Text(parent, height=6, font=(FONT, 7),
+                           bg=BG2, fg=WHITE, bd=0, highlightthickness=0,
+                           wrap="none")
+        pos_body.pack(fill="x", pady=(2, 0))
+        positions = snap.get("positions", [])
+        if positions:
+            pos_body.insert("end",
+                f"  {'SYMBOL':<12} {'SHORT':<14} {'LONG':<14} {'APR%':>7}"
+                f" {'H':>5} {'FUND$':>8}\n")
+            for p in positions:
+                pos_body.insert("end",
+                    f"  {p.get('symbol',''):<12} {p.get('venue_short',''):<14} "
+                    f"{p.get('venue_long',''):<14} "
+                    f"{p.get('current_apr',0):>+7.1f} "
+                    f"{p.get('hours_open',0):>5.1f} "
+                    f"{p.get('funding_accrued',0):>+8.2f}\n")
+        else:
+            pos_body.insert("end", "  no positions open\n")
+        pos_body.configure(state="disabled")
+
+        # Recent closed trades (tail)
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
+        tk.Label(parent, text="RECENT CLOSES",
+                 font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
+        log_body = tk.Text(parent, height=8, font=(FONT, 7),
                            bg=BG2, fg=DIM, bd=0, highlightthickness=0,
                            wrap="none")
         log_body.pack(fill="both", expand=True, pady=(2, 0))
-        try:
-            from pathlib import Path as _P
-            logs = sorted((_P("data") / ".proc_logs").glob("janestreet_*.log"),
-                          key=lambda p: p.stat().st_mtime, reverse=True)
-            if logs:
-                with logs[0].open("r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()[-60:]
-                log_body.insert("end", "".join(lines))
-                log_body.see("end")
-            else:
-                log_body.insert("end", "  no log yet — start the engine\n")
-        except Exception as e:
-            log_body.insert("end", f"  log unavailable: {e}\n")
+        recent = (snap.get("closed_recent", []) or
+                  (engine.closed[-10:] if engine is not None else []))
+        if recent:
+            for c in reversed(recent):
+                pnl = c.get('pnl', 0)
+                col_mark = "+" if pnl >= 0 else ""
+                log_body.insert("end",
+                    f"  {c.get('symbol',''):<12} {c.get('exit_reason',''):<10} "
+                    f"{c.get('hours_open',0):>5.1f}h "
+                    f"{col_mark}{pnl:.2f}\n")
+        else:
+            log_body.insert("end", "  no closes yet\n")
         log_body.configure(state="disabled")
+
+    # ═══════════════════════════════════════════════════════════
+    # Phase 1 redesign (2026-04-22): 3-tab layout
+    # ═══════════════════════════════════════════════════════════
+    _ARB_OPPS_COLS = [
+        ("VIAB",  6,  "w"),
+        ("SYM",   9,  "w"),
+        ("TYPE",  4,  "w"),
+        ("VENUES", 16, "w"),
+        ("APR",   8,  "e"),
+        ("BKEVN", 6,  "e"),
+        ("VOL",   8,  "e"),
+        ("SCORE", 5,  "e"),
+    ]
+
+    def _arb_render_opps(self, parent):
+        """Unified OPPS table. Replaces 5 separate tabs (cex-cex/dex-dex/
+        cex-dex/basis/spot) with one scrollable table tagged by TYPE."""
+        tk.Label(parent,
+                 text="OPPS  ·  unified funding + basis + spot arbitrage "
+                      "(worth it filter via VIAB)",
+                 font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(
+            anchor="w", pady=(0, 4))
+        self._arb_build_filter_bar(parent)
+        self._arb_opps_selected = []
+
+        def _on_click(ri: int):
+            if 0 <= ri < len(self._arb_opps_selected):
+                self._arb_show_detail(self._arb_opps_selected[ri])
+
+        _, repaint = self._arb_make_table(parent, self._ARB_OPPS_COLS,
+                                          on_click=_on_click)
+        self._arb_opps_repaint = repaint
+        repaint([])
+        self._arb_build_detail_pane(parent)
+
+    def _arb_render_positions(self, parent):
+        """Live paper engine positions + controls. Inherits body from
+        legacy _arb_render_engine — no destruction, just routed via
+        the new 3-tab layout."""
+        self._arb_render_engine(parent)
+
+    def _arb_render_history(self, parent):
+        """Closed trades log from SimpleArbEngine. Newest first, realized
+        PnL total at top. Read-only; rebuilds only when len(closed)
+        changes."""
+        engine = getattr(self, "_arb_simple_engine", None)
+        closed = (engine.closed if engine is not None else [])
+
+        total_pnl = round(sum(c.get("pnl", 0) for c in closed), 2)
+        n = len(closed)
+        header = tk.Frame(parent, bg=BG)
+        header.pack(fill="x", pady=(0, 4))
+        tk.Label(header, text="HISTORY",
+                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
+        tk.Label(header, text=f"  ·  {n} trades closed  ·  realized ",
+                 font=(FONT, 8), fg=DIM, bg=BG).pack(side="left")
+        pnl_fg = GREEN if total_pnl >= 0 else RED
+        tk.Label(header, text=f"${total_pnl:+,.2f}",
+                 font=(FONT, 9, "bold"), fg=pnl_fg, bg=BG).pack(side="left")
+
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 6))
+
+        if not closed:
+            tk.Label(parent,
+                     text="  No closed trades yet. Start the engine in POSITIONS tab.",
+                     font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=8)
+            return
+
+        cols = [
+            ("SYM",    9,  "w"),
+            ("VENUES", 16, "w"),
+            ("REASON", 11, "w"),
+            ("HOLD",   6,  "e"),
+            ("PNL",    9,  "e"),
+        ]
+        _, repaint = self._arb_make_table(parent, cols)
+        rows = []
+        for c in reversed(closed):  # newest first
+            pnl = c.get("pnl", 0) or 0
+            pnl_fg = GREEN if pnl >= 0 else RED
+            venues = f"{c.get('venue_short','')}/{c.get('venue_long','')}"[:16]
+            rows.append([
+                (c.get("symbol", "")[:9], WHITE),
+                (venues, AMBER_D),
+                (c.get("exit_reason", "")[:11], DIM),
+                (f"{c.get('hours_open', 0):.1f}h", DIM),
+                (f"${pnl:+,.2f}", pnl_fg),
+            ])
+        repaint(rows)
+
+    def _arb_paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot):
+        """Unified OPPS painter — merges 5 opp types, applies filter+score,
+        caps at 50 rows, paints with VIAB column."""
+        repaint = getattr(self, "_arb_opps_repaint", None)
+        if repaint is None:
+            return
+
+        # Tag each type
+        tagged: list[dict] = []
+        for p in (arb_cc or []):
+            pp = dict(p); pp["_type"] = "CC"; tagged.append(pp)
+        for p in (arb_dd or []):
+            pp = dict(p); pp["_type"] = "DD"; tagged.append(pp)
+        for p in (arb_cd or []):
+            pp = dict(p); pp["_type"] = "CD"; tagged.append(pp)
+        for p in (basis or []):
+            pp = dict(p); pp["_type"] = "BS"
+            # Adapt basis to look like an arb pair for scoring
+            pp.setdefault("net_apr", pp.get("basis_apr"))
+            pp.setdefault("short_venue", pp.get("venue_perp"))
+            pp.setdefault("long_venue", pp.get("venue_spot"))
+            pp.setdefault("volume_24h_short", pp.get("volume_perp"))
+            pp.setdefault("volume_24h_long", pp.get("volume_spot"))
+            pp.setdefault("volume_24h", min(
+                pp.get("volume_perp", 0) or 0,
+                pp.get("volume_spot", 0) or 0))
+            tagged.append(pp)
+        for p in (spot or []):
+            pp = dict(p); pp["_type"] = "SP"
+            # Spot spread: convert bps to rough APR equivalent — treat
+            # as a one-shot trade (no funding cycle), so scoring is only
+            # meaningful for viewing. Use spread_bps as APR proxy.
+            pp.setdefault("net_apr", abs(pp.get("spread_bps", 0) or 0) / 100.0)
+            pp.setdefault("short_venue", pp.get("venue_a"))
+            pp.setdefault("long_venue", pp.get("venue_b"))
+            pp.setdefault("volume_24h_short", pp.get("volume_a"))
+            pp.setdefault("volume_24h_long", pp.get("volume_b"))
+            pp.setdefault("volume_24h", min(
+                pp.get("volume_a", 0) or 0,
+                pp.get("volume_b", 0) or 0))
+            tagged.append(pp)
+
+        # Apply filter+score (with cache) and render cap
+        filtered = self._arb_filter_and_score(tagged)[:50]
+        self._arb_opps_selected = [p for p, _ in filtered]
+
+        rows = []
+        for a, sr in filtered:
+            viab = getattr(sr, "viab", sr.grade)
+            if viab == "GO":
+                viab_fg = GREEN
+            elif viab in ("WAIT", "MAYBE"):
+                viab_fg = AMBER
+            else:
+                viab_fg = DIM
+            net_apr = float(a.get("net_apr", 0) or 0)
+            apr_fg = GREEN if abs(net_apr) >= 50 else (
+                AMBER if abs(net_apr) >= 20 else DIM)
+            vol = a.get("volume_24h") or 0
+            be = getattr(sr, "breakeven_h", None)
+            be_txt = f"{be:.1f}h" if be is not None and be < 999 else "—"
+            be_fg = GREEN if (be is not None and be <= 24) else (
+                AMBER if (be is not None and be <= 72) else DIM)
+            short_v = (a.get("short_venue") or "")[:7].lower()
+            long_v = (a.get("long_venue") or "")[:7].lower()
+            venues = f"{long_v}>{short_v}"[:16]
+            rows.append([
+                (viab, viab_fg),
+                ((a.get("symbol", "") or "—")[:9], WHITE),
+                (a.get("_type", ""), DIM),
+                (venues, AMBER_D),
+                (f"{net_apr:+.1f}%", apr_fg),
+                (be_txt, be_fg),
+                (self._fmt_vol(vol), DIM),
+                (f"{int(sr.score):>3}", DIM),
+            ])
+        repaint(rows)
 
     # -- Engine control shortcuts ------------------------------
     def _arb_engine_start(self, mode: str):
-        """Start JANE STREET engine in the given mode (paper/demo/live)."""
-        from core import proc
-        proc.spawn("janestreet", cli_args=["--mode", mode])
+        """Start SimpleArbEngine (in-process, paper mode)."""
+        if mode == "demo":
+            # Demo/testnet requires venue auth — not supported in the simple
+            # in-process engine. Fall back to paper silently.
+            mode = "paper"
+        engine = getattr(self, "_arb_simple_engine", None)
+        if engine is None:
+            from core.arb.engine import SimpleArbEngine
+            engine = SimpleArbEngine()
+            self._arb_simple_engine = engine
+        if not engine.running:
+            engine.start(mode=mode)
         try:
             self.after(500, lambda: self._arbitrage_hub("engine"))
         except Exception:
             pass
 
     def _arb_engine_stop(self):
-        """Stop any running JANE STREET process."""
-        from core import proc
-        for p in proc.list_procs():
-            if p.get("engine") == "janestreet" and p.get("alive"):
-                proc.stop_proc(p["pid"], expected=p)
+        """Stop the in-process SimpleArbEngine."""
+        engine = getattr(self, "_arb_simple_engine", None)
+        if engine is not None and engine.running:
+            engine.stop()
         try:
             self.after(500, lambda: self._arbitrage_hub("engine"))
         except Exception:
@@ -4994,22 +5250,50 @@ class App(tk.Tk):
             "basis": basis, "spot": spot,
         }
 
-        # Route to the repaint callback for the active tab
-        tab = getattr(self, "_arb_tab", "cex-cex")
-        if tab == "cex-cex":
-            self._arb_paint_pairs(arb_cc,
-                getattr(self, "_arb_cex_repaint", None), "_arb_cex_selected")
-        elif tab == "dex-dex":
-            self._arb_paint_pairs(arb_dd,
-                getattr(self, "_arb_dex_repaint", None), "_arb_dex_selected")
-        elif tab == "cex-dex":
-            self._arb_paint_pairs(arb_cd,
-                getattr(self, "_arb_cdex_repaint", None), "_arb_cdex_selected")
-        elif tab == "basis":
-            self._arb_paint_basis(basis)
-        elif tab == "spot":
-            self._arb_paint_spot(spot)
-        # ENGINE tab doesn't consume scanner data
+        # Route to the repaint callback for the active tab.
+        # Phase 1 redesign: unified OPPS table consolidates 5 old tabs.
+        tab = getattr(self, "_arb_tab", "opps")
+        if tab == "opps":
+            self._arb_paint_opps(arb_cc, arb_dd, arb_cd, basis, spot)
+        # positions + history tabs don't consume scanner data directly —
+        # they read from _arb_simple_engine via their render fn.
+
+        # Feed SimpleArbEngine — any tab keeps the engine ticking as long
+        # as scanner returns data. The engine only processes FUNDING opps
+        # (arb_cc + arb_cd) and enriches with per-venue 24h volume from
+        # the raw FundingOpp list.
+        engine = getattr(self, "_arb_simple_engine", None)
+        if engine is not None and engine.running:
+            try:
+                self._arb_feed_engine(engine, opps, arb_cc + arb_cd)
+            except Exception as e:
+                # Never let engine errors kill the scan loop
+                try:
+                    import logging
+                    logging.getLogger("aurum.arb_hub").warning(
+                        "engine tick failed: %s", e, exc_info=True)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _arb_feed_engine(engine, raw_opps, arb_pairs_merged):
+        """Enrich arb pairs with volume_24h per leg, then tick engine."""
+        vol_lookup: dict[tuple[str, str], float] = {}
+        for o in raw_opps:
+            try:
+                vol_lookup[(o.symbol, o.venue)] = float(o.volume_24h)
+            except Exception:
+                continue
+        enriched: list[dict] = []
+        for ap in arb_pairs_merged:
+            sym = ap.get("symbol")
+            short_v = ap.get("short_venue", "")
+            long_v = ap.get("long_venue", "")
+            ap2 = dict(ap)
+            ap2["volume_short"] = vol_lookup.get((sym, short_v), 0)
+            ap2["volume_long"] = vol_lookup.get((sym, long_v), 0)
+            enriched.append(ap2)
+        engine.tick(enriched)
 
     def _arb_paint_pairs(self, pairs, repaint, selected_attr: str):
         """Render the 9-column pair table with scoring filter applied.
@@ -5607,12 +5891,23 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    # --- ENGINE LOGS (live proc list + log tail) --------------
+    # --- ENGINES — tela unificada (HISTORY / LIVE / LOGS) --------
     def _data_engines(self):
+        """Abre /engines — wrapper com chip bar HISTORY/LIVE/LOGS.
+
+        Consolida o que antes eram 3 entradas separadas no DATA CENTER
+        (RUNS HISTORY, LIVE RUNS, ENGINE LOGS) numa tela unica com a
+        mesma organizacao visual do /backtests. Os 3 sub-screens
+        originais continuam registrados, pra atalhos legacy e navegacao
+        direta (ex: live_runs -> runs_history via tecla R).
+        """
+        self._clr(); self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
         if hasattr(self, "screens") and getattr(self, "screens", None) is not None:
             if not self.screens_container.winfo_manager():
                 self.screens_container.pack(fill="both", expand=True)
-            self.screens.show("engine_logs")
+            self.screens.show("engines")
             try:
                 self.focus_set()
             except Exception:
@@ -7927,9 +8222,9 @@ class App(tk.Tk):
         lev   = g("leverage")
 
         def row(label, value, color=WHITE, bold=False):
-            r = tk.Frame(body, bg=PANEL); r.pack(fill="x", pady=1)
+            r = tk.Frame(body, bg=PANEL); r.pack(fill="x", pady=0)
             tk.Label(r, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=PANEL, width=12,
+                     fg=DIM, bg=PANEL, width=10,
                      anchor="w").pack(side="left")
             tk.Label(r, text=value,
                      font=(FONT, 8, "bold" if bold else "normal"),
@@ -8085,6 +8380,167 @@ class App(tk.Tk):
             # here in the first place.
             messagebox.showerror(
                 "Delete failed — unexpected error",
+                f"{type(e).__name__}: {e}")
+
+    def _dash_backtest_delete_all(self):
+        """Wipe TODOS os backtest runs: index.json + disk dirs referenciados.
+
+        Escopo = apenas run_dirs listados em data/index.json. Nao toca em
+        data/live/, data/millennium_shadow/, data/.proc_logs/, etc — esses
+        nao sao backtests e nao aparecem no index. Logo: essa operacao e
+        idempotente com o que a UI mostra: apagou aqui → sumiu no DATA >
+        BACKTEST RUNS e no engine picker LAST RUNS (ambos releem index.json
+        com cache por mtime — reescrever invalida).
+
+        Flow (espelha _dash_backtest_delete):
+        1. Dupla confirmacao (destrutivo).
+        2. Coletar run_dirs do index antes de zerar.
+        3. Escrever index.json = [] (atomico).
+        4. rmtree best-effort em cada run_dir (swallow OneDrive locks).
+        5. Invalidar cache local (self._bt_run_map) + refresh da lista.
+        """
+        idx_path = ROOT / "data" / "index.json"
+        try:
+            rows = json.loads(idx_path.read_text(encoding="utf-8"))
+            if not isinstance(rows, list):
+                rows = []
+        except (OSError, json.JSONDecodeError):
+            rows = []
+        total = len(rows)
+        if total == 0:
+            self.h_stat.configure(text="NOTHING TO DELETE", fg=AMBER_D)
+            self.after(1800,
+                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            return
+        if not messagebox.askyesno(
+                "Apagar TODOS os backtests",
+                f"Voce esta prestes a apagar {total} backtest runs.\n\n"
+                f"Isso inclui:\n"
+                f"  • {total} linhas de data/index.json\n"
+                f"  • Os diretorios data/*/<run_id>/ de cada um\n\n"
+                f"Sessoes live (data/live/) NAO sao afetadas.\n"
+                f"Processos ativos NAO sao matados.\n\n"
+                f"Continuar?"):
+            return
+        if not messagebox.askyesno(
+                "Confirmar novamente",
+                f"Ultima chance. {total} runs serao removidos.\n\n"
+                f"Certeza?"):
+            return
+
+        try:
+            from core.ops.fs import robust_rmtree
+
+            # Collect (run_id, run_dir) tuples before zeroing the index.
+            _SLUG_TO_DIR = {
+                "citadel":     ROOT / "data" / "runs",
+                "bridgewater": ROOT / "data" / "bridgewater",
+                "jump":        ROOT / "data" / "jump",
+                "deshaw":      ROOT / "data" / "deshaw",
+                "renaissance": ROOT / "data" / "renaissance",
+                "janestreet":  ROOT / "data" / "janestreet",
+                "millennium":  ROOT / "data" / "millennium",
+                "twosigma":    ROOT / "data" / "twosigma",
+                "aqr":         ROOT / "data" / "aqr",
+                "kepos":       ROOT / "data" / "kepos",
+                "medallion":   ROOT / "data" / "medallion",
+                "graham":      ROOT / "data" / "graham",
+                "phi":         ROOT / "data" / "phi",
+                "ornstein":    ROOT / "data" / "ornstein",
+            }
+            targets: list[Path] = []
+            for r in rows:
+                rid = str(r.get("run_id") or "").strip()
+                if not rid:
+                    continue
+                explicit = str(r.get("run_dir") or "").strip()
+                if explicit:
+                    targets.append(Path(explicit))
+                    continue
+                eng = str(r.get("engine") or "").lower()
+                base = _SLUG_TO_DIR.get(eng, ROOT / "data" / "runs")
+                folder = rid[len(eng) + 1:] if eng and rid.startswith(f"{eng}_") else rid
+                candidate = base / folder
+                if not candidate.exists() and eng == "citadel":
+                    candidate = base / rid  # citadel keeps the prefixed form
+                targets.append(candidate)
+
+            # Step 1a: zero index.json atomically.
+            atomic_write_json(idx_path, [], indent=2)
+            self._bt_run_map = {}
+            self._bt_recent_run_id = None
+
+            # Step 1b: zero o SQLite tbm. _query_last_runs faz fallback
+            # pra data/aurum.db quando index retorna []; sem isto, o
+            # engine picker ainda mostraria as runs antigas via DB.
+            # Truncar runs + trades (trades.run_id FK-ish logico).
+            db_path = ROOT / "data" / "aurum.db"
+            if db_path.exists():
+                try:
+                    import sqlite3 as _sq
+                    _c = _sq.connect(str(db_path))
+                    try:
+                        _c.execute("DELETE FROM trades")
+                        _c.execute("DELETE FROM runs")
+                        _c.commit()
+                    finally:
+                        _c.close()
+                except Exception:
+                    # DB wipe e best-effort — se falhar, index.json ja
+                    # esta vazio e a UI principal (DATA > BACKTEST RUNS)
+                    # reflete sumico. Picker pode mostrar stale ate rodar
+                    # reconcile, mas nao e bloqueante.
+                    pass
+
+            # Step 2: rebuild list (now empty), then refresh detail panel placeholder.
+            body = self._dash_widgets.get(("bt_detail",))
+            if body is not None:
+                try:
+                    for w in body.winfo_children():
+                        w.destroy()
+                    tk.Label(body, text="\n  all runs deleted",
+                             font=(FONT, 9, "bold"), fg=DIM, bg=PANEL,
+                             justify="left").pack(anchor="w", padx=10)
+                except tk.TclError:
+                    pass
+            try:
+                self._dash_backtest_render()
+            except Exception:
+                pass
+
+            # Step 3: best-effort disk cleanup (background not needed — 400 dirs rmtree fast).
+            deleted = 0
+            deferred = 0
+            for d in targets:
+                if not d.exists():
+                    continue
+                try:
+                    if robust_rmtree(d):
+                        deleted += 1
+                    else:
+                        deferred += 1
+                except Exception:
+                    deferred += 1
+
+            # Step 4: report.
+            if deferred == 0:
+                self.h_stat.configure(text=f"DELETED {total} RUNS", fg=AMBER)
+            else:
+                self.h_stat.configure(
+                    text=f"DELETED {total} ({deferred} disk deferred)",
+                    fg=AMBER_D,
+                )
+                messagebox.showinfo(
+                    "Disk cleanup deferred",
+                    f"{deleted} diretorios apagados do disco.\n"
+                    f"{deferred} ainda segurados por OneDrive / antivirus.\n\n"
+                    f"Rode `python tools/reports/reconcile_runs.py --apply` em "
+                    f"1-2 min pra limpar o restante.")
+            self.after(3000,
+                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+        except Exception as e:
+            messagebox.showerror(
+                "Delete ALL failed — unexpected error",
                 f"{type(e).__name__}: {e}")
 
     def _dash_backtest_open(self, run_id: str):
