@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, UTC
 from pathlib import Path
 
@@ -66,15 +67,22 @@ def _build_report(args: argparse.Namespace) -> dict[str, object]:
         "symbols": {},
     }
 
-    for sym in symbols:
+    def _prewarm_symbol(sym: str) -> tuple[str, dict]:
         funding_df = fetch_funding_rate(sym, limit=args.funding_limit)
         oi_df = fetch_open_interest(sym, period=args.period, limit=args.oi_limit)
         ls_df = fetch_long_short_ratio(sym, period=args.period, limit=args.ls_limit)
-        report["symbols"][sym] = {
+        return sym, {
             "funding": _coverage(funding_df),
             "open_interest": _coverage(oi_df),
             "long_short_ratio": _coverage(ls_df),
         }
+
+    # Network RTTs dominate — parallelize across symbols. core.sentiment's
+    # 150ms gap lock ensures we stay within Binance rate limits even with
+    # several worker threads overlapping.
+    with ThreadPoolExecutor(max_workers=min(4, len(symbols))) as pool:
+        for sym, payload in pool.map(_prewarm_symbol, symbols):
+            report["symbols"][sym] = payload
     return report
 
 

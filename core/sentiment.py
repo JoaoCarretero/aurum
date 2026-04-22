@@ -9,6 +9,7 @@ Fetches and scores on-chain/exchange sentiment data:
 All data from Binance public API (no auth required).
 """
 import logging
+import threading
 import time
 from pathlib import Path
 import numpy as np
@@ -16,9 +17,10 @@ import pandas as pd
 
 log = logging.getLogger("THOTH")
 
-# rate limit helper
+# rate limit helper — lock makes the gap safe under ThreadPoolExecutor use
 _last_req = 0.0
 _REQ_GAP = 0.15  # 150ms between requests
+_REQ_LOCK = threading.Lock()
 _SENTIMENT_CACHE_DIR = Path("data/sentiment")
 _PERIOD_MS = {
     "5m": 5 * 60 * 1000,
@@ -154,10 +156,11 @@ def _fetch_binance_rows(url: str, params: dict, label: str) -> list[dict] | None
 
 def _rate_limit():
     global _last_req
-    elapsed = time.time() - _last_req
-    if elapsed < _REQ_GAP:
-        time.sleep(_REQ_GAP - elapsed)
-    _last_req = time.time()
+    with _REQ_LOCK:
+        elapsed = time.time() - _last_req
+        if elapsed < _REQ_GAP:
+            time.sleep(_REQ_GAP - elapsed)
+        _last_req = time.time()
 
 
 def fetch_funding_rate(symbol: str, limit: int = 100,
