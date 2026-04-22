@@ -916,6 +916,13 @@ def _build_footer(parent, state) -> tk.Frame:
     state["footer_warn_lbl"] = tk.Label(f, text="", font=(FONT, 7, "bold"),
                                          fg=RED, bg=BG)
     state["footer_warn_lbl"].pack(side="right")
+    # Minimal tunnel indicator à direita do footer — substitui a antiga
+    # barra "VPS · TUNNEL" que ficava no topo do detail pane e ocupava
+    # espaço em todas as abas. Aqui o status fica visível em qualquer
+    # modo sem roubar espaço vertical do conteúdo principal.
+    state["footer_tunnel_lbl"] = tk.Label(f, text="", font=(FONT, 7, "bold"),
+                                           fg=DIM2, bg=BG)
+    state["footer_tunnel_lbl"].pack(side="right", padx=(0, 12))
     return f
 
 
@@ -926,6 +933,10 @@ def _refresh_footer(state):
     )
     state["footer_lbl"].configure(text=hints)
     state["footer_warn_lbl"].configure(text=warn)
+    tunnel_lbl = state.get("footer_tunnel_lbl")
+    if tunnel_lbl is not None:
+        tun_text, tun_fg = _get_tunnel_status_label()
+        tunnel_lbl.configure(text=f"TUNNEL {tun_text}", fg=tun_fg)
 
 
 def _load_shadow_snapshot_sync() -> tuple[Path | None, dict | None, list[dict]]:
@@ -1672,8 +1683,8 @@ def _render_detail(state, launcher):
 
     # SHADOW mode: path dedicado (telemetria do VPS cockpit API).
     if mode == "shadow":
-        # VPS engines control panel no topo — start/stop/restart unified
-        _render_vps_control_bar(detail_inner, launcher, state)
+        # Status do tunnel agora vive no footer global; aqui o detail
+        # pane vai direto pro engine card pra ganhar espaço vertical.
         if not slug:
             _render_shadow_empty_state(detail_inner, launcher, state)
             return
@@ -1687,7 +1698,6 @@ def _render_detail(state, launcher):
 
     # PAPER mode: pod sim tracking equity + positions via cockpit API.
     if mode == "paper":
-        _render_vps_control_bar(detail_inner, launcher, state)
         if not slug:
             _render_paper_empty_state(detail_inner, launcher, state)
             return
@@ -2362,18 +2372,9 @@ def _render_shadow_panel(parent, launcher, state, slug: str) -> None:
                  fill="x", padx=10, pady=(0, 4))
 
     if status == "RUNNING":
-        stop_row = tk.Frame(shadow, bg=BG2)
-        stop_row.pack(fill="x", padx=10, pady=(0, 8))
-        kill_btn = tk.Label(stop_row, text=" STOP SHADOW ",
-                            fg=BG, bg=RED, font=(FONT, 7, "bold"),
-                            cursor="hand2", padx=6, pady=3)
-        kill_btn.pack(side="left")
-        kill_btn.bind("<Button-1>",
-                      lambda _e, _d=run_dir, _s=state:
-                          _drop_shadow_kill(_d, launcher, _s))
-        # Poll the heartbeat while the loop runs so the cockpit shows
-        # live tick progress. Rebuilds only the shadow card, not the
-        # whole detail pane, to avoid flicker elsewhere.
+        # STOP SHADOW chip removido pra não ocupar espaço — controle heavy
+        # vive via systemctl no VPS. Poll do heartbeat continua rodando
+        # pra manter a UI viva sem precisar navegar pra outra aba.
         try:
             aid = launcher.after(
                 5000,
@@ -2512,39 +2513,23 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
         on_close_detail=_on_close_detail,
     )
 
-    # Actions row — SEMPRE mostra STOP + START + REFRESH. User quer controle
-    # total via terminal: parar, startar nova run, forçar refresh do cache.
+    # Actions row — só START (quando parado) + REFRESH. STOP e RESTART
+    # foram removidos do cockpit pra não ocupar espaço: controle pesado
+    # vive via SSH/systemctl no VPS quando preciso. REFRESH fica porque
+    # força re-fetch do cache local quando dados parecem stale.
     actions = tk.Frame(detail_frame, bg=PANEL)
     actions.pack(fill="x", padx=8, pady=(4, 10))
-    if status == "RUNNING" and run_dir is not None:
-        kill_btn = tk.Label(actions, text=" STOP SHADOW ",
-                            fg=BG, bg=RED, font=(FONT, 7, "bold"),
-                            cursor="hand2", padx=8, pady=3)
-        kill_btn.pack(side="left")
-        kill_btn.bind("<Button-1>",
-                      lambda _e, _d=run_dir, _s=state:
-                          _drop_shadow_kill(_d, launcher, _s))
-        # Restart: stop current + start new (no delay, systemd vai overlap
-        # mas cockpit API whitelist vai recusar start if already running)
-        restart_btn = tk.Label(actions, text=" RESTART ",
-                               fg=BG, bg=AMBER, font=(FONT, 7, "bold"),
-                               cursor="hand2", padx=8, pady=3)
-        restart_btn.pack(side="left", padx=(6, 0))
-        restart_btn.bind("<Button-1>",
-                         lambda _e: _restart_shadow_via_cockpit(
-                             launcher, state, run_dir))
-    else:
+    if not (status == "RUNNING" and run_dir is not None):
         start_btn = tk.Label(actions, text=" START SHADOW ON VPS ",
                              fg=BG, bg=GREEN, font=(FONT, 7, "bold"),
                              cursor="hand2", padx=8, pady=3)
         start_btn.pack(side="left")
         start_btn.bind("<Button-1>",
                        lambda _e: _start_shadow_via_cockpit(launcher, state))
-    # REFRESH: force re-fetch do cockpit (limpa cache local stale)
     refresh_btn = tk.Label(actions, text=" REFRESH ",
                            fg=WHITE, bg=BG3, font=(FONT, 7, "bold"),
                            cursor="hand2", padx=8, pady=3)
-    refresh_btn.pack(side="left", padx=(6, 0))
+    refresh_btn.pack(side="left", padx=(6, 0) if status != "RUNNING" else (0, 0))
     refresh_btn.bind("<Button-1>",
                      lambda _e: _force_refresh_shadow(launcher, state))
 
@@ -3460,9 +3445,6 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     status = str(hb.get("status") or "unknown").upper()
     status_color = GREEN if status == "RUNNING" else DIM2
 
-    def _on_stop():
-        _stop_paper_via_cockpit(launcher, state, run_id)
-
     detail_frame = render_detail(
         parent=parent,
         engine_display=name,
@@ -3476,7 +3458,6 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
         account_snapshot=account,
         open_positions=positions,
         equity_series=series,
-        on_stop_paper=_on_stop if status == "RUNNING" else None,
     )
 
     state["paper_last_render_sig"] = _paper_content_sig(state, launcher)

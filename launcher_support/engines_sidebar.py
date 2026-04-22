@@ -638,28 +638,24 @@ def _hl2_equity_metrics(parent: tk.Widget, account: dict,
 def _hl2_actions_bar(parent: tk.Widget, mode: str,
                      on_stop: Callable[[], None] | None,
                      on_flatten: Callable[[], None] | None) -> None:
-    """Bottom black bar with chip buttons. Shadow reuses caller-provided
-    controls further up (START/STOP via VPS bar); paper renders its own
-    STOP/FLATTEN chips here when callbacks are wired."""
-    if not (mode == "paper" and (on_stop or on_flatten)):
+    """Bottom bar com chips. STOP PAPER foi removido pra não ocupar
+    espaço — controle heavy (parar runner) vive via systemctl no VPS.
+    FLATTEN ALL fica porque é outra ação (zerar posições sem parar
+    o runner). ``on_stop`` é ignorado; mantido na signature pra
+    compatibilidade com callers antigos."""
+    del on_stop  # deprecado — chip STOP PAPER removido do cockpit
+    if not (mode == "paper" and on_flatten):
         return
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(4, 0))
     bar = tk.Frame(parent, bg=BG)
     bar.pack(fill="x")
     inner = tk.Frame(bar, bg=BG)
     inner.pack(fill="x", padx=10, pady=6)
-    if on_stop is not None:
-        chip = tk.Label(inner, text="  ■ STOP PAPER  ", fg=BG, bg=RED,
-                        font=(FONT, 7, "bold"), cursor="hand2",
-                        padx=8, pady=3)
-        chip.pack(side="left")
-        chip.bind("<Button-1>", lambda _e: on_stop())
-    if on_flatten is not None:
-        chip = tk.Label(inner, text="  ↻ FLATTEN ALL  ", fg=BG, bg=AMBER,
-                        font=(FONT, 7, "bold"), cursor="hand2",
-                        padx=8, pady=3)
-        chip.pack(side="left", padx=(6, 0))
-        chip.bind("<Button-1>", lambda _e: on_flatten())
+    chip = tk.Label(inner, text="  ↻ FLATTEN ALL  ", fg=BG, bg=AMBER,
+                    font=(FONT, 7, "bold"), cursor="hand2",
+                    padx=8, pady=3)
+    chip.pack(side="left")
+    chip.bind("<Button-1>", lambda _e: on_flatten())
 
 
 def _section_header(parent, title: str) -> None:
