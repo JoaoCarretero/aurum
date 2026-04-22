@@ -360,6 +360,15 @@ def render_detail(
 
     _hl2_telemetry_strip(frame, heartbeat, trades, mode, account_snapshot)
 
+    # Secoes enriquecidas — mostram a saude OPERACIONAL do pipeline
+    # que a strip de telemetria basica nao captura. Error banner em
+    # vermelho se last_error != null; SCAN funnel (scanned/dedup/stale/
+    # live/opened) mostra onde o pipeline de sinais perde candidatos;
+    # PROBE DIAGNOSTIC so aparece quando engine == PROBE.
+    _hl2_error_banner(frame, heartbeat)
+    _hl2_scan_section(frame, heartbeat)
+    _hl2_probe_section(frame, heartbeat, engine_display)
+
     if mode == "paper":
         _hl2_paper_body(frame, heartbeat, account_snapshot,
                         open_positions or [], equity_series or [],
@@ -465,6 +474,111 @@ def _hl2_telemetry_strip(parent: tk.Widget, hb: dict, trades: list[dict],
         _hl2_cell(strip, "EQUITY", f"${eq:,.0f}", eq_color)
         _hl2_cell(strip, "DD", f"-{dd_pct:.1f}%", dd_color)
         _hl2_cell(strip, "NET", f"{sign}${abs(net):,.0f}", net_color)
+
+
+def _hl2_error_banner(parent: tk.Widget, hb: dict) -> None:
+    """Banner vermelho compacto quando heartbeat.last_error != null.
+
+    Fica entre a strip de telemetria e as secoes de conteudo — operador
+    ve falha de tick imediatamente, sem precisar abrir log tail.
+    """
+    err = hb.get("last_error")
+    if not err:
+        return
+    bar = tk.Frame(parent, bg=BG, highlightbackground=RED,
+                   highlightthickness=1)
+    bar.pack(fill="x", padx=10, pady=(4, 2))
+    tk.Label(bar, text="LAST ERROR", fg=RED, bg=BG,
+             font=(FONT, 6, "bold")).pack(anchor="w", padx=6, pady=(3, 0))
+    tk.Label(bar, text=str(err)[:280], fg=RED, bg=BG,
+             font=(FONT, 7), anchor="w", justify="left",
+             wraplength=560).pack(anchor="w", padx=6, pady=(0, 3))
+
+
+def _hl2_scan_section(parent: tk.Widget, hb: dict) -> None:
+    """SCAN funnel — scanned -> dedup -> stale -> live -> opened.
+
+    Mostra onde o pipeline perde candidatos na ultima tick. Quando
+    operador ve novel=0 por horas, essa secao responde "o pipeline
+    ta escaneando?" — se scanned=0, nenhum sinal ta chegando aos
+    filtros; se scanned=N e live=0, filtros vetaram tudo.
+    """
+    keys = ("last_scan_scanned", "last_scan_dedup",
+            "last_scan_stale", "last_scan_live")
+    if all(hb.get(k) is None for k in keys) and not hb.get("last_novel_at"):
+        return
+
+    _hl2_section(parent, "SCAN", extra="last tick funnel")
+    strip = tk.Frame(parent, bg=PANEL)
+    strip.pack(fill="x", padx=10, pady=(0, 4))
+
+    scanned = int(hb.get("last_scan_scanned") or 0)
+    dedup = int(hb.get("last_scan_dedup") or 0)
+    stale = int(hb.get("last_scan_stale") or 0)
+    live = int(hb.get("last_scan_live") or 0)
+    opened = hb.get("last_scan_opened")
+
+    _hl2_cell(strip, "SCANNED", str(scanned),
+              WHITE if scanned > 0 else DIM2)
+    _hl2_cell(strip, "DEDUP", str(dedup),
+              DIM2 if dedup == 0 else WHITE)
+    _hl2_cell(strip, "STALE", str(stale),
+              DIM2 if stale == 0 else AMBER)
+    _hl2_cell(strip, "LIVE", str(live),
+              GREEN if live > 0 else DIM2)
+    if opened is not None:
+        _hl2_cell(strip, "OPENED", str(int(opened or 0)),
+                  GREEN if (opened or 0) > 0 else DIM2)
+
+
+def _hl2_probe_section(parent: tk.Widget, hb: dict,
+                       engine_display: str) -> None:
+    """PROBE DIAGNOSTIC — so quando engine == PROBE.
+
+    top_score vs threshold colorido (GREEN >= thr, AMBER_B >= 80%,
+    AMBER >= 60%, DIM2 abaixo) + top_symbol + direction + macro + n_above_*.
+    Quando engines reais estao com novel=0, probe responde "pipeline
+    vendo mercado?" — top_score ~0.15 = mercado morto, ~0.55 =
+    mercado ativo mas filtrado, >= threshold = sinal iminente.
+    """
+    if str(engine_display).upper() != "PROBE":
+        return
+    top = hb.get("top_score")
+    if top is None:
+        return
+
+    try:
+        top_f = float(top)
+        thr = float(hb.get("threshold") or 0.62)
+        mean = float(hb.get("mean_score") or 0.0)
+    except (TypeError, ValueError):
+        return
+    n_thr = int(hb.get("n_above_threshold") or 0)
+    n_80 = int(hb.get("n_above_80pct") or 0)
+    n_60 = int(hb.get("n_above_60pct") or 0)
+
+    top_color = (GREEN if top_f >= thr else
+                 AMBER_B if top_f >= thr * 0.8 else
+                 AMBER if top_f >= thr * 0.6 else DIM2)
+
+    top_sym = str(hb.get("top_symbol") or "—")
+    top_dir = str(hb.get("top_direction") or "—")
+    macro = str(hb.get("macro") or "—")
+    _hl2_section(parent, "PROBE DIAGNOSTIC",
+                 extra=f"macro {macro} · thr {thr:.3f}")
+    strip = tk.Frame(parent, bg=PANEL)
+    strip.pack(fill="x", padx=10, pady=(0, 4))
+
+    _hl2_cell(strip, "TOP", f"{top_f:.3f}", top_color)
+    _hl2_cell(strip, "TOP SYM", top_sym[:10], WHITE)
+    _hl2_cell(strip, "DIR", top_dir[:6], AMBER)
+    _hl2_cell(strip, "MEAN", f"{mean:.3f}", WHITE)
+    _hl2_cell(strip, ">THR", str(n_thr),
+              GREEN if n_thr > 0 else DIM2)
+    _hl2_cell(strip, ">80%", str(n_80),
+              AMBER_B if n_80 > 0 else DIM2)
+    _hl2_cell(strip, ">60%", str(n_60),
+              AMBER if n_60 > 0 else DIM2)
 
 
 def _hl2_cell(parent: tk.Widget, label: str, value: str, color: str) -> None:
