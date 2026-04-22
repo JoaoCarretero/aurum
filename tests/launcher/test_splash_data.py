@@ -128,7 +128,23 @@ def test_splash_cache_load_corrupt_returns_empty_dict(tmp_path):
 
 def test_splash_cache_save_creates_parent_dirs(tmp_path):
     cache_path = tmp_path / "nested" / "subdir" / "cache.json"
+    assert not cache_path.parent.exists()  # precondicao: dir nao existe ainda
     save_splash_cache(cache_path, {"a": 1})
+    assert cache_path.parent.is_dir()      # claim primario: mkdir aconteceu
     assert cache_path.exists()
-    assert cache_path.parent.is_dir()
     assert load_splash_cache(cache_path) == {"a": 1}
+
+
+def test_splash_cache_load_null_json_returns_empty_dict(tmp_path):
+    p = tmp_path / "null.json"
+    p.write_text("null", encoding="utf-8")
+    assert load_splash_cache(p) == {}
+
+
+def test_splash_cache_save_swallows_non_serializable(tmp_path):
+    from datetime import datetime
+    cache_path = tmp_path / "cache.json"
+    # O contrato e "nao raise". json.dump pode ter escrito parcial antes
+    # do TypeError; o round-trip load recupera: load lida com corrupt → {}.
+    save_splash_cache(cache_path, {"ts": datetime.now()})
+    assert load_splash_cache(cache_path) == {}

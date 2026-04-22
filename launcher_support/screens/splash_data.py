@@ -127,10 +127,14 @@ def load_splash_cache(cache_path: Path) -> dict:
 
 
 def save_splash_cache(cache_path: Path, data: dict) -> None:
-    """Escreve cache. Cria pasta pai se necessario. Falha silenciosa."""
+    """Escreve cache. Cria pasta pai se necessario. Falha silenciosa.
+
+    TypeError tambem e engolido — se o caller passa um objeto nao-serializavel
+    (datetime, numpy types etc), o write vira no-op em vez de crashar a UI.
+    """
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False)
-    except OSError:
+    except (OSError, TypeError):
         pass
