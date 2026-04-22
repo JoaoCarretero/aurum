@@ -9,13 +9,11 @@ name. The static top-of-file ``from engines.citadel import ...`` below and
 the lazy ``from engines.<x> import ...`` sites further down are therefore
 intentional, not violations to refactor away.
 """
-import sys, math, json, random, logging
-import numpy as np
+import sys, json, random, logging
 import pandas as pd
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -31,8 +29,8 @@ from core import (
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
-from analysis.benchmark import bear_market_analysis, year_by_year_analysis
-from analysis.plots import plot_montecarlo, plot_dashboard
+from analysis.benchmark import year_by_year_analysis
+from analysis.plots import plot_montecarlo
 from engines.citadel import scan_symbol as azoth_scan, setup_run, log
 
 # ── FORÇAR GLOBALS PARA O TF CORRECTO ─────────────────────────

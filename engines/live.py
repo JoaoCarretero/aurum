@@ -34,12 +34,11 @@ Ficheiros de output:
     reports/session_{date}.json
 """
 
-import os, sys, json, time, asyncio, logging, signal, math, random, requests
-import numpy as np
+import os, sys, json, time, asyncio, logging, signal, random, requests
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timezone
-from collections import defaultdict, deque
+from collections import defaultdict
 from typing import Optional
 
 # ── PATH ──────────────────────────────────────────────────────
