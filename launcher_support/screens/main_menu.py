@@ -20,8 +20,6 @@ from core.ui.ui_palette import (
     BORDER,
     DIM,
     FONT,
-    GREEN,
-    RED,
     TILE_CONTROL,
     TILE_EXECUTE,
     TILE_MARKETS,
@@ -74,6 +72,9 @@ class MainMenuScreen(Screen):
 
         app._menu_canvas = canvas
         app._menu_expanded_tile = None
+        # Expose the screen so launcher._menu_tile_expand_impl can redraw
+        # chrome from a clean scale-1 state (see draw_chrome docstring).
+        app._main_menu_screen = self
         canvas.delete("all")
 
         self._bind(canvas, "<Configure>", app._render_main_menu)
@@ -84,155 +85,10 @@ class MainMenuScreen(Screen):
         ):
             app._menu_live_fetch_async()
 
-        canvas.create_rectangle(24, 18, 896, 522, outline=AMBER_D, width=2, tags="frame")
-        canvas.create_rectangle(28, 22, 892, 518, outline=BORDER, width=1, tags="frame")
-        canvas.create_rectangle(32, 24, 888, 42, outline="", fill=BG2, tags="frame")
-        canvas.create_line(32, 42, 888, 42, fill=AMBER, width=1, tags="frame")
-        canvas.create_text(
-            42,
-            33,
-            anchor="w",
-            text="AURUM FINANCE",
-            font=(FONT, 8, "bold"),
-            fill=WHITE,
-            tags="frame",
-        )
-        canvas.create_text(
-            460,
-            33,
-            anchor="center",
-            text="DESK ROUTER",
-            font=(FONT, 8, "bold"),
-            fill=AMBER,
-            tags="frame",
-        )
-        canvas.create_text(
-            876,
-            33,
-            anchor="e",
-            text="MARKETS  |  EXECUTE  |  RESEARCH  |  CONTROL",
-            font=(FONT, 7),
-            fill=DIM,
-            tags="frame",
-        )
-        canvas.create_line(32, 504, 888, 504, fill=AMBER_D, width=1, tags="frame")
-
-        app._draw_panel(
-            canvas,
-            52,
-            58,
-            868,
-            104,
-            title="  DESK OVERVIEW  ",
-            accent=AMBER,
-            tag="menu",
-        )
-
-        def _col(
-            x_lbl: int,
-            label: str,
-            x_val: int,
-            value: str,
-            value_fg: str = WHITE,
-        ) -> None:
-            canvas.create_text(
-                x_lbl,
-                78,
-                anchor="w",
-                text=label,
-                font=(FONT, 7, "bold"),
-                fill=DIM,
-                tags="menu",
-            )
-            canvas.create_text(
-                x_val,
-                78,
-                anchor="w",
-                text=value,
-                font=(FONT, 9, "bold"),
-                fill=value_fg,
-                tags="menu",
-            )
-
-        _col(66, "DESK", 118, "AURUM ROUTER", AMBER)
-        canvas.create_text(
-            66,
-            94,
-            anchor="w",
-            text="select a command surface and route into the active workspace",
-            font=(FONT, 7),
-            fill=DIM,
-            tags="menu",
-        )
-        canvas.create_line(312, 68, 312, 98, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
-        _col(328, "PROFILE", 388, "PAPER | LOCAL", GREEN)
-        canvas.create_text(
-            328,
-            94,
-            anchor="w",
-            text="operator mode | kill-switch armed",
-            font=(FONT, 7),
-            fill=DIM,
-            tags="menu",
-        )
-        canvas.create_line(592, 68, 592, 98, fill=app._dim_color(AMBER, 0.4), width=1, tags="menu")
-        _col(608, "NAV", 648, "1-4 | ENTER | ESC", WHITE)
-        canvas.create_text(
-            608,
-            94,
-            anchor="w",
-            text="click a tile, use arrows, or jump by number",
-            font=(FONT, 7),
-            fill=DIM,
-            tags="menu",
-        )
+        self.draw_chrome()
 
         app._draw_cd_center(canvas, r=52)
-        canvas.create_line(60, 118, 860, 118, fill=app._dim_color(AMBER, 0.3), width=1, tags="menu")
         self.redraw_tiles()
-
-        app._draw_panel(
-            canvas,
-            52,
-            412,
-            868,
-            504,
-            title="  ACTIVE CONTEXT  ",
-            accent=AMBER,
-            tag="menu",
-        )
-        try:
-            market_label = MARKETS.get(self.conn.active_market, {}).get("label", "UNSET")
-        except Exception:
-            market_label = "UNSET"
-        app._draw_kv_rows(
-            canvas,
-            78,
-            434,
-            [
-                ("ENGINE", "DESK ROUTER", TILE_MARKETS),
-                ("MODE", "OPERATOR", WHITE),
-                ("ACCOUNT", "PAPER", GREEN),
-                ("MARKET", market_label.upper(), AMBER_B),
-            ],
-            value_x=218,
-            line_h=16,
-            tag="menu",
-        )
-        app._draw_kv_rows(
-            canvas,
-            468,
-            434,
-            [
-                ("BASKET", "DEFAULT", WHITE),
-                ("TIMEFRAME", "15M", TILE_EXECUTE),
-                ("ENVIRONMENT", "LOCAL", TILE_RESEARCH),
-                ("RISK", "KILL-SWITCH ARMED", RED),
-            ],
-            value_x=630,
-            line_h=16,
-            tag="menu",
-        )
 
         for n in (1, 2, 3, 4):
             app._kb(
@@ -266,6 +122,40 @@ class MainMenuScreen(Screen):
         app._menu_live_after_id = None
         app._menu_canvas = None
         app._menu_expanded_tile = None
+
+    def draw_chrome(self) -> None:
+        """Draw the persistent frame chrome at design (scale-1) coords.
+
+        Used by on_enter and by _menu_tile_expand_impl after the latter
+        clears the canvas. Keeping one drawing path guarantees the chrome
+        and any content drawn alongside share the same coordinate system,
+        so _render_main_menu scales them together.
+        """
+        canvas = self.canvas
+        if canvas is None:
+            return
+        try:
+            market_label = MARKETS.get(self.conn.active_market, {}).get("label", "UNSET")
+        except Exception:
+            market_label = "UNSET"
+        canvas.create_rectangle(24, 18, 896, 522, outline=AMBER_D, width=2, tags="frame")
+        canvas.create_rectangle(28, 22, 892, 518, outline=BORDER, width=1, tags="frame")
+        canvas.create_rectangle(32, 24, 888, 42, outline="", fill=BG2, tags="frame")
+        canvas.create_line(32, 42, 888, 42, fill=AMBER, width=1, tags="frame")
+        canvas.create_text(
+            42, 33, anchor="w", text="AURUM FINANCE",
+            font=(FONT, 8, "bold"), fill=WHITE, tags="frame",
+        )
+        canvas.create_text(
+            460, 33, anchor="center", text="DESK ROUTER",
+            font=(FONT, 8, "bold"), fill=AMBER, tags="frame",
+        )
+        canvas.create_text(
+            876, 33, anchor="e",
+            text=f"PAPER  ·  {market_label.upper()}  ·  15M  ·  KILL-SW ARMED",
+            font=(FONT, 7, "bold"), fill=DIM, tags="frame",
+        )
+        canvas.create_line(32, 504, 888, 504, fill=AMBER_D, width=1, tags="frame")
 
     def redraw_tiles(self) -> None:
         app = self.app

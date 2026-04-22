@@ -1722,7 +1722,10 @@ class App(tk.Tk):
             return
         children = MAIN_GROUPS[self._menu_expanded_tile][3]
         self._menu_sub_focus = (self._menu_sub_focus + delta) % len(children)
-        self._menu_sub_render(self._menu_expanded_tile)
+        # Full rebuild keeps chrome + submenu in the same scale space;
+        # incremental _menu_sub_render drew at design coords on an already
+        # scaled canvas and left the new rows off-center.
+        self._menu_tile_expand_impl(self._menu_expanded_tile, preserve_sub_focus=True)
 
     def _menu_sub_select(self, tile_idx: int, sub_idx: int) -> None:
         if not (0 <= tile_idx <= 3):
@@ -1967,20 +1970,24 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-    def _menu_tile_expand_impl(self, idx: int) -> None:
+    def _menu_tile_expand_impl(self, idx: int, preserve_sub_focus: bool = False) -> None:
         if not (0 <= idx <= 3) or self._menu_canvas is None:
             return
         self._menu_expanded_tile = idx
-        self._menu_sub_focus = 0
+        if not preserve_sub_focus:
+            self._menu_sub_focus = 0
 
         canvas = self._menu_canvas
-        # Clear everything except the persistent outer "frame"
-        for i in range(4):
-            canvas.delete(f"tile{i}")
-        canvas.delete("cd")
-        canvas.delete("spokes")
-        canvas.delete("menu")
-        canvas.delete("submenu")
+        # Rebuild from scratch at design (scale-1) coords. Previously we
+        # kept the already-scaled "frame" and drew the expanded content at
+        # design coords on top, which left the two at different scales —
+        # expanded panel drifted relative to the frame. Clearing + chrome
+        # redraw + end-of-method _render_main_menu() keeps them aligned.
+        canvas.delete("all")
+        self._menu_render_scale = 1.0
+        screen = getattr(self, "_main_menu_screen", None)
+        if screen is not None:
+            screen.draw_chrome()
 
         label, key_num, color, children = MAIN_GROUPS[idx]
         # Expand uses the full inner area (leaves room for outer frame + top bar)
@@ -2055,6 +2062,11 @@ class App(tk.Tk):
         self._kb("<Key-0>", self._menu_tile_collapse)
         self._bind_global_nav()
         self.f_lbl.configure(text="1-N select path  |  click item  |  enter confirm  |  esc back")
+        # Re-apply scale now that chrome + expanded content are drawn at
+        # design coords. Without this, expand on a zoomed window leaves
+        # content at scale 1 while the header remains in design coords —
+        # equivalent layout but looks shrunk-and-off-center.
+        self._render_main_menu()
 
     def _menu_sub_render(self, idx: int) -> None:
         if self._menu_canvas is None:
