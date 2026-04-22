@@ -35,7 +35,7 @@ def render(app, tab: str = "cex-cex"):
     app.history.append("main")
     app.h_path.configure(text=f"> ARBITRAGE > {tab.upper()}")
     app.h_stat.configure(text="DESK", fg=AMBER_D)
-    app.f_lbl.configure(text="1-6 switch tab  |  R refresh  |  ESC back")
+    app.f_lbl.configure(text="1-3 switch tab  |  R refresh  |  ESC back")
     app._kb("<Escape>", lambda: app._menu("main"))
     app._bind_global_nav()
 
@@ -45,11 +45,9 @@ def render(app, tab: str = "cex-cex"):
     )
 
     # -- Status strip --
-    # Left: live-scan indicator + clock + ISO date, right: scanner
-    # telemetry (CEX/DEX counts, top APR). Dot turns green when the
-    # scanner has successfully populated the cache, stays dim while
-    # the first scan is pending.
-    status = tk.Frame(outer, bg=BG, height=20)
+    # Single line: LIVE dot · CEX/DEX counts · SCAN Ns ago · TOP opp
+    # ─── ENGINE pill · ACCT · DD. All state at a glance, no tab hopping.
+    status = tk.Frame(outer, bg=BG, height=22)
     status.pack(fill="x", padx=16, pady=(2, 4))
     status.pack_propagate(False)
 
@@ -59,31 +57,43 @@ def render(app, tab: str = "cex-cex"):
                                  fg=dot_color, bg=BG)
     app._arb_live_dot.pack(side="left", padx=(0, 4))
     tk.Label(status, text="LIVE", font=(FONT, 7, "bold"),
-             fg=AMBER, bg=BG).pack(side="left", padx=(0, 8))
-    app._arb_clock = tk.Label(status, text="", font=(FONT, 7),
-                              fg=WHITE, bg=BG)
-    app._arb_clock.pack(side="left")
-    try:
-        now = datetime.now()
-        app._arb_clock.configure(
-            text=f"{now.strftime('%H:%M:%S UTC')}  ·  "
-                 f"{now.strftime('%Y-%m-%d')}")
-    except Exception:
-        pass
+             fg=AMBER, bg=BG).pack(side="left", padx=(0, 10))
 
-    # Right side — telemetry grouped by label·value chips.
-    app._arb_sum_best = tk.Label(status, text="TOP  —",
+    app._arb_sum_cex = tk.Label(status, text="CEX —",
+                                font=(FONT, 7), fg=DIM2, bg=BG)
+    app._arb_sum_cex.pack(side="left", padx=(0, 8))
+    app._arb_sum_dex = tk.Label(status, text="DEX —",
+                                font=(FONT, 7), fg=DIM2, bg=BG)
+    app._arb_sum_dex.pack(side="left", padx=(0, 10))
+
+    # Scan staleness — updated by _arb_schedule_clock each second
+    app._arb_scan_age = tk.Label(status, text="SCAN —",
+                                 font=(FONT, 7), fg=DIM, bg=BG)
+    app._arb_scan_age.pack(side="left", padx=(0, 10))
+
+    # Top opp inline
+    app._arb_sum_best = tk.Label(status, text="TOP —",
                                  font=(FONT, 7, "bold"),
                                  fg=AMBER, bg=BG)
-    app._arb_sum_best.pack(side="right")
-    app._arb_sum_dex = tk.Label(status, text="DEX  —",
-                                font=(FONT, 7), fg=DIM2, bg=BG)
-    app._arb_sum_dex.pack(side="right", padx=(0, 14))
-    app._arb_sum_cex = tk.Label(status, text="CEX  —",
-                                font=(FONT, 7), fg=DIM2, bg=BG)
-    app._arb_sum_cex.pack(side="right", padx=(0, 14))
-    tk.Label(status, text="SCAN", font=(FONT, 7, "bold"),
-             fg=DIM, bg=BG).pack(side="right", padx=(0, 8))
+    app._arb_sum_best.pack(side="left", padx=(0, 14))
+
+    # Engine pill — right side, with ACCT + DD
+    app._arb_engine_ddlbl = tk.Label(status, text="", font=(FONT, 7),
+                                     fg=DIM, bg=BG)
+    app._arb_engine_ddlbl.pack(side="right")
+    app._arb_engine_acctlbl = tk.Label(status, text="", font=(FONT, 7),
+                                       fg=WHITE, bg=BG)
+    app._arb_engine_acctlbl.pack(side="right", padx=(0, 8))
+    app._arb_engine_pill = tk.Label(status, text=" OFF ",
+                                    font=(FONT, 7, "bold"),
+                                    fg=BG, bg=DIM, padx=4)
+    app._arb_engine_pill.pack(side="right", padx=(0, 10))
+
+    # Populate engine pill immediately from current state
+    try:
+        app._arb_update_status_strip()
+    except Exception:
+        pass
 
     # -- Tab strip --
     # Phase 1 redesign (2026-04-22): 3 tabs in a single row, no groups.
@@ -182,7 +192,14 @@ def render(app, tab: str = "cex-cex"):
             pass
 
     # Kick off first async scan + schedule recurring refresh.
-    app._arb_hub_scan_async()
+    # Speed: skip new network call if scanner cache is still fresh
+    # (<10s). Lets tab-switch reuse existing data instantly.
+    try:
+        needs_scan = not app._arb_scan_is_fresh()
+    except Exception:
+        needs_scan = True
+    if needs_scan:
+        app._arb_hub_scan_async()
     app._arb_schedule_refresh()
 
     # Live clock tick — updates every second while the hub is open.

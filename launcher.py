@@ -4197,6 +4197,20 @@ class App(tk.Tk):
         """
         # Route legacy tab ids to their new home
         tab = self._ARB_LEGACY_TAB_MAP.get(tab, tab)
+        # Speed: if already on the requested tab with live widgets, just
+        # repaint from cache instead of tearing down and rebuilding the
+        # whole shell (status strip, tab strip, etc.). Saves ~40 widget
+        # destroys + re-creates per tab click.
+        current = getattr(self, "_arb_tab", None)
+        labels = getattr(self, "_arb_tab_labels", None)
+        if current == tab and labels:
+            try:
+                first = next(iter(labels.values()), None)
+                if first is not None and first.winfo_exists():
+                    self._arb_rerender_current_tab()
+                    return
+            except Exception:
+                pass
         from launcher_support.screens.arbitrage_hub import render as _render_arbitrage_hub
         _render_arbitrage_hub(self, tab=tab)
 
@@ -4228,22 +4242,27 @@ class App(tk.Tk):
                         return
                 except Exception:
                     return
-                self._arb_hub_scan_async()
+                # Skip network fetch if scanner cache is still fresh —
+                # triggered when a manual R-refresh or tab switch already
+                # kicked a scan a few seconds ago.
+                if not self._arb_scan_is_fresh():
+                    self._arb_hub_scan_async()
                 self._arb_refresh_after = self.after(delay_ms, _tick)
             self._arb_refresh_after = self.after(delay_ms, _tick)
         except Exception:
             pass
 
     def _arb_schedule_clock(self):
-        """Tick the status strip clock every second."""
+        """Tick every second — updates scan staleness + engine pill."""
         def _tick():
-            lbl = getattr(self, "_arb_clock", None)
-            if lbl is None:
+            # Short-circuit if status strip widgets gone (user left hub)
+            scan_lbl = getattr(self, "_arb_scan_age", None)
+            if scan_lbl is None:
                 return
             try:
-                if not lbl.winfo_exists():
+                if not scan_lbl.winfo_exists():
                     return
-                lbl.configure(text=datetime.now().strftime("%H:%M:%S UTC"))
+                self._arb_update_status_strip()
                 self.after(1000, _tick)
             except Exception:
                 pass
@@ -4251,6 +4270,58 @@ class App(tk.Tk):
             self.after(1000, _tick)
         except Exception:
             pass
+
+    def _arb_update_status_strip(self):
+        """Refresh scan staleness + engine pill in the hub status strip."""
+        import time as _time
+        # Scan staleness
+        scan_lbl = getattr(self, "_arb_scan_age", None)
+        if scan_lbl is not None:
+            try:
+                last = getattr(self, "_arb_last_scan_ts", 0) or 0
+                if last > 0:
+                    age = int(_time.time() - last)
+                    if age < 60:
+                        txt, fg = f"SCAN {age}s ago", GREEN if age <= 20 else AMBER
+                    else:
+                        txt, fg = f"SCAN {age // 60}m ago", RED
+                else:
+                    txt, fg = "SCAN —", DIM
+                scan_lbl.configure(text=txt, fg=fg)
+            except Exception:
+                pass
+        # Engine pill
+        pill = getattr(self, "_arb_engine_pill", None)
+        acctlbl = getattr(self, "_arb_engine_acctlbl", None)
+        ddlbl = getattr(self, "_arb_engine_ddlbl", None)
+        engine = getattr(self, "_arb_simple_engine", None)
+        if pill is not None:
+            try:
+                if engine is not None and engine.running:
+                    snap = engine.snapshot()
+                    mode = snap.get("mode", "paper").upper()
+                    pill.configure(
+                        text=f" {mode} RUN ",
+                        bg=GREEN if not snap.get("killed") else RED,
+                        fg=BG,
+                    )
+                    if acctlbl is not None:
+                        acctlbl.configure(
+                            text=f"ACCT ${snap.get('account', 0):,.0f}",
+                            fg=WHITE)
+                    if ddlbl is not None:
+                        dd = float(snap.get("drawdown_pct", 0) or 0)
+                        ddlbl.configure(
+                            text=f"DD {dd:+.2f}%",
+                            fg=RED if dd > 5 else (AMBER if dd > 1 else DIM))
+                else:
+                    pill.configure(text=" OFF ", bg=DIM, fg=BG)
+                    if acctlbl is not None:
+                        acctlbl.configure(text="", fg=DIM)
+                    if ddlbl is not None:
+                        ddlbl.configure(text="", fg=DIM)
+            except Exception:
+                pass
 
     # -- Table helper used by every tab -------------------------
     def _arb_make_table(self, parent, cols: list[tuple[str, int, str]],
@@ -4408,8 +4479,45 @@ class App(tk.Tk):
 
     def _arb_filter_state(self) -> dict:
         if not hasattr(self, "_arb_filters"):
-            self._arb_filters = dict(self._ARB_FILTER_DEFAULTS)
+            # First access — try loading persisted state, else defaults
+            self._arb_filters = self._arb_load_filters()
         return self._arb_filters
+
+    @staticmethod
+    def _arb_filters_path():
+        from pathlib import Path as _P
+        return _P("data") / "arb_hub" / "filters.json"
+
+    def _arb_load_filters(self) -> dict:
+        """Load persisted filter state from disk. Falls back to defaults."""
+        import json as _json
+        base = dict(self._ARB_FILTER_DEFAULTS)
+        try:
+            path = self._arb_filters_path()
+            if path.exists():
+                raw = _json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    # Only accept keys the defaults know about — prevents
+                    # stale schema entries from polluting the state.
+                    for k, v in raw.items():
+                        if k in base:
+                            base[k] = v
+        except Exception:
+            pass
+        return base
+
+    def _arb_save_filters(self) -> None:
+        """Persist current filter state to disk (atomic write)."""
+        import json as _json
+        try:
+            path = self._arb_filters_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                _json.dumps(self._arb_filters, indent=2), encoding="utf-8")
+            tmp.replace(path)
+        except Exception:
+            pass
 
     def _arb_fmt_filter(self, key: str, val) -> str:
         if key == "min_apr":
@@ -4453,12 +4561,14 @@ class App(tk.Tk):
             except Exception:
                 pass
         self._arb_refresh_viab_toolbar()
+        self._arb_save_filters()
         self._arb_rerender_current_tab()
 
     def _arb_toggle_risky_venues(self) -> None:
         state = self._arb_filter_state()
         state["exclude_risky_venues"] = not state.get("exclude_risky_venues", False)
         self._arb_refresh_viab_toolbar()
+        self._arb_save_filters()
         self._arb_rerender_current_tab()
 
     def _arb_refresh_viab_toolbar(self) -> None:
@@ -4558,12 +4668,35 @@ class App(tk.Tk):
         # Phase 2: viability toolbar on top, chips below as "advanced"
         self._arb_build_viab_toolbar(parent)
 
+        # Phase 4: ADVANCED chips collapsed by default. Clickable toggle.
         state = self._arb_filter_state()
-        bar = tk.Frame(parent, bg=BG2)
-        bar.pack(fill="x", pady=(0, 4))
-        tk.Label(bar, text=" ADVANCED ", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=BG2).pack(side="left", padx=(4, 2))
-        tk.Label(bar, text="› click pra ciclar",
+        adv_container = tk.Frame(parent, bg=BG)
+        adv_container.pack(fill="x", pady=(0, 4))
+
+        header = tk.Frame(adv_container, bg=BG)
+        header.pack(fill="x")
+        advanced_expanded = getattr(self, "_arb_advanced_expanded", False)
+        arrow = "▼" if advanced_expanded else "▶"
+        toggle = tk.Label(
+            header, text=f" {arrow} ADVANCED FILTERS ",
+            font=(FONT, 7, "bold"),
+            fg=DIM, bg=BG, cursor="hand2", padx=4)
+        toggle.pack(side="left")
+
+        def _toggle_advanced(_e=None):
+            self._arb_advanced_expanded = not getattr(self, "_arb_advanced_expanded", False)
+            # Force full rebuild (not fast-path) by clearing tab labels
+            self._arb_tab_labels = None
+            self._arbitrage_hub(self._arb_tab)
+        toggle.bind("<Button-1>", _toggle_advanced)
+
+        # Early-return if collapsed — chip bar never mounted
+        if not advanced_expanded:
+            return
+
+        bar = tk.Frame(adv_container, bg=BG2)
+        bar.pack(fill="x", pady=(2, 0))
+        tk.Label(bar, text=" click pra ciclar ",
                  font=(FONT, 6), fg=DIM, bg=BG2).pack(
             side="left", padx=(0, 6))
 
@@ -4603,6 +4736,7 @@ class App(tk.Tk):
                 # Keep viability toolbar in sync when grade_min changes
                 if _k == "grade_min":
                     self._arb_refresh_viab_toolbar()
+                self._arb_save_filters()
                 self._arb_rerender_current_tab()
             lbl.bind("<Button-1>", _cycle)
 
@@ -4944,116 +5078,11 @@ class App(tk.Tk):
         ("GRADE", 8,  "e"),
     ]
 
-    def _arb_render_cex_cex(self, parent):
-        """CEX↔CEX tab: paired funding arb opportunities + JANE STREET
-        live positions (if the engine is running and writing snapshots)."""
-        tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
-                 font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(
-            anchor="w", pady=(0, 4))
-
-        self._arb_build_filter_bar(parent)
-        self._arb_cex_selected = []  # filtered pairs, index-aligned with table rows
-
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_cex_selected):
-                self._arb_show_detail(self._arb_cex_selected[ri])
-        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
-                                           on_click=_on_click)
-        self._arb_cex_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-        # Live JANE STREET positions (shown only if engine has a fresh snapshot)
-        try:
-            from core.arb.alchemy_state import AlchemyState
-            state = getattr(self, "_arb_alchemy_state", None)
-            if state is None:
-                state = AlchemyState()
-                self._arb_alchemy_state = state
-            snap = state.read()
-            if not snap.get("_stale", True) and snap.get("positions"):
-                tk.Label(parent, text="LIVE POSITIONS",
-                         font=(FONT, 7, "bold"), fg=AMBER,
-                         bg=BG).pack(anchor="w", pady=(6, 2))
-                pcols = [("SYM", 7, "w"), ("L/S", 10, "w"),
-                         ("PNL", 9, "e"), ("DECAY", 8, "e"), ("EXIT", 8, "e")]
-                _, p_repaint = self._arb_make_table(parent, pcols)
-                pos_rows = []
-                for p in snap.get("positions", []):
-                    pnl = p.get("pnl", 0) or 0
-                    exit_s = p.get("exit_in_s", 0) or 0
-                    h, rem = divmod(int(exit_s), 3600)
-                    m = rem // 60
-                    long_v = (p.get("long") or "")[:3].upper()
-                    short_v = (p.get("short") or "")[:3].upper()
-                    pos_rows.append([
-                        ((p.get("sym") or "\u2014")[:6], WHITE),
-                        (f"{long_v}/{short_v}", AMBER_D),
-                        (f"{pnl:+.2f}", GREEN if pnl >= 0 else RED),
-                        (f"-{p.get('edge_decay_pct', 0):.0f}%", AMBER),
-                        (f"{h}h{m:02d}" if exit_s > 0 else "\u2014", DIM),
-                    ])
-                p_repaint(pos_rows)
-        except Exception:
-            pass
-
-    def _arb_render_dex_dex(self, parent):
-        tk.Label(parent, text="DEX \u2194 DEX  \u00b7  funding diff across decentralized venues",
-                 font=(FONT, 8, "bold"), fg="#00eaff", bg=BG).pack(anchor="w", pady=(0, 4))
-        self._arb_build_filter_bar(parent)
-        self._arb_dex_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_dex_selected):
-                self._arb_show_detail(self._arb_dex_selected[ri])
-        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
-                                           on_click=_on_click)
-        self._arb_dex_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-    def _arb_render_cex_dex(self, parent):
-        tk.Label(parent, text="CEX \u2194 DEX  \u00b7  funding diff cex vs dex",
-                 font=(FONT, 8, "bold"), fg="#c084fc", bg=BG).pack(anchor="w", pady=(0, 4))
-        self._arb_build_filter_bar(parent)
-        self._arb_cdex_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_cdex_selected):
-                self._arb_show_detail(self._arb_cdex_selected[ri])
-        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
-                                           on_click=_on_click)
-        self._arb_cdex_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-    def _arb_render_basis(self, parent):
-        tk.Label(parent, text="BASIS  \u00b7  buy spot / short perp (or reverse) to lock basis",
-                 font=(FONT, 8, "bold"), fg="#32bcad", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("PERP", 9, "w"),
-                ("SPOT", 9, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
-                ("BASIS", 8, "e"), ("APR", 7, "e")]
-        self._arb_basis_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_basis_selected):
-                self._arb_show_detail(self._arb_basis_selected[ri])
-        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
-        self._arb_basis_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-    def _arb_render_spot(self, parent):
-        tk.Label(parent, text="SPOT \u2194 SPOT  \u00b7  same asset, different exchange",
-                 font=(FONT, 8, "bold"), fg="#ff00a0", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("VENUE A", 9, "w"),
-                ("VENUE B", 9, "w"), ("PRICE A", 11, "e"),
-                ("PRICE B", 11, "e"), ("SPREAD", 9, "e")]
-        self._arb_spot_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_spot_selected):
-                self._arb_show_detail(self._arb_spot_selected[ri])
-        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
-        self._arb_spot_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
+    # Legacy renderers (cex_cex, dex_dex, cex_dex, basis, spot) removed
+    # in Phase 4 organize (2026-04-22). Their data now flows into the
+    # unified OPPS tab. The _arb_*_repaint/_selected fields they wrote
+    # to are no longer referenced; if you need the raw pair lists they
+    # live in self._arb_cache (populated by _arb_hub_scan_async).
 
     def _arb_render_engine(self, parent):
         """SimpleArbEngine (in-process) controls + live risk + positions."""
@@ -5397,6 +5426,14 @@ class App(tk.Tk):
             pass
 
     # -- Background scan: populates status strip + active tab ----
+    _ARB_SCAN_FRESH_SECS = 10  # within this window, skip new scan
+
+    def _arb_scan_is_fresh(self) -> bool:
+        """True if last scan is within the fresh window (no need to rescan)."""
+        import time as _time
+        last = getattr(self, "_arb_last_scan_ts", 0) or 0
+        return (_time.time() - last) < self._ARB_SCAN_FRESH_SECS
+
     def _arb_hub_scan_async(self):
         """Run FundingScanner in a worker thread and push results to the UI.
 
@@ -5510,11 +5547,18 @@ class App(tk.Tk):
             pass
 
         # Cache raw results so tab switches can repaint without rescanning
+        import time as _time
+        self._arb_last_scan_ts = _time.time()
         self._arb_cache = {
             "stats": stats, "top": top, "opps": opps,
             "arb_cc": arb_cc, "arb_dd": arb_dd, "arb_cd": arb_cd,
             "basis": basis, "spot": spot,
         }
+        # Push scan age + engine state into the status strip right away
+        try:
+            self._arb_update_status_strip()
+        except Exception:
+            pass
 
         # Route to the repaint callback for the active tab.
         # Phase 1 redesign: unified OPPS table consolidates 5 old tabs.
