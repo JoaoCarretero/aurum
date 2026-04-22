@@ -517,6 +517,20 @@ class App(tk.Tk):
             pass
         self.title("AURUM Terminal")
         self.configure(bg=BG)
+        # Defensive: forca Tk default palette pra BG em tudo. Se alguma
+        # Frame em algum canto esquecer bg=BG explicito, o Windows
+        # mostraria SystemButtonFace (~#F0F0F0) = "branco" no fundo.
+        # tk_setPalette varre todos widget defaults e seta em massa —
+        # inclui menu/dialog/messagebox criados internamente. Chamado
+        # ANTES de chrome/widgets serem criados.
+        try:
+            self.tk_setPalette(
+                background=BG, foreground=WHITE,
+                activeBackground=BG3, activeForeground=WHITE,
+                highlightColor=BORDER, highlightBackground=BG,
+            )
+        except Exception:
+            pass
         self._configure_windows_dpi()
         self.geometry("960x660")
         self.minsize(860, 560)
