@@ -219,11 +219,25 @@ def _fmt_age(ts):
 
 # ── UI PRIMITIVES ────────────────────────────────────────────
 
-def _draw_spark(canvas, values, color=AMBER, w=80, h=14):
+def _draw_spark(canvas, values, color=AMBER, w=80, h=14,
+                show_bounds: bool = True):
+    """Sparkline line chart com bounds opcionais (teto/piso pontilhados).
+
+    ``show_bounds``: se True, desenha linhas pontilhadas no min e max da
+    serie (dash dim) pra dar range visual instantaneo tipo Bloomberg.
+    """
     canvas.delete("all")
-    if not values or len(values) < 2: return
+    if not values or len(values) < 2:
+        return
     mn, mx = min(values), max(values)
     rng = mx - mn if mx > mn else 1.0
+
+    # Bounds dotted — teto e piso cinza dim. Desenha ANTES da linha
+    # principal pra linha ficar por cima.
+    if show_bounds and h >= 12:
+        canvas.create_line(2, 2, w - 2, 2, fill=DIM2, dash=(1, 2))
+        canvas.create_line(2, h - 2, w - 2, h - 2, fill=DIM2, dash=(1, 2))
+
     pts = []
     for i, v in enumerate(values):
         x = 2 + (w - 4) * (i / (len(values) - 1))
@@ -231,6 +245,37 @@ def _draw_spark(canvas, values, color=AMBER, w=80, h=14):
         pts.append(x); pts.append(y)
     if len(pts) >= 4:
         canvas.create_line(*pts, fill=color, width=1)
+
+
+def _draw_spark_candles(canvas, values, w=80, h=14, show_bounds: bool = True):
+    """Mini-candle sparkline — cada ponto e uma barra vertical verde (close
+    maior que anterior) ou vermelha (menor). Vibe Bloomberg OHLC density.
+
+    Cada barra ocupa da linha do close anterior ate o atual — altura
+    relativa no range total da serie.
+    """
+    canvas.delete("all")
+    if not values or len(values) < 2:
+        return
+    mn, mx = min(values), max(values)
+    rng = mx - mn if mx > mn else 1.0
+    n = len(values)
+    bw = max(1.0, (w - 4) / n - 0.5)
+
+    if show_bounds and h >= 12:
+        canvas.create_line(2, 2, w - 2, 2, fill=DIM2, dash=(1, 2))
+        canvas.create_line(2, h - 2, w - 2, h - 2, fill=DIM2, dash=(1, 2))
+
+    for i in range(1, n):
+        v, p = values[i], values[i - 1]
+        fill = GREEN if v >= p else RED
+        x = 2 + (w - 4) * (i / (n - 1))
+        y1 = h - 2 - (h - 4) * ((v - mn) / rng)
+        y2 = h - 2 - (h - 4) * ((p - mn) / rng)
+        canvas.create_rectangle(
+            x - bw / 2, min(y1, y2), x + bw / 2, max(y1, y2) + 1,
+            fill=fill, outline="",
+        )
 
 
 def _attach_hover(widget: tk.Widget, default_border: str = BORDER,
@@ -310,7 +355,7 @@ def _tile(parent, label, value, change="", change_color=WHITE,
     spark_cv = tk.Canvas(f, bg=PANEL, height=14, highlightthickness=0,
                           borderwidth=0)
     spark_cv.pack(fill="x", padx=PAD_TILE_INNER, pady=(0, 3))
-    # Desenho inicial se ja temos series
+    # Desenho inicial se ja temos series (mini-candles por default)
     if series:
         try:
             vals = [
@@ -320,10 +365,13 @@ def _tile(parent, label, value, change="", change_color=WHITE,
             vals = [v for v in vals if isinstance(v, (int, float))]
             if len(vals) >= 2:
                 # Deferred render via after() — winfo_width so e valido pos-pack.
-                spark_cv.after(30, lambda cv=spark_cv, vv=vals, sc=spark_color:
-                               _draw_spark(cv, vv, color=sc,
+                spark_cv.after(
+                    30,
+                    lambda cv=spark_cv, vv=vals:
+                        _draw_spark_candles(cv, vv,
                                             w=(cv.winfo_width() or 80),
-                                            h=14))
+                                            h=14),
+                )
         except Exception:
             pass
 
@@ -341,25 +389,47 @@ def _tile(parent, label, value, change="", change_color=WHITE,
     return f
 
 
-def _flash_label(lbl: tk.Label, up: bool) -> None:
-    """Flash brief no bg do value_lbl: verde se up, vermelho se down.
-    Reverte pra PANEL apos 450ms. Usa after() pra nao bloquear UI."""
+def _lerp_hex(c1: str, c2: str, t: float) -> str:
+    """Linear-interpolate dois hex colors (#rrggbb). t em [0,1]."""
+    try:
+        r1, g1, b1 = int(c1[1:3], 16), int(c1[3:5], 16), int(c1[5:7], 16)
+        r2, g2, b2 = int(c2[1:3], 16), int(c2[3:5], 16), int(c2[5:7], 16)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception:
+        return c2
+
+
+def _flash_label(lbl: tk.Label, up: bool, steps: int = 8,
+                 dur_ms: int = 480) -> None:
+    """Fade gradient no bg do value_lbl: verde/vermelho intenso → PANEL,
+    em ``steps`` quadros distribuidos em ``dur_ms``. Sensacao analogica
+    (fade out) em vez de cut abrupto.
+
+    Antes (cut): bg=GREEN por 450ms, depois PANEL. Visualmente aspero.
+    Agora (fade): bg e fg interpolam de (GREEN|RED, BG) -> (PANEL, WHITE)
+    em 8 steps de ~60ms cada. Vibe TradingView/Bloomberg.
+    """
     try:
         if not lbl.winfo_exists():
             return
-        flash_bg = GREEN if up else RED
-        # Bg transiente — use tag temporario via attribute pra nao conflitar
-        # com outros fluxos de styling.
-        lbl.configure(bg=flash_bg, fg=BG)
+        src_bg = GREEN if up else RED
+        src_fg = BG
 
-        def _revert():
-            try:
-                if lbl.winfo_exists():
-                    lbl.configure(bg=PANEL, fg=WHITE)
-            except Exception:
-                pass
+        def _step(i: int = 0):
+            if not lbl.winfo_exists():
+                return
+            t = i / steps
+            lbl.configure(
+                bg=_lerp_hex(src_bg, PANEL, t),
+                fg=_lerp_hex(src_fg, WHITE, t),
+            )
+            if i < steps:
+                lbl.after(dur_ms // steps, lambda: _step(i + 1))
 
-        lbl.after(450, _revert)
+        _step()
     except Exception:
         pass
 
@@ -473,16 +543,24 @@ def tick_update() -> int:
             except Exception:
                 pass
 
-        # Spark series
+        # Spark series — usa mini-candles por default pra densidade visual
+        # estilo Bloomberg. Se spark_style='line', desenha polyline simples.
         spark_cv = refs.get("spark")
         if spark_cv is not None:
             try:
                 if spark_cv.winfo_exists():
                     vals = [r["value"] for r in s[-30:]]
                     w = spark_cv.winfo_width() or 80
-                    _draw_spark(spark_cv, vals,
-                                 color=refs.get("spark_color", AMBER),
-                                 w=w, h=14)
+                    h = spark_cv.winfo_height() or 14
+                    style = refs.get("spark_style", "candles")
+                    if style == "line":
+                        _draw_spark(
+                            spark_cv, vals,
+                            color=refs.get("spark_color", AMBER),
+                            w=w, h=h,
+                        )
+                    else:
+                        _draw_spark_candles(spark_cv, vals, w=w, h=h)
             except Exception:
                 pass
     return changed
