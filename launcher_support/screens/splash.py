@@ -81,6 +81,7 @@ class SplashScreen(Screen):
         self.canvas: tk.Canvas | None = None
         self._design_w = app._SPLASH_DESIGN_W
         self._design_h = app._SPLASH_DESIGN_H
+        self._render_scale = 1.0
         self._index_path = Path("data/index.json")
 
     def build(self) -> None:
@@ -108,6 +109,9 @@ class SplashScreen(Screen):
             return
 
         canvas.delete("splash")
+        # Content was redrawn at design scale — reset tracker so _apply_canvas_scale
+        # computes the correct ratio for the next configure event.
+        self._render_scale = 1.0
         offline = self._read_offline_data()
         self._draw_offline_tiles(canvas, offline)
 
@@ -320,8 +324,11 @@ class SplashScreen(Screen):
     def _render_resize(self, _event=None) -> None:
         if self.canvas is None:
             return
-        self.app._apply_canvas_scale(
-            self.canvas, self._design_w, self._design_h, 1.0,
+        # Previous scale must be tracked across resize events — passing a
+        # constant 1.0 compounds the scale on every configure tick, which
+        # pushes content off-center as the window resizes.
+        _, self._render_scale = self.app._apply_canvas_scale(
+            self.canvas, self._design_w, self._design_h, self._render_scale,
         )
 
     def _pulse_tick(self) -> None:
