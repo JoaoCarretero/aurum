@@ -4,6 +4,7 @@ All route groups organized with APIRouter.
 """
 import json
 import asyncio
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -320,9 +321,23 @@ async def trading_status(user: dict = Depends(require_admin)):
     return {"engines": result}
 
 
+_POSITIONS_CACHE: dict = {"ts": 0.0, "payload": None}
+_POSITIONS_TTL_SEC = 2.0
+
+
 @trading_router.get("/positions")
 async def open_positions(user: dict = Depends(require_admin)):
-    """Get open positions from proc state files."""
+    """Get open positions from proc state files.
+
+    Cached in-memory for ``_POSITIONS_TTL_SEC`` seconds to collapse bursts
+    of admin polls — each call otherwise does a directory glob plus N
+    JSON parses.
+    """
+    now = time.monotonic()
+    cached_payload = _POSITIONS_CACHE["payload"]
+    if cached_payload is not None and (now - _POSITIONS_CACHE["ts"]) < _POSITIONS_TTL_SEC:
+        return cached_payload
+
     positions = []
     state_dir = DATA_DIR
     if state_dir.exists():
@@ -354,7 +369,10 @@ async def open_positions(user: dict = Depends(require_admin)):
         except (json.JSONDecodeError, OSError):
             pass
 
-    return {"positions": positions}
+    payload = {"positions": positions}
+    _POSITIONS_CACHE["ts"] = now
+    _POSITIONS_CACHE["payload"] = payload
+    return payload
 
 
 @trading_router.get("/trades")

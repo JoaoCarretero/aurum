@@ -315,14 +315,28 @@ _ALLOWED_KEYS = {
 }
 
 
+_CONFIG_CACHE: dict[str, tuple[float, "RiskGateConfig"]] = {}
+
+
 def load_gate_config(mode: str) -> RiskGateConfig:
     """Load RiskGateConfig for ``mode`` from config/risk_gates.json.
 
     Falls back to the permissive default if the file is absent, malformed,
     or the mode section is missing. Unknown keys are ignored (forward-compat).
+
+    Cached per mode by file mtime: edits to risk_gates.json are picked up
+    on next call, but unchanged files skip the JSON parse.
     """
     if not _CONFIG_PATH.exists():
+        _CONFIG_CACHE.clear()
         return RiskGateConfig()
+    try:
+        mtime = _CONFIG_PATH.stat().st_mtime
+    except OSError:
+        return RiskGateConfig()
+    cached = _CONFIG_CACHE.get(mode)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
     try:
         raw = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -336,9 +350,11 @@ def load_gate_config(mode: str) -> RiskGateConfig:
     if "freeze_hours_utc" in kwargs and isinstance(kwargs["freeze_hours_utc"], list):
         kwargs["freeze_hours_utc"] = tuple(int(h) for h in kwargs["freeze_hours_utc"])
     try:
-        return RiskGateConfig(**kwargs)
+        cfg = RiskGateConfig(**kwargs)
     except TypeError:
         return RiskGateConfig()
+    _CONFIG_CACHE[mode] = (mtime, cfg)
+    return cfg
 
 
 __all__ = [

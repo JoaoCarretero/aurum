@@ -99,112 +99,15 @@ from core.ui.ui_palette import (
     FONT,
 )
 
-LEGACY_ENGINE_ALIASES = {
-    "backtest": "citadel",
-    "citadel": "citadel",
-    "thoth": "bridgewater",
-    "bridgewater": "bridgewater",
-    "mercurio": "jump",
-    "jump": "jump",
-    "newton": "deshaw",
-    "deshaw": "deshaw",
-    "de_shaw": "deshaw",
-    "prometeu": "twosigma",
-    "twosigma": "twosigma",
-    "two_sigma": "twosigma",
-    "darwin": "aqr",
-    "aqr": "aqr",
-    "multistrategy": "millennium",
-    "millennium": "millennium",
-    "harmonics": "renaissance",
-    "harmonics_backtest": "renaissance",
-    "renaissance": "renaissance",
-    "arbitrage": "janestreet",
-    "jane_street": "janestreet",
-    "janestreet": "janestreet",
-}
-
-ENGINE_PREFIX_ALIASES = (
-    "citadel_", "thoth_", "bridgewater_", "newton_", "deshaw_",
-    "mercurio_", "jump_", "multistrategy_", "millennium_",
-    "prometeu_", "twosigma_", "renaissance_", "harmonics_",
-)
-
-def canonical_engine_key(name) -> str:
-    raw = str(name or "").strip().lower().replace(" ", "_")
-    return LEGACY_ENGINE_ALIASES.get(raw, raw)
-
-def engine_display_name(name) -> str:
-    key = canonical_engine_key(name)
-    return ENGINE_NAMES.get(key, key.replace("_", " ").upper())
-
 # --- 3D MENU — tile accents (SSOT: core/ui_palette) --------
 from core.ui.ui_palette import (
     TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL, TILE_DIM_FACTOR,
 )
 
 # -----------------------------------------------------------
-# VPS — remote control over SSH (passwordless key auth)
-# -----------------------------------------------------------
-VPS_HOST    = "root@37.60.254.151"
-VPS_PROJECT = "~/aurum.finance"
-
-# Windows: suppress the console window that pops up on every subprocess call,
-# otherwise polling every 5s makes a CMD window flash open/closed constantly.
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-
-def _vps_cmd(cmd: str, timeout: int = 10) -> str | None:
-    """Run a command on the VPS over SSH, return stdout or None on failure.
-    Intended to be called from a worker thread — subprocess.run blocks."""
-    try:
-        r = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "ConnectTimeout=5",
-             "-o", "BatchMode=yes",
-             VPS_HOST, cmd],
-            capture_output=True, text=True, timeout=timeout,
-            creationflags=_NO_WINDOW,
-        )
-        if r.returncode == 0:
-            return r.stdout
-        return None
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
-
-# -----------------------------------------------------------
-# TICKER (live prices)
-# -----------------------------------------------------------
-_TD = {}
-_TL = threading.Lock()
-def _fetch():
-    client = TransportClient()
-    while True:
-        try:
-            r = client.request(RequestSpec(
-                method="GET",
-                url="https://fapi.binance.com/fapi/v1/ticker/24hr",
-                timeout=8,
-            ))
-            if r.status_code == 200:
-                d = {t["symbol"]: t for t in r.json()}
-                with _TL:
-                    for s in ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"]:
-                        if s in d: _TD[s] = {"p": float(d[s]["lastPrice"]), "c": float(d[s]["priceChangePercent"])}
-        except Exception:
-            runtime_health.record("launcher.ticker_fetch_failure")
-        time.sleep(12)
-
-def _ticker_str():
-    with _TL:
-        if not _TD: return "connecting..."
-        return "   ".join(f"{s.replace('USDT','')} {_TD[s]['p']:,.2f} {'+'if _TD[s]['c']>=0 else ''}{_TD[s]['c']:.1f}%" for s in ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"] if s in _TD)
-
-# -----------------------------------------------------------
 # MENUS
 # -----------------------------------------------------------
 from core.data.connections import ConnectionManager, MARKETS
-from core.arb.alchemy_state import AlchemyState
-from core.ui import alchemy_ui
 ENGINE_PREFIX_ALIASES = _BOOTSTRAP_ENGINE_PREFIX_ALIASES
 VPS_HOST = _BOOTSTRAP_VPS_HOST
 VPS_PROJECT = _BOOTSTRAP_VPS_PROJECT
