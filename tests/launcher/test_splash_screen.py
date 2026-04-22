@@ -115,3 +115,19 @@ def test_splash_header_labels_set_on_enter(gui_root, fake_app, fake_conn):
     s.on_enter()
     assert fake_app.h_stat.cget("text") == "READY"
     assert "ENTER proceed" in fake_app.f_lbl.cget("text")
+
+
+@pytest.mark.gui
+def test_splash_renders_with_missing_index_json(gui_root, fake_app, fake_conn, tmp_path, monkeypatch):
+    """Sem data/index.json → tiles mostram NO SESSION DATA + roster sem Sharpe, no crash."""
+    monkeypatch.chdir(tmp_path)  # data/ nao existe no cwd isolado
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="ISO")
+    s.mount()
+    s.on_enter()
+    # LAST SESSION deveria exibir fallback:
+    texts = [
+        s.canvas.itemcget(item, "text")
+        for item in s.canvas.find_withtag("splash")
+        if s.canvas.type(item) == "text"
+    ]
+    assert any("NO SESSION DATA" in t for t in texts)
