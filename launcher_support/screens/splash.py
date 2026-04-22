@@ -166,6 +166,41 @@ class SplashScreen(Screen):
             canvas.itemconfigure("prompt2", text=current[:-1] + "_")
         self._after(500, self._pulse_tick)
 
+    def _draw_splash_tile(
+        self,
+        canvas: tk.Canvas,
+        *,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        title: str,
+        rows: list[tuple[str, str, str, str]],
+    ) -> None:
+        """Desenha um tile do splash: panel + linhas kv com tags unicas por valor.
+
+        rows: [(row_key, label, value, color)] — row_key vira tag
+        'tile-{row_key}-value' para permitir itemconfigure async.
+        """
+        self.app._draw_panel(
+            canvas, x1, y1, x2, y2,
+            title=title, accent=AMBER, tag="splash",
+        )
+        x_label = x1 + self._TILE_PAD
+        x_value = x1 + self._TILE_PAD + 96
+        y_start = y1 + 36  # abaixo do title chip
+        for i, (row_key, label, value, color) in enumerate(rows):
+            yy = y_start + i * self._TILE_LINE_H
+            canvas.create_text(
+                x_label, yy, anchor="w", text=label,
+                font=(FONT, 8), fill=DIM, tags=("splash", f"tile-{row_key}-label"),
+            )
+            canvas.create_text(
+                x_value, yy, anchor="w", text=value,
+                font=(FONT, 8, "bold"), fill=color,
+                tags=("splash", f"tile-{row_key}-value"),
+            )
+
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
         logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
         band_gap = self._TOP_BAND_GAP
