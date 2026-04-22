@@ -23,18 +23,19 @@ from scipy.special import logsumexp
 log = logging.getLogger("chronos")
 
 # ── Dependency checks ─────────────────────────────────────────
+# hmmlearn is a small pure-Python package — importing eagerly is fine.
+# arch ships a C extension that occasionally crashes during pytest
+# shutdown on Windows+Py3.14; defer to lazy import inside the one
+# function that actually uses it. find_spec gives us the availability
+# flag without touching the extension.
+import importlib.util as _importlib_util
+
 _HAS_HMM = False
-_HAS_ARCH = False
+_HAS_ARCH = _importlib_util.find_spec("arch") is not None
 
 try:
     from hmmlearn.hmm import GaussianHMM
     _HAS_HMM = True
-except ImportError:
-    pass
-
-try:
-    from arch import arch_model
-    _HAS_ARCH = True
 except ImportError:
     pass
 
@@ -552,6 +553,9 @@ def volatility_forecast(df: pd.DataFrame, horizon: int = 8,
         if len(data) < 100:
             return df
 
+        # Lazy import — keeps the C extension out of the process until
+        # someone actually runs a GARCH fit. See top-of-file note.
+        from arch import arch_model
         model = arch_model(data, vol="Garch", p=1, q=1, mean="Zero", rescale=False)
         res = model.fit(disp="off", show_warning=False)
 
