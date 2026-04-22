@@ -731,7 +731,6 @@ def render(launcher, parent, *, on_escape) -> dict:
         _emit_initial_refresh_metric()
 
     def refresh(*, stage_detail: bool = True):
-        _t_refresh0 = time.perf_counter()
         _cancel_pending_detail_refresh()
         # Skip the master-list rebuild when the visible state hasn't
         # changed (same mode, same running set, same selection, same
@@ -739,29 +738,12 @@ def render(launcher, parent, *, on_escape) -> dict:
         # every cycle — at 5s polling that's the root cause of the
         # flicker. Shadow/paper detail panes already do this via their
         # content_sig; the master list was the missing piece.
-        _t0 = time.perf_counter()
         new_sig = _master_list_sig(state, launcher)
-        _t_sig = (time.perf_counter() - _t0) * 1000.0
-        rebuilt = False
-        _t_rebuild = 0.0
         if new_sig != state.get("master_last_render_sig"):
             state["master_last_render_sig"] = new_sig
-            _t0 = time.perf_counter()
             _render_master_list(state, launcher)
-            _t_rebuild = (time.perf_counter() - _t0) * 1000.0
-            rebuilt = True
-        _t0 = time.perf_counter()
         _refresh_header(state)
-        _t_header = (time.perf_counter() - _t0) * 1000.0
-        _t0 = time.perf_counter()
         _refresh_footer(state)
-        _t_footer = (time.perf_counter() - _t0) * 1000.0
-        _t_total = (time.perf_counter() - _t_refresh0) * 1000.0
-        if _t_total > 50.0:
-            print(f"[COCKPIT-TIMING] refresh total={_t_total:.0f}ms "
-                  f"sig={_t_sig:.0f} rebuild={'YES' if rebuilt else 'skip'}"
-                  f" ({_t_rebuild:.0f}) header={_t_header:.0f} footer={_t_footer:.0f}",
-                  flush=True)
         if not stage_detail:
             _render_detail(state, launcher)
             _emit_initial_refresh_metric()
@@ -1157,7 +1139,6 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
 
 def _render_master_list(state, launcher):
     """Mount the 3-bucket master list on state['master_host']."""
-    _ml_t0 = time.perf_counter()
     host = state["master_host"]
     for w in host.winfo_children():
         w.destroy()
@@ -1165,9 +1146,7 @@ def _render_master_list(state, launcher):
     from config.engines import (
         ENGINES, LIVE_BOOTSTRAP_SLUGS, LIVE_READY_SLUGS, EXPERIMENTAL_SLUGS,
     )
-    _t0 = time.perf_counter()
     procs = _list_procs_cached()
-    _t_procs = (time.perf_counter() - _t0) * 1000.0
     running = running_slugs_from_procs(procs)
 
     # No modo SHADOW, so engines com shadow run visivel no poller
@@ -1255,12 +1234,10 @@ def _render_master_list(state, launcher):
         if selected is not None:
             state["selected_slug"], state["selected_bucket"] = selected
 
-    _t0 = time.perf_counter()
     _render_bucket(inner, "LIVE", live_items, state)
     _render_bucket(inner, "READY LIVE", ready_items, state)
     _render_bucket(inner, "RESEARCH", research_items, state)
     _render_bucket(inner, "EXPERIMENTAL", experimental_items, state)
-    _t_tiles = (time.perf_counter() - _t0) * 1000.0
 
     _render_summary_row(
         state,
@@ -1273,14 +1250,6 @@ def _render_master_list(state, launcher):
              + len(research_items) + len(experimental_items))
     state["counts_lbl"].configure(
         text=f"{total} engines  ·  {len(live_items)} running")
-
-    _t_total = (time.perf_counter() - _ml_t0) * 1000.0
-    if _t_total > 50.0:
-        print(f"[COCKPIT-TIMING] master_list total={_t_total:.0f}ms "
-              f"procs={_t_procs:.0f} tiles={_t_tiles:.0f} "
-              f"(live={len(live_items)} ready={len(ready_items)} "
-              f"research={len(research_items)} exp={len(experimental_items)})",
-              flush=True)
 
 
 def _render_summary_row(state, *, live_count: int, ready_count: int, research_count: int):
@@ -1559,6 +1528,26 @@ def _render_detail(state, launcher):
         and sidebar_host is not None and getattr(sidebar_host, "winfo_exists", lambda: False)()
         and detail_inner is not None and getattr(detail_inner, "winfo_exists", lambda: False)()
     )
+
+    # Skip full detail rebuild when nothing material changed. Master list
+    # already sig-skips; this covers the detail pane — which is the
+    # heavyweight one (cards, equity curve, positions grid). Without this
+    # the detail inner was destroyed and rebuilt on every refresh cycle,
+    # causing the flicker. shadow/paper paths have their own sig-check
+    # inside _refresh_*_detail, but _render_detail is also invoked from
+    # refresh() + set_mode + click handlers where the sig-check wasn't
+    # wired.
+    if reuse_shell and mode in ("paper", "shadow") and slug:
+        if mode == "paper":
+            new_sig = ("paper", slug, _paper_content_sig(state, launcher))
+        else:
+            new_sig = ("shadow", slug, _shadow_content_sig(state, launcher))
+        last_sig = state.get("_detail_last_render_sig")
+        if new_sig == last_sig:
+            return
+        state["_detail_last_render_sig"] = new_sig
+    else:
+        state["_detail_last_render_sig"] = None
 
     if not reuse_shell:
         for w in host.winfo_children():
