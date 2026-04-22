@@ -626,6 +626,42 @@ class App(tk.Tk):
                 pass
         emit_timing_metric("boot.shadow_poller_start", ms=(time.perf_counter() - poller_t0) * 1000.0)
 
+        # Pre-warm cockpit runs + paper snapshot caches off the main thread
+        # so first click on ENGINES renders from cache. Shadow is already
+        # covered by ShadowPoller above.
+        warm_t0 = time.perf_counter()
+        if _boot_workers_enabled():
+            try:
+                def _warm_cockpit_caches() -> None:
+                    try:
+                        from launcher_support.engines_live_view import (
+                            _load_cockpit_runs_cached,
+                            _fetch_paper_extras,
+                        )
+                        runs = _load_cockpit_runs_cached()
+                        for row in runs or []:
+                            if (str(row.get("engine") or "").lower() != "millennium"
+                                    or str(row.get("mode") or "").lower() != "paper"
+                                    or str(row.get("status") or "").lower() != "running"):
+                                continue
+                            run_id = str(row.get("run_id") or "")
+                            if run_id:
+                                _fetch_paper_extras(run_id)
+                            break
+                    except Exception:
+                        pass
+                threading.Thread(
+                    target=_warm_cockpit_caches,
+                    name="aurum-cockpit-cache-warmup",
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
+        emit_timing_metric(
+            "boot.cockpit_cache_warmup_start",
+            ms=(time.perf_counter() - warm_t0) * 1000.0,
+        )
+
     def _start_tunnel_async(self) -> None:
         """Start the cockpit tunnel off the critical paint path."""
         tunnel = getattr(self, "_aurum_tunnel", None)
@@ -2365,146 +2401,14 @@ class App(tk.Tk):
 
     # --- STRATEGY BRIEFING ------------------------------
     def _brief(self, name, script, desc, parent_menu):
-        """Half-Life 2 / Bloomberg terminal aesthetic: dense, single-column,
-        amber-on-black, monospace. Cuts cruft (technical V2 panel, model
-        governance, meta operacional) in favor of the 4 things that matter:
-        identity, best config, pipeline, edge/risk."""
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
-        self.h_stat.configure(text="BRIEFING", fg=AMBER_D)
-        self.f_lbl.configure(text="ENTER executar  |  ESC voltar")
-
-        brief = BRIEFINGS.get(name, {})
-
-        _outer, f = self._ui_page_shell(name, desc, content_width=720)
-
-        # Bloomberg-style section header — amber bar + label + thin rule
-        def _section(parent, title):
-            tk.Frame(parent, bg=BG, height=14).pack()
-            row = tk.Frame(parent, bg=BG)
-            row.pack(fill="x")
-            tk.Frame(row, bg=AMBER, width=3).pack(side="left", fill="y")
-            tk.Label(row, text=f" {title} ", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=BG, anchor="w", padx=6).pack(side="left", fill="x", expand=True)
-            tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-
-        # -- HEADER bar: BRIEFING badge + 1-line desc + amber rule --
-        hdr = tk.Frame(f, bg=BG)
-        hdr.pack(fill="x", pady=(0, 4))
-        tk.Label(hdr, text=" BRIEFING ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER, padx=6, pady=2).pack(side="left")
-        tk.Label(hdr, text=f"  {desc}", font=(FONT, 8), fg=DIM, bg=BG,
-                 anchor="w").pack(side="left", fill="x", expand=True)
-        tk.Frame(f, bg=AMBER_D, height=1).pack(fill="x", pady=(4, 0))
-
-        # Philosophy as a single italic block (no panel chrome)
-        if brief.get("philosophy"):
-            tk.Frame(f, bg=BG, height=10).pack()
-            tk.Label(f, text=brief["philosophy"], font=(FONT, 8, "italic"),
-                     fg=AMBER_D, bg=BG, wraplength=680, justify="left",
-                     anchor="w").pack(fill="x")
-
-        # -- BEST CONFIG (most actionable, render first) --
-        bc = brief.get("best_config")
-        if bc:
-            _section(f, "BEST CONFIG · BATTERY VALIDATED")
-            for k, v in bc.items():
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=0)
-                tk.Label(row, text=f"  {k.upper():<14}", font=(FONT, 8, "bold"),
-                         fg=AMBER_D, bg=BG, anchor="w", width=16).pack(side="left")
-                # Status row gets emoji-aware color
-                v_str = str(v)
-                _fg = (GREEN if "✓" in v_str else
-                       RED   if "✗" in v_str else
-                       AMBER if "?" in v_str else WHITE)
-                tk.Label(row, text=v_str, font=(FONT, 8),
-                         fg=_fg, bg=BG, anchor="w",
-                         wraplength=540, justify="left").pack(side="left", fill="x", expand=True)
-
-        # -- PIPELINE (numbered, no panel chrome) --
-        if brief.get("logic"):
-            _section(f, "PIPELINE")
-            for i, step in enumerate(brief["logic"], start=1):
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=1)
-                tk.Label(row, text=f"  {i:02d}", font=(FONT, 7, "bold"),
-                         fg=AMBER, bg=BG, width=4, anchor="w").pack(side="left")
-                tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG,
-                         wraplength=620, justify="left",
-                         anchor="w").pack(side="left", fill="x", expand=True)
-
-        # -- EDGE / RISK (color-tagged inline pills) --
-        if brief.get("edge") or brief.get("risk"):
-            _section(f, "EDGE / RISK")
-            if brief.get("edge"):
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text="  EDGE  ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=GREEN, padx=4).pack(side="left")
-                tk.Label(row, text="  " + brief["edge"], font=(FONT, 8),
-                         fg=WHITE, bg=BG, anchor="w",
-                         wraplength=580, justify="left").pack(side="left", fill="x", expand=True)
-            if brief.get("risk"):
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text="  RISK  ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=RED, padx=4).pack(side="left")
-                tk.Label(row, text="  " + brief["risk"], font=(FONT, 8),
-                         fg=DIM, bg=BG, anchor="w",
-                         wraplength=580, justify="left").pack(side="left", fill="x", expand=True)
-
-        tk.Frame(f, bg=BG, height=20).pack()
-
-        is_bt = parent_menu == "backtest"
-        is_live = parent_menu == "live"
-
-        btn_f = tk.Frame(f, bg=BG)
-        btn_f.pack()
-
-        if is_bt:
-            next_fn = lambda: self._config_backtest(name, script, desc, parent_menu)
-            btn_text = "  CONFIGURAR & RODAR  "
-        elif is_live:
-            next_fn = lambda: self._config_live(name, script, desc, parent_menu)
-            btn_text = "  SELECIONAR MODO & RODAR  "
-        else:
-            next_fn = lambda: self._exec(name, script, desc, parent_menu, [])
-            btn_text = "  EXECUTAR  "
-
-        run_btn = tk.Label(btn_f, text=btn_text, font=(FONT, 10, "bold"),
-                           fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
-        run_btn.pack(side="left", padx=4)
-        run_btn.bind("<Button-1>", lambda e: next_fn())
-        self._kb("<Return>", next_fn)
-
-        # VER CÓDIGO — opens engine source. Uses BRIEFINGS_V2 main_function
-        # when available (richer entry point), falls back to script + scan_symbol.
-        _v2 = BRIEFINGS_V2.get(name, None)
-        _v2_files = _v2.get("source_files") if _v2 else None
-        _v2_main  = _v2.get("main_function") if _v2 else None
-        def _open_code(_e=None, _script=script,
-                       _files=_v2_files, _main=_v2_main):
-            try:
-                files = _files if _files else [_script]
-                main  = _main  if _main  else (_script, "scan_symbol")
-                CodeViewer(self, source_files=files, main_function=main)
-            except Exception as exc:
-                messagebox.showerror("CodeViewer", f"{type(exc).__name__}: {exc}")
-
-        code_btn = tk.Label(btn_f, text="  VER CÓDIGO  ", font=(FONT, 10, "bold"),
-                            fg=AMBER, bg=BG3, cursor="hand2", padx=12, pady=4)
-        code_btn.pack(side="left", padx=4)
-        code_btn.bind("<Button-1>", _open_code)
-        self._kb("<F2>", _open_code)
-
-        back_btn = tk.Label(btn_f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
-                            cursor="hand2", padx=12, pady=4)
-        back_btn.pack(side="left", padx=4)
-        back_btn.bind("<Button-1>", lambda e: self._menu(parent_menu))
-        self._kb("<Escape>", lambda: self._menu(parent_menu))
-        return
-
+        """Delegate to launcher_support.screens.brief.render. Full
+        implementation (4-section Bloomberg-style briefing + code viewer
+        button) lives there. Kept as a method shim so every internal call
+        site (_strategies rows, backtest/live menu entries, tests) stays
+        unchanged.
+        """
+        from launcher_support.screens.brief import render as _render_brief
+        _render_brief(self, name, script, desc, parent_menu)
 
     # --- CALIBRATED CONFIG RESOLVER -----------------------
     @staticmethod
