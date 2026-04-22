@@ -1476,6 +1476,8 @@ if __name__ == "__main__":
     roi = ratios["ret"]
     _config = _apply_runtime_snapshot_overrides(snapshot_config(), BASKET_NAME)
     _summary = {
+        "engine": "DE SHAW",
+        "run_id": RUN_ID,
         "basket": BASKET_NAME,
         "n_trades": len(closed),
         "win_rate": round(wr, 2),
@@ -1495,7 +1497,6 @@ if __name__ == "__main__":
         "leverage": LEVERAGE,
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,
-        "engine": "DE SHAW",
         "n_pairs": len(pairs),
     }
 

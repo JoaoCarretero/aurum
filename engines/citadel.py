@@ -1057,6 +1057,7 @@ if __name__ == "__main__":
     _config["BASKET_EFFECTIVE"] = BASKET_NAME
     _summary = {
         "engine": "CITADEL",
+        "run_id": RUN_ID,
         "basket": BASKET_NAME,
         "n_trades": len(closed),
         "win_rate": round(wr_total, 2),
