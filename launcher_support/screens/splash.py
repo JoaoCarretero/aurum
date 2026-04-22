@@ -330,6 +330,18 @@ class SplashScreen(Screen):
         _, self._render_scale = self.app._apply_canvas_scale(
             self.canvas, self._design_w, self._design_h, self._render_scale,
         )
+        # _apply_canvas_scale aligns bbox top-left to the viewport top-left,
+        # which ignores the splash's 48/48 design padding and leaves content
+        # visibly left-biased. Re-center the bbox against the live window.
+        canvas = self.canvas
+        bbox = canvas.bbox("all")
+        if not bbox:
+            return
+        live_w = max(canvas.winfo_width(), 1)
+        live_h = max(canvas.winfo_height(), 1)
+        bbox_cx = (bbox[0] + bbox[2]) / 2
+        bbox_cy = (bbox[1] + bbox[3]) / 2
+        canvas.move("all", live_w / 2 - bbox_cx, live_h / 2 - bbox_cy)
 
     def _pulse_tick(self) -> None:
         canvas = self.canvas

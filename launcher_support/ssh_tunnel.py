@@ -54,6 +54,10 @@ _ALIVE_THRESHOLD_SEC = 2.0         # needs to stay alive this long to count as U
 _FAST_DEATH_WINDOW_SEC = 30.0      # deaths within this window count as "fast death"
 _STDERR_TRUNC = 120
 
+# Windows: suppress cmd.exe flash when spawning netstat/tasklist/taskkill
+# from the reconciliation preflight that runs at launcher startup.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 def _reap_orphan_tunnel_on_port(local_port: int) -> int:
     """Kill orphan ssh processes listening on local_port.
@@ -84,6 +88,7 @@ def _reap_tunnel_windows(local_port: int) -> int:
         out = subprocess.check_output(
             ["netstat", "-ano"], timeout=5,
             stderr=subprocess.DEVNULL,
+            creationflags=_NO_WINDOW,
         ).decode("latin-1", errors="replace")
     except Exception:
         return 0
@@ -100,12 +105,14 @@ def _reap_tunnel_windows(local_port: int) -> int:
             img = subprocess.check_output(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 timeout=3, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
             ).decode("latin-1", errors="replace")
             if "ssh.exe" not in img.lower():
                 continue
             subprocess.run(
                 ["taskkill", "/F", "/PID", str(pid)],
                 timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
             )
             killed += 1
         except Exception:
