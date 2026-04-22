@@ -132,9 +132,9 @@ def test_shadow_runner_paths_parametrized(engine, tmp_path):
 
 @pytest.mark.parametrize("engine", ["citadel", "jump", "renaissance"])
 def test_signal_filter_isolates_engine(engine, tmp_path):
-    """The scan filter in _paper_runner should return only signals where
-    ``strategy == ENGINE_UPPER``. Use a synthetic ``all_trades`` list to
-    avoid pulling real data.
+    """O paper runner delega pra engines.millennium._scan_one_engine_live
+    passando ENGINE_NAME. O helper retorna signals ja filtrados pro
+    engine. Stubar o helper pra evitar fetch real.
     """
     code = f"""
 import os
@@ -142,21 +142,19 @@ os.environ['AURUM_ENGINE_NAME'] = {engine!r}
 import sys
 sys.path.insert(0, r'{ROOT}')
 
-# Stub MILLENNIUM's _collect_live_signals BEFORE importing the runner.
-import contextlib
-import io
 import types
-fake_trades = [
-    {{'strategy': 'CITADEL', 'symbol': 'BTCUSDT', 'direction': 'LONG'}},
-    {{'strategy': 'JUMP', 'symbol': 'ETHUSDT', 'direction': 'SHORT'}},
-    {{'strategy': 'RENAISSANCE', 'symbol': 'SOLUSDT', 'direction': 'LONG'}},
-    {{'strategy': 'CITADEL', 'symbol': 'LINKUSDT', 'direction': 'LONG'}},
-]
+def _fake_scan(engine_name):
+    want = engine_name.upper()
+    all_trades = [
+        {{'strategy': 'CITADEL', 'symbol': 'BTCUSDT', 'direction': 'LONG'}},
+        {{'strategy': 'JUMP', 'symbol': 'ETHUSDT', 'direction': 'SHORT'}},
+        {{'strategy': 'RENAISSANCE', 'symbol': 'SOLUSDT', 'direction': 'LONG'}},
+        {{'strategy': 'CITADEL', 'symbol': 'LINKUSDT', 'direction': 'LONG'}},
+    ]
+    return [t for t in all_trades if t['strategy'] == want]
+
 fake_mill = types.ModuleType('engines.millennium')
-def _fake_load(_): return ({{}}, {{}}, {{}}, {{}})
-def _fake_collect(*_a, **_k): return ({{}}, fake_trades)
-fake_mill._load_dados = _fake_load
-fake_mill._collect_live_signals = _fake_collect
+fake_mill._scan_one_engine_live = _fake_scan
 sys.modules['engines.millennium'] = fake_mill
 
 from tools.operations import _paper_runner as m

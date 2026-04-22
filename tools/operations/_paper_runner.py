@@ -247,96 +247,15 @@ def _write_manifest(account_size: float) -> None:
     atomic_write(MANIFEST_PATH, json.dumps(payload, indent=2))
 
 
-# ── Engine-native scan config ────────────────────────────────────
-# Pre 2026-04-22 22:00: delegava pra MILLENNIUM._collect_live_signals, que
-# usa shared INTERVAL=15m + default SYMBOLS (all altcoins, no BTC/ETH).
-# Isso significava que:
-#   - CITADEL live MATCH backtest (15m + default)
-#   - JUMP    live = 15m default, backtest = 1h bluechip → SIGNAL MISMATCH
-#   - RENAIS  live = 15m default, backtest = 15m bluechip → BASKET MISMATCH
-#
-# Agora cada runner faz seu proprio fetch com TF + basket NATIVOS do
-# ENGINE_INTERVALS/ENGINE_BASKETS, e chama a scan fn nativa diretamente.
-# Assim os sinais ao vivo batem com a calibracao do backtest validado.
-def _resolve_engine_scan_config():
-    """Returns (engine_tf, engine_symbols, n_candles, scan_fn)."""
-    from config.params import (
-        ENGINE_INTERVALS, ENGINE_BASKETS, BASKETS, SYMBOLS as DEFAULT_SYMBOLS,
-        SCAN_DAYS,
-    )
-    tf = ENGINE_INTERVALS.get(ENGINE_UPPER, "15m")
-    basket_name = ENGINE_BASKETS.get(ENGINE_UPPER, "default")
-    if basket_name == "default" or basket_name not in BASKETS:
-        symbols = list(DEFAULT_SYMBOLS)
-    else:
-        symbols = list(BASKETS[basket_name])
-    # Candles per day varies by TF: 15m=96, 1h=24, 4h=6, 1d=1
-    bars_per_day = {
-        "5m": 288, "15m": 96, "30m": 48, "1h": 24,
-        "2h": 12, "4h": 6, "6h": 4, "12h": 2, "1d": 1,
-    }.get(tf, 24)
-    n_candles = SCAN_DAYS * bars_per_day
-    # Dispatch to engine scan fn
-    if ENGINE_NAME == "citadel":
-        from engines.citadel import scan_symbol as scan_fn
-    elif ENGINE_NAME == "jump":
-        from engines.jump import scan_mercurio as scan_fn
-    elif ENGINE_NAME == "renaissance":
-        from core.harmonics import scan_hermes as scan_fn
-    else:
-        raise RuntimeError(f"no scan fn for engine {ENGINE_NAME!r}")
-    return tf, symbols, n_candles, scan_fn
-
-
+# Scan hook — delega ao helper nativo do MILLENNIUM
+# (engines.millennium._scan_one_engine_live). Esse helper faz o fetch no
+# TF+basket nativos do engine (ENGINE_INTERVALS + ENGINE_BASKETS) e chama
+# a scan fn nativa com live_mode=True. Compartilhar o helper garante que
+# CITADEL solo / JUMP solo / RENAISSANCE solo produzem signals IDENTICOS
+# aos mesmos engines rodando dentro do pod MILLENNIUM.
 def _scan_new_signals(notify: bool = True) -> list[dict]:
-    """Scan para ESTE engine, com TF + basket nativos do backtest validado.
-
-    Fluxo:
-      1. Fetch OHLCV no TF nativo do engine (via ENGINE_INTERVALS)
-      2. Pro basket nativo (via ENGINE_BASKETS → BASKETS)
-      3. Macro + corr computados no mesmo set
-      4. Chama a scan fn nativa do engine (azoth_scan / scan_mercurio /
-         scan_hermes) com live_mode=True
-      5. Stamp strategy=ENGINE_UPPER, retorna lista de trades
-
-    Garante que signals live batem com os signals do backtest OOS-validado.
-    """
-    from core.data import fetch_all, validate
-    from core.portfolio import detect_macro, build_corr_matrix
-    from config.params import MACRO_SYMBOL
-
-    tf, engine_symbols, n_candles, scan_fn = _resolve_engine_scan_config()
-
-    # Fetch: engine symbols + macro symbol (for regime detection)
-    fetch_syms = list(engine_symbols)
-    if MACRO_SYMBOL and MACRO_SYMBOL not in fetch_syms:
-        fetch_syms.insert(0, MACRO_SYMBOL)
-
-    with contextlib.redirect_stdout(io.StringIO()):
-        all_dfs = fetch_all(fetch_syms, interval=tf, n_candles=n_candles)
-        for sym, df in all_dfs.items():
-            validate(df, sym)
-        if not all_dfs:
-            return []
-        macro_series = detect_macro(all_dfs)
-        corr = build_corr_matrix(all_dfs)
-
-    trades: list = []
-    with contextlib.redirect_stdout(io.StringIO()):
-        for sym, df in all_dfs.items():
-            if sym not in engine_symbols:
-                continue
-            t, _vetos = scan_fn(
-                df if ENGINE_NAME != "jump" else df.copy(),
-                sym, macro_series, corr, None,
-                live_mode=True,
-            )
-            for tt in t:
-                tt["strategy"] = ENGINE_UPPER
-                if ENGINE_NAME == "citadel":
-                    tt.setdefault("confirmed", False)
-            trades.extend(t)
-    return trades
+    from engines.millennium import _scan_one_engine_live
+    return _scan_one_engine_live(ENGINE_NAME)
 
 
 def _fetch_new_bars(symbol: str, since_iso: str | None) -> list[dict]:

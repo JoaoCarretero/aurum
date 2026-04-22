@@ -1860,72 +1860,111 @@ def _collect_operational_trades(all_dfs=None, htf_stack_by_sym=None, macro_serie
     return engine_trades, all_trades
 
 
+def _native_scan_config_for(engine_name: str):
+    """Returns (tf, symbols, n_candles, scan_fn, stamp_extras) usando o
+    sweet-spot do engine (ENGINE_INTERVALS + ENGINE_BASKETS de config/
+    params.py).
+
+    Pre 2026-04-22 22:30: _collect_live_signals usava shared INTERVAL
+    (15m) + shared SYMBOLS (default/altcoins) pros 3 engines, mesmo
+    JUMP tendo backtest OOS calibrado em 1h bluechip. Signals live
+    divergiam do backtest. Agora cada engine usa seu TF+basket nativos.
+    """
+    from config.params import (
+        ENGINE_INTERVALS, ENGINE_BASKETS, BASKETS,
+        SYMBOLS as DEFAULT_SYMBOLS, SCAN_DAYS,
+    )
+    engine_upper = engine_name.upper()
+    tf = ENGINE_INTERVALS.get(engine_upper, "15m")
+    basket_name = ENGINE_BASKETS.get(engine_upper, "default")
+    if basket_name == "default" or basket_name not in BASKETS:
+        symbols = list(DEFAULT_SYMBOLS)
+    else:
+        symbols = list(BASKETS[basket_name])
+    bars_per_day = {
+        "5m": 288, "15m": 96, "30m": 48, "1h": 24,
+        "2h": 12, "4h": 6, "6h": 4, "12h": 2, "1d": 1,
+    }.get(tf, 24)
+    n_candles = SCAN_DAYS * bars_per_day
+
+    if engine_upper == "CITADEL":
+        scan_fn = azoth_scan
+        stamp_extras = {"confirmed": False}
+    elif engine_upper == "RENAISSANCE":
+        scan_fn = scan_hermes
+        stamp_extras = {}
+    elif engine_upper == "JUMP":
+        from engines.jump import scan_mercurio as _sm
+        scan_fn = _sm
+        stamp_extras = {}
+    else:
+        raise RuntimeError(f"no scan fn for engine {engine_name!r}")
+    return tf, symbols, n_candles, scan_fn, stamp_extras
+
+
+def _scan_one_engine_live(engine_name: str) -> list:
+    """Fetch OHLCV no TF+basket nativos do engine e roda scan fn live.
+
+    Cada engine tem sua propria fetch (native TF+basket) — permite que
+    MILLENNIUM pod agregue signals no sweet-spot de cada um, em vez de
+    homogeneizar tudo em 15m+default (que degrada JUMP e RENAISSANCE).
+    """
+    import contextlib as _cx
+    import io as _io
+    from core.data import fetch_all, validate
+    from core.portfolio import detect_macro, build_corr_matrix
+
+    tf, engine_symbols, n_candles, scan_fn, stamp_extras = _native_scan_config_for(engine_name)
+    fetch_syms = list(engine_symbols)
+    if MACRO_SYMBOL and MACRO_SYMBOL not in fetch_syms:
+        fetch_syms.insert(0, MACRO_SYMBOL)
+
+    with _cx.redirect_stdout(_io.StringIO()):
+        all_dfs = fetch_all(fetch_syms, interval=tf, n_candles=n_candles)
+        for sym, df in all_dfs.items():
+            validate(df, sym)
+        if not all_dfs:
+            return []
+        macro_series = detect_macro(all_dfs)
+        corr = build_corr_matrix(all_dfs)
+
+    trades: list = []
+    engine_upper = engine_name.upper()
+    with _cx.redirect_stdout(_io.StringIO()):
+        for sym, df in all_dfs.items():
+            if sym not in engine_symbols:
+                continue
+            df_arg = df.copy() if engine_upper == "JUMP" else df
+            t, _vetos = scan_fn(df_arg, sym, macro_series, corr, None, live_mode=True)
+            for tt in t:
+                tt["strategy"] = engine_upper
+                for k, v in stamp_extras.items():
+                    tt.setdefault(k, v)
+            trades.extend(t)
+    return trades
+
+
 def _collect_live_signals(all_dfs=None, htf_stack_by_sym=None,
                           macro_series=None, corr=None):
     """Live-only scan: runs each operational engine with live_mode=True.
 
-    Unlike :func:`_collect_operational_trades` (backtest-oriented, scans
-    the labelable region and skips the tail), this function scans the
-    tail bars — exactly where signals fire on new candles arriving in
-    real time. Each engine emits trades with ``result="LIVE"`` and no
-    path-dependent labeling; paper/shadow runtime handles the outcome.
+    Cada engine usa seu TF+basket nativo (sweet-spot ENGINE_INTERVALS +
+    ENGINE_BASKETS), nao o shared INTERVAL=15m + SYMBOLS do backtest
+    multistrategy. Isso porque o backtest pod agrega assuming shared
+    config, mas o LIVE path precisa reproduzir cada engine no seu
+    ponto validado OOS — senao JUMP (1h bluechip) e RENAISSANCE
+    (15m bluechip) operam fora de calibracao.
+
+    Args ``all_dfs`` / ``htf_stack_by_sym`` / ``macro_series`` / ``corr``
+    sao ignorados — kept na assinatura pra backward compat com callers
+    (millennium_paper/shadow). Cada engine faz seu proprio fetch dedicado.
 
     Returns ``(engine_trades, all_trades_sorted_by_ts)``.
     """
+    del all_dfs, htf_stack_by_sym, macro_series, corr  # unused, legacy sig
     engine_trades: dict[str, list] = {}
-    shared_ctx = {
-        "all_dfs": all_dfs or {},
-        "htf_stack_by_sym": htf_stack_by_sym or {},
-        "macro_series": macro_series,
-        "corr": corr or {},
-    }
-
-    # CITADEL
-    azoth_live = []
-    for sym, df in shared_ctx["all_dfs"].items():
-        if sym not in SYMBOLS:
-            continue
-        trades, _ = azoth_scan(
-            df, sym, shared_ctx["macro_series"], shared_ctx["corr"],
-            shared_ctx["htf_stack_by_sym"].get(sym) if MTF_ENABLED else None,
-            live_mode=True,
-        )
-        for t in trades:
-            t["strategy"] = "CITADEL"
-            t.setdefault("confirmed", False)
-        azoth_live.extend(trades)
-    engine_trades["CITADEL"] = azoth_live
-
-    # RENAISSANCE
-    hermes_live = []
-    for sym, df in shared_ctx["all_dfs"].items():
-        if sym not in SYMBOLS:
-            continue
-        trades, _ = scan_hermes(
-            df, sym, shared_ctx["macro_series"], shared_ctx["corr"],
-            shared_ctx["htf_stack_by_sym"].get(sym) if MTF_ENABLED else None,
-            live_mode=True,
-        )
-        for t in trades:
-            t["strategy"] = "RENAISSANCE"
-        hermes_live.extend(trades)
-    engine_trades["RENAISSANCE"] = hermes_live
-
-    # JUMP
-    from engines.jump import scan_mercurio
-    mercurio_live = []
-    for sym, df in shared_ctx["all_dfs"].items():
-        if sym not in SYMBOLS:
-            continue
-        trades, _ = scan_mercurio(
-            df.copy(), sym,
-            shared_ctx["macro_series"], shared_ctx["corr"],
-            live_mode=True,
-        )
-        for t in trades:
-            t["strategy"] = "JUMP"
-        mercurio_live.extend(trades)
-    engine_trades["JUMP"] = mercurio_live
+    for engine_name in OPERATIONAL_ENGINES:
+        engine_trades[engine_name] = _scan_one_engine_live(engine_name)
 
     all_trades = []
     for eng, trades in engine_trades.items():
