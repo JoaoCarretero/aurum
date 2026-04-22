@@ -22,7 +22,7 @@ ENGINES = {
     "graham":      {"script": "engines/graham.py",       "display": "GRAHAM",      "desc": "Endogenous momentum with Hawkes regime gate",             "module": "BACKTEST", "stage": "experimental",       "sort_weight": 74,  "live_ready": False},
     "medallion":   {"script": "engines/medallion.py",    "display": "MEDALLION",   "desc": "Short-horizon ensemble with Kelly sizing",                "module": "BACKTEST", "stage": "experimental",       "sort_weight": 76,  "live_ready": False},
     "phi":         {"script": "engines/phi.py",          "display": "PHI",         "desc": "Fibonacci confluence at 0.618 retracement",               "module": "BACKTEST", "stage": "research",           "sort_weight": 78,  "live_ready": False},
-    "ornstein":    {"script": "engines/ornstein.py",     "display": "ORNSTEIN",    "desc": "Mean-reversion with O-U / Hurst / ADF / VR battery",      "module": "BACKTEST", "stage": "research",           "sort_weight": 79,  "live_ready": False},
+    "ornstein":    {"script": "engines/ornstein.py",     "display": "ORNSTEIN",    "desc": "Mean-reversion ARCHIVED 2026-04-22 (regime mismatch — crypto nao e mean-reverting em 15m/1h)",      "module": "BACKTEST", "stage": "experimental",      "sort_weight": 79,  "live_ready": False},
     "winton":      {"script": "core/chronos.py",         "display": "WINTON",      "desc": "Time-series regime suite (HMM, GARCH, Hurst)",            "module": "TOOLS",    "stage": "research",           "sort_weight": 110, "live_ready": False},
     "live":        {"script": "engines/live.py",         "display": "LIVE",        "desc": "Live execution — paper / demo / testnet / real",          "module": "LIVE",     "stage": "validated",          "sort_weight": 80,  "live_ready": True},
 }
@@ -62,8 +62,9 @@ LIVE_BOOTSTRAP_SLUGS = frozenset(k for k, v in ENGINES.items() if v.get("live_bo
 # Consumo: launcher filtra em view "experimental"; CLI aurum_cli emite
 # warning ao rodar; orquestrador OOS audit pode incluir/excluir via flag.
 EXPERIMENTAL_SLUGS: frozenset[str] = frozenset({
-    "deshaw",    # oos_sharpe=-1.73 BEAR 2022 (cointegração quebra em regime shifts). Smoke last-360d: -1.9 Sharpe / 2.0 MC / 2/6 overfit.
+    "deshaw",    # ARCHIVED 2026-04-22 (verdict docs/audits/2026-04-22_deshaw_phi_ornstein). Backtest 360d bluechip 1h: Sharpe −0.19, ROI −0.33%. 4 gates do overfit audit falharam (walk-forward, regime concentration, symbol concentration FETUSDT 363% do PnL negativo, temporal decay 246%). Grid esgotado.
     "graham",    # arquivado per docstring (4h overfit)
+    "ornstein",  # ARCHIVED 2026-04-22 (verdict docs/audits/2026-04-22_deshaw_phi_ornstein). Strict filter zera sample; exploratory solto colapsa Sharpe −31.98. Regime mismatch: crypto 15m/1h e trending (H ~0.8+), nao mean-reverting. Grid esgotado.
     "kepos",     # Smoke last-360d 2026-04-17 pós-fixes completos (cost asymmetry + eta 0.95→0.75 + sustained 10→5 + k_sigma 2.0→1.0): 164 trades, Sharpe -2.08, ROI -36%, MDD 46%. Rodável mas "fade extensions" thesis sem edge em mercado atual.
     "medallion", # Smoke last-360d 2026-04-17 pós-fix cost asymmetry: Sharpe -3.69, ROI -35%, MDD 35%. Grid-best in-sample foi overfit canônico (Codex audit flag).
 })

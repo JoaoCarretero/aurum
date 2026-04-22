@@ -1,10 +1,40 @@
 """
-ORNSTEIN — AURUM Finance Mean-Reversion Engine
-===============================================
+ORNSTEIN — AURUM Finance Mean-Reversion Engine (ARCHIVED)
+==========================================================
 Leonard Ornstein tribute (Ornstein-Uhlenbeck process co-author).
 
-Thesis
-------
+🗄️ ARCHIVED 2026-04-22 — confirma archive anterior (2026-04-21 salvage).
+
+Audit verdict (docs/audits/2026-04-22_deshaw_phi_ornstein_archive_verdict.md):
+
+- Strict filter: 0 trades (testes estatisticos em cascata zeram sample)
+- Exploratory filter (relaxado): Sharpe **−31.98**, PF 0.307, MaxDD 8.92%
+  — colapso catastrofico indicando anti-edge estrutural (filtro solto
+  libera sinais ruidosos, nao mean-reversion genuino)
+- 5 configs O00-O04 do grid fechado 2026-04-21: nenhum bate sample
+  minimo + Sharpe positiva
+
+Grid esgotado: halflife band, Hurst threshold, ADF p, divergence
+on/off, todas combinacoes razoaveis testadas.
+
+Mecanismo academico e solido (OU process, AR(1), ADF, Hurst, VR),
+mas crypto em janelas curtas (15m/1h) e trending (H ~0.8+), nao
+mean-reverting. Janelas 2025-2026 foram bull/acumulacao. O problema
+nao e calibracao de filtros — e **regime mismatch**: crypto nao
+oferece o regime onde OU funciona.
+
+Joao's feedback "mean-rev e conceito valido, filters mal calibrados":
+testado. Nao e calibracao, e anti-edge estrutural.
+
+Se aparecer evidencia nova (post-crash bounces em alts confirmados,
+data pre-2024 com H<0.5 robusto), reabrir com NOVA hipotese (regime-
+specific, e.g., "only trade 48h pos-flush"), nao novo grid na tese
+atual.
+
+Thesis original abaixo, mantida pra referencia historica.
+
+---
+
 *"Quanto mais a mola estica, mais forte volta — mas só se ela ainda for mola."*
 
 Trade mean-reversion setups **only** when the price deviation series passes
@@ -26,7 +56,7 @@ Discipline
 - All features computed locally. No `core.indicators` mutation (protected).
 - AURUM cost model (C1+C2) from `config.params`.
 - Local sizing (convex, phi-scaled, 1% risk, 2% notional cap).
-- NOT in FROZEN_ENGINES / OPERATIONAL_ENGINES until overfit_audit 6/6 passes.
+- NOT in FROZEN_ENGINES / OPERATIONAL_ENGINES (archived).
 - Every trade logs each Ω subscore separately for auditability.
 - Ablation suite: run-time flag masks components to isolate marginal value.
 - Zero lookahead: HTF features are forward-filled only after bar close.
