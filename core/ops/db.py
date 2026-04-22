@@ -432,11 +432,6 @@ def register_run(
         conn.close()
 
 
-def repair_run(json_path: str, engine: str | None = None) -> str | None:
-    """Re-ingest a report, normalizing DB metadata from the artifact itself."""
-    return save_run(engine or "", json_path)
-
-
 def list_runs(engine: str | None = None, limit: int = 20) -> list[dict]:
     normalized_engine = _normalize_engine(engine) if engine else None
     conn = _connect()
@@ -471,6 +466,52 @@ def get_trades(run_id: str) -> list[dict]:
         rows = conn.execute(
             "SELECT * FROM trades WHERE run_id=? ORDER BY id", (run_id,)
         ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_filtered_trades(
+    engine: str | None = None,
+    symbol: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Single-query trade lookup joined with the parent run's engine.
+
+    Replaces the N+1 pattern of ``list_runs`` + per-run ``get_trades``: one
+    SQLite connection, one SELECT, filters pushed to SQL, already ordered
+    DESC by trade_time. Returns at most ``limit`` rows. Each row carries a
+    normalized ``engine`` and ``run_id`` attached from the join.
+    """
+    where: list[str] = []
+    params: list = []
+    if engine:
+        where.append("r.engine = ?")
+        params.append(_normalize_engine(engine))
+    if symbol:
+        where.append("t.symbol = ?")
+        params.append(symbol)
+    if date_from:
+        where.append("t.trade_time >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("t.trade_time <= ?")
+        params.append(date_to)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"""
+        SELECT t.*, r.engine AS engine
+        FROM trades t
+        JOIN runs r ON t.run_id = r.run_id
+        {where_sql}
+        ORDER BY t.trade_time DESC
+        LIMIT ?
+    """
+    params.append(int(limit))
+    conn = _connect()
+    try:
+        rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()

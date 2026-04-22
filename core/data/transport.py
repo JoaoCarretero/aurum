@@ -46,10 +46,3 @@ class TransportClient:
                 return resp
             if policy.sleep_seconds > 0:
                 time.sleep(policy.sleep_seconds)
-
-
-def request_json(spec: RequestSpec, retry: RetryPolicy | None = None) -> Any:
-    client = TransportClient()
-    resp = client.request(spec, retry=retry)
-    resp.raise_for_status()
-    return resp.json()

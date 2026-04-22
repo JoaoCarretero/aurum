@@ -384,29 +384,15 @@ async def trade_history(
     date_to: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
 ):
-    """Get trade history with filters. Reads from core/db.py trade data."""
-    runs = trade_db.list_runs(engine=engine, limit=limit)
-
-    all_trades = []
-    for run in runs:
-        trades = trade_db.get_trades(run["run_id"])
-        for t in trades:
-            # Apply symbol filter
-            if symbol and t.get("symbol") != symbol:
-                continue
-            # Apply date filters
-            trade_time = t.get("trade_time", "")
-            if date_from and trade_time < date_from:
-                continue
-            if date_to and trade_time > date_to:
-                continue
-            t["engine"] = run.get("engine")
-            t["run_id"] = run["run_id"]
-            all_trades.append(t)
-
-    # Sort by trade time descending and apply limit
-    all_trades.sort(key=lambda x: x.get("trade_time", ""), reverse=True)
-    return {"trades": all_trades[:limit]}
+    """Get trade history with filters. Single JOIN query on core.db."""
+    trades = trade_db.get_filtered_trades(
+        engine=engine,
+        symbol=symbol,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+    return {"trades": trades}
 
 
 @trading_router.post("/start")
