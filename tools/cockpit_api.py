@@ -93,6 +93,11 @@ def _summarize_run(run_dir: Path) -> RunSummary:
         # Heartbeat allows extras — label may be there as fallback
         extras = hb.model_extra or {}
         label = extras.get("label")
+    extras = hb.model_extra or {}
+    equity = extras.get("equity")
+    drawdown_pct = extras.get("drawdown_pct")
+    ks_state = extras.get("ks_state")
+    primed = extras.get("primed")
     return RunSummary(
         run_id=hb.run_id,
         engine=engine,
@@ -102,6 +107,12 @@ def _summarize_run(run_dir: Path) -> RunSummary:
         last_tick_at=hb.last_tick_at,
         novel_total=hb.novel_total,
         label=label,
+        ticks_ok=hb.ticks_ok,
+        ticks_fail=hb.ticks_fail,
+        equity=float(equity) if isinstance(equity, (int, float)) else None,
+        drawdown_pct=float(drawdown_pct) if isinstance(drawdown_pct, (int, float)) else None,
+        ks_state=str(ks_state) if ks_state else None,
+        primed=bool(primed) if primed is not None else None,
     )
 
 

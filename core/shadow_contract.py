@@ -58,7 +58,14 @@ class Heartbeat(BaseModel):
 
 
 class RunSummary(BaseModel):
-    """Linha leve do /runs — o suficiente pra listar sem payloads pesados."""
+    """Linha leve do /runs — o suficiente pra listar sem payloads pesados.
+
+    Fields below the core four (id/engine/mode/status) are optional and
+    preloaded from the heartbeat when available. This lets clients render
+    the Live Cockpit from a single /v1/runs round-trip instead of fanning
+    out to /heartbeat + /account for every row (was ~6s on 24 runs over
+    SSH tunnel).
+    """
     run_id: str
     engine: str
     mode: RunMode
@@ -67,6 +74,12 @@ class RunSummary(BaseModel):
     last_tick_at: datetime | None = None
     novel_total: int = 0
     label: str | None = None
+    ticks_ok: int = 0
+    ticks_fail: int = 0
+    equity: float | None = None
+    drawdown_pct: float | None = None
+    ks_state: str | None = None
+    primed: bool | None = None
 
 
 class RunDetail(BaseModel):

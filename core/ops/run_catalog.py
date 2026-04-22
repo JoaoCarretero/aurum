@@ -74,6 +74,18 @@ def collect_local_runs(data_root: Path | None = None) -> list[RunSummary]:
 
 
 def collect_vps_runs(client) -> list[RunSummary]:
+    """Fast list of VPS runs from ``GET /v1/runs`` only.
+
+    Previous implementation fanned out to
+    ``/v1/runs/{id}/heartbeat`` + ``/v1/runs/{id}/account`` for every
+    row — 2*N extra HTTP calls through the SSH tunnel. With 24 live
+    runs that was ~48 serialised round-trips, wall time ~6s, stalling
+    the Live Cockpit every time the cache expired. The heartbeat/
+    account data is only needed when the operator drills into a
+    specific run; fetch it on demand there (see
+    ``_collect_single_vps_run`` for the deep-fetch helper, still
+    available for callers that genuinely need per-run detail).
+    """
     rows: list[RunSummary] = []
     if client is None:
         return rows
@@ -87,26 +99,38 @@ def collect_vps_runs(client) -> list[RunSummary]:
         return rows
     if not isinstance(runs, list):
         return rows
-    indexed_runs = [(idx, r) for idx, r in enumerate(runs) if r.get("run_id")]
-    built_rows: dict[int, RunSummary] = {}
-    max_workers = min(8, max(1, len(indexed_runs)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_collect_single_vps_run, client, r): idx
-            for idx, r in indexed_runs
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                row = future.result()
-            except Exception:
-                row = None
-            if row is not None:
-                built_rows[idx] = row
-    for idx, _ in indexed_runs:
-        row = built_rows.get(idx)
-        if row is not None:
-            rows.append(row)
+    for payload in runs:
+        rid = payload.get("run_id")
+        if not rid:
+            continue
+        equity_val = payload.get("equity")
+        try:
+            equity_f = float(equity_val) if equity_val is not None else None
+        except (TypeError, ValueError):
+            equity_f = None
+        rows.append(RunSummary(
+            run_id=rid,
+            engine=str(payload.get("engine") or "?").upper(),
+            mode=str(payload.get("mode") or "?"),
+            status=str(payload.get("status") or "unknown"),
+            started_at=payload.get("started_at"),
+            stopped_at=None,
+            last_tick_at=payload.get("last_tick_at"),
+            ticks_ok=_as_int(payload.get("ticks_ok")),
+            ticks_fail=_as_int(payload.get("ticks_fail")),
+            novel=_as_int(payload.get("novel_total") or payload.get("novel_count")),
+            equity=equity_f,
+            initial_balance=None,
+            roi_pct=None,
+            trades_closed=None,
+            source="vps",
+            run_dir=None,
+            heartbeat=None,
+            host=str(payload.get("host") or "") or None,
+            label=str(payload.get("label") or "") or None,
+            open_count=None,
+            _raw=payload,
+        ))
     _store_cached_rows(_VPS_RUNS_CACHE, cache_key, rows)
     return rows
 

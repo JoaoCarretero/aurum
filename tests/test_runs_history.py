@@ -186,18 +186,19 @@ class _FakeClient:
 
 
 def test_collect_vps_runs_builds_summaries():
+    # Post-fastpath: collect_vps_runs reads ticks_ok / novel_total
+    # directly from the /v1/runs payload (cockpit API expanded to
+    # include them, saving 2*N follow-up calls). Heartbeat endpoint is
+    # only hit on drill-down.
     runs_payload = [
         {"run_id": "R1", "engine": "millennium", "mode": "shadow",
          "status": "running",
          "started_at": "2026-04-19T19:00:00Z",
-         "last_tick_at": "2026-04-20T11:00:00Z"},
+         "last_tick_at": "2026-04-20T11:00:00Z",
+         "ticks_ok": 10,
+         "novel_total": 2},
     ]
-    hbs = {"R1": {"ticks_ok": 10, "ticks_fail": 0,
-                  "novel_since_prime": 2,
-                  "status": "running",
-                  "started_at": "2026-04-19T19:00:00+00:00",
-                  "last_tick_at": "2026-04-20T11:00:00+00:00"}}
-    client = _FakeClient(runs=runs_payload, heartbeats=hbs)
+    client = _FakeClient(runs=runs_payload, heartbeats={})
     rows = collect_vps_runs(client)
     assert len(rows) == 1
     r = rows[0]
@@ -228,13 +229,14 @@ def test_collect_vps_runs_uses_ttl_cache():
         {"run_id": "R1", "engine": "millennium", "mode": "shadow",
          "status": "running",
          "started_at": "2026-04-19T19:00:00Z",
-         "last_tick_at": "2026-04-20T11:00:00Z"},
+         "last_tick_at": "2026-04-20T11:00:00Z",
+         "ticks_ok": 10},
     ]
-    hbs = {"R1": {"ticks_ok": 10, "ticks_fail": 0, "status": "running"}}
-    client = _FakeClient(runs=runs_payload, heartbeats=hbs)
+    client = _FakeClient(runs=runs_payload, heartbeats={})
 
     rows1 = collect_vps_runs(client)
-    client._heartbeats["R1"] = {"ticks_ok": 99, "ticks_fail": 0, "status": "running"}
+    # Mutate the payload to prove the cached list is returned on 2nd call.
+    client._runs[0]["ticks_ok"] = 99
     rows2 = collect_vps_runs(client)
 
     assert rows1[0].ticks_ok == 10
