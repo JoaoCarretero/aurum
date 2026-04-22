@@ -1036,6 +1036,13 @@ def render(
         state["chip"] = chip
         _paint_detail()
 
+    # mtime-based cache pro index.json (215KB, ~7.6k linhas). Sem cache,
+    # clicar em OVERVIEW reparsa o JSON inteiro e causa lag perceptivel
+    # (~30-80ms no Windows/OneDrive). Chave = (mtime, path); invalida
+    # automaticamente quando o arquivo e reescrito pelo reconcile.
+    if not hasattr(render, "_idx_cache"):
+        render._idx_cache = {"mtime": 0.0, "rows": None}  # type: ignore[attr-defined]
+
     def _query_last_runs(slug: str, limit: int = 12) -> list[dict]:
         """Fetch the N most recent backtest runs for a given engine slug.
 
@@ -1063,7 +1070,14 @@ def render(
         # Prefer index.json — mesmo origem do DATA > BACKTESTS.
         if _idx.exists():
             try:
-                idx_rows = _json.loads(_idx.read_text(encoding="utf-8"))
+                mtime = _idx.stat().st_mtime
+                cache = render._idx_cache  # type: ignore[attr-defined]
+                if cache["rows"] is not None and cache["mtime"] == mtime:
+                    idx_rows = cache["rows"]
+                else:
+                    idx_rows = _json.loads(_idx.read_text(encoding="utf-8"))
+                    cache["rows"] = idx_rows
+                    cache["mtime"] = mtime
                 if isinstance(idx_rows, list):
                     matched = [
                         r for r in idx_rows
@@ -1173,7 +1187,10 @@ def render(
                  SHRP (8) · ROI (8) · DD (7) · VER (3)
         """
         sbody = _scrollable(host)
-        runs = _query_last_runs(t.slug, limit=12)
+        # 8 runs e o sweet spot: cabe sem scroll, render em ~60-80ms em vez
+        # dos ~200ms de 12 runs (cada run = 9 Label widgets). Joao reportou
+        # lag ao clicar — reduzir # widgets e a win mais barata.
+        runs = _query_last_runs(t.slug, limit=8)
         if not runs:
             tk.Label(sbody, text="  ▸ no runs indexed for this engine yet",
                      font=(FONT, 8, "italic"), fg=DIM2, bg=PANEL, anchor="w",
