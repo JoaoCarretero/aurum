@@ -70,9 +70,14 @@ _STAGE_STYLE: dict[str, tuple[str, str]] = {
     "quarantined": ("QUARANTINED", HAZARD),
 }
 _PROCS_CACHE: dict[str, object] = {"ts": 0.0, "rows": []}
-_COCKPIT_RUNS_CACHE_TTL_S = 2.0
-_PAPER_SNAPSHOT_CACHE_TTL_S = 2.0
-_SHADOW_SNAPSHOT_CACHE_TTL_S = 2.0
+# TTLs raised from 2s → 5s after operator reported flicker: every worker
+# completion scheduled a refresh, and with 3 workers (cockpit runs +
+# paper snapshot + shadow snapshot) completing on staggered 2s TTLs the
+# master list rebuilt effectively continuously. 5s keeps the UI fresh
+# enough for a 15m tick system while giving the tk main loop room.
+_COCKPIT_RUNS_CACHE_TTL_S = 5.0
+_PAPER_SNAPSHOT_CACHE_TTL_S = 5.0
+_SHADOW_SNAPSHOT_CACHE_TTL_S = 5.0
 _COCKPIT_RUNS_CACHE: dict[str, object] = {"ts": 0.0, "runs": None, "loading": False}
 _COCKPIT_RUNS_LOCK = threading.Lock()
 _PAPER_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[dict | None, list[dict], list[float], dict | None]]] = {}
@@ -487,6 +492,38 @@ def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict
     return rows
 
 
+def _master_list_sig(state, launcher=None) -> tuple:
+    """Signature of everything the master-list render depends on.
+
+    Cheap to compute (hits only already-cached data sources). When this
+    matches the previously rendered sig, refresh() skips the rebuild
+    entirely — prevents the flicker storm when periodic refresh timers
+    fire without any actual state change.
+    """
+    try:
+        procs = _list_procs_cached()
+    except Exception:
+        procs = []
+    running = tuple(sorted(running_slugs_from_procs(procs).keys()))
+    mode = state.get("mode")
+    vps_running: tuple = ()
+    if mode in ("shadow", "paper"):
+        try:
+            vps = _vps_running_slugs(mode=mode, launcher=launcher, state=state)
+            vps_running = tuple(sorted(vps))
+        except Exception:
+            vps_running = ()
+    collapsed = tuple(sorted((state.get("bucket_collapsed") or {}).items()))
+    return (
+        mode,
+        state.get("selected_slug"),
+        state.get("selected_bucket"),
+        running,
+        vps_running,
+        collapsed,
+    )
+
+
 def _schedule_state_refresh(launcher, state) -> None:
     """Debounced refresh scheduler, called from async worker completions.
 
@@ -695,7 +732,16 @@ def render(launcher, parent, *, on_escape) -> dict:
 
     def refresh(*, stage_detail: bool = True):
         _cancel_pending_detail_refresh()
-        _render_master_list(state, launcher)
+        # Skip the master-list rebuild when the visible state hasn't
+        # changed (same mode, same running set, same selection, same
+        # collapsed buckets). Rebuilding destroys ~15 tiles + subframes
+        # every cycle — at 5s polling that's the root cause of the
+        # flicker. Shadow/paper detail panes already do this via their
+        # content_sig; the master list was the missing piece.
+        new_sig = _master_list_sig(state, launcher)
+        if new_sig != state.get("master_last_render_sig"):
+            state["master_last_render_sig"] = new_sig
+            _render_master_list(state, launcher)
         _refresh_header(state)
         _refresh_footer(state)
         if not stage_detail:
@@ -2435,7 +2481,7 @@ def _schedule_shadow_refresh(launcher, state) -> None:
         except Exception:
             pass
     try:
-        aid = launcher.after(5000,
+        aid = launcher.after(8000,
                              lambda: _refresh_shadow_detail(launcher, state))
         state["shadow_refresh_aid"] = aid
     except Exception:
@@ -3169,7 +3215,7 @@ def _schedule_paper_refresh(launcher, state) -> None:
         except Exception:
             pass
     try:
-        aid = launcher.after(5000,
+        aid = launcher.after(8000,
                              lambda: _refresh_paper_detail(launcher, state))
         state["paper_refresh_aid"] = aid
     except Exception:
