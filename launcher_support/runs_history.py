@@ -667,15 +667,23 @@ def _refresh_runs(state: dict, launcher,
     except Exception:
         return
 
-    # Antes: destroy-all aqui + _paint_rows(local) + _paint_rows(merged)
-    # quando VPS retornava = 3 ciclos destroy/rebuild por tick (5s),
-    # causando blink a cada refresh.
-    # Agora: sem destroy pre-paint — _paint_rows() sozinho ja faz
-    # destroy+rebuild atomico quando novos dados chegam. Local+DB
-    # sync paint primeiro (conteudo antigo sai so no momento do
-    # swap), VPS async paint depois quando chegar.
+    # Flicker fix definitivo: state["last_sig"] rastreia a assinatura
+    # do que foi pintado por ultimo (nao state["rows"] que tem formas
+    # diferentes em local+db vs merged). Antes: cada tick pintava 2x
+    # — local+db sync (sig_local != sig_merged anterior -> paint) +
+    # VPS async (sig_merged != sig_local -> paint). Agora: local+db
+    # pinta so no bootstrap (last_sig None), refreshes subsequentes
+    # dependem do retorno do VPS (que tb e invocado com vps=[] em
+    # caso de falha, preservando o fluxo sem tunel).
     local = collect_local_runs()
     db_rows = collect_db_runs(limit=500)
+
+    def _sig(rows):
+        return tuple(
+            (r.run_id, r.status,
+             None if r.roi_pct is None else round(r.roi_pct, 2))
+            for r in rows
+        )
 
     def _fetch_vps():
         try:
@@ -690,21 +698,10 @@ def _refresh_runs(state: dict, launcher,
             vps = []
         merged = merge_runs(local, vps, db_rows)
         def _apply_vps_rows():
-            # Dedup guard: compara run_id + status + roi_pct bucket.
-            # Antes comparava so run_id → status transition (running→
-            # stopped) nao triggava repaint e o dot color continuava
-            # verde com processo ja morto. Incluindo status + roi bucket
-            # apanha as mudancas visiveis sem forcar repaint por
-            # floating point noise na equity.
-            def _sig(rows):
-                return tuple(
-                    (r.run_id, r.status,
-                     None if r.roi_pct is None else round(r.roi_pct, 2))
-                    for r in rows
-                )
-            prev = state.get("rows") or []
-            if _sig(prev) == _sig(merged):
+            new_sig = _sig(merged)
+            if state.get("last_sig") == new_sig:
                 return
+            state["last_sig"] = new_sig
             state["rows"] = merged
             _paint_rows(state)
         try:
@@ -715,26 +712,20 @@ def _refresh_runs(state: dict, launcher,
         except Exception:
             pass
 
+    # Bootstrap paint: so na PRIMEIRA refresh, antes do VPS responder
+    # pela primeira vez. Refreshes subsequentes so repaintam via
+    # _apply_vps_rows (que tambem dispara mesmo com vps=[] em falha).
+    if state.get("last_sig") is None:
+        new_local = merge_runs(local, [], db_rows)
+        state["last_sig"] = _sig(new_local)
+        state["rows"] = new_local
+        _paint_rows(state)
+
     if hasattr(launcher, "_ui_call_soon"):
         t = threading.Thread(target=_fetch_vps, daemon=True)
         t.start()
     else:
         _fetch_vps()
-
-    # Paint local+DB primeiro — mesmo guard de status/roi pra apanhar
-    # running→stopped sem depender do VPS chegar.
-    new_local = merge_runs(local, [], db_rows)
-
-    def _sig_local(rows):
-        return tuple(
-            (r.run_id, r.status,
-             None if r.roi_pct is None else round(r.roi_pct, 2))
-            for r in rows
-        )
-    prev = state.get("rows") or []
-    if _sig_local(prev) != _sig_local(new_local):
-        state["rows"] = new_local
-        _paint_rows(state)
 
 
 def _paint_rows(state: dict) -> None:

@@ -95,7 +95,7 @@ class TestCockpitSummaries:
 
     def test_bucket_titles_are_operational(self):
         from launcher_support.engines_live_view import bucket_title
-        assert bucket_title("LIVE") == "RUNNING NOW"
+        assert bucket_title("LIVE") == "ENGINES"
         assert bucket_title("READY") == "READY TO LAUNCH"
         assert bucket_title("RESEARCH") == "RESEARCH ONLY"
 

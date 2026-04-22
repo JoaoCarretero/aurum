@@ -582,12 +582,16 @@ def _hl2_probe_section(parent: tk.Widget, hb: dict,
 
 
 def _hl2_cell(parent: tk.Widget, label: str, value: str, color: str) -> None:
-    """HL2 telemetry cell — 2 lines, sharp border, equal-width flex."""
+    """HL2 telemetry cell — 2 lines, sharp border, equal-width flex.
+
+    Label font 6 -> 7 (usuario reportou "letras minusculas" no cockpit).
+    Value mantido em 10 bold — ja visivel e consome espaco vertical.
+    """
     cell = tk.Frame(parent, bg=BG, highlightbackground=BORDER,
                     highlightthickness=1)
     cell.pack(side="left", fill="both", expand=True, padx=(0, 3))
     tk.Label(cell, text=label.upper(), fg=DIM2, bg=BG,
-             font=(FONT, 6, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
+             font=(FONT, 7, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
     tk.Label(cell, text=str(value), fg=color, bg=BG,
              font=(FONT, 10, "bold")).pack(anchor="w", padx=6, pady=(0, 4))
 

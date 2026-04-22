@@ -41,34 +41,34 @@ from launcher_support.engines_sidebar import (
     render_sidebar,
     render_detail,
 )
+from launcher_support.engines_live_helpers import (
+    Bucket, Mode,
+    _MODE_ORDER, _DEFAULT_MODE, _DEFAULT_STATE_PATH, _REPO_ROOT,
+    _MODE_COLORS, _STAGE_STYLE,
+    _PROC_TO_SLUG, _ENGINE_DIR_MAP,
+    _stage_badge,
+    footer_hints,
+    cockpit_summary,
+    bucket_title,
+    bucket_header_title,
+    row_action_label,
+    initial_selection,
+    assign_bucket,
+    cycle_mode,
+    load_mode,
+    save_mode,
+    live_confirm_ok,
+    format_uptime,
+    _use_remote_shadow_cache,
+    _safe_float,
+    _uptime_seconds,
+    running_slugs_from_procs,
+    _sanitize_instance_label,
+)
 from launcher_support.screens._metrics import emit_timing_metric
 # signal_detail_popup.render_inline eh chamado via engines_sidebar.render_detail
 # (inline, sem Toplevel). show() legacy continua disponivel no modulo.
 
-Bucket = Literal["LIVE", "READY", "RESEARCH"]
-Mode = Literal["paper", "demo", "testnet", "live", "shadow"]
-
-_MODE_ORDER: tuple[Mode, ...] = ("paper", "demo", "testnet", "live", "shadow")
-_DEFAULT_MODE: Mode = "paper"
-_DEFAULT_STATE_PATH = Path("data/ui_state.json")
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
-_MODE_COLORS: dict[Mode, str] = {
-    "paper":   MODE_PAPER,
-    "demo":    MODE_DEMO,
-    "testnet": MODE_TESTNET,
-    "live":    MODE_LIVE,
-    # SHADOW e observacional — usa amber distinto do vermelho LIVE pra
-    # deixar claro que nao executa ordens reais, so le o VPS.
-    "shadow":  AMBER_B,
-}
-_STAGE_STYLE: dict[str, tuple[str, str]] = {
-    "validated": ("VALIDATED", GREEN),
-    "bootstrap_staging": ("BOOTSTRAP", AMBER),
-    "research": ("RESEARCH", DIM2),
-    "experimental": ("EXPERIMENTAL", RED),
-    "quarantined": ("QUARANTINED", HAZARD),
-}
 _PROCS_CACHE: dict[str, object] = {"ts": 0.0, "rows": []}
 # TTLs raised to 60s. The paper/shadow runners tick every 15 min —
 # rendering the detail pane more than once per minute gives the operator
@@ -92,234 +92,6 @@ _SHADOW_SNAPSHOT_LOCK = threading.Lock()
 _REMOTE_SHADOW_RUN_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
 _REMOTE_SHADOW_RUN_LOADING: set[str] = set()
 _REMOTE_SHADOW_RUN_LOCK = threading.Lock()
-
-
-def _stage_badge(meta: dict | None) -> tuple[str, str]:
-    key = str((meta or {}).get("stage") or "research").strip().lower()
-    if key in _STAGE_STYLE:
-        return _STAGE_STYLE[key]
-    return (key.upper() or "RESEARCH", DIM2)
-
-
-def footer_hints(*, selected_bucket: Bucket | None, mode: str) -> tuple[str, str]:
-    hints = ["ESC main", "↑↓ list"]
-    if selected_bucket == "LIVE":
-        hints += ["←→ fleet", "ENTER monitor", "S stop", "L log"]
-    elif selected_bucket == "READY":
-        hints += ["ENTER launch", "M cycle"]
-    elif selected_bucket == "RESEARCH":
-        hints += ["B backtest", "ENTER"]
-    else:
-        hints += ["ENTER select"]
-    # Quick-jump shortcuts: 1-5 map to _MODE_ORDER
-    hints += ["1=paper 2=demo 3=testnet 4=live 5=shadow"]
-    warn = "LIVE MODE - real orders enabled" if mode == "live" else ""
-    return ("  ·  ".join(hints), warn)
-
-
-def cockpit_summary(*, mode: str, live_count: int, ready_count: int, research_count: int) -> list[tuple[str, str, str]]:
-    return [
-        ("RUNNING", str(live_count), GREEN if live_count else DIM2),
-        ("READY", str(ready_count), AMBER_B if ready_count else DIM2),
-        ("RESEARCH", str(research_count), WHITE if research_count else DIM2),
-        ("DESK", mode.upper(), _MODE_COLORS.get(mode, CYAN)),
-    ]
-
-
-def bucket_title(bucket: Bucket) -> str:
-    return {
-        "LIVE": "RUNNING NOW",
-        "READY": "READY TO LAUNCH",
-        "RESEARCH": "RESEARCH ONLY",
-    }[bucket]
-
-
-def bucket_header_title(title: str) -> str:
-    if title == "LIVE":
-        return "RUNNING NOW"
-    if title == "READY LIVE":
-        return "READY TO LAUNCH"
-    if title == "EXPERIMENTAL":
-        return "EXPERIMENTAL"
-    return "RESEARCH ONLY"
-
-
-def row_action_label(bucket: Bucket, meta: dict | None) -> tuple[str, str]:
-    if bucket == "LIVE":
-        return ("MONITOR", GREEN)
-    if bucket == "READY":
-        if bool((meta or {}).get("live_bootstrap")) and not bool((meta or {}).get("live_ready")):
-            return ("BOOTSTRAP", AMBER)
-        return ("LAUNCH", GREEN)
-    return ("BACKTEST", DIM2)
-
-
-def initial_selection(
-    *,
-    live_items: list[tuple],
-    ready_items: list[tuple],
-    research_items: list[tuple],
-    experimental_items: list[tuple],
-) -> tuple[str, Bucket] | None:
-    if live_items:
-        return str(live_items[0][0]), "LIVE"
-    if ready_items:
-        return str(ready_items[0][0]), "READY"
-    if research_items:
-        return str(research_items[0][0]), "RESEARCH"
-    if experimental_items:
-        return str(experimental_items[0][0]), "RESEARCH"
-    return None
-
-
-def assign_bucket(*, slug: str, is_running: bool, live_ready: bool, live_bootstrap: bool = False) -> Bucket:
-    """Decide which bucket an engine belongs to in the cockpit view.
-
-    Rules:
-      - A running engine that is also live_ready → LIVE.
-      - A non-running live_ready engine → READY.
-      - A bootstrap-runnable engine also lands in READY so the cockpit can
-        expose its dedicated preflight runner without claiming it is
-        validated for production execution.
-      - Anything else → RESEARCH.
-    """
-    if not live_ready and not live_bootstrap:
-        return "RESEARCH"
-    return "LIVE" if is_running else "READY"
-
-
-def cycle_mode(current: str) -> Mode:
-    """paper → demo → testnet → live → paper. Unknown input → paper."""
-    try:
-        idx = _MODE_ORDER.index(current)  # type: ignore[arg-type]
-    except ValueError:
-        return _DEFAULT_MODE
-    return _MODE_ORDER[(idx + 1) % len(_MODE_ORDER)]
-
-
-def load_mode(*, state_path: Path | None = None) -> Mode:
-    """Read engines_live.mode from ui_state.json. Missing/invalid → paper."""
-    path = state_path or _DEFAULT_STATE_PATH
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return _DEFAULT_MODE
-    mode = (data.get("engines_live") or {}).get("mode")
-    if mode in _MODE_ORDER:
-        return mode  # type: ignore[return-value]
-    return _DEFAULT_MODE
-
-
-def save_mode(mode: Mode, *, state_path: Path | None = None) -> None:
-    """Persist engines_live.mode into ui_state.json. Preserves other keys.
-
-    Uses atomic_write_json so a crashed write leaves the prior file intact.
-    """
-    from core.ops.persistence import atomic_write_json
-    path = state_path or _DEFAULT_STATE_PATH
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = {}
-    block = dict(data.get("engines_live") or {})
-    block["mode"] = mode
-    data["engines_live"] = block
-    atomic_write_json(path, data)
-
-
-def live_confirm_ok(*, engine_name: str, user_input: str) -> bool:
-    """Case-sensitive, whitespace-strict match used by the LIVE modal."""
-    return user_input == engine_name
-
-
-def format_uptime(*, seconds: float | int | None) -> str:
-    """Render uptime compactly for bucket rows and cockpit headers."""
-    if seconds is None:
-        return "—"
-    total = int(seconds)
-    h, rem = divmod(total, 3600)
-    m, _ = divmod(rem, 60)
-    return f"{h}h{m:02d}m" if h else f"{m}m"
-
-
-# Legacy proc-manager engine names → canonical slugs.
-# Matches the mapping in launcher.py::_strategies (_proc_to_slug).
-_PROC_TO_SLUG: dict[str, str] = {
-    "backtest":    "citadel",
-    "mercurio":    "jump",
-    "thoth":       "bridgewater",
-    "newton":      "deshaw",
-    "multi":       "millennium",
-    "prometeu":    "twosigma",
-    "renaissance": "renaissance",
-    "live":        "live",
-    "arb":         "janestreet",
-    "darwin":      "aqr",
-    "chronos":     "winton",
-    "kepos":       "kepos",
-    "graham":      "graham",
-}
-
-_ENGINE_DIR_MAP: dict[str, str] = {
-    "citadel": "runs",
-}
-
-
-def _use_remote_shadow_cache() -> bool:
-    """Only trust the global ShadowPoller when running from the repo workspace.
-
-    Tests that chdir() into a temp tree expect pure local disk discovery and
-    must not inherit a live poller singleton from another launcher instance.
-    """
-    try:
-        cwd = Path.cwd().resolve()
-    except Exception:
-        return False
-    return cwd == _REPO_ROOT
-
-
-def _safe_float(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _uptime_seconds(proc: dict) -> float | None:
-    for key in ("uptime_seconds", "uptime_s", "uptime"):
-        value = _safe_float(proc.get(key))
-        if value is not None:
-            return value
-    started = proc.get("started")
-    if not started:
-        return None
-    try:
-        from datetime import datetime as _dt
-        return (_dt.now() - _dt.fromisoformat(str(started))).total_seconds()
-    except Exception:
-        return None
-
-
-def running_slugs_from_procs(procs: list[dict]) -> dict[str, dict]:
-    """Filter live proc-manager rows into {slug: proc_row}.
-
-    A proc is considered running when status=='running' AND alive=True.
-    Unknown engine names are dropped silently.
-    """
-    out: dict[str, dict] = {}
-    for p in procs:
-        if p.get("status") != "running" or not p.get("alive"):
-            continue
-        slug = _PROC_TO_SLUG.get(p.get("engine"))
-        if slug:
-            out[slug] = p
-    return out
-
-
-def _sanitize_instance_label(raw: str) -> str:
-    label = re.sub(r"[^a-z0-9-]+", "-", str(raw or "").strip().lower())
-    label = re.sub(r"-{2,}", "-", label).strip("-")
-    return label[:40]
 
 
 def _show_new_instance_dialog(launcher, state) -> None:
@@ -939,15 +711,23 @@ def _refresh_footer(state):
         tunnel_lbl.configure(text=f"TUNNEL {tun_text}", fg=tun_fg)
 
 
-def _load_shadow_snapshot_sync() -> tuple[Path | None, dict | None, list[dict]]:
+def _load_shadow_snapshot_sync(engine: str = "millennium") -> tuple[Path | None, dict | None, list[dict]]:
+    """Fetch latest shadow run for ``engine``. Default stays millennium pra
+    compatibilidade; callers novos (per-engine runners 2026-04-22) passam
+    citadel/jump/renaissance.
+
+    Perf: apos latest_run() devolver run_id, heartbeat + trades rodam em
+    paralelo via ThreadPoolExecutor (antes era 3 calls seriais via SSH
+    tunnel, ~600-900ms tipico -> agora ~300-450ms).
+    """
     client = _get_cockpit_client()
     if client is None:
         return None, None, []
     try:
-        run = client.latest_run(engine="millennium", mode="shadow")
+        run = client.latest_run(engine=engine, mode="shadow")
     except TypeError:
         try:
-            run = client.latest_run(engine="millennium")
+            run = client.latest_run(engine=engine)
         except Exception:
             return None, None, []
     except Exception:
@@ -956,9 +736,28 @@ def _load_shadow_snapshot_sync() -> tuple[Path | None, dict | None, list[dict]]:
         return None, None, []
     run_id = str(run["run_id"])
     run_dir = Path(f"remote://{run_id}")
-    try:
-        hb = client.get_heartbeat(run_id)
-    except Exception:
+
+    def _fetch_hb():
+        try:
+            return client.get_heartbeat(run_id)
+        except Exception:
+            return None
+
+    def _fetch_trades():
+        try:
+            payload = client.get_trades(run_id, limit=20)
+            raw = (payload or {}).get("trades") or []
+            return [t for t in raw if isinstance(t, dict)]
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        hb_fut = pool.submit(_fetch_hb)
+        trades_fut = pool.submit(_fetch_trades)
+        hb = hb_fut.result()
+        trades = trades_fut.result()
+
+    if hb is None:
         hb = {
             "run_id": run_id,
             "status": run.get("status", "unknown"),
@@ -969,19 +768,17 @@ def _load_shadow_snapshot_sync() -> tuple[Path | None, dict | None, list[dict]]:
             "last_error": "heartbeat fetch failed",
             "tick_sec": 0,
         }
-    try:
-        trades_payload = client.get_trades(run_id, limit=20)
-        raw_trades = (trades_payload or {}).get("trades") or []
-        trades = [trade for trade in raw_trades if isinstance(trade, dict)]
-    except Exception:
-        trades = []
     return run_dir, hb, trades
 
 
 def _load_shadow_snapshot_cached(*, launcher=None, state=None,
-                                 allow_sync: bool = False) -> tuple[Path | None, dict | None, list[dict]]:
+                                 allow_sync: bool = False,
+                                 engine: str = "millennium") -> tuple[Path | None, dict | None, list[dict]]:
+    """Cached shadow snapshot fetch per engine. Cache is keyed by engine
+    so citadel/jump/renaissance nao colidem com millennium nem entre si.
+    """
     global _SHADOW_SNAPSHOT_LOADING
-    cache_key = "latest"
+    cache_key = f"latest:{engine}"
     now = time.monotonic()
     with _SHADOW_SNAPSHOT_LOCK:
         cached = _SHADOW_SNAPSHOT_CACHE.get(cache_key)
@@ -996,7 +793,7 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
 
             def _worker() -> None:
                 global _SHADOW_SNAPSHOT_LOADING
-                payload = _load_shadow_snapshot_sync()
+                payload = _load_shadow_snapshot_sync(engine)
                 with _SHADOW_SNAPSHOT_LOCK:
                     _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
                     _SHADOW_SNAPSHOT_LOADING = False
@@ -1004,11 +801,11 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
 
             threading.Thread(
                 target=_worker,
-                name="engines-live-shadow",
+                name=f"engines-live-shadow-{engine}",
                 daemon=True,
             ).start()
             return cached[1] if cached is not None else (None, None, [])
-    payload = _load_shadow_snapshot_sync()
+    payload = _load_shadow_snapshot_sync(engine)
     with _SHADOW_SNAPSHOT_LOCK:
         _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
         _SHADOW_SNAPSHOT_LOADING = False
@@ -1076,50 +873,51 @@ def _fetch_remote_shadow_run_cached(
 def _shadow_active_slugs(*, launcher=None, state=None) -> set[str]:
     """Return the set of engine slugs with an active shadow run visible.
 
-    Le o slug diretamente de poller.engine — se cache tem payload, slug
-    esta ativo. Quando houver mais de um poller, isto evolui pra iterar
-    uma lista registrada no tunnel_registry.
+    Pre 2026-04-22: um unico slug via poller.engine. Com runners per-engine
+    (citadel/jump/renaissance), merge com cockpit /v1/runs cache pra que
+    o sidebar LIVE bucket inclua TODAS as shadows rodando — nao so a que
+    o ShadowPoller esta seguindo.
     """
+    slugs: set[str] = set()
+    # Shadow poller (usually tracks MILLENNIUM, legacy path)
     try:
         from launcher_support.tunnel_registry import get_shadow_poller
         poller = get_shadow_poller()
     except Exception:
-        return set()
-    if poller is None:
-        return set()
+        poller = None
+    if poller is not None:
+        eng = getattr(poller, "engine", None)
+        if isinstance(eng, str) and eng:
+            slugs.add(eng.lower())
+
+    # Cockpit /v1/runs cache — pega TODOS os engine+mode=shadow runs
     try:
-        cached = poller.get_cached()
+        cached_runs = _COCKPIT_RUNS_CACHE.get("runs") or []
     except Exception:
-        return set()
-    if cached is None:
-        run_dir, hb, _trades = _load_shadow_snapshot_cached(
-            launcher=launcher,
-            state=state,
-            allow_sync=(launcher is None and state is None),
-        )
-        if run_dir is None or hb is None:
-            return set()
-        if hb.get("status") != "running":
-            return set()
-        engine = str(hb.get("engine") or "millennium").strip()
-        return {engine} if engine else set()
-    engine = getattr(poller, "engine", None)
-    if not isinstance(engine, str) or not engine:
-        return set()
-    return {engine}
+        cached_runs = []
+    for r in cached_runs:
+        if str(r.get("mode") or "").lower() != "shadow":
+            continue
+        if str(r.get("status") or "").lower() != "running":
+            continue
+        eng = str(r.get("engine") or "").lower()
+        if eng:
+            slugs.add(eng)
+    return slugs
 
 
 def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, dict | None, list[dict]]:
-    """Return latest shadow snapshot from poller cache or cockpit API."""
+    """Return latest shadow snapshot from poller cache or cockpit API.
+
+    ``state.selected_slug`` controla qual engine — quando o usuario seleciona
+    citadel/jump/renaissance na sidebar, buscamos o shadow run dele em vez
+    de cair sempre no millennium.
+    """
     picked_run_id = _fetch_shadow_run_id(state)
+    selected_slug = str((state or {}).get("selected_slug") or "millennium").lower()
 
     # Fast-path: if _COCKPIT_RUNS_CACHE (60s TTL, background-warmed) já sabe
-    # que o run pedido está running, pula o run_catalog.list_runs_catalog —
-    # que tem TTL de só 2s e re-fetcha /v1/runs via SSH tunnel em ~900ms,
-    # travando o Tk mainloop em cada click do picker RUNNING NOW que cai
-    # fora da janela de 2s. Cockpit /v1/runs já tem os mesmos dados do VPS,
-    # então redirecionar pro cache elimina o round-trip duplicado. Só VPS
-    # runs aparecem aí; local-only runs continuam no path original.
+    # que o run pedido está running, pula o run_catalog.list_runs_catalog.
     cached_runs = _COCKPIT_RUNS_CACHE.get("runs") or []
     target_row: dict | None = None
     if picked_run_id and cached_runs:
@@ -1131,7 +929,7 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
     elif cached_runs and not picked_run_id:
         target_row = next(
             (r for r in cached_runs
-             if str(r.get("engine") or "").lower() == "millennium"
+             if str(r.get("engine") or "").lower() == selected_slug
              and str(r.get("mode") or "").lower() == "shadow"
              and str(r.get("status") or "").lower() == "running"),
             None,
@@ -1149,7 +947,7 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
     local_row = (
         run_catalog.get_run_summary(picked_run_id, client=_get_cockpit_client())
         if picked_run_id else
-        run_catalog.latest_active_run(engine="MILLENNIUM", mode="shadow")
+        run_catalog.latest_active_run(engine=selected_slug.upper(), mode="shadow")
     )
     if local_row is not None and str(local_row.status or "").lower() != "running":
         local_row = None
@@ -1200,6 +998,7 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
         launcher=launcher,
         state=state,
         allow_sync=(launcher is None and state is None),
+        engine=selected_slug,
     )
 
 
@@ -1215,27 +1014,36 @@ def _render_master_list(state, launcher):
     procs = _list_procs_cached()
     running = running_slugs_from_procs(procs)
 
-    # No modo SHADOW, so engines com shadow run visivel no poller
-    # aparecem. Quando nao ha nenhum, todos os buckets ficam vazios e
-    # a detail pane renderiza seu empty-state dedicado.
-    is_shadow_mode = state.get("mode") == "shadow"
-    shadow_slugs = _shadow_active_slugs(launcher=launcher, state=state) if is_shadow_mode else set()
-
-    # VPS-backed modes (shadow, paper) — merge running set with cockpit
-    # runs so the RUNNING counter up top reflects real state of the
-    # VPS, not just local processes (which are usually 0 for these
-    # modes). Query is best-effort; failures keep the local-proc count.
+    # VPS-backed modes (shadow, paper): popular running set PRIMEIRO pra
+    # garantir que _COCKPIT_RUNS_CACHE está quente antes de calcular
+    # shadow_slugs. Ordem anterior travava CITADEL/JUMP/RENAISSANCE no
+    # render inicial porque _shadow_active_slugs lia cache vazio e
+    # retornava so {millennium} do poller legado — filtrando outras
+    # engines visíveis do LIVE bucket. (2026-04-22 fix.)
     current_mode = state.get("mode")
     if current_mode in ("shadow", "paper"):
+        # Sync load na primeira chamada: sem isso, _COCKPIT_RUNS_CACHE fica
+        # vazio no primeiro render e CITADEL/JUMP/RENAISSANCE nao aparecem
+        # no LIVE bucket até o worker assíncrono popular o cache. Com
+        # allow_sync=True, o primeiro render espera a resposta (~500ms)
+        # mas ja mostra tudo certo. Subsequentes usam o cache TTL=60s.
+        cache_is_empty = _COCKPIT_RUNS_CACHE.get("runs") is None
         vps_running = _vps_running_slugs(
             mode=current_mode,
             launcher=launcher,
             state=state,
+            allow_sync=cache_is_empty,
         )
         if vps_running:
             running = {**running, **{slug: {"status": "running", "alive": True,
                                             "source": "vps"}
                                      for slug in vps_running}}
+
+    # No modo SHADOW, so engines com shadow run visivel no poller
+    # aparecem. Agora lê _COCKPIT_RUNS_CACHE (populado acima) pra cobrir
+    # todas as shadows rodando (poller legado so segue uma).
+    is_shadow_mode = current_mode == "shadow"
+    shadow_slugs = _shadow_active_slugs(launcher=launcher, state=state) if is_shadow_mode else set()
 
     live_items: list[tuple[str, dict, dict]] = []
     ready_items: list[tuple[str, dict]] = []
@@ -1589,8 +1397,14 @@ def _render_detail(state, launcher):
     mode = state.get("mode")
 
     if mode == "paper":
-        slug = "millennium"
-        bucket = "LIVE"
+        # Pre 2026-04-22: forcava slug="millennium" + bucket="LIVE" no
+        # paper mode. Com runners per-engine (citadel/jump/renaissance),
+        # paper tem tambem as 3 engines — preservar selecao do usuario.
+        # Defaults so aplicam quando nada foi selecionado ainda.
+        if not slug:
+            slug = "millennium"
+        if not bucket:
+            bucket = "LIVE"
         state["selected_slug"] = slug
         state["selected_bucket"] = bucket
 
@@ -2405,14 +2219,18 @@ def _refresh_shadow_panel(launcher, state) -> None:
             return
     except Exception:
         return
-    # Only refresh while the Millennium detail is still the active selection.
-    if state.get("selected_slug") != "millennium":
+    # Only refresh while a shadow-capable engine is still the active
+    # selection. Antes: hardcoded millennium. Agora: qualquer engine com
+    # shadow runner (citadel/jump/renaissance passaram a ter o seu em
+    # 2026-04-22). Usa selected_slug pra re-renderizar o painel certo.
+    slug = state.get("selected_slug")
+    if not slug:
         return
     try:
         frame.destroy()
     except Exception:
         return
-    _render_shadow_panel(parent, launcher, state, "millennium")
+    _render_shadow_panel(parent, launcher, state, slug)
 
 
 # ─── SHADOW mode detail view ───────────────────────────────────────
@@ -2423,9 +2241,13 @@ def _refresh_shadow_panel(launcher, state) -> None:
 def _engine_registry_for_sidebar(state) -> list[dict]:
     """Return list de {slug, display} pra sidebar. Inclui todas engines
     exibidas no bucket LIVE/READY atual — evita depender de import
-    circular com launcher.ENGINES."""
-    if state.get("mode") == "paper":
-        return [{"slug": "millennium", "display": "MILLENNIUM"}]
+    circular com launcher.ENGINES.
+
+    Antes 2026-04-22: paper mode hardcoded pra so mostrar MILLENNIUM.
+    Agora CITADEL/JUMP/RENAISSANCE tem runners paper+shadow proprios
+    (per-engine runners 2e065db); a sidebar cobre todas as engines
+    com runs ao vivo no bucket LIVE.
+    """
     by_bucket = state.get("engines_by_bucket") or {}
     seen: set[str] = set()
     out: list[dict] = []
@@ -2879,7 +2701,7 @@ def _render_run_instance_picker(
     header = tk.Frame(container, bg=BG)
     header.pack(fill="x", padx=0, pady=(0, 0))
     tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
-    tk.Label(header, text="RUNNING NOW", font=(FONT, 7, "bold"),
+    tk.Label(header, text="ENGINES", font=(FONT, 7, "bold"),
              fg=AMBER, bg=BG).pack(side="left")
     tk.Label(header, text=f"  ·  {len(active_runs)}", font=(FONT, 7),
              fg=DIM, bg=BG).pack(side="left")
@@ -2962,11 +2784,11 @@ def _active_engine_runs(
     paper: list[dict] = []
     shadow: list[dict] = []
     if mode in (None, "paper"):
-        paper = _active_paper_runs(launcher, state)
+        paper = _active_paper_runs(launcher, state, engine=slug)
         for r in paper:
             r.setdefault("mode", "paper")
     if mode in (None, "shadow"):
-        shadow = _active_shadow_runs(launcher=launcher, state=state)
+        shadow = _active_shadow_runs(launcher=launcher, state=state, engine=slug)
         for r in shadow:
             r.setdefault("mode", "shadow")
     combined = list(paper) + list(shadow)
@@ -3003,7 +2825,7 @@ def _render_engine_instance_picker(
     header = tk.Frame(container, bg=BG)
     header.pack(fill="x")
     tk.Frame(header, bg=AMBER, width=3, height=12).pack(side="left", padx=(0, 5))
-    tk.Label(header, text="RUNNING NOW", font=(FONT, 7, "bold"),
+    tk.Label(header, text="ENGINES", font=(FONT, 7, "bold"),
              fg=AMBER, bg=BG).pack(side="left")
     tk.Label(header, text=f"  ·  {len(active_runs)}", font=(FONT, 7),
              fg=DIM, bg=BG).pack(side="left")
@@ -3083,11 +2905,22 @@ def _render_engine_instance_picker(
             w.bind("<Button-1>", _make_click(rid, mode))
 
 
-def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
+def _active_mode_runs(mode: str, *, launcher=None, state=None,
+                      engine: str | None = None) -> list[dict]:
+    """List active runs for ``mode`` filtered by ``engine`` (default None =
+    all engines).
+
+    Pre 2026-04-22: hardcoded a MILLENNIUM. Com runners per-engine
+    (citadel/jump/renaissance) publicando no mesmo live_runs, o filter
+    passou a ser parametrico. Default None mostra todas as engines; o
+    sidebar filtra depois via `_active_engine_runs(slug, ...)`.
+    """
+    wanted = (engine or "").lower()
     cached_runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
     matches_by_id: dict[str, dict] = {}
     for row in cached_runs:
-        if str(row.get("engine") or "").lower() != "millennium":
+        row_engine = str(row.get("engine") or "").lower()
+        if wanted and row_engine != wanted:
             continue
         if str(row.get("mode") or "").lower() != mode:
             continue
@@ -3098,6 +2931,7 @@ def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
             continue
         matches_by_id[run_id] = {
             "run_id": run_id,
+            "engine": row_engine,
             "label": row.get("label"),
             "ticks_ok": int(row.get("novel_total") or 0),
             "novel_total": int(row.get("novel_total") or 0),
@@ -3107,27 +2941,26 @@ def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
             "source": "vps",
         }
 
-    # VPS is the source of truth for running state. If the cockpit cache
-    # has any runs for this mode, only merge DB rows that match an
-    # already-seen VPS run_id — avoids surfacing stale DB entries (paper
-    # graceful stop bug leaves "running" DB rows after a kill). When the
-    # VPS cache is empty (tunnel offline / first paint before warmup),
-    # fall back to DB fully so at least something renders.
+    # VPS is source-of-truth; DB is fallback only when VPS answered empty
+    # for this mode (tunnel offline / pre-warmup).
     vps_has_runs_for_mode = any(
         str(r.get("mode") or "").lower() == mode
         and str(r.get("status") or "").lower() == "running"
         for r in cached_runs
     )
     for row in run_catalog.collect_db_runs(mode=mode, limit=100):
-        if row.engine != "MILLENNIUM" or str(row.status or "").lower() != "running":
+        row_engine = str(row.engine or "").lower()
+        if wanted and row_engine != wanted:
+            continue
+        if str(row.status or "").lower() != "running":
             continue
         payload = matches_by_id.get(row.run_id)
         if payload is None:
             if vps_has_runs_for_mode:
-                # VPS answered; DB row without a VPS match is stale.
                 continue
             matches_by_id[row.run_id] = {
                 "run_id": row.run_id,
+                "engine": row_engine,
                 "label": row.label,
                 "ticks_ok": row.ticks_ok or 0,
                 "novel_total": row.novel or 0,
@@ -3149,12 +2982,14 @@ def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
     return matches
 
 
-def _active_paper_runs(launcher, state: dict | None = None) -> list[dict]:
-    return _active_mode_runs("paper", launcher=launcher, state=state)
+def _active_paper_runs(launcher, state: dict | None = None,
+                       engine: str | None = None) -> list[dict]:
+    return _active_mode_runs("paper", launcher=launcher, state=state, engine=engine)
 
 
-def _active_shadow_runs(launcher=None, state: dict | None = None) -> list[dict]:
-    return _active_mode_runs("shadow", launcher=launcher, state=state)
+def _active_shadow_runs(launcher=None, state: dict | None = None,
+                        engine: str | None = None) -> list[dict]:
+    return _active_mode_runs("shadow", launcher=launcher, state=state, engine=engine)
 
 
 def _fetch_shadow_run_id(state: dict | None = None) -> str | None:
