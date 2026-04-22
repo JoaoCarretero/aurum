@@ -631,6 +631,7 @@ class App(tk.Tk):
         # covered by ShadowPoller above.
         warm_t0 = time.perf_counter()
         tunnel_ref = self._aurum_tunnel
+        app_ref = self
         if _boot_workers_enabled():
             try:
                 def _warm_cockpit_caches() -> None:
@@ -640,6 +641,10 @@ class App(tk.Tk):
                     if tunnel_ref is not None:
                         deadline = _t.monotonic() + 15.0
                         while _t.monotonic() < deadline:
+                            # Bail if the app is shutting down so we don't
+                            # block quit on a straggling HTTP fetch.
+                            if not getattr(app_ref, "_ui_alive", True):
+                                return
                             try:
                                 st = tunnel_ref.status
                                 if hasattr(st, "name") and st.name == "UP":
@@ -649,6 +654,8 @@ class App(tk.Tk):
                             _t.sleep(0.2)
                         else:
                             return
+                    if not getattr(app_ref, "_ui_alive", True):
+                        return
                     try:
                         from launcher_support.engines_live_view import (
                             _load_cockpit_runs_sync,
@@ -740,7 +747,7 @@ class App(tk.Tk):
         poller = getattr(self, "_aurum_shadow_poller", None)
         if poller is not None:
             try:
-                poller.stop(timeout_sec=1.0)
+                poller.stop(timeout_sec=0.5)
             except Exception:
                 pass
             self._aurum_shadow_poller = None
@@ -752,7 +759,7 @@ class App(tk.Tk):
         tunnel = getattr(self, "_aurum_tunnel", None)
         if tunnel is not None:
             try:
-                tunnel.stop(timeout_sec=3.0)
+                tunnel.stop(timeout_sec=1.0)
             except Exception:
                 pass
             self._aurum_tunnel = None
@@ -8329,6 +8336,8 @@ class App(tk.Tk):
 
     # --- QUIT --------------------------------------------
     def _quit(self):
+        # Flip the alive flag first so any background worker (warmup thread,
+        # poller tick, log tail reader) checking it can exit promptly.
         self._ui_alive = False
         aid = getattr(self, "_ui_task_after_id", None)
         if aid is not None:
@@ -8337,16 +8346,25 @@ class App(tk.Tk):
             except Exception:
                 pass
             self._ui_task_after_id = None
+        # User-facing confirmations for running work. User already clicked X;
+        # answering "no" returns without shutdown so we don't freeze their work.
         if self.proc and self.proc.poll() is None:
             r = messagebox.askyesnocancel("AURUM", "Engine running. Stop before closing?")
-            if r is None: return
+            if r is None:
+                return
             if r:
                 self.proc.terminate()
-                try: self.proc.wait(timeout=3)
-                except: self.proc.kill()
+                try:
+                    self.proc.wait(timeout=1)
+                except Exception:
+                    try:
+                        self.proc.kill()
+                    except Exception:
+                        pass
         elif self._exec_managed_info is not None:
             r = messagebox.askyesnocancel("AURUM", "Background backtest running. Stop before closing?")
-            if r is None: return
+            if r is None:
+                return
             if r:
                 try:
                     from core.ops.proc import stop_proc
@@ -8356,27 +8374,20 @@ class App(tk.Tk):
         sr = getattr(self, "_site_runner_inst", None)
         if sr and sr.is_running():
             r = messagebox.askyesnocancel("AURUM", "Dev server running. Stop before closing?")
-            if r is None: return
+            if r is None:
+                return
             if r:
-                try: sr.stop()
-                except Exception: pass
-        # Clean shutdown: shadow poller primeiro, depois tunnel.
-        poller = getattr(self, "_aurum_shadow_poller", None)
-        if poller is not None:
-            try:
-                poller.stop(timeout_sec=1.0)
-            except Exception:
-                pass
-        tunnel = getattr(self, "_aurum_tunnel", None)
-        if tunnel is not None:
-            try:
-                tunnel.stop(timeout_sec=3.0)
-            except Exception:
-                pass
+                try:
+                    sr.stop()
+                except Exception:
+                    pass
         try:
             _dump_screen_metrics(reason="quit")
         except Exception:
             pass
+        # Everything else (shadow poller, ssh tunnel) is stopped by
+        # destroy() -> _shutdown_runtime. Centralizing avoids the
+        # double-stop path that used to hang on the 3s tunnel timeout.
         self.destroy()
 
 
