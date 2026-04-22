@@ -91,6 +91,7 @@ def test_read_engine_roster_merges_sharpe_from_index(tmp_path):
         {"engine": "jump",    "timestamp": "2026-04-20T10:00:00", "sharpe": 1.42},
     ])
     roster = read_engine_roster(idx)
+    assert len(roster) == 11  # layout sempre completo mesmo quando só 2 engines tem runs
     citadel = next(r for r in roster if r["name"] == "CITADEL")
     jump    = next(r for r in roster if r["name"] == "JUMP")
     phi     = next(r for r in roster if r["name"] == "PHI")
