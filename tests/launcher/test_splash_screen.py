@@ -142,3 +142,26 @@ def test_splash_apply_live_data_updates_tagged_value(gui_root, fake_app, fake_co
     items = s.canvas.find_withtag("tile-btc-value")
     assert items, "tile-btc-value tag must exist on canvas"
     assert s.canvas.itemcget(items[0], "text") == "67,240 +2.30% ▲"
+
+
+@pytest.mark.gui
+def test_splash_cancel_event_set_on_exit(gui_root, fake_app, fake_conn):
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
+    s.mount()
+    s.on_enter()
+    assert s._cancel_event is not None
+    assert not s._cancel_event.is_set()
+    s.on_exit()
+    assert s._cancel_event.is_set()
+
+
+@pytest.mark.gui
+def test_splash_apply_live_data_noop_after_cancel(gui_root, fake_app, fake_conn):
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
+    s.mount()
+    s.on_enter()
+    before = s.canvas.itemcget(s.canvas.find_withtag("tile-btc-value")[0], "text")
+    s._cancel_event.set()
+    s._apply_live_data({"btc": ("SHOULD_NOT_APPLY", "#fff")})
+    after = s.canvas.itemcget(s.canvas.find_withtag("tile-btc-value")[0], "text")
+    assert after == before

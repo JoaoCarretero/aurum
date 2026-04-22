@@ -433,5 +433,35 @@ class SplashScreen(Screen):
         )
 
     def _kick_async_fetch(self) -> None:
-        """Stub: async fetch lands in Task 9. Por enquanto no-op."""
-        pass
+        """Dispara daemon thread que busca dados live e atualiza canvas."""
+        self._cancel_event = threading.Event()
+        thread = threading.Thread(target=self._fetch_live_worker, daemon=True)
+        thread.start()
+
+    def _fetch_live_worker(self) -> None:
+        """Roda off UI thread. Tenta market pulse; marshalls updates via after()."""
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            return
+        try:
+            pulse = self._fetch_market_pulse()
+        except Exception:
+            pulse = None
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            return
+        if pulse:
+            try:
+                self.container.after(0, lambda d=pulse: self._apply_live_data(d))
+                self._save_pulse_to_cache(pulse)
+            except tk.TclError:
+                return  # container destroyed
+
+    def _save_pulse_to_cache(self, pulse: dict) -> None:
+        plain = {k: v[0] for k, v in pulse.items()}
+        for k, v in pulse.items():
+            plain[f"{k}_col"] = v[1]
+        save_splash_cache(self._cache_path, plain)
+
+    def on_exit(self) -> None:
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        super().on_exit()
