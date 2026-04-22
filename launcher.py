@@ -630,11 +630,29 @@ class App(tk.Tk):
         # so first click on ENGINES renders from cache. Shadow is already
         # covered by ShadowPoller above.
         warm_t0 = time.perf_counter()
+        tunnel_ref = self._aurum_tunnel
         if _boot_workers_enabled():
             try:
                 def _warm_cockpit_caches() -> None:
+                    import time as _t
+                    # SSH tunnel starts async 25ms after boot (typical up time
+                    # 1–3s). Firing the HTTP fetch before UP => connection
+                    # refused => cache filled with []. Poll up to 15s for the
+                    # tunnel to report UP; bail out if it never does (next
+                    # click triggers a fresh fetch anyway).
+                    if tunnel_ref is not None:
+                        deadline = _t.monotonic() + 15.0
+                        while _t.monotonic() < deadline:
+                            try:
+                                st = tunnel_ref.status
+                                if hasattr(st, "name") and st.name == "UP":
+                                    break
+                            except Exception:
+                                pass
+                            _t.sleep(0.2)
+                        else:
+                            return
                     try:
-                        import time as _t
                         from launcher_support.engines_live_view import (
                             _load_cockpit_runs_sync,
                             _fetch_paper_extras_sync,
@@ -644,6 +662,11 @@ class App(tk.Tk):
                             _PAPER_SNAPSHOT_LOCK,
                         )
                         rows = _load_cockpit_runs_sync()
+                        if not rows:
+                            # Tunnel up but HTTP still failed — leave cache
+                            # untouched so the normal async worker path
+                            # retries on the next click.
+                            return
                         with _COCKPIT_RUNS_LOCK:
                             _COCKPIT_RUNS_CACHE["ts"] = _t.monotonic()
                             _COCKPIT_RUNS_CACHE["runs"] = list(rows)
