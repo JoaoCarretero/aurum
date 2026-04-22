@@ -2870,11 +2870,25 @@ def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
             "source": "vps",
         }
 
+    # VPS is the source of truth for running state. If the cockpit cache
+    # has any runs for this mode, only merge DB rows that match an
+    # already-seen VPS run_id — avoids surfacing stale DB entries (paper
+    # graceful stop bug leaves "running" DB rows after a kill). When the
+    # VPS cache is empty (tunnel offline / first paint before warmup),
+    # fall back to DB fully so at least something renders.
+    vps_has_runs_for_mode = any(
+        str(r.get("mode") or "").lower() == mode
+        and str(r.get("status") or "").lower() == "running"
+        for r in cached_runs
+    )
     for row in run_catalog.collect_db_runs(mode=mode, limit=100):
         if row.engine != "MILLENNIUM" or str(row.status or "").lower() != "running":
             continue
         payload = matches_by_id.get(row.run_id)
         if payload is None:
+            if vps_has_runs_for_mode:
+                # VPS answered; DB row without a VPS match is stale.
+                continue
             matches_by_id[row.run_id] = {
                 "run_id": row.run_id,
                 "label": row.label,

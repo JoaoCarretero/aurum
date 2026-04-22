@@ -634,20 +634,36 @@ class App(tk.Tk):
             try:
                 def _warm_cockpit_caches() -> None:
                     try:
+                        import time as _t
                         from launcher_support.engines_live_view import (
-                            _load_cockpit_runs_cached,
-                            _fetch_paper_extras,
+                            _load_cockpit_runs_sync,
+                            _fetch_paper_extras_sync,
+                            _COCKPIT_RUNS_CACHE,
+                            _COCKPIT_RUNS_LOCK,
+                            _PAPER_SNAPSHOT_CACHE,
+                            _PAPER_SNAPSHOT_LOCK,
                         )
-                        runs = _load_cockpit_runs_cached()
-                        for row in runs or []:
+                        rows = _load_cockpit_runs_sync()
+                        with _COCKPIT_RUNS_LOCK:
+                            _COCKPIT_RUNS_CACHE["ts"] = _t.monotonic()
+                            _COCKPIT_RUNS_CACHE["runs"] = list(rows)
+                            _COCKPIT_RUNS_CACHE["loading"] = False
+                        # Preload snapshot for every running paper instance so
+                        # the multi-instance picker has data on first paint.
+                        for row in rows:
                             if (str(row.get("engine") or "").lower() != "millennium"
                                     or str(row.get("mode") or "").lower() != "paper"
                                     or str(row.get("status") or "").lower() != "running"):
                                 continue
-                            run_id = str(row.get("run_id") or "")
-                            if run_id:
-                                _fetch_paper_extras(run_id)
-                            break
+                            rid = str(row.get("run_id") or "")
+                            if not rid:
+                                continue
+                            try:
+                                payload = _fetch_paper_extras_sync(rid)
+                                with _PAPER_SNAPSHOT_LOCK:
+                                    _PAPER_SNAPSHOT_CACHE[rid] = (_t.monotonic(), payload)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                 threading.Thread(
