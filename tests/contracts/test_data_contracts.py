@@ -96,7 +96,7 @@ class TestFetch:
         # Single page of 500 candles fits under limit=1000
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(500)]
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)):
             df = fetch("BTCUSDT", interval="1m", n_candles=500)
         assert df is not None
@@ -105,7 +105,7 @@ class TestFetch:
     def test_returns_expected_columns(self):
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(400)]
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)):
             df = fetch("BTCUSDT", interval="1m", n_candles=400)
         expected = {"time", "open", "high", "low", "close", "vol", "tbb"}
@@ -114,7 +114,7 @@ class TestFetch:
     def test_float_dtype_for_ohlcv(self):
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(400)]
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)):
             df = fetch("BTCUSDT", interval="1m", n_candles=400)
         for col in ("open", "high", "low", "close", "vol", "tbb"):
@@ -123,7 +123,7 @@ class TestFetch:
     def test_time_converted_to_datetime(self):
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(400)]
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)):
             df = fetch("BTCUSDT", interval="1m", n_candles=400)
         assert pd.api.types.is_datetime64_any_dtype(df["time"])
@@ -131,7 +131,7 @@ class TestFetch:
     def test_sorts_by_time(self):
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(400)]
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)):
             df = fetch("BTCUSDT", interval="1m", n_candles=400)
         times = df["time"].values
@@ -142,20 +142,20 @@ class TestFetch:
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(400)]
         klines.append(klines[0])  # dup
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)):
             df = fetch("BTCUSDT", interval="1m", n_candles=401)
         assert df["time"].duplicated().sum() == 0
 
     def test_empty_response_returns_none(self):
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response([])):
             df = fetch("BTCUSDT", interval="1m", n_candles=400)
         assert df is None
 
     def test_http_error_returns_none_after_retries(self):
         # Status 404 → not 200, not 429, not 5xx → immediate break, frames empty
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response([], status_code=404)):
             df = fetch("BTCUSDT", interval="1m", n_candles=400)
         assert df is None
@@ -163,7 +163,7 @@ class TestFetch:
     def test_futures_uses_fapi_url(self):
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(400)]
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)) as mock_get:
             fetch("BTCUSDT", interval="1m", n_candles=400, futures=True)
         # First call: positional args; url is first arg
@@ -173,7 +173,7 @@ class TestFetch:
     def test_spot_uses_api_url(self):
         klines = [_binance_kline_row(1_700_000_000_000 + i * 60_000)
                   for i in range(400)]
-        with patch("core.data.base.requests.get",
+        with patch("core.data.base._SESSION.get",
                    return_value=_make_mock_response(klines)) as mock_get:
             fetch("BTCUSDT", interval="1m", n_candles=400, futures=False)
         url = mock_get.call_args_list[0].args[0]
