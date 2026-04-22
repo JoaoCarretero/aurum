@@ -86,24 +86,6 @@ def snapshot_config() -> dict:
     return snapshot
 
 
-# ── 2. create_run_dir ──────────────────────────────────────────────────────
-
-def create_run_dir(engine_name: str = "citadel") -> tuple[str, Path]:
-    """Create a timestamped run directory under data/runs/.
-
-    Returns (run_id, run_dir) where run_id is e.g. 'citadel_2026-04-09_1940'.
-    """
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    run_id = f"{engine_name}_{stamp}"
-    run_dir = RUNS_DIR / run_id
-
-    run_dir.mkdir(parents=True, exist_ok=True)
-    # NOTE: charts/ subdir não é mais usado — métricas renderizadas
-    # internamente no launcher dashboard via tk.Canvas.
-
-    return run_id, run_dir
-
-
 # ── 3. setup_logging ──────────────────────────────────────────────────────
 
 def setup_logging(run_dir: Path) -> tuple:
@@ -217,89 +199,6 @@ def _clean_trades(trades) -> list:
     return result
 
 
-# ── 5. append_to_index ─────────────────────────────────────────────────────
-
-def append_to_index(run_dir, summary, config, overfit_results=None):
-    """Append this run to data/index.json (creates the file if needed).
-
-    Infers engine identity from (in order): summary["engine"] → parent dir
-    name → run_id prefix. Writes run_id with engine prefix to avoid the
-    launcher listing duplicates (engine-dir-scanned vs index-recorded).
-    """
-    run_dir = Path(run_dir)
-    raw_id = run_dir.name
-
-    # Resolve engine (institutional name → slug)
-    s = summary if isinstance(summary, dict) else {}
-    _inst = str(s.get("engine") or "").strip()
-    _parent = run_dir.parent.name.lower()
-    _ENG_TO_SLUG = {
-        "CITADEL": "citadel", "BRIDGEWATER": "bridgewater",
-        "JUMP": "jump", "DE SHAW": "deshaw", "RENAISSANCE": "renaissance",
-        "MILLENNIUM": "millennium", "TWO SIGMA": "twosigma",
-        "AQR": "aqr", "JANE STREET": "janestreet",
-        "KEPOS": "kepos", "GRAHAM": "graham", "MEDALLION": "medallion",
-    }
-    _PARENT_TO_SLUG = {
-        "bridgewater": "bridgewater", "jump": "jump", "deshaw": "deshaw",
-        "renaissance": "renaissance", "millennium": "millennium",
-        "twosigma": "twosigma", "aqr": "aqr", "janestreet": "janestreet",
-        "kepos": "kepos", "graham": "graham", "medallion": "medallion",
-        "runs": "citadel",  # data/runs/ is CITADEL's
-    }
-    engine_slug = (_ENG_TO_SLUG.get(_inst.upper())
-                   or _PARENT_TO_SLUG.get(_parent)
-                   or raw_id.rsplit("_", 2)[0] if "_" in raw_id else "unknown")
-
-    # Prefix run_id with engine slug so launcher dedup works
-    run_id = raw_id if raw_id.startswith(f"{engine_slug}_") else f"{engine_slug}_{raw_id}"
-
-    # Load existing index
-    index = _load_index()
-
-    # Config hash for dedup / fingerprinting
-    config_json = json.dumps(config, sort_keys=True, default=str)
-    config_hash = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
-
-    # Build entry — pull fields from summary with safe gets
-    entry = {
-        "run_id":       run_id,
-        "engine":       engine_slug,
-        "timestamp":    datetime.now().isoformat(),
-        "interval":     s.get("interval") or config.get("INTERVAL") or config.get("ENTRY_TF"),
-        "period_days":  s.get("period_days") or config.get("SCAN_DAYS"),
-        "basket":       s.get("basket") or config.get("BASKET_EFFECTIVE") or "default",
-        "n_symbols":    s.get("n_symbols"),
-        "n_candles":    s.get("n_candles") or config.get("N_CANDLES"),
-        "n_trades":     s.get("n_trades"),
-        "win_rate":     s.get("win_rate"),
-        "pnl":          s.get("pnl") or s.get("total_pnl"),
-        "roi_pct":      s.get("roi_pct") or s.get("roi"),
-        "sharpe":       s.get("sharpe"),
-        "sortino":      s.get("sortino"),
-        "max_dd_pct":   s.get("max_dd_pct") or s.get("max_dd"),
-        "overfit_pass": None,
-        "overfit_warn": None,
-        "config_hash":  config_hash,
-    }
-
-    if overfit_results and isinstance(overfit_results, dict):
-        entry["overfit_pass"] = overfit_results.get("passed")
-        entry["overfit_warn"] = overfit_results.get("warnings")
-
-    index.append(entry)
-
-    # Write back — simple file-lock pattern (atomic-ish on Windows)
-    INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        atomic_write_json(INDEX_PATH, index)
-    except OSError:
-        # Fallback: write directly
-        with open(INDEX_PATH, "w", encoding="utf-8") as f:
-            json.dump(index, f, ensure_ascii=False, indent=2, default=str)
-    _set_index_cache(index)
-
-
 def _load_index() -> list:
     """Load the global index, returning [] on missing/corrupt file."""
     cached = _get_index_cache()
@@ -389,6 +288,8 @@ def _index_lock():
     return _IndexLockContext()
 
 
+# ── 2. create_run_dir ──────────────────────────────────────────────────────
+
 def create_run_dir(engine_name: str = "citadel") -> tuple[str, Path]:
     """Create a unique timestamped run directory under data/runs/."""
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -404,6 +305,8 @@ def create_run_dir(engine_name: str = "citadel") -> tuple[str, Path]:
             continue
     raise RuntimeError(f"could not allocate unique run directory for {engine_name} at {stamp}")
 
+
+# ── 5. append_to_index ─────────────────────────────────────────────────────
 
 def append_to_index(run_dir, summary, config, overfit_results=None, entry_overrides=None):
     """Append this run to data/index.json with process-safe locking."""

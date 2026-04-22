@@ -463,7 +463,16 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 f"dd ${state.account.drawdown:.2f}"
             )
 
-    # 3. Signal discovery (skip if KS halted)
+    # 3. Signal discovery (skip if KS halted). Init counters upfront so the
+    # heartbeat/log below can read them even when KS fast-halt short-circuits
+    # the scan branch.
+    all_trades: list = []
+    priming = not state.primed
+    primed_count = 0
+    dedup_skips = 0
+    stale_skips = 0
+    live_count = 0
+    opened_count = 0
     if state.ks.state == KSState.NORMAL:
         try:
             all_trades = _scan_new_signals(notify=notify)
@@ -477,19 +486,18 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
         # one full tick_sec (15m default) before ever trading; runs killed
         # before tick 2 produced zero trades (data/millennium_paper/*
         # empty).
-        priming = not state.primed
-        primed_count = 0
         for t in all_trades:
             key = _trade_key(t)
             if key in state.seen_keys:
+                dedup_skips += 1
                 continue
             state.seen_keys.add(key)
-            state.novel_total += 1
 
             # Live-bar filter: only open on signals from the most recent
             # bar(s). Rejects 90d backscan residue and most "future-ts"
             # artifacts from incomplete tail candles.
             if not _is_live_signal(t, state.tick_sec):
+                stale_skips += 1
                 if priming:
                     primed_count += 1
                 _append_jsonl(SIGNALS_PATH, {
@@ -501,7 +509,9 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "signal_ts": str(signal_timestamp(t)),
                 })
                 continue
+            state.novel_total += 1
             state.novel_since_prime += 1
+            live_count += 1
             state.last_novel_at = now_iso
 
             # 4. Portfolio gate V1: MAX_OPEN_POSITIONS only
@@ -549,6 +559,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                                       opened_at_iso=now_iso,
                                       live_price_fn=live_fn)
             state.open_positions.append(pos)
+            opened_count += 1
             state.last_bar_ts_by_symbol[pos.symbol] = now_iso
             _append_jsonl(FILLS_PATH, {
                 "event": "open", "pos_id": pos.id, "ts": pos.opened_at,
@@ -571,11 +582,20 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 )
 
     # 5. Metrics + snapshots
+    if state.ks.state == KSState.NORMAL and (priming or dedup_skips or stale_skips or opened_count):
+        log.info(
+            "SIGNAL scan tick=%d scanned=%d dedup=%d stale=%d opened=%d priming=%s",
+            tick_idx, len(all_trades), dedup_skips, stale_skips, opened_count,
+            "yes" if priming else "no",
+        )
     if state.ks.state == KSState.NORMAL and not state.primed:
         # After a successful first scan, paper is primed — future ticks
         # open positions.
         state.primed = True
-        log.info("PAPER PRIMED tick=%d signals_seen=%d", tick_idx, primed_count)
+        log.info(
+            "PAPER PRIMED tick=%d signals_seen=%d stale=%d dedup=%d",
+            tick_idx, primed_count, stale_skips, dedup_skips,
+        )
     metrics = state.metrics.current_metrics()
     state.metrics.record_equity_point(
         tick=tick_idx, ts=now_iso,
@@ -607,6 +627,11 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
         "ticks_fail": state.ticks_fail,
         "novel_total": state.novel_total,
         "novel_since_prime": state.novel_since_prime,
+        "last_scan_scanned": len(all_trades),
+        "last_scan_dedup": dedup_skips,
+        "last_scan_stale": stale_skips,
+        "last_scan_live": live_count,
+        "last_scan_opened": opened_count,
         "last_novel_at": state.last_novel_at,
         "last_tick_at": now_iso,
         "last_error": None,

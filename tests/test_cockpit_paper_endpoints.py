@@ -187,7 +187,9 @@ def test_systemctl_action_rejects_unknown_service(client):
     r = client.post("/v1/systemctl/start?service=sshd",
                     headers={"Authorization": "Bearer ADMIN456"})
     assert r.status_code == 400
-    assert "service must be one of" in r.json()["error"]
+    # Post-7d0f20e: message generalised to allow template instances
+    # (millennium_paper@foo.service). Test now checks for stable substring.
+    assert "service must be" in r.json()["error"]
 
 
 def test_systemctl_action_requires_admin(client):

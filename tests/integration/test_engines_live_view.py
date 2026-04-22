@@ -343,7 +343,7 @@ def test_render_detail_reuses_shell_for_paper_refresh(monkeypatch):
         }
 
         monkeypatch.setattr(elv, "_fetch_paper_run_id", lambda launcher, state=None: "RID")
-        monkeypatch.setattr(elv, "_active_paper_runs", lambda launcher: [])
+        monkeypatch.setattr(elv, "_active_paper_runs", lambda launcher, state=None: [])
         monkeypatch.setattr(elv, "_fetch_paper_extras", lambda *args, **kwargs: (
             {"run_id": "RID", "status": "running", "last_tick_at": "2026-04-21T20:00:00Z"},
             [],

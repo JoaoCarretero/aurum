@@ -129,6 +129,7 @@ _RUN_DISCOVERY_TTL_S = 1.0
 _RUN_DISCOVERY_CACHE: dict[tuple[str, tuple[str, ...] | None], tuple[float, list[Path]]] = {}
 _JSON_CACHE_TTL_S = 1.0
 _JSON_CACHE: dict[Path, tuple[float, dict]] = {}
+_CACHE_MAX_ENTRIES = 512
 
 
 def clear_caches() -> None:
@@ -142,6 +143,8 @@ def _load_json_cached(path: Path) -> dict:
     if cached and (now - cached[0]) < _JSON_CACHE_TTL_S:
         return dict(cached[1])
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if len(_JSON_CACHE) >= _CACHE_MAX_ENTRIES:
+        _JSON_CACHE.clear()
     _JSON_CACHE[path] = (now, dict(payload))
     return payload
 
@@ -191,6 +194,8 @@ def find_runs(data_root: Path, engines: list[str] | None = None) -> list[Path]:
                         runs.append((hb.stat().st_mtime, run_dir))
     runs.sort(key=lambda t: t[0], reverse=True)
     resolved = [p for _, p in runs]
+    if len(_RUN_DISCOVERY_CACHE) >= _CACHE_MAX_ENTRIES:
+        _RUN_DISCOVERY_CACHE.clear()
     _RUN_DISCOVERY_CACHE[cache_key] = (now, list(resolved))
     return resolved
 
