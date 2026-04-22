@@ -595,6 +595,32 @@ def test_shadow_start_calls_systemctl(monkeypatch, client):
     assert calls == [["systemctl", "start", "millennium_shadow.service"]]
 
 
+def test_shadow_start_accepts_template_instance(monkeypatch, client):
+    import subprocess
+    calls = []
+
+    class _Fake:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(args, **kwargs):
+        calls.append(args)
+        return _Fake(returncode=0, stdout="started", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    r = client.post(
+        "/v1/shadow/start?service=millennium_paper@desk-paper-b",
+        headers={"Authorization": "Bearer ADMIN456"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "started"
+    assert body["service"] == "millennium_paper@desk-paper-b.service"
+    assert calls == [["systemctl", "start", "millennium_paper@desk-paper-b.service"]]
+
+
 def test_shadow_start_reports_systemctl_failure(monkeypatch, client):
     import subprocess
 
@@ -613,3 +639,28 @@ def test_shadow_start_reports_systemctl_failure(monkeypatch, client):
     )
     assert r.status_code == 500
     assert "Unit" in r.json()["error"]
+
+
+def test_systemctl_action_accepts_template_instance(monkeypatch, client):
+    import subprocess
+    calls = []
+
+    class _Fake:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(args, **kwargs):
+        calls.append(args)
+        return _Fake(returncode=0, stdout="active", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    r = client.post(
+        "/v1/systemctl/status?service=millennium_shadow@desk-shadow-b",
+        headers={"Authorization": "Bearer ADMIN456"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["service"] == "millennium_shadow@desk-shadow-b.service"
+    assert calls == [["systemctl", "status", "millennium_shadow@desk-shadow-b.service"]]

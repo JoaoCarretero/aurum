@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets
 import sys
 from datetime import datetime, timezone
@@ -40,6 +41,9 @@ from tools.operations.millennium_signal_gate import is_live_signal  # noqa: E402
 
 VERSION = "1.0.0"
 STARTED_AT = datetime.now(timezone.utc)
+_SERVICE_RE = re.compile(
+    r"^millennium_(paper|shadow)(?:@[a-z0-9][a-z0-9-]{0,39})?$"
+)
 
 
 def _engine_from_dir(run_dir: Path) -> tuple[str, str]:
@@ -106,6 +110,10 @@ def _find_run_by_id(data_root: Path, run_id: str) -> Path | None:
         if run_dir.name == run_id:
             return run_dir
     return None
+
+
+def _is_allowed_service_name(service: str) -> bool:
+    return bool(_SERVICE_RE.fullmatch(str(service or "").strip()))
 
 
 def build_app() -> FastAPI:
@@ -431,10 +439,9 @@ def build_app() -> FastAPI:
         SSH. `service` default millennium_shadow; whitelist abaixo
         previne chamada arbitraria."""
         _check_auth(request, admin=True)
-        ALLOWED = {"millennium_shadow", "millennium_paper"}
-        if service not in ALLOWED:
+        if not _is_allowed_service_name(service):
             raise HTTPException(status_code=400,
-                                detail=f"service must be one of {sorted(ALLOWED)}")
+                                detail="service must be millennium_{paper|shadow} or template instance")
         import subprocess
         try:
             proc = subprocess.run(
@@ -460,13 +467,12 @@ def build_app() -> FastAPI:
         sem SSH. Complementa /v1/shadow/start (que só startava)."""
         _check_auth(request, admin=True)
         ALLOWED_ACTIONS = {"start", "stop", "restart", "status", "is-active"}
-        ALLOWED_SERVICES = {"millennium_shadow", "millennium_paper"}
         if action not in ALLOWED_ACTIONS:
             raise HTTPException(status_code=400,
                                 detail=f"action must be one of {sorted(ALLOWED_ACTIONS)}")
-        if service not in ALLOWED_SERVICES:
+        if not _is_allowed_service_name(service):
             raise HTTPException(status_code=400,
-                                detail=f"service must be one of {sorted(ALLOWED_SERVICES)}")
+                                detail="service must be millennium_{paper|shadow} or template instance")
         import subprocess
         try:
             proc = subprocess.run(

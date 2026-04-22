@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import tkinter as tk
@@ -304,6 +305,12 @@ def running_slugs_from_procs(procs: list[dict]) -> dict[str, dict]:
     return out
 
 
+def _sanitize_instance_label(raw: str) -> str:
+    label = re.sub(r"[^a-z0-9-]+", "-", str(raw or "").strip().lower())
+    label = re.sub(r"-{2,}", "-", label).strip("-")
+    return label[:40]
+
+
 def _show_new_instance_dialog(launcher, state) -> None:
     """Toplevel dialog pra startar uma nova MILLENNIUM instance com label.
 
@@ -361,16 +368,17 @@ def _show_new_instance_dialog(launcher, state) -> None:
                               relief="flat", font=(FONT, 8))
         size_entry.pack(fill="x", padx=14, pady=(2, 8))
 
-    # Warning strip — clarifies local spawn semantics
+    # Warning strip — clarifies local vs VPS semantics
     tk.Label(dlg,
-             text="⚠ runs LOCALLY — cockpit VPS nao ve.\nVer data/millennium_"
-                  f"{mode}/ ou Runs History.",
+             text=("LOCAL cria processo aqui.\n"
+                   "VPS usa systemd template millennium_"
+                   f"{mode}@<label>.service."),
              fg=AMBER, bg=PANEL, font=(FONT, 6),
              wraplength=320, justify="left").pack(anchor="w", padx=14,
                                                    pady=(4, 6))
 
     def _start():
-        label = label_var.get().strip()
+        label = _sanitize_instance_label(label_var.get())
         if not label:
             _toast(launcher, "label obrigatorio", error=True)
             return
@@ -394,12 +402,39 @@ def _show_new_instance_dialog(launcher, state) -> None:
         _toast(launcher, f"new {mode} instance '{label}' spawned locally")
         dlg.destroy()
 
+    def _start_vps():
+        label = _sanitize_instance_label(label_var.get())
+        if not label:
+            _toast(launcher, "label obrigatorio", error=True)
+            return
+        client = _get_cockpit_client()
+        if client is None or not getattr(client.cfg, "admin_token", None):
+            _toast(launcher, "admin_token ausente para start remoto", error=True)
+            return
+        service = f"millennium_{mode}@{label}"
+        try:
+            result = client._post(f"/v1/shadow/start?service={service}", admin=True)
+        except Exception as exc:
+            _toast(launcher, f"VPS start falhou: {exc}", error=True)
+            return
+        if isinstance(result, dict) and result.get("status") == "started":
+            _toast(launcher, f"VPS {mode} '{label}' started")
+            _clear_cockpit_view_caches()
+            _schedule_state_refresh(launcher, state)
+            dlg.destroy()
+            return
+        _toast(launcher, f"VPS start retornou: {result}", error=True)
+
     btn_row = tk.Frame(dlg, bg=PANEL)
     btn_row.pack(fill="x", padx=14, pady=(6, 10))
-    start = tk.Label(btn_row, text=" ▶ START ", fg=BG, bg=GREEN,
+    start = tk.Label(btn_row, text=" ▶ START LOCAL ", fg=BG, bg=GREEN,
                      font=(FONT, 7, "bold"), cursor="hand2", padx=6, pady=2)
     start.pack(side="left")
     start.bind("<Button-1>", lambda _e: _start())
+    start_vps = tk.Label(btn_row, text=" ⤴ START VPS ", fg=BG, bg=AMBER,
+                         font=(FONT, 7, "bold"), cursor="hand2", padx=6, pady=2)
+    start_vps.pack(side="left", padx=(6, 0))
+    start_vps.bind("<Button-1>", lambda _e: _start_vps())
     cancel = tk.Label(btn_row, text=" CANCEL ", fg=WHITE, bg=BG2,
                       font=(FONT, 7, "bold"), cursor="hand2", padx=6, pady=2)
     cancel.pack(side="right")
