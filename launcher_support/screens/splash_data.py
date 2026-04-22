@@ -4,8 +4,6 @@ Responsibilities:
   Implemented:
     - read last session entry from data/index.json
     - read engine roster (OOS status + latest Sharpe per engine)
-
-  Planned (upcoming tasks):
     - load/save splash cache (market pulse between openings)
 """
 from __future__ import annotations
@@ -116,3 +114,23 @@ def read_engine_roster(index_path: Path) -> list[dict]:
             "sharpe": entry[1] if entry else None,
         })
     return out
+
+
+def load_splash_cache(cache_path: Path) -> dict:
+    """Le cache do mercado salvo na sessao anterior. Falha silenciosa → {}."""
+    try:
+        with open(cache_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_splash_cache(cache_path: Path, data: dict) -> None:
+    """Escreve cache. Cria pasta pai se necessario. Falha silenciosa."""
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False)
+    except OSError:
+        pass

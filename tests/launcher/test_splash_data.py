@@ -8,8 +8,10 @@ import pytest
 
 from launcher_support.screens.splash_data import (
     ENGINE_ROSTER_LAYOUT,
+    load_splash_cache,
     read_engine_roster,
     read_last_session,
+    save_splash_cache,
 )
 
 
@@ -106,3 +108,27 @@ def test_read_engine_roster_no_index_returns_labels_only(tmp_path):
     assert len(roster) == 11
     assert all(r["sharpe"] is None for r in roster)
     assert all(r["status"] in {"✅", "⚠️", "🆕", "🔧", "⚪", "🔴"} for r in roster)
+
+
+def test_splash_cache_roundtrip(tmp_path):
+    cache_path = tmp_path / "splash_cache.json"
+    save_splash_cache(cache_path, {"btc": "67,240", "eth": "3,180"})
+    assert load_splash_cache(cache_path) == {"btc": "67,240", "eth": "3,180"}
+
+
+def test_splash_cache_load_missing_returns_empty_dict(tmp_path):
+    assert load_splash_cache(tmp_path / "never.json") == {}
+
+
+def test_splash_cache_load_corrupt_returns_empty_dict(tmp_path):
+    p = tmp_path / "corrupt.json"
+    p.write_text("not json {", encoding="utf-8")
+    assert load_splash_cache(p) == {}
+
+
+def test_splash_cache_save_creates_parent_dirs(tmp_path):
+    cache_path = tmp_path / "nested" / "subdir" / "cache.json"
+    save_splash_cache(cache_path, {"a": 1})
+    assert cache_path.exists()
+    assert cache_path.parent.is_dir()
+    assert load_splash_cache(cache_path) == {"a": 1}
