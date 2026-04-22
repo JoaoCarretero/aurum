@@ -20,9 +20,26 @@ import re
 import threading
 import time
 import tkinter as tk
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
+
+
+# TEMP DIAGNOSTIC — writes render timings to data/.cockpit_timing.log so
+# the operator can just open the file instead of copying terminal output.
+# Remove after flicker root cause is confirmed.
+_TIMING_LOG_PATH = Path(__file__).resolve().parent.parent / "data" / ".cockpit_timing.log"
+
+
+def _tlog(msg: str) -> None:
+    try:
+        _TIMING_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_TIMING_LOG_PATH, "a", encoding="utf-8") as f:
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            f.write(f"{ts} {msg}\n")
+    except Exception:
+        pass
 
 from core.ops.python_runtime import preferred_python_executable
 from core.ops import run_catalog
@@ -634,7 +651,9 @@ def _cockpit_runs_loading() -> bool:
 # Tkinter rendering — smoke-tested via launcher, not unit-tested
 # ════════════════════════════════════════════════════════════════
 
-def render(launcher, parent, *, on_escape) -> dict:
+def render(launcher, parent, *, on_escape) -> dict:  # noqa
+    _tlog("=" * 40 + " ENGINES LIVE ENTER " + "=" * 40)
+    _render_t0 = time.perf_counter()
     """Mount the ENGINES LIVE cockpit view onto `parent`.
 
     `launcher` is the AurumTerminal instance (for _kb/_exec/_clr utilities).
@@ -734,19 +753,25 @@ def render(launcher, parent, *, on_escape) -> dict:
         _emit_initial_refresh_metric()
 
     def refresh(*, stage_detail: bool = True):
+        _t0 = time.perf_counter()
         _cancel_pending_detail_refresh()
-        # Skip the master-list rebuild when the visible state hasn't
-        # changed (same mode, same running set, same selection, same
-        # collapsed buckets). Rebuilding destroys ~15 tiles + subframes
-        # every cycle — at 5s polling that's the root cause of the
-        # flicker. Shadow/paper detail panes already do this via their
-        # content_sig; the master list was the missing piece.
+        t_sig0 = time.perf_counter()
         new_sig = _master_list_sig(state, launcher)
+        t_sig = (time.perf_counter() - t_sig0) * 1000.0
+        rebuilt = False
+        t_rebuild = 0.0
         if new_sig != state.get("master_last_render_sig"):
             state["master_last_render_sig"] = new_sig
+            t_rebuild0 = time.perf_counter()
             _render_master_list(state, launcher)
+            t_rebuild = (time.perf_counter() - t_rebuild0) * 1000.0
+            rebuilt = True
         _refresh_header(state)
         _refresh_footer(state)
+        t_total = (time.perf_counter() - _t0) * 1000.0
+        _tlog(f"refresh total={t_total:.0f}ms sig={t_sig:.0f} "
+              f"rebuild={'YES' if rebuilt else 'skip'}({t_rebuild:.0f}) "
+              f"stage_detail={stage_detail}")
         if not stage_detail:
             _render_detail(state, launcher)
             _emit_initial_refresh_metric()
@@ -818,6 +843,9 @@ def render(launcher, parent, *, on_escape) -> dict:
     except Exception:
         state["initial_refresh_after_id"] = None
         refresh()
+    _t_render = (time.perf_counter() - _render_t0) * 1000.0
+    _tlog(f"render() returned after {_t_render:.0f}ms "
+          f"(setup only, refresh runs on after_idle)")
     return {
         "refresh": refresh,
         "cleanup": cleanup,
@@ -1142,6 +1170,7 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
 
 def _render_master_list(state, launcher):
     """Mount the 3-bucket master list on state['master_host']."""
+    _t0 = time.perf_counter()
     host = state["master_host"]
     for w in host.winfo_children():
         w.destroy()
@@ -1149,7 +1178,9 @@ def _render_master_list(state, launcher):
     from config.engines import (
         ENGINES, LIVE_BOOTSTRAP_SLUGS, LIVE_READY_SLUGS, EXPERIMENTAL_SLUGS,
     )
+    t_procs0 = time.perf_counter()
     procs = _list_procs_cached()
+    t_procs = (time.perf_counter() - t_procs0) * 1000.0
     running = running_slugs_from_procs(procs)
 
     # No modo SHADOW, so engines com shadow run visivel no poller
@@ -1237,10 +1268,12 @@ def _render_master_list(state, launcher):
         if selected is not None:
             state["selected_slug"], state["selected_bucket"] = selected
 
+    t_tiles0 = time.perf_counter()
     _render_bucket(inner, "LIVE", live_items, state)
     _render_bucket(inner, "READY LIVE", ready_items, state)
     _render_bucket(inner, "RESEARCH", research_items, state)
     _render_bucket(inner, "EXPERIMENTAL", experimental_items, state)
+    t_tiles = (time.perf_counter() - t_tiles0) * 1000.0
 
     _render_summary_row(
         state,
@@ -1253,6 +1286,11 @@ def _render_master_list(state, launcher):
              + len(research_items) + len(experimental_items))
     state["counts_lbl"].configure(
         text=f"{total} engines  ·  {len(live_items)} running")
+
+    t_total = (time.perf_counter() - _t0) * 1000.0
+    _tlog(f"  master_list total={t_total:.0f}ms procs_cached={t_procs:.0f} "
+          f"tiles={t_tiles:.0f} live={len(live_items)} ready={len(ready_items)} "
+          f"research={len(research_items)} exp={len(experimental_items)}")
 
 
 def _render_summary_row(state, *, live_count: int, ready_count: int, research_count: int):
@@ -1533,13 +1571,8 @@ def _render_detail(state, launcher):
     )
 
     # Skip full detail rebuild when nothing material changed. Master list
-    # already sig-skips; this covers the detail pane — which is the
-    # heavyweight one (cards, equity curve, positions grid). Without this
-    # the detail inner was destroyed and rebuilt on every refresh cycle,
-    # causing the flicker. shadow/paper paths have their own sig-check
-    # inside _refresh_*_detail, but _render_detail is also invoked from
-    # refresh() + set_mode + click handlers where the sig-check wasn't
-    # wired.
+    # already sig-skips; this covers the detail pane.
+    _rd_t0 = time.perf_counter()
     if reuse_shell and mode in ("paper", "shadow") and slug:
         if mode == "paper":
             new_sig = ("paper", slug, _paper_content_sig(state, launcher))
@@ -1547,6 +1580,8 @@ def _render_detail(state, launcher):
             new_sig = ("shadow", slug, _shadow_content_sig(state, launcher))
         last_sig = state.get("_detail_last_render_sig")
         if new_sig == last_sig:
+            t = (time.perf_counter() - _rd_t0) * 1000.0
+            _tlog(f"  render_detail SKIP (sig unchanged) sig_compute={t:.0f}ms")
             return
         state["_detail_last_render_sig"] = new_sig
     else:
@@ -1638,7 +1673,12 @@ def _render_detail(state, launcher):
         card = tk.Frame(detail_inner, bg=PANEL,
                         highlightbackground=BORDER, highlightthickness=1)
         card.pack(fill="both", expand=True)
+        t_paper0 = time.perf_counter()
         _render_detail_paper(card, slug, meta, state, launcher)
+        t_paper = (time.perf_counter() - t_paper0) * 1000.0
+        t_total = (time.perf_counter() - _rd_t0) * 1000.0
+        _tlog(f"  render_detail FULL paper slug={slug} "
+              f"total={t_total:.0f}ms paper_body={t_paper:.0f}ms")
         return
 
     if not slug:
