@@ -60,38 +60,42 @@ def test_splash_builds_canvas(gui_root, fake_app, fake_conn):
 
 
 @pytest.mark.gui
-def test_splash_draws_logo_panel_rows(gui_root, fake_app, fake_conn):
+def test_splash_draws_five_tiles(gui_root, fake_app, fake_conn):
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
     s.mount()
     s.on_enter()
-    assert fake_app._draw_panel.call_count >= 1
-    panel_call = fake_app._draw_panel.call_args
-    assert panel_call.args[1:5] == (140, 292, 780, 430)
-
-    assert fake_app._draw_kv_rows.call_count >= 2
-    left_call = fake_app._draw_kv_rows.call_args_list[0]
-    right_call = fake_app._draw_kv_rows.call_args_list[1]
-    assert left_call.args[1:3] == (176, 336)
-    assert right_call.args[1:3] == (486, 336)
-    assert left_call.kwargs["value_x"] == 288
-    assert right_call.kwargs["value_x"] == 598
-    assert fake_app._draw_aurum_logo.call_count >= 1
+    # 5 panels = STATUS, RISK, MARKET PULSE, LAST SESSION, ENGINE ROSTER
+    assert fake_app._draw_panel.call_count == 5
+    titles = [call.kwargs.get("title", "") for call in fake_app._draw_panel.call_args_list]
+    assert "STATUS" in titles
+    assert "RISK" in titles
+    assert "MARKET PULSE" in titles
+    assert "LAST SESSION" in titles
+    assert "ENGINE ROSTER" in titles
 
 
 @pytest.mark.gui
-def test_splash_intro_stays_above_session_panel(gui_root, fake_app, fake_conn):
+def test_splash_tile_row2_wide_has_expected_width(gui_root, fake_app, fake_conn):
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
     s.mount()
     s.on_enter()
-    assert s._INTRO_Y + s._INTRO_BLOCK_GAP < s._SESSION_PANEL_Y1
+    roster_call = next(
+        c for c in fake_app._draw_panel.call_args_list
+        if c.kwargs.get("title") == "ENGINE ROSTER"
+    )
+    x1, y1, x2, y2 = roster_call.args[1:5]
+    assert x2 - x1 == SplashScreen._TILE_W_WIDE
+    assert y2 - y1 == SplashScreen._TILE_H
 
 
 @pytest.mark.gui
-def test_splash_hero_stays_above_session_panel(gui_root, fake_app, fake_conn):
+def test_splash_wordmark_stays_above_row1(gui_root, fake_app, fake_conn):
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
     s.mount()
     s.on_enter()
-    assert s._INTRO_Y + s._INTRO_BLOCK_GAP < s._SESSION_PANEL_Y1
+    assert s._TAGLINE_Y < s._ROW1_Y1
+    assert s._ROW1_Y2 < s._ROW2_Y1
+    assert s._ROW2_Y2 < s._PROMPT_Y
 
 
 @pytest.mark.gui
@@ -111,3 +115,53 @@ def test_splash_header_labels_set_on_enter(gui_root, fake_app, fake_conn):
     s.on_enter()
     assert fake_app.h_stat.cget("text") == "READY"
     assert "ENTER proceed" in fake_app.f_lbl.cget("text")
+
+
+@pytest.mark.gui
+def test_splash_renders_with_missing_index_json(gui_root, fake_app, fake_conn, tmp_path, monkeypatch):
+    """Sem data/index.json → tiles mostram NO SESSION DATA + roster sem Sharpe, no crash."""
+    monkeypatch.chdir(tmp_path)  # data/ nao existe no cwd isolado
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="ISO")
+    s.mount()
+    s.on_enter()
+    # LAST SESSION deveria exibir fallback:
+    texts = [
+        s.canvas.itemcget(item, "text")
+        for item in s.canvas.find_withtag("splash")
+        if s.canvas.type(item) == "text"
+    ]
+    assert any("NO SESSION DATA" in t for t in texts)
+
+
+@pytest.mark.gui
+def test_splash_apply_live_data_updates_tagged_value(gui_root, fake_app, fake_conn):
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
+    s.mount()
+    s.on_enter()
+    s._apply_live_data({"btc": ("67,240 +2.30% ▲", "#00ff00")})
+    items = s.canvas.find_withtag("tile-btc-value")
+    assert items, "tile-btc-value tag must exist on canvas"
+    assert s.canvas.itemcget(items[0], "text") == "67,240 +2.30% ▲"
+
+
+@pytest.mark.gui
+def test_splash_cancel_event_set_on_exit(gui_root, fake_app, fake_conn):
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
+    s.mount()
+    s.on_enter()
+    assert s._cancel_event is not None
+    assert not s._cancel_event.is_set()
+    s.on_exit()
+    assert s._cancel_event.is_set()
+
+
+@pytest.mark.gui
+def test_splash_apply_live_data_noop_after_cancel(gui_root, fake_app, fake_conn):
+    s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="T")
+    s.mount()
+    s.on_enter()
+    before = s.canvas.itemcget(s.canvas.find_withtag("tile-btc-value")[0], "text")
+    s._cancel_event.set()
+    s._apply_live_data({"btc": ("SHOULD_NOT_APPLY", "#fff")})
+    after = s.canvas.itemcget(s.canvas.find_withtag("tile-btc-value")[0], "text")
+    assert after == before
