@@ -479,6 +479,30 @@ def _vps_running_slugs(*, mode: str, launcher=None, state=None,
     return slugs
 
 
+def _vps_running_instance_count(
+    *,
+    mode: str,
+    launcher=None,
+    state=None,
+) -> int:
+    """Count live VPS run *instances* (not engine slugs).
+
+    ``_vps_running_slugs`` returns a deduplicated set — when MILLENNIUM
+    has 2 paper + 2 shadow runs, that set has 1 entry. The RUNNING
+    counter in the header should reflect the true number of live
+    instances in the current mode (2 papers = 2, 2 shadows = 2).
+    """
+    runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
+    count = 0
+    for r in runs:
+        if str(r.get("status") or "").lower() != "running":
+            continue
+        if mode and str(r.get("mode") or "").lower() != mode:
+            continue
+        count += 1
+    return count
+
+
 def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict]:
     now = time.monotonic()
     cached_rows = _PROCS_CACHE.get("rows")
@@ -1236,9 +1260,19 @@ def _render_master_list(state, launcher):
     _render_bucket(inner, "RESEARCH", research_items, state)
     _render_bucket(inner, "EXPERIMENTAL", experimental_items, state)
 
+    # Running counter: for VPS-backed modes (shadow, paper) count actual
+    # run *instances* in the cockpit cache — otherwise a single engine
+    # with 2+ instances registers as "1 running".
+    if current_mode in ("shadow", "paper"):
+        running_instances = _vps_running_instance_count(
+            mode=current_mode, launcher=launcher, state=state,
+        )
+    else:
+        running_instances = len(live_items)
+
     _render_summary_row(
         state,
-        live_count=len(live_items),
+        live_count=running_instances,
         ready_count=len(ready_items),
         research_count=len(research_items) + len(experimental_items),
     )
@@ -1246,7 +1280,7 @@ def _render_master_list(state, launcher):
     total = (len(live_items) + len(ready_items)
              + len(research_items) + len(experimental_items))
     state["counts_lbl"].configure(
-        text=f"{total} engines  ·  {len(live_items)} running")
+        text=f"{total} engines  ·  {running_instances} running")
 
 
 def _render_summary_row(state, *, live_count: int, ready_count: int, research_count: int):
