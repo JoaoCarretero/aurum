@@ -56,13 +56,15 @@ class MainMenuScreen(Screen):
         if canvas is None:
             return
 
+        # Tiles maiores — layout spread-out pra preencher o espaco que abriu
+        # com a remocao dos paineis DESK OVERVIEW / ACTIVE CONTEXT.
         app._active_tile_slots = [
-            ("nw", 192, 182),
-            ("ne", 728, 182),
-            ("sw", 192, 340),
-            ("se", 728, 340),
+            ("nw", 192, 170),
+            ("ne", 728, 170),
+            ("sw", 192, 370),
+            ("se", 728, 370),
         ]
-        app._active_cd_center = (460, 261)
+        app._active_cd_center = (460, 270)
         app._menu_render_scale = 1.0
         app.h_stat.configure(text="DESK SELECT", fg=AMBER_B)
         app.h_path.configure(text="> MAIN  |  DESK ROUTER")

@@ -1209,8 +1209,8 @@ class App(tk.Tk):
         ("sw", 192, 480),
         ("se", 728, 480),
     ]
-    _TILE_W = 220
-    _TILE_H = 118
+    _TILE_W = 280
+    _TILE_H = 150
     _TILE_DEPTH = 16
 
     _CD_CX = 460

@@ -922,6 +922,7 @@ def render(
         else:
             _chips = [
                 ("OVER",  "OVERVIEW"),
+                ("BRIEF", "BRIEF"),
                 ("LAB",   "CONFIG"),
                 ("CODE",  "CODE"),
                 ("RUN",   "RUN"),
@@ -941,6 +942,7 @@ def render(
 
         _chip_painters = {
             "OVERVIEW":  _paint_overview,
+            "BRIEF":     _paint_brief,
             "CONFIG":    _paint_config,
             "CODE":      _paint_code,
             "RUN":       _paint_run,
@@ -977,8 +979,170 @@ def render(
         state["chip"] = chip
         _paint_detail()
 
+    def _query_last_runs(slug: str, limit: int = 8) -> list[dict]:
+        """Fetch the N most recent backtest runs for a given engine slug.
+
+        Reads from data/aurum.db (the canonical runs index). Returns an
+        empty list if the DB is unavailable — never raises. Callers render
+        a "no runs yet" placeholder when the list is empty.
+        """
+        try:
+            import sqlite3 as _sq
+            _db = Path("data/aurum.db")
+            if not _db.exists():
+                return []
+            _c = _sq.connect(str(_db))
+            try:
+                rows = _c.execute(
+                    """
+                    SELECT run_id, timestamp, sharpe, sortino, roi, max_dd,
+                           win_rate, n_trades, interval, json_path, veredito
+                    FROM runs
+                    WHERE engine = ?
+                    ORDER BY run_id DESC
+                    LIMIT ?
+                    """,
+                    (slug, int(limit)),
+                ).fetchall()
+            finally:
+                _c.close()
+            cols = ("run_id", "timestamp", "sharpe", "sortino", "roi",
+                    "max_dd", "win_rate", "n_trades", "interval",
+                    "json_path", "veredito")
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception:
+            return []
+
+    def _open_run_artifact(json_path: Optional[str]) -> None:
+        """Best-effort open the run JSON in the system default app.
+
+        Silent no-op when the path is missing or the OS call fails — the UI
+        never blocks on filesystem issues. On Windows uses os.startfile; on
+        other platforms falls back to xdg-open via webbrowser.
+        """
+        if not json_path:
+            return
+        try:
+            _p = Path(str(json_path))
+            if not _p.exists():
+                return
+            import os as _os
+            if hasattr(_os, "startfile"):
+                _os.startfile(str(_p))  # type: ignore[attr-defined]
+            else:
+                import webbrowser as _wb
+                _wb.open(_p.as_uri())
+        except Exception:
+            return
+
     def _paint_overview(host, t: EngineTrack):
-        """Research brief — institutional layout.
+        """LAST RUNS — cyberpunk clickable history from data/aurum.db.
+
+        Substitui o antigo briefing (movido pro chip BRIEF). Cada row
+        mostra timestamp, Sharpe, ROI, trades e verdict; click abre o
+        JSON artifact no app padrao do sistema.
+        """
+        sbody = _scrollable(host)
+
+        hdr = tk.Frame(sbody, bg=PANEL)
+        hdr.pack(fill="x", pady=(0, 4))
+        tk.Label(hdr, text="▓▓ LAST RUNS ▓▓", font=(FONT, 8, "bold"),
+                 fg=CYAN, bg=PANEL, anchor="w").pack(side="left")
+        tk.Label(hdr, text=f"engine: {t.name}", font=(FONT, 7),
+                 fg=DIM, bg=PANEL, anchor="e").pack(side="right")
+        tk.Frame(sbody, bg=CYAN, height=1).pack(fill="x", pady=(0, 8))
+
+        runs = _query_last_runs(t.slug, limit=8)
+        if not runs:
+            tk.Label(sbody, text="  ▸ no runs indexed yet — run this engine to populate history",
+                     font=(FONT, 8), fg=DIM2, bg=PANEL, anchor="w",
+                     wraplength=560, justify="left"
+                     ).pack(fill="x", pady=(12, 6))
+            return
+
+        def _color_for(metric: str, val: Optional[float]) -> str:
+            if val is None:
+                return DIM
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                return DIM
+            if metric == "sharpe":
+                if v >= 1.5:
+                    return GREEN
+                if v >= 0.5:
+                    return AMBER
+                return RED
+            if metric == "roi":
+                return GREEN if v > 0 else RED
+            return WHITE
+
+        for run in runs:
+            card = tk.Frame(sbody, bg=BG2,
+                            highlightbackground=CYAN,
+                            highlightthickness=1,
+                            cursor="hand2")
+            card.pack(fill="x", pady=2)
+
+            # Top strip: timestamp + run_id (monospace) + chevrons
+            top = tk.Frame(card, bg=BG2)
+            top.pack(fill="x", padx=8, pady=(5, 2))
+            ts_raw = str(run.get("timestamp") or "")[:19].replace("T", " ")
+            tk.Label(top, text=ts_raw or "—", font=(FONT, 8, "bold"),
+                     fg=CYAN, bg=BG2, anchor="w").pack(side="left")
+            tk.Label(top, text=" ◢◢◢", font=(FONT, 7, "bold"),
+                     fg=AMBER, bg=BG2).pack(side="right")
+            rid = str(run.get("run_id") or "")
+            if rid:
+                tk.Label(top, text=f"  {rid[-19:]}", font=(FONT, 7),
+                         fg=DIM, bg=BG2, anchor="w").pack(side="left")
+
+            # Metrics row
+            met = tk.Frame(card, bg=BG2)
+            met.pack(fill="x", padx=8, pady=(0, 6))
+
+            def _cell(parent, label, val_txt, val_color):
+                c = tk.Frame(parent, bg=BG2)
+                c.pack(side="left", padx=(0, 14))
+                tk.Label(c, text=label, font=(FONT, 6, "bold"),
+                         fg=DIM, bg=BG2, anchor="w").pack(anchor="w")
+                tk.Label(c, text=val_txt, font=(FONT, 9, "bold"),
+                         fg=val_color, bg=BG2, anchor="w").pack(anchor="w")
+
+            sh = run.get("sharpe")
+            roi = run.get("roi")
+            nt = run.get("n_trades")
+            tf = run.get("interval") or "—"
+            sh_txt = f"{sh:+.2f}" if isinstance(sh, (int, float)) else "—"
+            roi_txt = f"{roi:+.1f}%" if isinstance(roi, (int, float)) else "—"
+            nt_txt = str(int(nt)) if isinstance(nt, (int, float)) else "—"
+
+            _cell(met, "SHARPE", sh_txt, _color_for("sharpe", sh))
+            _cell(met, "ROI", roi_txt, _color_for("roi", roi))
+            _cell(met, "TRADES", nt_txt, WHITE)
+            _cell(met, "TF", str(tf).upper(), AMBER)
+
+            ver = str(run.get("veredito") or "").strip()
+            if ver:
+                tk.Label(met, text=f"  ⟨ {ver.upper()} ⟩",
+                         font=(FONT, 7, "bold"),
+                         fg=CYAN, bg=BG2).pack(side="right")
+
+            json_path = run.get("json_path")
+            def _click(_e=None, _p=json_path):
+                _open_run_artifact(_p)
+            for w in (card, top, met):
+                w.bind("<Button-1>", _click)
+            # Hover accent
+            def _enter(_e=None, _c=card):
+                _c.configure(highlightbackground=AMBER, bg=BG3)
+            def _leave(_e=None, _c=card):
+                _c.configure(highlightbackground=CYAN, bg=BG2)
+            card.bind("<Enter>", _enter)
+            card.bind("<Leave>", _leave)
+
+    def _paint_brief(host, t: EngineTrack):
+        """Research brief — institutional layout (moved from OVERVIEW).
 
         Sections render top-to-bottom in this fixed order:
           1. STRATEGY   — one-paragraph description
