@@ -308,7 +308,8 @@ PERIODS_UI = [
     ("30 DIAS",   "~1 mês — validação rápida",        "30"),
     ("90 DIAS",   "~3 meses — backtest padrão",        "90"),
     ("180 DIAS",  "~6 meses — médio prazo",            "180"),
-    ("365 DIAS",  "~1 ano — ciclo completo",           "365"),
+    ("360 DIAS",  "~1 ano — ciclo completo",           "360"),
+    ("720 DIAS",  "~2 anos — walk-forward longo",      "720"),
 ]
 
 
