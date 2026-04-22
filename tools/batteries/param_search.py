@@ -10,11 +10,9 @@ Usage:
 Params are patched at runtime via setattr(config.params, ...) and
 restored after each run. config/params.py is NEVER written to disk.
 """
-import sys, os, time, csv, json, logging, itertools
+import sys, time, csv, logging, itertools
 from pathlib import Path
 from datetime import datetime
-from collections import defaultdict
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 if sys.stdout.encoding != "utf-8":

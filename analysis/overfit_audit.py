@@ -3,8 +3,7 @@ AURUM Finance — Overfit Audit
 6 reality checks on backtest trade data.
 If it smells like overfit, it probably is.
 """
-import json, sys, math
-import numpy as np
+import json, sys
 from pathlib import Path
 
 from config.params import LEVERAGE, COMMISSION, FUNDING_PER_8H

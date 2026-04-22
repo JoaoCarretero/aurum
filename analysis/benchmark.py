@@ -1,7 +1,6 @@
 """AURUM — Benchmark comparison, bear market analysis, year-by-year."""
 import requests
-import numpy as np
-from config.params import ACCOUNT_SIZE, SCAN_DAYS, INTERVAL
+from config.params import ACCOUNT_SIZE
 from analysis.stats import equity_stats, calc_ratios
 
 def bear_market_analysis(all_trades: list) -> dict:

@@ -2,10 +2,9 @@
 AURUM Full Battery Test — All engines, all configurations.
 Runs tests sequentially, reports after each block.
 """
-import sys, time, csv, json, logging
+import sys, time, csv, logging
 from pathlib import Path
 from datetime import datetime
-from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 if sys.stdout.encoding != "utf-8":

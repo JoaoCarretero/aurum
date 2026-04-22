@@ -2,10 +2,9 @@
 AURUM Master Battery — All engines × all configs × all timeframes.
 Fetches data once per (TF, basket, days) combo, runs all applicable engines.
 """
-import sys, time, csv, json, logging, traceback
+import sys, time, csv, logging, traceback
 from pathlib import Path
 from datetime import datetime
-from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 if sys.stdout.encoding != "utf-8":

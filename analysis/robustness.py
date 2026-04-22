@@ -1,9 +1,7 @@
 """AURUM — Symbol robustness analysis."""
-import numpy as np
 from collections import defaultdict
 from config.params import SCAN_DAYS
 from analysis.stats import equity_stats, calc_ratios
-from analysis.walkforward import walk_forward
 
 def symbol_robustness(all_trades):
     SYM_TRAIN, SYM_TEST = 8, 4

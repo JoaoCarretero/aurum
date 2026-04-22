@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 from datetime import datetime
-
-import tkinter as tk
 
 
 def build_tab(

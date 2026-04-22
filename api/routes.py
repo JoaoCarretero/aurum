@@ -6,11 +6,10 @@ import json
 import asyncio
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 from api.models import get_conn
 from api.auth import (
