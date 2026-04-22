@@ -1,35 +1,20 @@
-import { Nav } from "./components/Nav";
-import { Footer } from "./components/Footer";
-import { StatusTicker } from "./components/StatusTicker";
-import { Hero } from "./sections/Hero";
-import { Bento } from "./sections/Bento";
-import { Thesis } from "./sections/Thesis";
-import { Methodology } from "./sections/Methodology";
-import { Performance } from "./sections/Performance";
-import { CodeShowcase } from "./sections/CodeShowcase";
-import { Technology } from "./sections/Technology";
-import { Principles } from "./sections/Principles";
-import { Research } from "./sections/Research";
-import { Contact } from "./sections/Contact";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { AuthProvider } from "./lib/auth";
+import { Landing } from "./pages/Landing";
+import { Login } from "./pages/Login";
+import { Members } from "./pages/Members";
 
 export default function App() {
   return (
-    <>
-      <StatusTicker />
-      <Nav />
-      <main className="app">
-        <Hero />
-        <Bento />
-        <Thesis />
-        <Methodology />
-        <Performance />
-        <CodeShowcase />
-        <Technology />
-        <Principles />
-        <Research />
-        <Contact />
-      </main>
-      <Footer />
-    </>
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/members" element={<Members />} />
+          <Route path="*" element={<Landing />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
