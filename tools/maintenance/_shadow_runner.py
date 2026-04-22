@@ -386,6 +386,40 @@ def _tg_signal(trade: dict) -> None:
     _tg_send("\n".join(lines))
 
 
+def _resolve_engine_scan_config():
+    """Returns (engine_tf, engine_symbols, n_candles, scan_fn) using the
+    engine's native sweet-spot from ENGINE_INTERVALS/ENGINE_BASKETS.
+
+    Antes 2026-04-22 22:00: delegava pra MILLENNIUM (shared 15m + default
+    basket). Isso quebrava JUMP (native 1h bluechip) e RENAISSANCE (native
+    15m bluechip) — live signals nao correspondiam ao backtest OOS.
+    """
+    from config.params import (
+        ENGINE_INTERVALS, ENGINE_BASKETS, BASKETS, SYMBOLS as DEFAULT_SYMBOLS,
+        SCAN_DAYS,
+    )
+    tf = ENGINE_INTERVALS.get(ENGINE_UPPER, "15m")
+    basket_name = ENGINE_BASKETS.get(ENGINE_UPPER, "default")
+    if basket_name == "default" or basket_name not in BASKETS:
+        symbols = list(DEFAULT_SYMBOLS)
+    else:
+        symbols = list(BASKETS[basket_name])
+    bars_per_day = {
+        "5m": 288, "15m": 96, "30m": 48, "1h": 24,
+        "2h": 12, "4h": 6, "6h": 4, "12h": 2, "1d": 1,
+    }.get(tf, 24)
+    n_candles = SCAN_DAYS * bars_per_day
+    if ENGINE_NAME == "citadel":
+        from engines.citadel import scan_symbol as scan_fn
+    elif ENGINE_NAME == "jump":
+        from engines.jump import scan_mercurio as scan_fn
+    elif ENGINE_NAME == "renaissance":
+        from core.harmonics import scan_hermes as scan_fn
+    else:
+        raise RuntimeError(f"no scan fn for engine {ENGINE_NAME!r}")
+    return tf, symbols, n_candles, scan_fn
+
+
 def _run_tick(
     seen_keys: set,
     tick_sec: int,
@@ -394,26 +428,45 @@ def _run_tick(
     """Run one shadow tick. Returns (novel_count, total_scanned, engines_ok,
     last_novel_observed_at, scan_stats).
 
-    Uses MILLENNIUM's ``_collect_live_signals`` and filters output to this
-    engine — so signals match exactly what MILLENNIUM would see for this
-    engine on the same candles (clean cross-validation)."""
-    from engines.millennium import (  # noqa: E402
-        _load_dados,
-        _collect_live_signals,
-    )
+    Fetcha OHLCV no TF+basket nativos do engine (ENGINE_INTERVALS/
+    ENGINE_BASKETS) e chama a scan fn nativa — assim o shadow reproduz
+    EXATAMENTE a calibracao do backtest OOS validado.
+    """
+    from core.data import fetch_all, validate
+    from core.portfolio import detect_macro, build_corr_matrix
+    from config.params import MACRO_SYMBOL
+
+    tf, engine_symbols, n_candles, scan_fn = _resolve_engine_scan_config()
+    fetch_syms = list(engine_symbols)
+    if MACRO_SYMBOL and MACRO_SYMBOL not in fetch_syms:
+        fetch_syms.insert(0, MACRO_SYMBOL)
 
     with contextlib.redirect_stdout(io.StringIO()):
-        all_dfs, htf_stack, macro_series, corr = _load_dados(False)
-        engine_trades, all_trades = _collect_live_signals(
-            all_dfs, htf_stack, macro_series, corr,
-        )
+        all_dfs = fetch_all(fetch_syms, interval=tf, n_candles=n_candles)
+        for sym, df in all_dfs.items():
+            validate(df, sym)
+        if not all_dfs:
+            return 0, 0, 0, None, {"scanned": 0, "dedup": 0, "stale": 0, "live": 0}
+        macro_series = detect_macro(all_dfs)
+        corr = build_corr_matrix(all_dfs)
 
-    # Filter to this engine only.
-    filtered = [
-        t for t in all_trades
-        if str(t.get("strategy", "")).upper() == ENGINE_UPPER
-    ]
-    engines_ok = 1 if filtered else 0  # we're one engine by design
+    filtered: list = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        for sym, df in all_dfs.items():
+            if sym not in engine_symbols:
+                continue
+            t, _vetos = scan_fn(
+                df if ENGINE_NAME != "jump" else df.copy(),
+                sym, macro_series, corr, None,
+                live_mode=True,
+            )
+            for tt in t:
+                tt["strategy"] = ENGINE_UPPER
+                if ENGINE_NAME == "citadel":
+                    tt.setdefault("confirmed", False)
+            filtered.extend(t)
+
+    engines_ok = 1 if filtered else 0
     novel = 0
     dedup_skips = 0
     stale_skips = 0
