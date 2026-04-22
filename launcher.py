@@ -4393,13 +4393,18 @@ class App(tk.Tk):
     _ARB_OI_OPTS    = [0, 50_000, 100_000, 500_000, 1_000_000]
     _ARB_RISK_OPTS  = ["HIGH", "MED", "LOW"]
     _ARB_GRADE_OPTS = ["SKIP", "MAYBE", "GO"]
-    # Defaults são permissivos DE PROPÓSITO — se começarmos apertado
-    # (GRADE=MAYBE, APR=20%), o usuário abre a desk e vê tabela vazia sem
-    # saber porquê. Começa relaxado, user aperta se quiser ver só o topo.
+    # Phase 2 redesign: default ships with GRADE=MAYBE (≈ +WAIT), hiding
+    # SKIP noise of the day. User clicks "ALL" to see everything or
+    # "GO ONLY" to tighten.
     _ARB_FILTER_DEFAULTS = {
         "min_apr": 5.0, "min_volume": 0, "min_oi": 0,
-        "risk_max": "HIGH", "grade_min": "SKIP",
+        "risk_max": "HIGH", "grade_min": "MAYBE",
+        "exclude_risky_venues": False,
     }
+
+    # Venues considered "risky" for the [NO RISKY VENUES] toggle —
+    # reliability ≤ 94 from core.arb.arb_scoring._DEFAULT_VENUE_RELIABILITY.
+    _ARB_RISKY_VENUES = frozenset({"bingx", "bitget", "paradex"})
 
     def _arb_filter_state(self) -> dict:
         if not hasattr(self, "_arb_filters"):
@@ -4423,17 +4428,141 @@ class App(tk.Tk):
             return f"GRADE\u2265{val}"
         return f"{key}={val}"
 
+    def _arb_rerender_current_tab(self) -> None:
+        """Repaint the active tab from cached scan data (no network)."""
+        cache = getattr(self, "_arb_cache", None)
+        if not cache:
+            return
+        try:
+            self._arb_hub_telem_update(
+                cache.get("stats"), cache.get("top"),
+                cache.get("opps", []), cache.get("arb_cc", []),
+                cache.get("arb_dd", []), cache.get("arb_cd", []),
+                cache.get("basis", []), cache.get("spot", []))
+        except Exception:
+            pass
+
+    def _arb_set_grade_min(self, grade: str) -> None:
+        """Set grade_min filter (for [GO ONLY]/[+WAIT]/[ALL] toolbar)."""
+        self._arb_filter_state()["grade_min"] = grade
+        # Refresh chip display if visible
+        lbl = getattr(self, "_arb_filter_labels", {}).get("grade_min")
+        if lbl is not None:
+            try:
+                lbl.configure(text=f" {self._arb_fmt_filter('grade_min', grade)} ")
+            except Exception:
+                pass
+        self._arb_refresh_viab_toolbar()
+        self._arb_rerender_current_tab()
+
+    def _arb_toggle_risky_venues(self) -> None:
+        state = self._arb_filter_state()
+        state["exclude_risky_venues"] = not state.get("exclude_risky_venues", False)
+        self._arb_refresh_viab_toolbar()
+        self._arb_rerender_current_tab()
+
+    def _arb_refresh_viab_toolbar(self) -> None:
+        """Repaint the top viability toolbar's active/inactive states."""
+        btns = getattr(self, "_arb_viab_btns", {})
+        if not btns:
+            return
+        state = self._arb_filter_state()
+        active = state.get("grade_min", "MAYBE")
+        palette = {
+            "GO":    (GREEN, BG),      # [GO ONLY]
+            "MAYBE": (AMBER, BG),      # [+WAIT]
+            "SKIP":  (DIM, BG),        # [ALL]
+        }
+        for key, (btn, grade) in btns.items():
+            if key == "risky":
+                continue
+            try:
+                if grade == active:
+                    fg, _bg = BG, palette[grade][0]
+                    btn.configure(fg=fg, bg=_bg)
+                else:
+                    fg, _bg = palette[grade][0], palette[grade][1]
+                    btn.configure(fg=fg, bg=_bg)
+            except Exception:
+                pass
+        risky_btn = btns.get("risky", (None,))[0]
+        if risky_btn is not None:
+            try:
+                on = state.get("exclude_risky_venues", False)
+                risky_btn.configure(
+                    text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
+                    fg=RED if on else DIM, bg=BG)
+            except Exception:
+                pass
+
+    def _arb_build_viab_toolbar(self, parent):
+        """Phase 2: 3-button viability toolbar + NO RISKY VENUES toggle.
+
+        Sits ABOVE the advanced filter chips. User picks a viability
+        bucket ([GO ONLY]/[+WAIT]/[ALL]) and optionally excludes venues
+        with low reliability. Simpler than the 5-chip cycling bar and
+        answers the "does this position make sense?" question directly.
+        """
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill="x", pady=(0, 4))
+
+        tk.Label(bar, text=" VIAB ", font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 6))
+
+        state = self._arb_filter_state()
+        active = state.get("grade_min", "MAYBE")
+        self._arb_viab_btns = {}
+
+        viab_buttons = [
+            ("GO ONLY", "GO",    GREEN),
+            ("+WAIT",   "MAYBE", AMBER),
+            ("ALL",     "SKIP",  DIM),
+        ]
+        for label, grade, color in viab_buttons:
+            is_active = (grade == active)
+            fg = BG if is_active else color
+            bg = color if is_active else BG
+            btn = tk.Label(
+                bar, text=f"  {label}  ",
+                font=(FONT, 8, "bold"),
+                fg=fg, bg=bg, cursor="hand2",
+                padx=8, pady=3, bd=0, highlightthickness=0,
+            )
+            btn.pack(side="left", padx=(0, 2))
+            btn.bind("<Button-1>", lambda _e, _g=grade: self._arb_set_grade_min(_g))
+            self._arb_viab_btns[label] = (btn, grade)
+
+        # Divider
+        tk.Frame(bar, bg=BORDER, width=1, height=18).pack(
+            side="left", fill="y", padx=(10, 10))
+
+        # [NO RISKY VENUES] toggle
+        on = state.get("exclude_risky_venues", False)
+        risky_btn = tk.Label(
+            bar,
+            text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
+            font=(FONT, 8, "bold"),
+            fg=RED if on else DIM, bg=BG,
+            cursor="hand2", padx=6, pady=3,
+        )
+        risky_btn.pack(side="left")
+        risky_btn.bind("<Button-1>", lambda _e: self._arb_toggle_risky_venues())
+        self._arb_viab_btns["risky"] = (risky_btn, None)
+
     def _arb_build_filter_bar(self, parent):
         """Render the shared filter chip strip. Click a chip to cycle its value.
 
         Filters persist across tab switches via self._arb_filters. Any value
         change re-renders the active tab from the cached scan (no network).
         """
+        # Phase 2: viability toolbar on top, chips below as "advanced"
+        self._arb_build_viab_toolbar(parent)
+
         state = self._arb_filter_state()
         bar = tk.Frame(parent, bg=BG2)
         bar.pack(fill="x", pady=(0, 4))
-        tk.Label(bar, text=" FILTERS ", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG2).pack(side="left", padx=(4, 2))
+        tk.Label(bar, text=" ADVANCED ", font=(FONT, 7, "bold"),
+                 fg=DIM, bg=BG2).pack(side="left", padx=(4, 2))
         tk.Label(bar, text="› click pra ciclar",
                  font=(FONT, 6), fg=DIM, bg=BG2).pack(
             side="left", padx=(0, 6))
@@ -4471,14 +4600,10 @@ class App(tk.Tk):
                 s[_k] = nxt
                 self._arb_filter_labels[_k].configure(
                     text=f" {self._arb_fmt_filter(_k, nxt)} ")
-                # Re-render the current tab with cached data
-                cache = getattr(self, "_arb_cache", None)
-                if cache:
-                    self._arb_hub_telem_update(
-                        cache.get("stats"), cache.get("top"),
-                        cache.get("opps", []), cache.get("arb_cc", []),
-                        cache.get("arb_dd", []), cache.get("arb_cd", []),
-                        cache.get("basis", []), cache.get("spot", []))
+                # Keep viability toolbar in sync when grade_min changes
+                if _k == "grade_min":
+                    self._arb_refresh_viab_toolbar()
+                self._arb_rerender_current_tab()
             lbl.bind("<Button-1>", _cycle)
 
     # -- Detail pane (populated on row click) ------------------
@@ -4562,13 +4687,111 @@ class App(tk.Tk):
                 fill="x", padx=6, pady=(2, 2))
             sum_line = tk.Frame(body, bg=BG2)
             sum_line.pack(fill="x", padx=6, pady=(0, 4))
+            viab = getattr(res, "viab", res.grade)
+            viab_fg = (GREEN if viab == "GO" else
+                       AMBER if viab in ("WAIT", "MAYBE") else DIM)
             grade_fg = (GREEN if res.grade == "GO" else
                         AMBER if res.grade == "MAYBE" else DIM)
-            tk.Label(sum_line, text=f"SCORE {res.score:.0f}/100",
-                     font=(FONT, 9, "bold"), fg=WHITE, bg=BG2).pack(side="left")
-            tk.Label(sum_line, text=f"  GRADE {res.grade}",
-                     font=(FONT, 9, "bold"), fg=grade_fg,
-                     bg=BG2).pack(side="left", padx=(8, 0))
+            tk.Label(sum_line, text=f"VIAB {viab}",
+                     font=(FONT, 10, "bold"), fg=viab_fg, bg=BG2).pack(side="left")
+            tk.Label(sum_line, text=f"  ·  SCORE {res.score:.0f}/100",
+                     font=(FONT, 9), fg=WHITE, bg=BG2).pack(side="left")
+            be = getattr(res, "breakeven_h", None)
+            if be is not None:
+                be_fg = GREEN if be <= 24 else (AMBER if be <= 72 else DIM)
+                tk.Label(sum_line, text=f"  ·  BKEVN {be:.1f}h",
+                         font=(FONT, 9), fg=be_fg, bg=BG2).pack(side="left")
+
+            # "Why GO/WAIT/SKIP" reason line — surfaces the top 2-3
+            # factors (positive if GO/WAIT, negative if SKIP) so the
+            # user understands the verdict at a glance.
+            reason = self._arb_viab_reason(pair, res)
+            if reason:
+                tk.Label(body, text=reason,
+                         font=(FONT, 7), fg=DIM, bg=BG2,
+                         anchor="w", justify="left", wraplength=600).pack(
+                    fill="x", padx=6, pady=(2, 4))
+
+            # Action bar — OPEN AS PAPER POSITION
+            tk.Frame(body, bg=BORDER, height=1).pack(
+                fill="x", padx=6, pady=(2, 2))
+            action = tk.Frame(body, bg=BG2)
+            action.pack(fill="x", padx=6, pady=(2, 6))
+
+            engine = getattr(self, "_arb_simple_engine", None)
+            engine_running = engine is not None and engine.running
+            if engine_running:
+                btn_text = " OPEN AS PAPER POSITION "
+                btn_fg, btn_bg = BG, GREEN
+                btn_cmd = lambda _e=None, _p=pair: self._arb_open_as_paper(_p)
+            else:
+                btn_text = " START ENGINE FIRST (POSITIONS tab) "
+                btn_fg, btn_bg = DIM, BG3
+                btn_cmd = lambda _e=None: None
+            btn = tk.Label(action, text=btn_text,
+                           font=(FONT, 8, "bold"),
+                           fg=btn_fg, bg=btn_bg,
+                           cursor="hand2" if engine_running else "arrow",
+                           padx=10, pady=4)
+            btn.pack(side="left")
+            btn.bind("<Button-1>", btn_cmd)
+
+    def _arb_viab_reason(self, pair: dict, res) -> str:
+        """Human-readable reason for the VIAB verdict (top 2-3 factors)."""
+        viab = getattr(res, "viab", res.grade)
+        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
+        be = getattr(res, "breakeven_h", None)
+        vol_score = (res.factors.get("volume") or 0)
+        if viab == "GO":
+            parts = [f"high APR ({apr:.0f}%)"]
+            if be is not None:
+                parts.append(f"fast breakeven ({be:.1f}h)")
+            if vol_score >= 40:
+                parts.append("liquid")
+            return "  Why GO: " + ", ".join(parts)
+        if viab in ("WAIT", "MAYBE"):
+            parts = [f"APR {apr:.0f}%"]
+            if be is not None:
+                parts.append(f"bkevn {be:.1f}h")
+            if vol_score < 40:
+                parts.append("liquidity moderate")
+            return "  Why WAIT: " + ", ".join(parts)
+        # SKIP
+        reasons = []
+        if apr < 20:
+            reasons.append(f"APR too low ({apr:.0f}%)")
+        if be is not None and be > 72:
+            reasons.append(f"slow breakeven ({be:.1f}h)")
+        if vol_score < 20:
+            reasons.append("illiquid")
+        return "  Why SKIP: " + ", ".join(reasons) if reasons else ""
+
+    def _arb_open_as_paper(self, pair: dict) -> None:
+        """Open this opp as a paper position immediately (bypass tick)."""
+        engine = getattr(self, "_arb_simple_engine", None)
+        if engine is None or not engine.running:
+            return
+        import time as _time
+        try:
+            # Ensure the pair has the keys SimpleArbEngine._open expects
+            opp = dict(pair)
+            if "net_apr" not in opp:
+                opp["net_apr"] = opp.get("apr") or opp.get("basis_apr") or 0
+            if "short_venue" not in opp:
+                opp["short_venue"] = opp.get("venue_perp") or opp.get("venue_a") or ""
+            if "long_venue" not in opp:
+                opp["long_venue"] = opp.get("venue_spot") or opp.get("venue_b") or ""
+            if "mark_price" not in opp:
+                opp["mark_price"] = opp.get("spot_price") or opp.get("price_a") or 0
+            engine._open(opp, _time.time())
+            engine._persist()
+            # Nudge the hub to refresh to show the new position
+            self.after(200, lambda: self._arbitrage_hub("positions"))
+        except Exception as e:
+            import logging
+            logging.getLogger("aurum.arb_hub").warning(
+                "open_as_paper failed for %s: %s", pair.get("symbol"), e,
+                exc_info=True)
 
     @staticmethod
     def _pair_min(a, b):
@@ -4655,6 +4878,8 @@ class App(tk.Tk):
             self._arb_score_cache = cache
         cache_map = cache["map"]
 
+        exclude_risky = state.get("exclude_risky_venues", False)
+        risky_venues = self._ARB_RISKY_VENUES
         out = []
         for p in (pairs or []):
             # Cheap filters first
@@ -4674,6 +4899,15 @@ class App(tk.Tk):
             risk = p.get("risk", "HIGH")
             if _R.get(risk, 2) > risk_cap:
                 continue
+            # [NO RISKY VENUES] toolbar toggle — drop pairs involving
+            # low-reliability venues (bingx, bitget, paradex).
+            if exclude_risky:
+                sv = (p.get("short_venue") or p.get("venue_perp") or
+                      p.get("venue_a") or "").lower()
+                lv = (p.get("long_venue") or p.get("venue_spot") or
+                      p.get("venue_b") or "").lower()
+                if sv in risky_venues or lv in risky_venues:
+                    continue
 
             # Cache key: symbol + venues + apr rounded to 1dp (the only
             # field that changes meaningfully between scans).
@@ -4887,51 +5121,83 @@ class App(tk.Tk):
             b.pack(side="left", padx=(6, 0))
             b.bind("<Button-1>", lambda _e, _c=cmd: _c())
 
-        # Live positions table
+        # Live positions table (Phase 3: proper diff-updating _arb_make_table
+        # instead of tk.Text — gains colored APR/PnL, click-to-detail, etc.)
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
         tk.Label(parent, text="OPEN POSITIONS",
                  font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        pos_body = tk.Text(parent, height=6, font=(FONT, 7),
-                           bg=BG2, fg=WHITE, bd=0, highlightthickness=0,
-                           wrap="none")
-        pos_body.pack(fill="x", pady=(2, 0))
         positions = snap.get("positions", [])
+        pos_cols = [
+            ("SYM",      10, "w"),
+            ("VENUES",   18, "w"),
+            ("APR NOW",  9,  "e"),
+            ("ACCRUED",  9,  "e"),
+            ("NET P&L",  9,  "e"),
+            ("OPEN",     7,  "e"),
+        ]
+        _, pos_repaint = self._arb_make_table(parent, pos_cols)
         if positions:
-            pos_body.insert("end",
-                f"  {'SYMBOL':<12} {'SHORT':<14} {'LONG':<14} {'APR%':>7}"
-                f" {'H':>5} {'FUND$':>8}\n")
+            pos_rows = []
             for p in positions:
-                pos_body.insert("end",
-                    f"  {p.get('symbol',''):<12} {p.get('venue_short',''):<14} "
-                    f"{p.get('venue_long',''):<14} "
-                    f"{p.get('current_apr',0):>+7.1f} "
-                    f"{p.get('hours_open',0):>5.1f} "
-                    f"{p.get('funding_accrued',0):>+8.2f}\n")
+                entry_apr = float(p.get("entry_apr", 0) or 0)
+                cur_apr = float(p.get("current_apr", 0) or 0)
+                # APR decay color: RED if below 50% of entry
+                if abs(entry_apr) > 0 and abs(cur_apr) / abs(entry_apr) < 0.5:
+                    apr_fg = RED
+                elif abs(cur_apr) >= 50:
+                    apr_fg = GREEN
+                else:
+                    apr_fg = AMBER
+                accrued = float(p.get("funding_accrued", 0) or 0)
+                fees = float(p.get("fees_paid", 0) or 0)
+                # Entry fees already deducted; approximate exit fee for
+                # net-P&L preview (matches SimpleArbEngine._close math).
+                exit_fee_est = fees  # symmetric
+                net_pnl = accrued - fees - exit_fee_est
+                sv = (p.get("venue_short", "") or "")[:8]
+                lv = (p.get("venue_long", "") or "")[:8]
+                pos_rows.append([
+                    ((p.get("symbol", "") or "—")[:10], WHITE),
+                    (f"{lv}>{sv}"[:18], AMBER_D),
+                    (f"{cur_apr:+.1f}%", apr_fg),
+                    (f"${accrued:+.2f}", GREEN if accrued >= 0 else RED),
+                    (f"${net_pnl:+.2f}", GREEN if net_pnl >= 0 else RED),
+                    (f"{p.get('hours_open', 0):.1f}h", DIM),
+                ])
+            pos_repaint(pos_rows)
         else:
-            pos_body.insert("end", "  no positions open\n")
-        pos_body.configure(state="disabled")
+            pos_repaint([])
+            tk.Label(parent, text="  no positions open — start engine in POSITIONS tab",
+                     font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=4)
 
-        # Recent closed trades (tail)
+        # Recent closed trades (tail, proper table)
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
         tk.Label(parent, text="RECENT CLOSES",
                  font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        log_body = tk.Text(parent, height=8, font=(FONT, 7),
-                           bg=BG2, fg=DIM, bd=0, highlightthickness=0,
-                           wrap="none")
-        log_body.pack(fill="both", expand=True, pady=(2, 0))
+        closed_cols = [
+            ("SYM",     10, "w"),
+            ("REASON",  11, "w"),
+            ("HOLD",    6,  "e"),
+            ("P&L",     9,  "e"),
+        ]
+        _, closed_repaint = self._arb_make_table(parent, closed_cols)
         recent = (snap.get("closed_recent", []) or
                   (engine.closed[-10:] if engine is not None else []))
         if recent:
+            closed_rows = []
             for c in reversed(recent):
-                pnl = c.get('pnl', 0)
-                col_mark = "+" if pnl >= 0 else ""
-                log_body.insert("end",
-                    f"  {c.get('symbol',''):<12} {c.get('exit_reason',''):<10} "
-                    f"{c.get('hours_open',0):>5.1f}h "
-                    f"{col_mark}{pnl:.2f}\n")
+                pnl = float(c.get("pnl", 0) or 0)
+                closed_rows.append([
+                    ((c.get("symbol", "") or "—")[:10], WHITE),
+                    ((c.get("exit_reason", "") or "")[:11], DIM),
+                    (f"{c.get('hours_open', 0):.1f}h", DIM),
+                    (f"${pnl:+.2f}", GREEN if pnl >= 0 else RED),
+                ])
+            closed_repaint(closed_rows)
         else:
-            log_body.insert("end", "  no closes yet\n")
-        log_body.configure(state="disabled")
+            closed_repaint([])
+            tk.Label(parent, text="  no closes yet",
+                     font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=4)
 
     # ═══════════════════════════════════════════════════════════
     # Phase 1 redesign (2026-04-22): 3-tab layout
