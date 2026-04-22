@@ -957,9 +957,11 @@ def _render_detail_health(parent: tk.Widget, r: RunSummary) -> None:
         return
 
     rows = []
-    dd = hb.get("drawdown_pct")
-    if dd is not None:
-        dd_f = float(dd)
+    # _as_float trata strings nao-numericas ("N/A", "") como None em vez
+    # de raise. Sem isso, um cockpit mal-comportado derruba o detail pane
+    # inteiro (audit 2026-04-22).
+    dd_f = _as_float(hb.get("drawdown_pct"))
+    if dd_f is not None:
         dd_color = (RED if dd_f >= 5 else
                     AMBER_D if dd_f >= 2 else WHITE)
         rows.append(("drawdown", f"{dd_f:.2f}%", dd_color))
@@ -1020,20 +1022,22 @@ def _render_detail_probe(parent: tk.Widget, r: RunSummary) -> None:
     if str(r.engine).upper() != "PROBE":
         return
     hb = r.heartbeat or {}
-    top = hb.get("top_score")
-    if top is None:
+    # _as_float trata strings nao-numericas como None — se o cockpit
+    # mandar lixo em top_score, a secao simplesmente nao renderiza em
+    # vez de crashar o detail pane (audit 2026-04-22).
+    top_f = _as_float(hb.get("top_score"))
+    if top_f is None:
         return
 
-    thr = float(hb.get("threshold") or 0.62)
-    top_f = float(top)
+    thr = _as_float(hb.get("threshold")) or 0.62
     top_color = (GREEN if top_f >= thr else
                  AMBER_B if top_f >= thr * 0.8 else
                  AMBER_D if top_f >= thr * 0.6 else DIM)
 
-    mean = float(hb.get("mean_score") or 0)
-    n_thr = int(hb.get("n_above_threshold") or 0)
-    n_80 = int(hb.get("n_above_80pct") or 0)
-    n_60 = int(hb.get("n_above_60pct") or 0)
+    mean = _as_float(hb.get("mean_score")) or 0.0
+    n_thr = _as_int(hb.get("n_above_threshold")) or 0
+    n_80 = _as_int(hb.get("n_above_80pct")) or 0
+    n_60 = _as_int(hb.get("n_above_60pct")) or 0
 
     rows = [
         ("top score", f"{top_f:.3f}", top_color),
