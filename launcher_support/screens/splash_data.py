@@ -3,9 +3,9 @@
 Responsibilities:
   Implemented:
     - read last session entry from data/index.json
+    - read engine roster (OOS status + latest Sharpe per engine)
 
   Planned (upcoming tasks):
-    - read engine roster (status + last Sharpe)
     - load/save splash cache (market pulse between openings)
 """
 from __future__ import annotations
@@ -51,3 +51,67 @@ def read_last_session(index_path: Path) -> Optional[dict]:
         return None
     dated.sort(key=lambda pair: pair[0], reverse=True)
     return dated[0][1]
+
+
+# OOS audit 2026-04-17 — (DISPLAY_NAME, engine_key_in_index, status_icon)
+# ordenado: edges primeiro, mixed, novos, em tuning, fora-da-bateria, falhados.
+# Exclui JANE_STREET (arb, não direcional), MILLENNIUM/WINTON (orchestrators)
+# e GRAHAM (arquivado).
+ENGINE_ROSTER_LAYOUT: list[tuple[str, str, str]] = [
+    ("CITADEL",     "citadel",     "✅"),
+    ("JUMP",        "jump",        "✅"),
+    ("RENAISS",     "renaissance", "⚠️"),
+    ("BRIDGEW",     "bridgewater", "⚠️"),
+    ("PHI",         "phi",         "🆕"),
+    ("ORNSTEIN",    "ornstein",    "🔧"),
+    ("TWOSIGMA",    "twosigma",    "⚪"),
+    ("AQR",         "aqr",         "⚪"),
+    ("DE_SHAW",     "deshaw",      "🔴"),
+    ("KEPOS",       "kepos",       "🔴"),
+    ("MEDALLION",   "medallion",   "🔴"),
+]
+
+
+def read_engine_roster(index_path: Path) -> list[dict]:
+    """Cruza status hardcoded (OOS audit) com Sharpe mais recente do index.json.
+
+    Retorna lista de dicts [{name, status, sharpe}]. sharpe é None se não há
+    run registrado para o engine. Usa `_parse_timestamp` defensivo pra tolerar
+    formatos ISO variados (naive vs aware) sem quebrar.
+    """
+    try:
+        with open(index_path, "r", encoding="utf-8") as fh:
+            rows = json.load(fh)
+        if not isinstance(rows, list):
+            rows = []
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        rows = []
+
+    latest_by_engine: dict[str, tuple[datetime, float]] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        key = r.get("engine")
+        sh = r.get("sharpe")
+        if not key or sh is None:
+            continue
+        parsed = _parse_timestamp(r.get("timestamp"))
+        if parsed is None:
+            continue
+        try:
+            sh_f = float(sh)
+        except (TypeError, ValueError):
+            continue
+        cur = latest_by_engine.get(key)
+        if cur is None or parsed > cur[0]:
+            latest_by_engine[key] = (parsed, sh_f)
+
+    out: list[dict] = []
+    for display, key, status in ENGINE_ROSTER_LAYOUT:
+        entry = latest_by_engine.get(key)
+        out.append({
+            "name": display,
+            "status": status,
+            "sharpe": entry[1] if entry else None,
+        })
+    return out

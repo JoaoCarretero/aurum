@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from launcher_support.screens.splash_data import read_last_session
+from launcher_support.screens.splash_data import (
+    ENGINE_ROSTER_LAYOUT,
+    read_engine_roster,
+    read_last_session,
+)
 
 
 def _write_index(tmp_path: Path, rows: list[dict]) -> Path:
@@ -67,3 +71,37 @@ def test_read_last_session_skips_rows_with_unparseable_timestamp(tmp_path):
     result = read_last_session(idx)
     assert result is not None
     assert result["engine"] == "jump"
+
+
+def test_engine_roster_layout_has_11_engines():
+    assert len(ENGINE_ROSTER_LAYOUT) == 11
+    names = [row[0] for row in ENGINE_ROSTER_LAYOUT]
+    assert "CITADEL" in names
+    assert "PHI" in names
+    assert "ORNSTEIN" in names
+    # orchestrators & arquivados excluídos
+    assert "MILLENNIUM" not in names
+    assert "GRAHAM" not in names
+
+
+def test_read_engine_roster_merges_sharpe_from_index(tmp_path):
+    idx = _write_index(tmp_path, [
+        {"engine": "citadel", "timestamp": "2026-04-20T10:00:00", "sharpe": 1.87},
+        {"engine": "citadel", "timestamp": "2026-04-19T10:00:00", "sharpe": 1.50},
+        {"engine": "jump",    "timestamp": "2026-04-20T10:00:00", "sharpe": 1.42},
+    ])
+    roster = read_engine_roster(idx)
+    citadel = next(r for r in roster if r["name"] == "CITADEL")
+    jump    = next(r for r in roster if r["name"] == "JUMP")
+    phi     = next(r for r in roster if r["name"] == "PHI")
+    assert citadel["sharpe"] == 1.87  # mais recente vence
+    assert jump["sharpe"] == 1.42
+    assert phi["sharpe"] is None      # no run registrado
+
+
+def test_read_engine_roster_no_index_returns_labels_only(tmp_path):
+    missing = tmp_path / "absent.json"
+    roster = read_engine_roster(missing)
+    assert len(roster) == 11
+    assert all(r["sharpe"] is None for r in roster)
+    assert all(r["status"] in {"✅", "⚠️", "🆕", "🔧", "⚪", "🔴"} for r in roster)
