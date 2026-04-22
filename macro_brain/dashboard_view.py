@@ -280,12 +280,13 @@ def _clickable_bg_row(parent, open_fn=None) -> tk.Frame:
 def _tile(parent, label, value, change="", change_color=WHITE,
           series=None, spark_color=AMBER, metric_key: str | None = None,
           fmt: str | None = None):
-    """Render one metric tile — stat-block style, no sparkline.
+    """Render one metric tile — TradingView-vibe com sparkline viva.
 
-    ``series`` / ``spark_color`` kept in the signature for call-site
-    compatibility but ignored: v6 grimoire palette drops sparklines to
-    cut visual pollution. Registry stores ``spark=None`` so tick_update
-    skips the canvas-refresh branch cleanly.
+    Pre 2026-04-22: v6 removeu sparklines ("visual pollution"). Joao
+    pediu pra trazer de volta — mais alive, tipo TradingView. Agora:
+    - label + valor + change% em cima
+    - sparkline (30 pontos) embaixo, cor segue direcao do ultimo tick
+    - flash verde/vermelho no valor quando muda (via tick_update)
     """
     f = tk.Frame(parent, bg=PANEL,
                  highlightbackground=BORDER, highlightthickness=1)
@@ -294,7 +295,7 @@ def _tile(parent, label, value, change="", change_color=WHITE,
                               padx=PAD_TILE_INNER, pady=(3, 0))
     body = tk.Frame(f, bg=PANEL); body.pack(fill="x",
                                              padx=PAD_TILE_INNER,
-                                             pady=(0, 4))
+                                             pady=(0, 2))
     value_lbl = tk.Label(body, text=value, font=(FONT, 11, "bold"),
                           fg=WHITE, bg=PANEL, anchor="w")
     value_lbl.pack(side="left")
@@ -303,19 +304,64 @@ def _tile(parent, label, value, change="", change_color=WHITE,
         change_lbl = tk.Label(body, text=change, font=(FONT, 7, "bold"),
                                fg=change_color, bg=PANEL, anchor="e")
         change_lbl.pack(side="right", padx=2)
+
+    # Sparkline canvas — sempre presente, mesmo tiles sem data iniciam
+    # vazios e recebem a 1a renderizacao no primeiro tick_update.
+    spark_cv = tk.Canvas(f, bg=PANEL, height=14, highlightthickness=0,
+                          borderwidth=0)
+    spark_cv.pack(fill="x", padx=PAD_TILE_INNER, pady=(0, 3))
+    # Desenho inicial se ja temos series
+    if series:
+        try:
+            vals = [
+                (r.get("value") if isinstance(r, dict) else r)
+                for r in series[-30:]
+            ]
+            vals = [v for v in vals if isinstance(v, (int, float))]
+            if len(vals) >= 2:
+                # Deferred render via after() — winfo_width so e valido pos-pack.
+                spark_cv.after(30, lambda cv=spark_cv, vv=vals, sc=spark_color:
+                               _draw_spark(cv, vv, color=sc,
+                                            w=(cv.winfo_width() or 80),
+                                            h=14))
+        except Exception:
+            pass
+
     _attach_hover(f)
 
-    # Register this tile so tick_update can re-target its labels without
-    # rebuilding the layout. spark=None → tick_update skips spark branch.
     if metric_key:
         _TILE_REGISTRY[metric_key] = {
             "value": value_lbl,
             "change": change_lbl,
-            "spark": None,
+            "spark": spark_cv,
             "fmt": fmt,
             "spark_color": spark_color,
+            "last_val": None,  # flash detection
         }
     return f
+
+
+def _flash_label(lbl: tk.Label, up: bool) -> None:
+    """Flash brief no bg do value_lbl: verde se up, vermelho se down.
+    Reverte pra PANEL apos 450ms. Usa after() pra nao bloquear UI."""
+    try:
+        if not lbl.winfo_exists():
+            return
+        flash_bg = GREEN if up else RED
+        # Bg transiente — use tag temporario via attribute pra nao conflitar
+        # com outros fluxos de styling.
+        lbl.configure(bg=flash_bg, fg=BG)
+
+        def _revert():
+            try:
+                if lbl.winfo_exists():
+                    lbl.configure(bg=PANEL, fg=WHITE)
+            except Exception:
+                pass
+
+        lbl.after(450, _revert)
+    except Exception:
+        pass
 
 
 def _grid(parent, data, specs, spark_color=AMBER):
@@ -395,6 +441,18 @@ def tick_update() -> int:
 
         try:
             if value_lbl.cget("text") != vs:
+                # Flash verde/vermelho antes de atualizar, pra sinalizar
+                # direcao do movimento (tipo TradingView tape).
+                last_val = refs.get("last_val")
+                if last_val is not None and isinstance(val, (int, float)):
+                    try:
+                        if val > last_val:
+                            _flash_label(value_lbl, up=True)
+                        elif val < last_val:
+                            _flash_label(value_lbl, up=False)
+                    except Exception:
+                        pass
+                refs["last_val"] = val if isinstance(val, (int, float)) else last_val
                 value_lbl.configure(text=vs)
                 changed += 1
         except Exception:
