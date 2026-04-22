@@ -836,7 +836,70 @@ def render(
         tk.Frame(right, bg=BORDER, height=1).pack(
             fill="x", padx=PAD_X, pady=(8, 0))
 
-        # ── 2. KPI TAPE — two groups: PERFORMANCE | TRACK RECORD ──
+        # ── 2. CHIP BAR — terminal-style tabs com accent bar no topo
+        # pra chip ativa. Menor (font 8, padding compacto), sem borda
+        # retangular, visual flat institucional. Chip bar vem logo
+        # abaixo do identity strip (nav primario, sobe antes do tape).
+        chip_bar = tk.Frame(right, bg=PANEL)
+        chip_bar.pack(fill="x", padx=PAD_X, pady=(6, 0))
+        chip_host["frame"] = chip_bar
+
+        def _mk_chip(label, key):
+            active = state["chip"] == key
+            wrap = tk.Frame(chip_bar, bg=PANEL, cursor="hand2")
+            wrap.pack(side="left", padx=(0, 14))
+            # Accent bar no topo (2px) sinaliza tab ativa
+            accent = tk.Frame(wrap, bg=AMBER if active else PANEL, height=2)
+            accent.pack(fill="x")
+            fg_c = AMBER if active else DIM
+            lbl = tk.Label(wrap, text=label,
+                           font=(FONT, 8, "bold"),
+                           fg=fg_c, bg=PANEL,
+                           padx=2, pady=3)
+            lbl.pack()
+
+            def _click(_e=None, _k=key):
+                state["chip"] = _k
+                _paint_detail()
+            wrap.bind("<Button-1>", _click)
+            lbl.bind("<Button-1>", _click)
+            accent.bind("<Button-1>", _click)
+            if not active:
+                def _enter(_e=None, _l=lbl):
+                    try: _l.config(fg=WHITE)
+                    except Exception: pass
+                def _leave(_e=None, _l=lbl):
+                    try: _l.config(fg=DIM)
+                    except Exception: pass
+                wrap.bind("<Enter>", _enter)
+                wrap.bind("<Leave>", _leave)
+                lbl.bind("<Enter>", _enter)
+                lbl.bind("<Leave>", _leave)
+            return wrap
+
+        if mode == "live":
+            _chips_list = [
+                ("LAUNCH",    "LAUNCH"),
+                ("LOG",       "LOG"),
+                ("POS",       "POSITIONS"),
+                ("OVER",      "OVERVIEW"),
+            ]
+        else:
+            _chips_list = [
+                ("OVER",  "OVERVIEW"),
+                ("BRIEF", "BRIEF"),
+                ("CODE",  "CODE"),
+                ("RUN",   "RUN"),
+            ]
+        if state["chip"] not in {k for _, k in _chips_list}:
+            state["chip"] = _chips_list[0][1]
+        for _label, _key in _chips_list:
+            _mk_chip(_label, _key)
+
+        tk.Frame(right, bg=BORDER, height=1).pack(
+            fill="x", padx=PAD_X, pady=(6, 0))
+
+        # ── 3. KPI TAPE — two groups: PERFORMANCE | TRACK RECORD ──
         # When the user clicks a LAST RUN row, state["run_override"] holds
         # that run's metrics; display those instead of the hydrated latest
         # so the tape reflects the clicked history item.
@@ -926,59 +989,6 @@ def render(
         tk.Frame(tape, bg=PANEL, width=8).pack(side="left", fill="y")
         _mk_group(tape, "TRACK RECORD", track_cells)
 
-        # ── 3. CHIP BAR ────────────────────────────────────────
-        chip_bar = tk.Frame(right, bg=BG)
-        chip_bar.pack(fill="x", padx=PAD_X, pady=(10, 0))
-        chip_host["frame"] = chip_bar
-
-        def _mk_chip(label, key):
-            active = state["chip"] == key
-            # Chips mais prominentes: inativa tem borda amber (sinaliza
-            # interacao), ativa tem fill amber solido. Font bumped 8→9
-            # e padding 3→5 pra hit target maior.
-            fg_c = BG if active else AMBER
-            bg_c = AMBER if active else BG2
-            border_c = AMBER if active else AMBER_H
-            hov = AMBER_H if active else BG3
-            b = tk.Label(chip_bar, text=f" {label} ",
-                         font=(FONT, 9, "bold"),
-                         fg=fg_c, bg=bg_c, padx=10, pady=5,
-                         highlightbackground=border_c,
-                         highlightthickness=1,
-                         cursor="hand2")
-            b.pack(side="left", padx=(0, 3))
-
-            def _click(_e=None, _k=key):
-                state["chip"] = _k
-                _paint_detail()
-            b.bind("<Button-1>", _click)
-            if not active:
-                b.bind("<Enter>", lambda _e: b.config(bg=hov, fg=BG))
-                b.bind("<Leave>", lambda _e: b.config(bg=bg_c, fg=AMBER))
-            return b
-
-        if mode == "live":
-            _chips = [
-                ("LAUNCH",    "LAUNCH"),
-                ("LOG",       "LOG"),
-                ("POS",       "POSITIONS"),
-                ("OVER",      "OVERVIEW"),
-            ]
-        else:
-            # LAB (CONFIG) merged into RUN — editable params now live
-            # inline above the run buttons, so the old CONFIG chip would
-            # just duplicate the controls.
-            _chips = [
-                ("OVER",  "OVERVIEW"),
-                ("BRIEF", "BRIEF"),
-                ("CODE",  "CODE"),
-                ("RUN",   "RUN"),
-            ]
-        if state["chip"] not in {k for _, k in _chips}:
-            state["chip"] = _chips[0][1]
-        for _label, _key in _chips:
-            _mk_chip(_label, _key)
-
         tk.Frame(right, bg=BORDER, height=1).pack(
             fill="x", padx=PAD_X, pady=(3, 0))
 
@@ -1026,13 +1036,80 @@ def render(
         state["chip"] = chip
         _paint_detail()
 
-    def _query_last_runs(slug: str, limit: int = 8) -> list[dict]:
+    def _query_last_runs(slug: str, limit: int = 12) -> list[dict]:
         """Fetch the N most recent backtest runs for a given engine slug.
 
-        Reads from data/aurum.db (the canonical runs index). Returns an
-        empty list if the DB is unavailable — never raises. Callers render
-        a "no runs yet" placeholder when the list is empty.
+        Prefers data/index.json (same canonical source as DATA >
+        BACKTESTS via launcher.App._bt_collect_runs), falls back to
+        data/aurum.db. Returns dicts normalized pro schema do picker:
+        run_id, timestamp, sharpe, sortino, roi, max_dd, win_rate,
+        n_trades, interval, scan_days, json_path, veredito.
+
+        Index.json usa campos ligeiramente diferentes (period_days em
+        vez de scan_days, roi_pct em vez de roi, max_dd_pct em vez de
+        max_dd), entao fazemos o remap inline.
         """
+        import json as _json
+        _idx = Path("data/index.json")
+
+        def _pick(row, *keys):
+            """Primeiro valor nao-None/nao-vazio entre as keys tentadas."""
+            for k in keys:
+                v = row.get(k)
+                if v is not None and v != "":
+                    return v
+            return None
+
+        # Prefer index.json — mesmo origem do DATA > BACKTESTS.
+        if _idx.exists():
+            try:
+                idx_rows = _json.loads(_idx.read_text(encoding="utf-8"))
+                if isinstance(idx_rows, list):
+                    matched = [
+                        r for r in idx_rows
+                        if isinstance(r, dict)
+                        and str(r.get("engine") or "").lower() == slug.lower()
+                    ]
+                    # Sort by timestamp desc (same order as _bt_collect_runs)
+                    matched.sort(
+                        key=lambda r: str(r.get("timestamp") or ""),
+                        reverse=True,
+                    )
+                    out = []
+                    for r in matched[: int(limit)]:
+                        # max_dd: index stores as 0-1 fraction (max_dd_pct
+                        # sometimes as 0-100). DB uses 0-100. Normalizar
+                        # pra 0-100 (percentual) pro display.
+                        dd_raw = _pick(r, "max_dd_pct", "max_dd")
+                        dd_norm = None
+                        if isinstance(dd_raw, (int, float)):
+                            # Se valor absoluto <= 1, assume fraction e
+                            # multiplica por 100 pra virar percent.
+                            dd_norm = (float(dd_raw) * 100.0
+                                       if abs(dd_raw) <= 1.0
+                                       else float(dd_raw))
+                        out.append({
+                            "run_id":    r.get("run_id"),
+                            "timestamp": r.get("timestamp"),
+                            "interval":  r.get("interval"),
+                            "scan_days": _pick(r, "period_days", "scan_days"),
+                            "sharpe":    r.get("sharpe"),
+                            "sortino":   r.get("sortino"),
+                            "roi":       _pick(r, "roi_pct", "roi"),
+                            "max_dd":    dd_norm,
+                            "win_rate":  r.get("win_rate"),
+                            "n_trades":  r.get("n_trades"),
+                            "json_path": _pick(r, "report_json_path",
+                                               "summary_path", "json_path"),
+                            "veredito":  r.get("veredito"),
+                        })
+                    if out:
+                        return out
+            except Exception:
+                pass  # fall through to DB
+
+        # Fallback: data/aurum.db (pode ter runs que index.json ainda
+        # nao reconciliou, ou viceversa — reconcile e' best-effort).
         try:
             import sqlite3 as _sq
             _db = Path("data/aurum.db")
@@ -1043,7 +1120,8 @@ def render(
                 rows = _c.execute(
                     """
                     SELECT run_id, timestamp, sharpe, sortino, roi, max_dd,
-                           win_rate, n_trades, interval, json_path, veredito
+                           win_rate, n_trades, interval, scan_days,
+                           json_path, veredito
                     FROM runs
                     WHERE engine = ?
                     ORDER BY run_id DESC
@@ -1055,7 +1133,7 @@ def render(
                 _c.close()
             cols = ("run_id", "timestamp", "sharpe", "sortino", "roi",
                     "max_dd", "win_rate", "n_trades", "interval",
-                    "json_path", "veredito")
+                    "scan_days", "json_path", "veredito")
             return [dict(zip(cols, r)) for r in rows]
         except Exception:
             return []

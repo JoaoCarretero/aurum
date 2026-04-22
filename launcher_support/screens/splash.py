@@ -49,25 +49,28 @@ class SplashScreen(Screen):
     _RULE_X1 = 48
     _RULE_X2 = 872
 
-    _LOGO_Y = 58
+    _LOGO_Y = 58              # top logo: 28px abaixo do top rule (y=30)
+    _BOTTOM_LOGO_Y = 568      # bottom logo: 28px acima do bottom rule (y=596)
+                               # espelhando o LOGO_Y (prompt text removido)
 
     # Tile grid 2×3 (row 2 has wide tile in slot 2-3)
     _CONTENT_X1 = 48          # = _RULE_X1
     _CONTENT_X2 = 872         # = _RULE_X2
-    _TILE_GAP = 18
+    _TILE_GAP = 16
     _TILE_W_SIMPLE = 264      # (824 - 2*16) / 3
     _TILE_W_WIDE = 544        # 2 simples + 1 gap
-    _TILE_H = 200
-    _TILE_PAD = 16
-    _TILE_LINE_H = 22
+    _TILE_H = 180
+    _TILE_PAD = 14
+    _TILE_LINE_H = 20
 
-    _ROW1_Y1 = 110
-    _ROW1_Y2 = _ROW1_Y1 + _TILE_H       # 310
-    _ROW2_Y1 = _ROW1_Y2 + _TILE_GAP     # 328
-    _ROW2_Y2 = _ROW2_Y1 + _TILE_H       # 528
+    _ROW1_Y1 = 104
+    _ROW1_Y2 = _ROW1_Y1 + _TILE_H       # 284
+    _ROW2_Y1 = _ROW1_Y2 + _TILE_GAP     # 300
+    _ROW2_Y2 = _ROW2_Y1 + _TILE_H       # 480
 
-    _PROMPT_DIVIDER_Y = 554
-    _PROMPT_Y = 576
+    # Ticker/news strip entre Row2 e logo inferior (uma linha so).
+    _TICKER_Y1 = 500
+    _TICKER_Y2 = 536
 
     def __init__(self, parent: tk.Misc, app: Any, conn: Any, tagline: str):
         super().__init__(parent)
@@ -245,16 +248,8 @@ class SplashScreen(Screen):
             roster=data["roster"],
         )
 
-        # Prompt
-        canvas.create_line(
-            self._RULE_X1, self._PROMPT_DIVIDER_Y, self._RULE_X2, self._PROMPT_DIVIDER_Y,
-            fill=DIM2, width=1, tags="splash",
-        )
-        canvas.create_text(
-            self._CENTER_X, self._PROMPT_Y,
-            anchor="center", text="[ ENTER TO ACCESS DESK ]_",
-            font=(FONT, 11, "bold"), fill=AMBER_B, tags=("splash", "prompt2"),
-        )
+        # Ticker strip (news/alerts agregando o state do sistema).
+        self._draw_ticker_strip(canvas, data)
 
     def _draw_last_session_tile(self, canvas: tk.Canvas, *, x1: int, y1: int, data: dict | None) -> None:
         x2 = x1 + self._TILE_W_SIMPLE
@@ -287,6 +282,94 @@ class SplashScreen(Screen):
                 ("sess_trades", "TRADES",  str(trades), WHITE),
                 ("sess_pnl",    "PNL",     pnl_txt,    pnl_col),
             ],
+        )
+
+    def _draw_ticker_strip(self, canvas: tk.Canvas, data: dict) -> None:
+        """Desenha a barra de ticker/news entre Row2 e a logo inferior.
+
+        Uma linha so, agregando: ultima run + macro regime + status
+        engines (alive/total). Dados vem todos do offline payload ja
+        carregado em _read_offline_data, sem I/O adicional aqui.
+        """
+        x1, x2 = self._CONTENT_X1, self._CONTENT_X2
+        y1, y2 = self._TICKER_Y1, self._TICKER_Y2
+
+        # Frame externo com accent amber
+        canvas.create_rectangle(
+            x1, y1, x2, y2,
+            outline=AMBER_D, fill=BG, width=1, tags="splash",
+        )
+        # LIVE dot + label na esquerda
+        pad = 14
+        cx = x1 + pad
+        canvas.create_text(
+            cx, (y1 + y2) // 2, anchor="w",
+            text="● SYSTEM",
+            font=(FONT, 8, "bold"), fill=AMBER, tags="splash",
+        )
+        # Pipe divider
+        canvas.create_line(
+            x1 + 90, y1 + 8, x1 + 90, y2 - 8,
+            fill=DIM2, width=1, tags="splash",
+        )
+
+        # Compor os "news items" a partir do payload offline
+        items: list[tuple[str, str, str]] = []  # (label, value, color)
+
+        sess = data.get("session") or {}
+        if sess:
+            engine = str(sess.get("engine", "-")).upper()[:10]
+            pnl_val = sess.get("pnl")
+            if isinstance(pnl_val, (int, float)):
+                pnl_txt = f"{pnl_val:+.2f}"
+                pnl_col = GREEN if pnl_val >= 0 else RED
+            else:
+                pnl_txt = "---"
+                pnl_col = DIM
+            items.append(("LAST RUN", f"{engine} {pnl_txt}", pnl_col))
+
+        # Regime macro (color vem do macro rows)
+        macro_rows = data.get("macro") or {}
+        regime_pair = macro_rows.get("regime")
+        if regime_pair:
+            regime_val, regime_col = regime_pair
+            items.append(("MACRO", str(regime_val).upper(), regime_col))
+
+        # Roster — conta engines em OK
+        roster = data.get("roster") or []
+        ok_n = sum(1 for r in roster if r.get("status") == "OK")
+        total = len(roster)
+        if total:
+            items.append(("EDGE", f"{ok_n}/{total} ENGINES", GREEN if ok_n > 0 else DIM))
+
+        # Render os items inline
+        cur_x = x1 + 104
+        for label, val, col in items:
+            canvas.create_text(
+                cur_x, (y1 + y2) // 2, anchor="w",
+                text=label,
+                font=(FONT, 7, "bold"), fill=DIM, tags="splash",
+            )
+            cur_x += len(label) * 6 + 6
+            canvas.create_text(
+                cur_x, (y1 + y2) // 2, anchor="w",
+                text=val,
+                font=(FONT, 8, "bold"), fill=col, tags="splash",
+            )
+            cur_x += len(val) * 7 + 14
+            if cur_x < x2 - 40:
+                canvas.create_text(
+                    cur_x, (y1 + y2) // 2, anchor="w",
+                    text="·",
+                    font=(FONT, 8), fill=DIM2, tags="splash",
+                )
+                cur_x += 12
+
+        # Right-edge chevrons
+        canvas.create_text(
+            x2 - pad, (y1 + y2) // 2, anchor="e",
+            text="◂◂◂",
+            font=(FONT, 8, "bold"), fill=AMBER_D, tags="splash",
         )
 
     def _draw_roster_tile(self, canvas: tk.Canvas, *, x1: int, y1: int, roster: list[dict]) -> None:
@@ -393,26 +476,28 @@ class SplashScreen(Screen):
             )
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
-        """Desenha top rule + logo (AURUM losango) e bottom rule.
+        """Desenha top rule + top logo + bottom rule + bottom logo.
 
-        Textos do topo (wordmark band AURUM FINANCE, title OPERATOR DESK,
-        subtitle e tagline) foram removidos pra dar espaco aos tiles —
-        a logo sozinha carrega a identidade visual. Bottom rule mantido
-        como ancora visual acima do prompt.
+        Prompt text "[ ENTER TO ACCESS DESK ]_" e divider removidos.
+        Em vez disso, logo inferior espelha a superior (mesma escala
+        e distancia do respectivo rule) pra fechar a composicao
+        simetricamente.
         """
-        logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
+        logo_cx = self._CENTER_X
 
         # top rule (full width)
         canvas.create_line(
             self._RULE_X1, self._TOP_RULE_Y, self._RULE_X2, self._TOP_RULE_Y,
             fill=AMBER_D, width=1, tags="splash",
         )
+        self.app._draw_aurum_logo(canvas, logo_cx, self._LOGO_Y,
+                                  scale=18, tag="splash")
 
-        self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=18, tag="splash")
-
-        # bottom rule
+        # bottom rule + bottom logo (espelha a superior)
         canvas.create_line(
             self._RULE_X1, self._BOTTOM_RULE_Y, self._RULE_X2, self._BOTTOM_RULE_Y,
             fill=DIM2, width=1, tags="splash",
         )
+        self.app._draw_aurum_logo(canvas, logo_cx, self._BOTTOM_LOGO_Y,
+                                  scale=18, tag="splash")
 
