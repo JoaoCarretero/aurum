@@ -948,15 +948,27 @@ def _desk_banner(parent, metrics: dict, specs: list[tuple[str, str, str]]) -> No
                 change_color = GREEN if pct > 0 else (RED if pct < 0 else DIM)
 
         tile = tk.Frame(row, bg=BG2,
-                        highlightbackground=BORDER, highlightthickness=1)
+                        highlightbackground=BORDER, highlightthickness=1,
+                        cursor="hand2")
         tile.pack(side="left", fill="both", expand=True, padx=1)
         _attach_hover(tile)
-        tk.Label(tile, text=label, font=(FONT, 6, "bold"), fg=DIM2, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(4, 0))
-        tk.Label(tile, text=value_txt, font=(FONT, 10, "bold"), fg=WHITE, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6)
-        tk.Label(tile, text=change_txt, font=(FONT, 7, "bold"), fg=change_color, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(0, 4))
+        lbl_w = tk.Label(tile, text=label, font=(FONT, 6, "bold"),
+                         fg=DIM2, bg=BG2, anchor="w", cursor="hand2")
+        lbl_w.pack(fill="x", padx=6, pady=(4, 0))
+        val_w = tk.Label(tile, text=value_txt, font=(FONT, 10, "bold"),
+                         fg=WHITE, bg=BG2, anchor="w", cursor="hand2")
+        val_w.pack(fill="x", padx=6)
+        chg_w = tk.Label(tile, text=change_txt, font=(FONT, 7, "bold"),
+                         fg=change_color, bg=BG2, anchor="w",
+                         cursor="hand2")
+        chg_w.pack(fill="x", padx=6, pady=(0, 4))
+
+        # Click-to-expand — padrao 10Y: click no tile abre chart popup.
+        _mk, _lbl_txt, _fmt = metric, label, fmt
+        def _click(_e=None, m=_mk, l=_lbl_txt, fm=_fmt):
+            _open_tile_detail(m, l, fm)
+        for w in (tile, lbl_w, val_w, chg_w):
+            w.bind("<Button-1>", _click)
 
 
 def _bind_scroll_canvas(canvas: tk.Canvas, window_id: int, pad_x: int = 0) -> None:
@@ -1038,7 +1050,7 @@ def _cot_matrix(parent, rows: list[tuple]):
     Each metric may be None. Latest value is pulled from macro_data;
     green/red tint based on sign, dim when missing.
     """
-    from macro_brain.persistence.store import latest_macro, latest_macro_many
+    from macro_brain.persistence.store import latest_macro_many
 
     metrics = [m for _label, nc, sw, mm in rows for m in (nc, sw, mm) if m]
     latest_map = latest_macro_many(metrics, n=1)
@@ -1073,35 +1085,41 @@ def _cot_matrix(parent, rows: list[tuple]):
 
     for label, nc, sw, mm in rows:
         metrics = [m for m in (nc, sw, mm) if m]
-        def _open_cot_detail(row_label=label, metric_names=metrics):
-            lines = [row_label]
-            for metric_name in metric_names:
-                lat = latest_macro(metric_name, n=5)
-                if not lat:
-                    lines.append(f"{metric_name}: no data")
-                    continue
-                values = ", ".join(f"{float(r['value']):+,.0f}" for r in lat[:3])
-                lines.append(f"{metric_name}: {values}")
-            try:
-                from tkinter import messagebox
-                messagebox.showinfo("COT detail", "\n".join(lines))
-            except Exception:
-                pass
+        primary = metrics[0] if metrics else None
 
-        row = _clickable_bg_row(shell, open_fn=_open_cot_detail if metrics else None)
+        # Row-level click: abre chart do metric primario (NC NET) — padrao 10Y.
+        row_open = None
+        if primary:
+            def row_open(pm=primary, pl=label):
+                _open_tile_detail(pm, pl, "{:+,.0f}")
+        row = _clickable_bg_row(shell, open_fn=row_open)
         row.pack(fill="x", padx=2, pady=1)
 
         tk.Label(row, text=label, font=(FONT, 8, "bold"),
                  fg=WHITE, bg=row.cget("bg"), width=14, anchor="w",
                  padx=4).pack(side="left")
-        for metric, w in [(nc, 13), (sw, 14), (mm, 14)]:
+        # Cada celula clicavel individualmente — click no ticker abre
+        # chart daquele metric especifico.
+        for metric, col_label, w in [
+            (nc, "NC NET",       13),
+            (sw, "SWAP · BANKS", 14),
+            (mm, "MM · FUNDS",   14),
+        ]:
             s, c = _val(metric)
-            tk.Label(row, text=s, font=(FONT, 8),
-                     fg=c, bg=row.cget("bg"), width=w, anchor="e",
-                     padx=4).pack(side="left")
+            cell = tk.Label(row, text=s, font=(FONT, 8),
+                            fg=c, bg=row.cget("bg"), width=w, anchor="e",
+                            padx=4,
+                            cursor=("hand2" if metric else "arrow"))
+            cell.pack(side="left")
+            if metric:
+                _mk, _cl = metric, f"{label} · {col_label}"
+                cell.bind("<Button-1>",
+                          lambda _e, m=_mk, l=_cl: _open_tile_detail(
+                              m, l, "{:+,.0f}"))
         if metrics:
             tk.Label(row, text="OPEN", font=(FONT, 6, "bold"),
-                     fg=AMBER, bg=row.cget("bg"), width=8, anchor="e").pack(side="right", padx=4)
+                     fg=AMBER, bg=row.cget("bg"), width=8,
+                     anchor="e").pack(side="right", padx=4)
 
 
 def _render_calendar_list(parent, title: str, only_us: bool = False):
