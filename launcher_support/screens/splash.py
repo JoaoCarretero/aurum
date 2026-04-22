@@ -13,30 +13,40 @@ from launcher_support.screens.base import Screen
 
 
 class SplashScreen(Screen):
+    # Canvas dimensions come from app._SPLASH_DESIGN_W / _H (920×640).
+
+    # Top band + wordmark
     _CENTER_X = 460
-    _TOP_RULE_Y = 48
+    _TOP_RULE_Y = 30
     _BOTTOM_RULE_Y = 596
     _RULE_X1 = 48
     _RULE_X2 = 872
 
-    _TOP_BAND_Y = 82
-    _TOP_BAND_GAP = 78
-    _LOGO_Y = 124
-    _TITLE_Y = 164
-    _BRAND_Y = 190
-    _WORDMARK_DIVIDER_HALF = 96
-    _SUBTITLE_DIVIDER_HALF = 170
-    _INTRO_Y = 230
-    _INTRO_BLOCK_GAP = 18
+    _WORDMARK_BAND_Y = 46
+    _WORDMARK_BAND_GAP = 78
+    _LOGO_Y = 96
+    _TITLE_Y = 132
+    _SUBTITLE_Y = 152
+    _TAGLINE_Y = 174
+    _TAGLINE_DIVIDER_HALF = 170
 
-    _SESSION_PANEL_W = 640
-    _SESSION_PANEL_H = 138
-    _SESSION_PANEL_Y1 = 292
-    _SESSION_PANEL_Y2 = _SESSION_PANEL_Y1 + _SESSION_PANEL_H
-    _SESSION_GUTTER = 24
-    _SESSION_COLUMN_GAP = 28
-    _SESSION_LABEL_VALUE_GAP = 112
-    _SESSION_LINE_H = 19
+    # Tile grid 2×3 (row 2 has wide tile in slot 2-3)
+    _CONTENT_X1 = 48          # = _RULE_X1
+    _CONTENT_X2 = 872         # = _RULE_X2
+    _TILE_GAP = 16
+    _TILE_W_SIMPLE = 264      # (824 - 2*16) / 3
+    _TILE_W_WIDE = 544        # 2 simples + 1 gap
+    _TILE_H = 150
+    _TILE_PAD = 14
+    _TILE_LINE_H = 19
+
+    _ROW1_Y1 = 190
+    _ROW1_Y2 = _ROW1_Y1 + _TILE_H       # 340
+    _ROW2_Y1 = _ROW1_Y2 + _TILE_GAP     # 356
+    _ROW2_Y2 = _ROW2_Y1 + _TILE_H       # 506
+
+    _PROMPT_DIVIDER_Y = 530
+    _PROMPT_Y = 552
 
     def __init__(self, parent: tk.Misc, app: Any, conn: Any, tagline: str):
         super().__init__(parent)
