@@ -48,13 +48,7 @@ def test_is_live_signal_uses_reference_timestamp():
 
 
 def test_tg_signal_clamps_future_ts_to_now(monkeypatch):
-    """Future ts (from incomplete tail candle) must be clamped to now.
-
-    live_mode scan can emit a signal whose timestamp = next candle's
-    open_time, which is in the future relative to observation. Telegram
-    used to render that literal, confusing the operator. Clamp is
-    cosmetic — does not affect dedup or gating.
-    """
+    """Future ts must be clamped to now in Telegram rendering."""
     import tools.maintenance.millennium_shadow as shadow
 
     sent: list[str] = []
@@ -72,27 +66,23 @@ def test_tg_signal_clamps_future_ts_to_now(monkeypatch):
 
     assert len(sent) == 1
     msg = sent[0]
-    # Rendered ts should be <= now (rounded to minute; tolerate drift).
     now_minute = datetime.now(timezone.utc).isoformat().replace("T", " ")[:13]
     assert now_minute in msg, f"clamped ts not in message: {msg}"
-    # And the raw future ts should NOT leak into the rendered line.
     future_minute = future_ts.replace("T", " ")[:16]
     assert future_minute not in msg
 
 
 def test_tg_signal_preserves_past_ts(monkeypatch):
-    """Past/present ts rendered as-is (only future ts is clamped)."""
     import tools.maintenance.millennium_shadow as shadow
 
     sent: list[str] = []
     monkeypatch.setattr(shadow, "_tg_send", lambda text: sent.append(text))
 
-    past_ts = "2026-04-20T10:00:00Z"
     trade = {
         "strategy": "CITADEL", "symbol": "BTCUSDT", "direction": "LONG",
         "entry": 100.0, "stop": 98.0, "target": 103.0,
         "rr": 1.5, "size": 0.1,
-        "timestamp": past_ts,
+        "timestamp": "2026-04-20T10:00:00Z",
     }
 
     _tg_signal(trade)
@@ -109,7 +99,6 @@ def test_run_tick_skips_stale_signals_after_prime(monkeypatch):
     notified: list[dict] = []
 
     monkeypatch.setattr(mm, "_load_dados", lambda _: (None, None, None, None))
-    # Shadow now calls _collect_live_signals (tail-only). Patch that.
     monkeypatch.setattr(
         mm,
         "_collect_live_signals",
@@ -130,14 +119,81 @@ def test_run_tick_skips_stale_signals_after_prime(monkeypatch):
     monkeypatch.setattr(shadow, "_append_per_engine", lambda trade: None)
     monkeypatch.setattr(shadow, "_tg_signal", lambda trade: notified.append(trade))
 
-    novel, scanned, engines_ok, last_novel = _run_tick(set(), tick_sec=900, notify=True)
+    novel, scanned, engines_ok, last_novel, stats = _run_tick(set(), tick_sec=900, notify=True)
 
     assert novel == 0
     assert scanned == 1
     assert engines_ok == 1
     assert last_novel is None
+    assert stats == {"scanned": 1, "dedup": 0, "stale": 1, "live": 0}
     assert appended == []
     assert notified == []
+
+
+def test_run_tick_does_not_materialize_stale_priming_signal(monkeypatch):
+    import engines.millennium as mm
+    import tools.maintenance.millennium_shadow as shadow
+
+    appended: list[dict] = []
+    seen_keys: set[tuple] = set()
+
+    monkeypatch.setattr(mm, "_load_dados", lambda _: (None, None, None, None))
+    monkeypatch.setattr(
+        mm,
+        "_collect_live_signals",
+        lambda *_args, **_kwargs: (
+            {"JUMP": [{"symbol": "SANDUSDT"}]},
+            [{
+                "strategy": "JUMP",
+                "symbol": "SANDUSDT",
+                "direction": "BEARISH",
+                "entry": 0.10,
+                "stop": 0.11,
+                "target": 0.07,
+                "timestamp": "2026-01-22T14:00:00Z",
+            }],
+        ),
+    )
+    monkeypatch.setattr(shadow, "_append_trade", lambda trade: appended.append(trade))
+    monkeypatch.setattr(shadow, "_append_per_engine", lambda trade: None)
+    monkeypatch.setattr(shadow, "_tg_signal", lambda trade: None)
+
+    novel, scanned, engines_ok, last_novel, stats = _run_tick(seen_keys, tick_sec=900, notify=False)
+
+    assert novel == 0
+    assert scanned == 1
+    assert engines_ok == 1
+    assert last_novel is None
+    assert stats == {"scanned": 1, "dedup": 0, "stale": 1, "live": 0}
+    assert appended == []
+    assert len(seen_keys) == 1
+
+
+def test_run_tick_logs_prime_scan_summary_for_stale_bootstrap(monkeypatch, caplog):
+    import engines.millennium as mm
+
+    monkeypatch.setattr(mm, "_load_dados", lambda _: (None, None, None, None))
+    monkeypatch.setattr(
+        mm,
+        "_collect_live_signals",
+        lambda *_args, **_kwargs: (
+            {"JUMP": [{"symbol": "SANDUSDT"}]},
+            [{
+                "strategy": "JUMP",
+                "symbol": "SANDUSDT",
+                "direction": "BEARISH",
+                "entry": 0.10,
+                "stop": 0.11,
+                "target": 0.07,
+                "timestamp": "2026-01-22T14:00:00Z",
+            }],
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="millennium_shadow"):
+        _run_tick(set(), tick_sec=900, notify=False)
+
+    assert "PRIME scan scanned=1 dedup=0 stale=1 live=0" in caplog.text
 
 
 def test_ensure_log_handlers_rebinds_shadow_log_after_label_change(monkeypatch):

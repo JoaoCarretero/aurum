@@ -188,6 +188,8 @@ def test_runner_first_tick_opens_on_live_signal(tmp_path, monkeypatch):
     # Both signals are dedup-seen; primed becomes True after first scan.
     assert state.primed is True
     assert len(state.seen_keys) == 2
+    assert state.novel_total == 1
+    assert state.novel_since_prime == 1
     # Only the live signal opens. Stale one is rejected by is_live_signal.
     assert len(state.open_positions) == 1
     assert state.open_positions[0].symbol == "BTCUSDT"
@@ -197,6 +199,12 @@ def test_runner_first_tick_opens_on_live_signal(tmp_path, monkeypatch):
     stale = [ln for ln in lines if ln.get("reason") == "stale_bar"]
     assert len(stale) == 1
     assert stale[0]["symbol"] == "XRPUSDT"
+    heartbeat = json.loads((run_dir / "state" / "heartbeat.json").read_text())
+    assert heartbeat["last_scan_scanned"] == 2
+    assert heartbeat["last_scan_dedup"] == 0
+    assert heartbeat["last_scan_stale"] == 1
+    assert heartbeat["last_scan_live"] == 1
+    assert heartbeat["last_scan_opened"] == 1
 
 
 def test_runner_rejects_opposing_direction_same_symbol(tmp_path, monkeypatch):
@@ -355,6 +363,7 @@ def test_runner_rejects_stale_signal_post_prime(tmp_path, monkeypatch):
     mp.run_one_tick(state, tick_idx=1, notify=False)
     mp.run_one_tick(state, tick_idx=2, notify=False)
     assert len(state.open_positions) == 0
+    assert state.novel_total == 0
     assert state.novel_since_prime == 0
     assert state.last_novel_at is None
 
@@ -362,3 +371,9 @@ def test_runner_rejects_stale_signal_post_prime(tmp_path, monkeypatch):
     lines = [json.loads(ln) for ln in signals_path.read_text().splitlines() if ln.strip()]
     stale = [ln for ln in lines if ln.get("reason") == "stale_bar"]
     assert len(stale) == 1
+    heartbeat = json.loads((run_dir / "state" / "heartbeat.json").read_text())
+    assert heartbeat["last_scan_scanned"] == 1
+    assert heartbeat["last_scan_dedup"] == 0
+    assert heartbeat["last_scan_stale"] == 1
+    assert heartbeat["last_scan_live"] == 0
+    assert heartbeat["last_scan_opened"] == 0

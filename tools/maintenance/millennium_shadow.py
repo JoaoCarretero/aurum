@@ -475,9 +475,9 @@ def _run_tick(
     seen_keys: set,
     tick_sec: int,
     notify: bool = True,
-) -> tuple[int, int, int, str | None]:
+) -> tuple[int, int, int, str | None, dict[str, int]]:
     """Run one shadow tick. Returns (novel_count, total_scanned, engines_ok,
-    last_novel_observed_at).
+    last_novel_observed_at, scan_stats).
 
     Fetches fresh OHLCV, runs operational scans inside a stdout-silenced block
     (the engine prints verbosely), appends any novel trades to the JSONL, and
@@ -506,14 +506,18 @@ def _run_tick(
 
     engines_ok = sum(1 for trades in engine_trades.values() if trades)
     novel = 0
+    dedup_skips = 0
+    stale_skips = 0
     last_novel_at: str | None = None
-    # Primed records = populacao inicial do dedup set (notify=False). Novel
-    # records = detectados AO VIVO (notify=True) — esses contam pra LAST SIG
-    # e disparam Telegram.
+    # Primed path (notify=False) still seeds seen_keys so historical residue
+    # never opens later, but stale bootstrap records are NOT materialized or
+    # counted as novel. That keeps shadow telemetry aligned with paper: only
+    # live-bar signals contribute to novel_total / last_sig semantics.
     primed_flag = not notify
     for t in all_trades:
         key = _trade_key(t)
         if key in seen_keys:
+            dedup_skips += 1
             continue
         seen_keys.add(key)
         record = dict(t)
@@ -521,14 +525,16 @@ def _run_tick(
         observed_at = datetime.now(timezone.utc).isoformat()
         record["shadow_observed_at"] = observed_at
         record["primed"] = primed_flag
-        if notify and not is_live_signal(record, tick_sec=tick_sec, reference_ts=observed_at):
-            log.info(
-                "STALE signal skipped strategy=%s symbol=%s signal_ts=%s observed_at=%s",
-                str(record.get("strategy") or "?").upper(),
-                str(record.get("symbol") or "?").upper(),
-                signal_timestamp(record),
-                observed_at,
-            )
+        if not is_live_signal(record, tick_sec=tick_sec, reference_ts=observed_at):
+            stale_skips += 1
+            if notify:
+                log.info(
+                    "STALE signal skipped strategy=%s symbol=%s signal_ts=%s observed_at=%s",
+                    str(record.get("strategy") or "?").upper(),
+                    str(record.get("symbol") or "?").upper(),
+                    signal_timestamp(record),
+                    observed_at,
+                )
             continue
         _append_trade(record)
         _append_per_engine(record)
@@ -536,7 +542,22 @@ def _run_tick(
         if notify:
             last_novel_at = observed_at
             _tg_signal(record)
-    return novel, len(all_trades), engines_ok, last_novel_at
+    if primed_flag:
+        log.info(
+            "PRIME scan scanned=%d dedup=%d stale=%d live=%d seen=%d",
+            len(all_trades), dedup_skips, stale_skips, novel, len(seen_keys),
+        )
+    elif dedup_skips or stale_skips:
+        log.info(
+            "LIVE scan scanned=%d dedup=%d stale=%d live=%d seen=%d",
+            len(all_trades), dedup_skips, stale_skips, novel, len(seen_keys),
+        )
+    return novel, len(all_trades), engines_ok, last_novel_at, {
+        "scanned": len(all_trades),
+        "dedup": dedup_skips,
+        "stale": stale_skips,
+        "live": novel,
+    }
 
 
 def run_shadow(tick_sec: int, run_hours: float) -> int:
@@ -588,6 +609,10 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         "ticks_fail": 0,
         "novel_total": 0,
         "novel_since_prime": 0,
+        "last_scan_scanned": 0,
+        "last_scan_dedup": 0,
+        "last_scan_stale": 0,
+        "last_scan_live": 0,
         "last_novel_at": None,
         "last_tick_at": None,
         "last_error": None,
@@ -615,7 +640,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
             break
 
         try:
-            novel, scanned, engines_ok, tick_last_novel = _run_tick(
+            novel, scanned, engines_ok, tick_last_novel, scan_stats = _run_tick(
                 seen_keys, tick_sec=tick_sec, notify=not first_tick)
             was_first = first_tick
             first_tick = False
@@ -642,6 +667,10 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 "ticks_fail": ticks_fail,
                 "novel_total": novel_total,
                 "novel_since_prime": novel_since_prime,
+                "last_scan_scanned": scan_stats["scanned"],
+                "last_scan_dedup": scan_stats["dedup"],
+                "last_scan_stale": scan_stats["stale"],
+                "last_scan_live": scan_stats["live"],
                 "last_novel_at": last_novel_at,
                 "last_tick_at": now_iso_ok,
                 "last_error": None,
@@ -676,6 +705,10 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 "ticks_fail": ticks_fail,
                 "novel_total": novel_total,
                 "novel_since_prime": novel_since_prime,
+                "last_scan_scanned": 0,
+                "last_scan_dedup": 0,
+                "last_scan_stale": 0,
+                "last_scan_live": 0,
                 "last_novel_at": last_novel_at,
                 "last_tick_at": now_iso_fail,
                 "last_error": err,
@@ -713,6 +746,10 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
         "ticks_fail": ticks_fail,
         "novel_total": novel_total,
         "novel_since_prime": novel_since_prime,
+        "last_scan_scanned": 0,
+        "last_scan_dedup": 0,
+        "last_scan_stale": 0,
+        "last_scan_live": 0,
         "last_novel_at": last_novel_at,
     })
     _upsert_live_run(
