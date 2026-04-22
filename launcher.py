@@ -4638,10 +4638,10 @@ class App(tk.Tk):
         answers the "does this position make sense?" question directly.
         """
         bar = tk.Frame(parent, bg=BG)
-        bar.pack(fill="x", pady=(0, 4))
+        bar.pack(fill="x", pady=(0, 3))
 
-        tk.Label(bar, text=" VIAB ", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 6))
+        # VIAB label dropped — legend row above already establishes the
+        # semantics, and the GO/WAIT/ALL chips are self-explanatory.
 
         state = self._arb_filter_state()
         active = state.get("grade_min", "MAYBE")
@@ -4781,22 +4781,20 @@ class App(tk.Tk):
 
     # -- Detail pane (populated on row click) ------------------
     def _arb_build_detail_pane(self, parent):
-        """Reserve a detail panel below the table. Updated on row click with
-        the selected pair's factor breakdown + score."""
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 2))
-        # Title row: DETAIL + hint so the user knows this panel fills
-        # from a row click — was easy to miss as a passive label.
-        title_row = tk.Frame(parent, bg=BG); title_row.pack(fill="x")
-        tk.Label(title_row, text="DETAIL",
-                 font=(FONT, 7, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(title_row, text="  › clique numa linha pra inspecionar",
-                 font=(FONT, 6), fg=DIM, bg=BG).pack(side="left")
+        """Reserve a detail panel below the table. Empty-state is just a
+        single-line hint (no separate title + body frames) so the OPPS
+        table keeps the full vertical budget until the user clicks a row.
+        Body is BG2 so _arb_show_detail's BG2 child labels render as a
+        cohesive card when populated.
+        """
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(4, 0))
         body = tk.Frame(parent, bg=BG2)
-        body.pack(fill="x", pady=(2, 0))
-        default = tk.Label(body,
-                           text="  (nenhuma linha selecionada — clique pra abrir)",
-                           font=(FONT, 7), fg=DIM2, bg=BG2)
-        default.pack(anchor="w", padx=6, pady=6)
+        body.pack(fill="x", pady=(0, 0))
+        default = tk.Label(
+            body,
+            text="  DETAIL  ›  clique numa linha pra simular posição",
+            font=(FONT, 7), fg=DIM, bg=BG2)
+        default.pack(anchor="w", padx=4, pady=(2, 2))
         self._arb_detail_body = body
         self._arb_detail_default = default
 
@@ -5552,27 +5550,27 @@ class App(tk.Tk):
 
     def _arb_render_opps(self, parent):
         """Unified OPPS table. All 5 legacy tabs (cex-cex / dex-dex /
-        cex-dex / basis / spot) merged here, scored + bucketed by VIAB."""
+        cex-dex / basis / spot) merged here, scored + bucketed by VIAB.
+
+        Header collapses the tab title + VIAB legend into one row so
+        the table shows up within ~80px of the status strip.
+        """
         head = tk.Frame(parent, bg=BG)
-        head.pack(fill="x", pady=(0, 2))
-        tk.Label(head, text="OPPS",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        # VIAB legend — inlined so users stop wondering "why GO vs WAIT".
-        # GO is the strict triple (score/bkevn/vol), WAIT is the lenient
-        # OR-clause, SKIP is everything else.
-        legend = tk.Frame(parent, bg=BG)
-        legend.pack(fill="x", pady=(0, 4))
-        tk.Label(legend, text="GO", font=(FONT, 7, "bold"),
+        head.pack(fill="x", pady=(0, 3))
+        # GO / WAIT / SKIP legend inline — surfaces the triage rule
+        # without burning a second row on it. Colors match the table
+        # cells so the eye bridges legend→rows automatically.
+        tk.Label(head, text="GO", font=(FONT, 7, "bold"),
                  fg=GREEN, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(legend, text="score≥70 + bkevn≤24h + líquido",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 10))
-        tk.Label(legend, text="WAIT", font=(FONT, 7, "bold"),
+        tk.Label(head, text="score≥70 · bkevn≤24h · líquido",
+                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
+        tk.Label(head, text="WAIT", font=(FONT, 7, "bold"),
                  fg=AMBER, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(legend, text="score≥40 + (bkevn≤72h ou vol moderada)",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 10))
-        tk.Label(legend, text="SKIP", font=(FONT, 7, "bold"),
+        tk.Label(head, text="score≥40 · bkevn≤72h OU vol moderada",
+                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
+        tk.Label(head, text="SKIP", font=(FONT, 7, "bold"),
                  fg=DIM, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(legend, text="resto", font=(FONT, 7),
+        tk.Label(head, text="resto", font=(FONT, 7),
                  fg=DIM2, bg=BG).pack(side="left")
         self._arb_build_filter_bar(parent)
         self._arb_opps_selected = []

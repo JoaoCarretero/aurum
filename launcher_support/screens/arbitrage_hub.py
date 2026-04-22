@@ -49,35 +49,37 @@ def render(app, tab: str = "cex-cex"):
     # -- Status strip --
     # Single line: LIVE dot · CEX/DEX counts · SCAN Ns ago · TOP opp
     # ─── ENGINE pill · ACCT · DD. All state at a glance, no tab hopping.
-    status = tk.Frame(outer, bg=BG, height=22)
-    status.pack(fill="x", padx=16, pady=(2, 4))
+    # Padding squeezed after 2026-04-22 organize pass — was breathing
+    # too hard on a single terminal line. Every gap dropped ~25-30%.
+    status = tk.Frame(outer, bg=BG, height=18)
+    status.pack(fill="x", padx=16, pady=(0, 3))
     status.pack_propagate(False)
 
     dot_color = GREEN if getattr(app, "_arb_cache", None) else DIM
     app._arb_live_dot = tk.Label(status, text="●",
                                  font=(FONT, 9, "bold"),
                                  fg=dot_color, bg=BG)
-    app._arb_live_dot.pack(side="left", padx=(0, 4))
+    app._arb_live_dot.pack(side="left", padx=(0, 3))
     tk.Label(status, text="LIVE", font=(FONT, 7, "bold"),
-             fg=AMBER, bg=BG).pack(side="left", padx=(0, 10))
+             fg=AMBER, bg=BG).pack(side="left", padx=(0, 8))
 
     app._arb_sum_cex = tk.Label(status, text="CEX —",
                                 font=(FONT, 7), fg=DIM2, bg=BG)
-    app._arb_sum_cex.pack(side="left", padx=(0, 8))
+    app._arb_sum_cex.pack(side="left", padx=(0, 6))
     app._arb_sum_dex = tk.Label(status, text="DEX —",
                                 font=(FONT, 7), fg=DIM2, bg=BG)
-    app._arb_sum_dex.pack(side="left", padx=(0, 10))
+    app._arb_sum_dex.pack(side="left", padx=(0, 8))
 
     # Scan staleness — updated by _arb_schedule_clock each second
     app._arb_scan_age = tk.Label(status, text="SCAN —",
                                  font=(FONT, 7), fg=DIM, bg=BG)
-    app._arb_scan_age.pack(side="left", padx=(0, 10))
+    app._arb_scan_age.pack(side="left", padx=(0, 8))
 
     # Top opp inline
     app._arb_sum_best = tk.Label(status, text="TOP —",
                                  font=(FONT, 7, "bold"),
                                  fg=AMBER, bg=BG)
-    app._arb_sum_best.pack(side="left", padx=(0, 14))
+    app._arb_sum_best.pack(side="left", padx=(0, 10))
 
     # Engine pill — right side, with ACCT + DD
     app._arb_engine_ddlbl = tk.Label(status, text="", font=(FONT, 7),
@@ -85,7 +87,7 @@ def render(app, tab: str = "cex-cex"):
     app._arb_engine_ddlbl.pack(side="right")
     app._arb_engine_acctlbl = tk.Label(status, text="", font=(FONT, 7),
                                        fg=WHITE, bg=BG)
-    app._arb_engine_acctlbl.pack(side="right", padx=(0, 8))
+    app._arb_engine_acctlbl.pack(side="right", padx=(0, 6))
     app._arb_engine_pill = tk.Label(status, text=" OFF ",
                                     font=(FONT, 7, "bold"),
                                     fg=BG, bg=DIM, padx=4)
@@ -107,7 +109,7 @@ def render(app, tab: str = "cex-cex"):
     ]
 
     tabs_frame = tk.Frame(outer, bg=BG)
-    tabs_frame.pack(fill="x", padx=16, pady=(2, 0))
+    tabs_frame.pack(fill="x", padx=16, pady=(0, 0))
     app._arb_tab = tab
     app._arb_tab_labels = {}
 
@@ -158,7 +160,7 @@ def render(app, tab: str = "cex-cex"):
             app._arb_tab_labels[tid] = lbl
 
     tk.Frame(outer, bg=BORDER, height=1).pack(
-        fill="x", padx=16, pady=(4, 6))
+        fill="x", padx=16, pady=(2, 3))
 
     # -- Content area (tab-specific render) --
     content = tk.Frame(outer, bg=BG)
