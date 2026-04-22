@@ -2,6 +2,7 @@ import { Nav } from "../components/Nav";
 import { Footer } from "../components/Footer";
 import { StatusTicker } from "../components/StatusTicker";
 import { Hero } from "../sections/Hero";
+import { Pillars } from "../sections/Pillars";
 import { Bento } from "../sections/Bento";
 import { Thesis } from "../sections/Thesis";
 import { Methodology } from "../sections/Methodology";
@@ -19,6 +20,7 @@ export function Landing() {
       <Nav />
       <main className="app">
         <Hero />
+        <Pillars />
         <Bento />
         <Thesis />
         <Methodology />

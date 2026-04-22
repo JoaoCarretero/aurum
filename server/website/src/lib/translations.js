@@ -27,6 +27,36 @@ export const translations = {
     // Footer
     "footer.tagline": "The tape reads itself.",
 
+    // Hero
+    "hero.eyebrowPrimary": "Systematic quant · crypto perpetual futures",
+    "hero.eyebrowPill": "Invitation only",
+    "hero.titlePre": "The tape reads",
+    "hero.titleEm": "itself.",
+    "hero.ledeStrong": "A sovereign quantitative fund for crypto perpetual futures.",
+    "hero.ledeBody":
+      "Nine engines read the market across five dimensions. Ensemble signal, deterministic sizing, three-layer kill-switch. We don't predict — we measure.",
+    "hero.ctaPrimary": "Request research",
+    "hero.ctaSecondary": "Read the methodology",
+    "hero.metricsEngines": "Engines tested",
+    "hero.metricsSharpeBear": "Sharpe · OOS bear",
+    "hero.metricsJumpSharpe": "JUMP Sharpe · OOS",
+    "hero.metricsLayers": "Risk layers",
+    "hero.metricsMaxDd": "Max DD · OOS · %",
+
+    // Pillars strip
+    "pillars.systematic.num": "01",
+    "pillars.systematic.title": "Systematic",
+    "pillars.systematic.body":
+      "Every trade is the output of a pipeline. Data → indicators → Ω fractal → regime → signal → portfolio → size → notional cap → kill-switch. No single human decides.",
+    "pillars.sovereign.num": "02",
+    "pillars.sovereign.title": "Sovereign",
+    "pillars.sovereign.body":
+      "Data, signal, sizing, risk, execution — every critical path is in-house. No vendor ML model, no third-party signal. If the cloud dies, the laser still reads the tape.",
+    "pillars.survived.num": "03",
+    "pillars.survived.title": "Survived",
+    "pillars.survived.body":
+      "Five of nine engines passed honest out-of-sample in the 2022 bear and 2024–25 cycles. DSR-adjusted. Four were archived. We report what we couldn't break.",
+
     // Login
     "login.title": "Members access",
     "login.subtitle": "Restricted terminal. Live signals, in-house research, reports.",
@@ -81,6 +111,37 @@ export const translations = {
 
     // Footer
     "footer.tagline": "O disco lê a si mesmo.",
+
+    // Hero
+    "hero.eyebrowPrimary": "Quant sistemático · crypto perpetual futures",
+    "hero.eyebrowPill": "Acesso por convite",
+    "hero.titlePre": "O disco lê",
+    "hero.titleEm": "a si mesmo.",
+    "hero.ledeStrong":
+      "Um fundo quantitativo soberano para crypto perpetual futures.",
+    "hero.ledeBody":
+      "Nove engines lêem o mercado em cinco dimensões. Sinal de ensemble, sizing determinístico, kill-switch em três camadas. A gente não prevê — a gente mede.",
+    "hero.ctaPrimary": "Solicitar research",
+    "hero.ctaSecondary": "Ler a metodologia",
+    "hero.metricsEngines": "Engines testadas",
+    "hero.metricsSharpeBear": "Sharpe · OOS bear",
+    "hero.metricsJumpSharpe": "Sharpe · JUMP OOS",
+    "hero.metricsLayers": "Camadas de risco",
+    "hero.metricsMaxDd": "Max DD · OOS · %",
+
+    // Pillars strip
+    "pillars.systematic.num": "01",
+    "pillars.systematic.title": "Sistemático",
+    "pillars.systematic.body":
+      "Todo trade é o output de um pipeline. Dados → indicadores → Ω fractal → regime → sinal → portfolio → sizing → notional cap → kill-switch. Nenhum humano decide sozinho.",
+    "pillars.sovereign.num": "02",
+    "pillars.sovereign.title": "Soberano",
+    "pillars.sovereign.body":
+      "Dados, sinal, sizing, risco, execução — cada caminho crítico é in-house. Nenhum modelo ML de vendor, nenhum sinal terceirizado. Se a nuvem cai, o laser continua lendo o tape.",
+    "pillars.survived.num": "03",
+    "pillars.survived.title": "Sobreviveu",
+    "pillars.survived.body":
+      "Cinco de nove engines passaram OOS honesto no bear de 2022 e nos ciclos 2024–25. Com haircut DSR. Quatro foram arquivadas. A gente reporta o que não conseguiu quebrar.",
 
     // Login
     "login.title": "Acesso membros",
