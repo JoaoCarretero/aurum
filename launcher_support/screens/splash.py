@@ -40,38 +40,34 @@ class SplashScreen(Screen):
         "uncertainty": DIM,
     }
 
-    # Top band + wordmark
+    # Top rule + logo (textos do topo removidos: wordmark band, title
+    # "OPERATOR DESK", subtitle e tagline foram retirados pra dar mais
+    # espaco pros tiles ocuparem a tela). A logo subiu pra y=58.
     _CENTER_X = 460
     _TOP_RULE_Y = 30
     _BOTTOM_RULE_Y = 596
     _RULE_X1 = 48
     _RULE_X2 = 872
 
-    _WORDMARK_BAND_Y = 46
-    _WORDMARK_BAND_GAP = 78
-    _LOGO_Y = 96
-    _TITLE_Y = 132
-    _SUBTITLE_Y = 152
-    _TAGLINE_Y = 174
-    _TAGLINE_DIVIDER_HALF = 170
+    _LOGO_Y = 58
 
     # Tile grid 2×3 (row 2 has wide tile in slot 2-3)
     _CONTENT_X1 = 48          # = _RULE_X1
     _CONTENT_X2 = 872         # = _RULE_X2
-    _TILE_GAP = 16
+    _TILE_GAP = 18
     _TILE_W_SIMPLE = 264      # (824 - 2*16) / 3
     _TILE_W_WIDE = 544        # 2 simples + 1 gap
-    _TILE_H = 150
-    _TILE_PAD = 14
-    _TILE_LINE_H = 19
+    _TILE_H = 200
+    _TILE_PAD = 16
+    _TILE_LINE_H = 22
 
-    _ROW1_Y1 = 190
-    _ROW1_Y2 = _ROW1_Y1 + _TILE_H       # 340
-    _ROW2_Y1 = _ROW1_Y2 + _TILE_GAP     # 356
-    _ROW2_Y2 = _ROW2_Y1 + _TILE_H       # 506
+    _ROW1_Y1 = 110
+    _ROW1_Y2 = _ROW1_Y1 + _TILE_H       # 310
+    _ROW2_Y1 = _ROW1_Y2 + _TILE_GAP     # 328
+    _ROW2_Y2 = _ROW2_Y1 + _TILE_H       # 528
 
-    _PROMPT_DIVIDER_Y = 530
-    _PROMPT_Y = 552
+    _PROMPT_DIVIDER_Y = 554
+    _PROMPT_Y = 576
 
     def __init__(self, parent: tk.Misc, app: Any, conn: Any, tagline: str):
         super().__init__(parent)
@@ -397,51 +393,22 @@ class SplashScreen(Screen):
             )
 
     def _draw_wordmark(self, canvas: tk.Canvas) -> None:
+        """Desenha top rule + logo (AURUM losango) e bottom rule.
+
+        Textos do topo (wordmark band AURUM FINANCE, title OPERATOR DESK,
+        subtitle e tagline) foram removidos pra dar espaco aos tiles —
+        a logo sozinha carrega a identidade visual. Bottom rule mantido
+        como ancora visual acima do prompt.
+        """
         logo_cx, logo_cy = self._CENTER_X, self._LOGO_Y
-        band_gap = self._WORDMARK_BAND_GAP
 
         # top rule (full width)
         canvas.create_line(
             self._RULE_X1, self._TOP_RULE_Y, self._RULE_X2, self._TOP_RULE_Y,
             fill=AMBER_D, width=1, tags="splash",
         )
-        # AURUM FINANCE wordmark band
-        canvas.create_line(
-            self._RULE_X1, self._WORDMARK_BAND_Y,
-            self._CENTER_X - band_gap, self._WORDMARK_BAND_Y,
-            fill=AMBER_D, width=1, tags="splash",
-        )
-        canvas.create_line(
-            self._CENTER_X + band_gap, self._WORDMARK_BAND_Y,
-            self._RULE_X2, self._WORDMARK_BAND_Y,
-            fill=AMBER_D, width=1, tags="splash",
-        )
-        canvas.create_text(
-            self._CENTER_X, self._WORDMARK_BAND_Y,
-            anchor="center", text="AURUM FINANCE",
-            font=(FONT, 7, "bold"), fill=AMBER, tags="splash",
-        )
 
         self.app._draw_aurum_logo(canvas, logo_cx, logo_cy, scale=18, tag="splash")
-
-        canvas.create_text(
-            logo_cx, self._TITLE_Y, anchor="center", text="OPERATOR DESK",
-            font=(FONT, 18, "bold"), fill=WHITE, tags="splash",
-        )
-        canvas.create_text(
-            logo_cx, self._SUBTITLE_Y, anchor="center",
-            text="Quant operations console",
-            font=(FONT, 9), fill=DIM2, tags="splash",
-        )
-        canvas.create_line(
-            logo_cx - self._TAGLINE_DIVIDER_HALF, self._TAGLINE_Y - 8,
-            logo_cx + self._TAGLINE_DIVIDER_HALF, self._TAGLINE_Y - 8,
-            fill=BORDER, width=1, tags="splash",
-        )
-        canvas.create_text(
-            logo_cx, self._TAGLINE_Y, anchor="center", text=self.tagline,
-            font=(FONT, 8), fill=DIM, tags="splash",
-        )
 
         # bottom rule
         canvas.create_line(

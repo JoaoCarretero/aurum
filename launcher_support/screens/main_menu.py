@@ -56,13 +56,15 @@ class MainMenuScreen(Screen):
         if canvas is None:
             return
 
-        # Tiles maiores — layout spread-out pra preencher o espaco que abriu
-        # com a remocao dos paineis DESK OVERVIEW / ACTIVE CONTEXT.
+        # Tiles grandes (320x170) — preenchem a tela com o espaco que
+        # abriu dos paineis DESK OVERVIEW / ACTIVE CONTEXT. Centers em
+        # x=200/720 deixam 40px de gap com a borda do frame e 48px com
+        # o CD ao centro.
         app._active_tile_slots = [
-            ("nw", 192, 170),
-            ("ne", 728, 170),
-            ("sw", 192, 370),
-            ("se", 728, 370),
+            ("nw", 200, 170),
+            ("ne", 720, 170),
+            ("sw", 200, 370),
+            ("se", 720, 370),
         ]
         app._active_cd_center = (460, 270)
         app._menu_render_scale = 1.0
@@ -105,6 +107,15 @@ class MainMenuScreen(Screen):
         app._kb("<Return>", lambda: app._menu_tile_expand(app._menu_focused_tile))
         app._kb("<Escape>", app._splash)
         app._bind_global_nav()
+        # Forcar layout do canvas antes do primeiro _render_main_menu
+        # pra evitar o "puxao pra direita" que acontecia quando a tela
+        # abria: sem update_idletasks, winfo_width retornava 1 e o
+        # render inicial nao escalava, ate o primeiro <Configure>
+        # disparar e o conteudo saltar pra posicao final.
+        try:
+            canvas.update_idletasks()
+        except Exception:
+            pass
         app._render_main_menu()
         self._schedule_live_refresh()
         try:

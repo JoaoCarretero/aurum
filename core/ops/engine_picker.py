@@ -866,11 +866,24 @@ def render(
         trds_txt = (str(int(_trds_override))
                     if isinstance(_trds_override, (int, float))
                     else (_pull_trade_count(bc) or "--"))
+        # DAYS = scan_days do run clicado (LAST RUNS). Sem override,
+        # cai pra "--" (period nao faz sentido no baseline hydrated).
+        _days_raw = ro.get("scan_days")
+        days_txt = (f"{int(_days_raw)}d"
+                    if isinstance(_days_raw, (int, float))
+                    else "--")
+        # TF = interval do run clicado. Sem override, usa t.brief.best_config.TF.
+        _tf_raw = ro.get("interval")
+        if _tf_raw:
+            tf_txt = str(_tf_raw).lower()
+        else:
+            tf_txt = str(bc.get("TF") or "--").lower()[:5]
         track_cells = [
             ("TRDS", trds_txt, DIM2),
             ("ROI",  roi or "--",
              GREEN if roi.startswith("+") else (RED if roi.startswith("-") else DIM2)),
-            ("MC+",  _pull_mc(bc) or "--", DIM2),
+            ("DAYS", days_txt, WHITE if days_txt != "--" else DIM2),
+            ("TF",   tf_txt, AMBER if tf_txt != "--" else DIM2),
             ("AUD",  aud,
              GREEN if "PASS" in aud else
              AMBER if "WARN" in aud else
@@ -1070,69 +1083,89 @@ def render(
             return
 
     def _paint_overview(host, t: EngineTrack):
-        """LAST RUNS — compact clickable history from data/aurum.db.
+        """LAST RUNS — canonical view of this engine's runs.
 
-        Single-row layout, institutional palette (amber/green/red/dim2).
-        Each row: timestamp, TF+period, sharpe, ROI, trades. Click a row
-        to populate the KPI tape above with that run's metrics (stored
-        in state['run_override']) and open the JSON artifact.
+        Same table structure as DATA > BACKTESTS (_BT_RUN_COLS) pra
+        manter paridade visual. Cada row lista um run real do
+        data/aurum.db (engine=slug, ORDER BY run_id DESC). Click
+        atualiza a KPI tape acima com as metricas daquele run e abre o
+        JSON artifact.
+
+        Columns: DATE/TIME (19) · TF (4) · DAYS (5) · TRDS (6) ·
+                 SHRP (8) · ROI (8) · DD (7) · VER (3)
         """
         sbody = _scrollable(host)
-        runs = _query_last_runs(t.slug, limit=10)
+        runs = _query_last_runs(t.slug, limit=12)
         if not runs:
-            tk.Label(sbody, text="  ▸ no runs indexed yet — run this engine to populate history",
+            tk.Label(sbody, text="  ▸ no runs indexed for this engine yet",
                      font=(FONT, 8, "italic"), fg=DIM2, bg=PANEL, anchor="w",
                      wraplength=560, justify="left"
                      ).pack(fill="x", pady=(6, 6))
             return
 
-        # Column header — subtle
+        # Column spec — same widths pra header e rows (tabela alinhada).
+        # Se mudar aqui, mude em ambos lugares ou vira drift visual.
+        _cols = (
+            ("DATE / TIME", 19, "w"),
+            ("TF",           4, "w"),
+            ("DAYS",         5, "e"),
+            ("TRDS",         6, "e"),
+            ("SHRP",         8, "e"),
+            ("ROI",          8, "e"),
+            ("DD",           7, "e"),
+            ("V",            3, "e"),
+        )
+
         hdr = tk.Frame(sbody, bg=PANEL)
         hdr.pack(fill="x", pady=(0, 2))
-        for txt, w_, anc in (("WHEN", 17, "w"), ("TF·DAYS", 12, "w"),
-                             ("SHRP", 8, "e"), ("ROI", 8, "e"),
-                             ("TRDS", 6, "e"), ("VER", 6, "e")):
-            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"),
+        for txt, w_, anc in _cols:
+            tk.Label(hdr, text=txt, font=(FONT, 7, "bold"),
                      fg=DIM, bg=PANEL, width=w_, anchor=anc
-                     ).pack(side="left", padx=(4, 0))
+                     ).pack(side="left", padx=(3, 0))
         tk.Frame(sbody, bg=BORDER, height=1).pack(fill="x")
 
         def _sharpe_color(v):
-            if v is None:
-                return DIM
-            try:
-                f = float(v)
-            except (TypeError, ValueError):
-                return DIM
+            if v is None: return DIM
+            try: f = float(v)
+            except (TypeError, ValueError): return DIM
             if f >= 1.5: return GREEN
             if f >= 0.5: return AMBER
             return RED
 
         def _roi_color(v):
-            if v is None:
-                return DIM
-            try:
-                return GREEN if float(v) > 0 else RED
-            except (TypeError, ValueError):
-                return DIM
+            if v is None: return DIM
+            try: return GREEN if float(v) > 0 else RED
+            except (TypeError, ValueError): return DIM
+
+        def _dd_color(v):
+            # max_dd gravado em 0-100 (percentual). Valores baixos = bom.
+            if v is None: return DIM
+            try: f = float(v)
+            except (TypeError, ValueError): return DIM
+            if f < 10.0: return GREEN
+            if f < 20.0: return AMBER
+            return RED
 
         active_rid = (state.get("run_override") or {}).get("run_id")
 
         for run in runs:
             rid = str(run.get("run_id") or "")
-            ts = str(run.get("timestamp") or "")[:16].replace("T", " ")
-            tf = str(run.get("interval") or "-").lower()
+            ts_raw = str(run.get("timestamp") or "")
+            # Formato canonico: "YYYY-MM-DD HH:MM" (19 chars)
+            ts = ts_raw[:16].replace("T", " ") if ts_raw else "-"
+            tf = str(run.get("interval") or "-").lower()[:4]
             sd = run.get("scan_days")
-            sd_txt = f"{int(sd)}d" if isinstance(sd, (int, float)) else "-"
-            tf_days = f"{tf}·{sd_txt}"
+            sd_txt = str(int(sd)) if isinstance(sd, (int, float)) else "-"
             sh = run.get("sharpe")
             roi = run.get("roi")
             nt = run.get("n_trades")
+            dd = run.get("max_dd")
             ver = str(run.get("veredito") or "").strip().upper()
 
             sh_txt = f"{sh:+.2f}" if isinstance(sh, (int, float)) else "--"
             roi_txt = f"{roi:+.1f}%" if isinstance(roi, (int, float)) else "--"
             nt_txt = str(int(nt)) if isinstance(nt, (int, float)) else "--"
+            dd_txt = f"{dd:.1f}%" if isinstance(dd, (int, float)) else "--"
             ver_txt = ("✓" if "PASS" in ver or ver == "OK"
                        else "⚠" if "WARN" in ver
                        else "✗" if "FAIL" in ver
@@ -1147,22 +1180,25 @@ def render(
             row = tk.Frame(sbody, bg=row_bg, cursor="hand2")
             row.pack(fill="x", pady=0)
 
-            # Left accent rail — amber when active, invisible when not
+            # Left accent rail — amber quando selecionado, transparente se nao
             rail_col = AMBER if is_active else PANEL
             tk.Frame(row, bg=rail_col, width=2).pack(side="left", fill="y")
 
-            # Cells — same widths as header for visual alignment
-            def _c(parent, text, col, w, anchor="w"):
-                tk.Label(parent, text=text, font=(FONT, 8, "bold" if is_active else "normal"),
+            # Cells — peso "bold" fixo pra todas (consistencia de largura)
+            def _c(parent, text, col, w, anchor):
+                tk.Label(parent, text=text, font=(FONT, 8, "bold"),
                          fg=col, bg=row_bg, width=w, anchor=anchor
-                         ).pack(side="left", padx=(4, 0))
+                         ).pack(side="left", padx=(3, 0))
 
-            _c(row, ts or "-", AMBER if is_active else WHITE, 17, "w")
-            _c(row, tf_days, DIM2 if not is_active else AMBER_H, 12, "w")
-            _c(row, sh_txt, _sharpe_color(sh), 8, "e")
-            _c(row, roi_txt, _roi_color(roi), 8, "e")
-            _c(row, nt_txt, WHITE if is_active else DIM2, 6, "e")
-            _c(row, ver_txt, ver_col, 6, "e")
+            date_col = AMBER if is_active else WHITE
+            _c(row, ts,      date_col,              _cols[0][1], _cols[0][2])
+            _c(row, tf,      DIM2,                  _cols[1][1], _cols[1][2])
+            _c(row, sd_txt,  DIM2,                  _cols[2][1], _cols[2][2])
+            _c(row, nt_txt,  WHITE,                 _cols[3][1], _cols[3][2])
+            _c(row, sh_txt,  _sharpe_color(sh),     _cols[4][1], _cols[4][2])
+            _c(row, roi_txt, _roi_color(roi),       _cols[5][1], _cols[5][2])
+            _c(row, dd_txt,  _dd_color(dd),         _cols[6][1], _cols[6][2])
+            _c(row, ver_txt, ver_col,               _cols[7][1], _cols[7][2])
 
             json_path = run.get("json_path")
             def _click(_e=None, _r=run, _p=json_path):
@@ -1189,10 +1225,11 @@ def render(
                 child.bind("<Enter>", _enter)
                 child.bind("<Leave>", _leave)
 
-        # Hint footer
-        tk.Label(sbody, text="  ▸ click a row to overlay its metrics above",
+        # Footer — origem dos dados + hint de click
+        tk.Frame(sbody, bg=BORDER, height=1).pack(fill="x", pady=(6, 2))
+        tk.Label(sbody, text=f"  ▸ {len(runs)} runs · data/aurum.db (canonical) · click row = overlay KPIs",
                  font=(FONT, 7, "italic"), fg=DIM2, bg=PANEL, anchor="w"
-                 ).pack(fill="x", pady=(8, 2))
+                 ).pack(fill="x", pady=(0, 2))
 
     def _paint_brief(host, t: EngineTrack):
         """Research brief — institutional layout (moved from OVERVIEW).

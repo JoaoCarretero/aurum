@@ -93,7 +93,9 @@ def test_splash_wordmark_stays_above_row1(gui_root, fake_app, fake_conn):
     s = SplashScreen(parent=gui_root, app=fake_app, conn=fake_conn, tagline="TEST TAGLINE")
     s.mount()
     s.on_enter()
-    assert s._TAGLINE_Y < s._ROW1_Y1
+    # Geometry: logo -> row1 -> gap -> row2 -> prompt must not overlap.
+    # Tagline / title / subtitle removed — logo is the only top element.
+    assert s._LOGO_Y < s._ROW1_Y1
     assert s._ROW1_Y2 < s._ROW2_Y1
     assert s._ROW2_Y2 < s._PROMPT_Y
 
