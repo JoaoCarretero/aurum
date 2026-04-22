@@ -74,6 +74,12 @@ _TILE_REGISTRY: dict[str, dict] = {}
 
 def _clear_tile_registry() -> None:
     _TILE_REGISTRY.clear()
+    # _STATUSBAR refs apontam pra widgets que tb sao destruidos no
+    # render() parent.destroy() loop. Limpar junto evita stale refs.
+    try:
+        _STATUSBAR.clear()
+    except NameError:
+        pass
 
 
 def _read_vps_status() -> tuple[bool, str]:
@@ -386,7 +392,255 @@ def _tile(parent, label, value, change="", change_color=WHITE,
             "spark_color": spark_color,
             "last_val": None,  # flash detection
         }
+        # Click-to-expand — tile inteiro (frame + todos os labels) abre
+        # popup detalhado com chart de 100 barras + min/max/last.
+        _mk = metric_key
+        _lbl = label
+        _fmt = fmt
+
+        def _click(_e=None, m=_mk, l=_lbl, fm=_fmt):
+            _open_tile_detail(m, l, fm)
+
+        f.configure(cursor="hand2")
+        f.bind("<Button-1>", _click)
+        for child in (value_lbl, change_lbl, spark_cv):
+            if child is None:
+                continue
+            try:
+                child.configure(cursor="hand2")
+                child.bind("<Button-1>", _click)
+            except Exception:
+                pass
     return f
+
+
+# ── NORTH-STAR WATCHLIST + STATUS BAR state ──────────────────
+# Refs globais pra tick_update refrescar o statusbar em place, sem
+# rebuild. Populados em _render_northstar / _render_statusbar.
+_STATUSBAR: dict = {}
+_TICK_STATS = {"count": 0, "last_changed": 0, "last_tick_at": None}
+
+
+def _render_northstar(parent) -> None:
+    """Strip fixo no topo com 5 tiles XL (BTC/ETH/SP500/DXY/BTC.D).
+
+    Cada cell: label 7pt amber + value 20pt white + change 10pt + spark
+    60px alto. Registra cada metric em _TILE_REGISTRY igual tiles normais
+    — aproveita o tick_update existente pra refresh automatico (fade +
+    candles + bounds).
+
+    Vibe Bloomberg header: 5 "north stars" sempre visiveis, independente
+    da tab ativa abaixo.
+    """
+    from macro_brain.persistence.store import macro_series_many
+
+    bar = tk.Frame(parent, bg=BG,
+                   highlightbackground=AMBER, highlightthickness=1)
+    bar.pack(fill="x", pady=(4, 2))
+
+    specs = [
+        ("BTC_SPOT",       "BTC",    "${:,.0f}"),
+        ("ETH_SPOT",       "ETH",    "${:,.2f}"),
+        ("SP500",          "S&P",    "{:,.2f}"),
+        ("DXY",            "DXY",    "{:.2f}"),
+        ("BTC_DOMINANCE",  "BTC.D",  "{:.2f}%"),
+    ]
+
+    metrics_keys = [m for m, _, _ in specs]
+    try:
+        series_map = macro_series_many(metrics_keys)
+    except Exception:
+        series_map = {}
+
+    for metric, lbl_text, fmt in specs:
+        s = series_map.get(metric) or []
+        val = s[-1].get("value") if s else None
+        prev = s[-2].get("value") if len(s) > 1 else None
+
+        cell = tk.Frame(bar, bg=BG2,
+                        highlightbackground=BORDER, highlightthickness=1)
+        cell.pack(side="left", fill="both", expand=True, padx=1, pady=1)
+
+        tk.Label(cell, text=lbl_text, font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG2, anchor="w").pack(
+            fill="x", padx=8, pady=(4, 0))
+
+        vs = fmt.format(val) if val is not None else "—"
+        vlbl = tk.Label(cell, text=vs, font=(FONT, 18, "bold"),
+                        fg=WHITE, bg=BG2, anchor="w")
+        vlbl.pack(fill="x", padx=8)
+
+        pct = _pct_change(val, prev) if val is not None else None
+        ch = f"{pct:+.2f}%" if pct is not None else ""
+        cc = GREEN if (pct or 0) > 0 else (RED if (pct or 0) < 0 else DIM)
+        chlbl = tk.Label(cell, text=ch, font=(FONT, 9, "bold"),
+                         fg=cc, bg=BG2, anchor="w")
+        chlbl.pack(fill="x", padx=8)
+
+        cv = tk.Canvas(cell, bg=BG2, height=28,
+                       highlightthickness=0, borderwidth=0)
+        cv.pack(fill="x", padx=4, pady=(0, 4))
+        # Draw initial candles (deferred — winfo_width so apos pack)
+        if s and len(s) >= 2:
+            vals = [r["value"] for r in s[-30:]
+                    if isinstance(r.get("value"), (int, float))]
+            if len(vals) >= 2:
+                cv.after(30, lambda c=cv, v=vals:
+                         _draw_spark_candles(c, v,
+                                             w=(c.winfo_width() or 150),
+                                             h=28))
+
+        # Override bg=BG2 (nao PANEL) no registry — _flash_label precisa
+        # saber pra onde voltar. Simples: tick_update usa PANEL default;
+        # aqui o label usa BG2 como cor base, entao registramos com
+        # spark_color/fmt normais mas marcamos "north_star": True pra
+        # tratar no _flash_label (abaixo).
+        _TILE_REGISTRY[metric] = {
+            "value": vlbl,
+            "change": chlbl,
+            "spark": cv,
+            "fmt": fmt,
+            "spark_color": AMBER,
+            "last_val": val if isinstance(val, (int, float)) else None,
+            "north_star": True,
+        }
+
+
+def _render_statusbar(parent) -> None:
+    """Barra fixa no bottom: ● LIVE · 47 tiles · last tick Xs ago · clock.
+
+    Refs armazenadas em _STATUSBAR module-level pra tick_update refrescar.
+    """
+    bar = tk.Frame(parent, bg=BG2,
+                   highlightbackground=BORDER, highlightthickness=1)
+    bar.pack(fill="x", side="bottom", pady=(2, 0))
+
+    dot = tk.Label(bar, text="●", font=(FONT, 9, "bold"),
+                   fg=GREEN, bg=BG2)
+    dot.pack(side="left", padx=(8, 4), pady=2)
+    status = tk.Label(bar, text="LIVE", font=(FONT, 7, "bold"),
+                      fg=WHITE, bg=BG2)
+    status.pack(side="left", padx=2, pady=2)
+
+    def _sep():
+        return tk.Label(bar, text="│", font=(FONT, 7),
+                        fg=DIM, bg=BG2)
+
+    _sep().pack(side="left", padx=4)
+    tiles_lbl = tk.Label(bar, text="0 tiles", font=(FONT, 7),
+                         fg=DIM2, bg=BG2)
+    tiles_lbl.pack(side="left", padx=2)
+
+    _sep().pack(side="left", padx=4)
+    tick_lbl = tk.Label(bar, text="no tick yet", font=(FONT, 7),
+                        fg=DIM2, bg=BG2)
+    tick_lbl.pack(side="left", padx=2)
+
+    clock_lbl = tk.Label(bar, text="—", font=(FONT, 7, "bold"),
+                         fg=AMBER, bg=BG2)
+    clock_lbl.pack(side="right", padx=8)
+
+    tk.Label(bar, text="aurum macro", font=(FONT, 6),
+             fg=DIM, bg=BG2).pack(side="right", padx=(0, 4))
+
+    _STATUSBAR.update({
+        "dot": dot, "status": status, "tiles": tiles_lbl,
+        "tick": tick_lbl, "clock": clock_lbl,
+    })
+
+
+def _statusbar_tick(changed: int) -> None:
+    """Chamado por tick_update apos cada refresh. Atualiza counters +
+    clock UTC in-place."""
+    if not _STATUSBAR:
+        return
+    now = datetime.utcnow()
+    try:
+        clock = _STATUSBAR.get("clock")
+        if clock and clock.winfo_exists():
+            clock.configure(text=now.strftime("%H:%M:%S UTC"))
+        tiles = _STATUSBAR.get("tiles")
+        if tiles and tiles.winfo_exists():
+            tiles.configure(text=f"{len(_TILE_REGISTRY)} tiles")
+        tick = _STATUSBAR.get("tick")
+        if tick and tick.winfo_exists():
+            if changed > 0:
+                tick.configure(
+                    text=f"{changed} chg · just now", fg=GREEN,
+                )
+            else:
+                tick.configure(
+                    text=f"stable · {_TICK_STATS.get('count', 0)} ticks",
+                    fg=DIM2,
+                )
+    except Exception:
+        pass
+
+
+def _open_tile_detail(metric_key: str, label: str,
+                     fmt: str | None = None) -> None:
+    """Click-to-expand popup (Toplevel 420x280) com chart detalhado de
+    ate 100 barras (mini-candles grande) + min/max/last footer.
+
+    Vibe drill-down TradingView: click tile = abre janela grande.
+    """
+    try:
+        from macro_brain.persistence.store import macro_series_many
+        s = (macro_series_many([metric_key]) or {}).get(metric_key) or []
+        vals = [
+            r["value"] for r in s[-100:]
+            if isinstance(r.get("value"), (int, float))
+        ]
+
+        top = tk.Toplevel()
+        top.title(f"{label} — {metric_key}")
+        top.configure(bg=BG)
+        top.geometry("440x300")
+
+        tk.Label(top, text=f"  [ {label} · {metric_key} ]",
+                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG,
+                 anchor="w").pack(fill="x", padx=8, pady=(8, 4))
+
+        cv = tk.Canvas(top, bg=PANEL, width=420, height=220,
+                       highlightthickness=1,
+                       highlightbackground=BORDER)
+        cv.pack(padx=10, pady=2)
+
+        if len(vals) >= 2:
+            cv.after(
+                30,
+                lambda: _draw_spark_candles(cv, vals, w=420, h=220),
+            )
+            foot_text = (
+                f"  n={len(vals)}  "
+                f"min {_fmt_val(min(vals), fmt)}  "
+                f"max {_fmt_val(max(vals), fmt)}  "
+                f"last {_fmt_val(vals[-1], fmt)}"
+            )
+        else:
+            foot_text = f"  {label}: sem dados suficientes (n={len(vals)})"
+
+        tk.Label(top, text=foot_text, font=(FONT, 8),
+                 fg=DIM, bg=BG, anchor="w").pack(
+            fill="x", padx=8, pady=(4, 4))
+
+        tk.Label(top, text="  esc · close",
+                 font=(FONT, 7), fg=DIM2, bg=BG,
+                 anchor="w").pack(fill="x", padx=8)
+
+        top.bind("<Escape>", lambda _e: top.destroy())
+        top.focus_set()
+    except Exception as exc:
+        log.warning("open tile detail failed: %s", exc)
+
+
+def _fmt_val(v, fmt: str | None) -> str:
+    if fmt:
+        try:
+            return fmt.format(v)
+        except (ValueError, TypeError):
+            pass
+    return f"{v:.4g}"
 
 
 def _lerp_hex(c1: str, c2: str, t: float) -> str:
@@ -563,6 +817,11 @@ def tick_update() -> int:
                         _draw_spark_candles(spark_cv, vals, w=w, h=h)
             except Exception:
                 pass
+
+    _TICK_STATS["count"] = _TICK_STATS.get("count", 0) + 1
+    _TICK_STATS["last_changed"] = changed
+    _TICK_STATS["last_tick_at"] = datetime.utcnow()
+    _statusbar_tick(changed)
     return changed
 
 
@@ -2331,6 +2590,22 @@ def render(parent: tk.Widget, app=None) -> None:
              font=(FONT, 7), fg=DIM, bg=BG).pack(side="right", padx=8)
 
     tk.Frame(outer, bg=AMBER, height=1).pack(fill="x", pady=(2, 0))
+
+    # ── NORTH-STAR WATCHLIST (fixed header) ────────────
+    # 5 tiles XL (BTC · ETH · S&P · DXY · BTC.D) sempre visiveis, tick
+    # update via _TILE_REGISTRY como qualquer outro tile.
+    try:
+        _render_northstar(outer)
+    except Exception as exc:
+        log.warning("render northstar failed: %s", exc)
+
+    # ── STATUS BAR (fixed bottom — packed BEFORE content expands) ──
+    # Pack side=bottom agora pra reservar espaco antes de content_wrap
+    # tomar o resto com expand=True.
+    try:
+        _render_statusbar(outer)
+    except Exception as exc:
+        log.warning("render statusbar failed: %s", exc)
 
     # ── TAB BAR ────────────────────────────────────────
     tab_bar = tk.Frame(outer, bg=BG)
