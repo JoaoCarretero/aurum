@@ -81,6 +81,9 @@ _PAPER_SNAPSHOT_LOCK = threading.Lock()
 _SHADOW_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
 _SHADOW_SNAPSHOT_LOADING = False
 _SHADOW_SNAPSHOT_LOCK = threading.Lock()
+_REMOTE_SHADOW_RUN_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
+_REMOTE_SHADOW_RUN_LOADING: set[str] = set()
+_REMOTE_SHADOW_RUN_LOCK = threading.Lock()
 
 
 def _stage_badge(meta: dict | None) -> tuple[str, str]:
@@ -556,6 +559,9 @@ def _clear_cockpit_view_caches() -> None:
     with _SHADOW_SNAPSHOT_LOCK:
         _SHADOW_SNAPSHOT_CACHE.clear()
         _SHADOW_SNAPSHOT_LOADING = False
+    with _REMOTE_SHADOW_RUN_LOCK:
+        _REMOTE_SHADOW_RUN_CACHE.clear()
+        _REMOTE_SHADOW_RUN_LOADING.clear()
 
 
 def _cockpit_runs_loading() -> bool:
@@ -910,6 +916,64 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
     return payload
 
 
+def _fetch_remote_shadow_run_sync(run_id: str) -> tuple[Path | None, dict | None, list[dict]]:
+    client = _get_cockpit_client()
+    if client is None:
+        return None, None, []
+    try:
+        hb = client.get_heartbeat(run_id)
+    except Exception:
+        hb = None
+    if hb is None:
+        return Path(f"remote://{run_id}"), None, []
+    try:
+        trades_payload = client.get_trades(run_id, limit=20)
+        raw_trades = (trades_payload or {}).get("trades") or []
+        trades = [trade for trade in raw_trades if isinstance(trade, dict)]
+    except Exception:
+        trades = []
+    return Path(f"remote://{run_id}"), hb, trades
+
+
+def _fetch_remote_shadow_run_cached(
+    run_id: str,
+    *,
+    launcher=None,
+    state=None,
+    allow_sync: bool = False,
+) -> tuple[Path | None, dict | None, list[dict]]:
+    now = time.monotonic()
+    with _REMOTE_SHADOW_RUN_LOCK:
+        cached = _REMOTE_SHADOW_RUN_CACHE.get(run_id)
+        if cached is not None and (now - cached[0]) <= _SHADOW_SNAPSHOT_CACHE_TTL_S:
+            return cached[1]
+        if allow_sync:
+            _REMOTE_SHADOW_RUN_LOADING.add(run_id)
+        elif run_id in _REMOTE_SHADOW_RUN_LOADING:
+            return cached[1] if cached is not None else (None, None, [])
+        else:
+            _REMOTE_SHADOW_RUN_LOADING.add(run_id)
+
+            def _worker() -> None:
+                payload = _fetch_remote_shadow_run_sync(run_id)
+                with _REMOTE_SHADOW_RUN_LOCK:
+                    _REMOTE_SHADOW_RUN_CACHE[run_id] = (time.monotonic(), payload)
+                    _REMOTE_SHADOW_RUN_LOADING.discard(run_id)
+                _schedule_state_refresh(launcher, state)
+
+            threading.Thread(
+                target=_worker,
+                name=f"engines-live-shadow-{run_id}",
+                daemon=True,
+            ).start()
+            return cached[1] if cached is not None else (None, None, [])
+    payload = _fetch_remote_shadow_run_sync(run_id)
+    with _REMOTE_SHADOW_RUN_LOCK:
+        _REMOTE_SHADOW_RUN_CACHE[run_id] = (time.monotonic(), payload)
+        _REMOTE_SHADOW_RUN_LOADING.discard(run_id)
+    return payload
+
+
 def _shadow_active_slugs(*, launcher=None, state=None) -> set[str]:
     """Return the set of engine slugs with an active shadow run visible.
 
@@ -975,29 +1039,12 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
                 trades = []
         return local_row.run_dir, hb, trades
     if local_row is not None and local_row.run_id:
-        client = _get_cockpit_client()
-        if client is not None:
-            try:
-                hb = client.get_heartbeat(local_row.run_id)
-            except Exception:
-                hb = {
-                    "run_id": local_row.run_id,
-                    "status": local_row.status or "unknown",
-                    "ticks_ok": local_row.ticks_ok or 0,
-                    "ticks_fail": local_row.ticks_fail or 0,
-                    "novel_total": local_row.novel or 0,
-                    "started_at": local_row.started_at,
-                    "last_tick_at": local_row.last_tick_at,
-                    "tick_sec": 900,
-                    "last_error": "heartbeat fetch failed",
-                }
-            try:
-                trades_payload = client.get_trades(local_row.run_id, limit=20)
-                raw_trades = (trades_payload or {}).get("trades") or []
-                trades = [trade for trade in raw_trades if isinstance(trade, dict)]
-            except Exception:
-                trades = []
-            return Path(f"remote://{local_row.run_id}"), hb, trades
+        return _fetch_remote_shadow_run_cached(
+            local_row.run_id,
+            launcher=launcher,
+            state=state,
+            allow_sync=(launcher is None and state is None),
+        )
 
     try:
         from launcher_support.tunnel_registry import get_shadow_poller
@@ -2239,7 +2286,7 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     """
     name = meta.get("display", slug.upper())
 
-    active_runs = _active_shadow_runs()
+    active_runs = _active_shadow_runs(launcher=launcher, state=state)
     if len(active_runs) >= 2:
         _render_run_instance_picker(
             parent,
@@ -2634,52 +2681,68 @@ def _render_paper_instance_picker(parent, active_runs: list[dict],
     )
 
 
-def _active_paper_runs(launcher) -> list[dict]:
-    """All RUNNING paper runs via cockpit /v1/runs, sorted started_at DESC.
+def _active_mode_runs(mode: str, *, launcher=None, state=None) -> list[dict]:
+    cached_runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
+    matches_by_id: dict[str, dict] = {}
+    for row in cached_runs:
+        if str(row.get("engine") or "").lower() != "millennium":
+            continue
+        if str(row.get("mode") or "").lower() != mode:
+            continue
+        if str(row.get("status") or "").lower() != "running":
+            continue
+        run_id = str(row.get("run_id") or "")
+        if not run_id:
+            continue
+        matches_by_id[run_id] = {
+            "run_id": run_id,
+            "label": row.get("label"),
+            "ticks_ok": int(row.get("novel_total") or 0),
+            "novel_total": int(row.get("novel_total") or 0),
+            "started_at": row.get("started_at"),
+            "last_tick_at": row.get("last_tick_at"),
+            "status": row.get("status"),
+            "source": "vps",
+        }
 
-    Returns [] if cockpit unreachable or no paper runs visible. The list
-    is kept on the launcher to power the multi-instance picker above the
-    detail pane — one entry per concurrent paper run.
-    """
-    rows = run_catalog.list_runs_catalog(mode="paper", client=_get_cockpit_client())
-    matches: list[dict] = []
-    for row in rows:
+    for row in run_catalog.collect_db_runs(mode=mode, limit=100):
         if row.engine != "MILLENNIUM" or str(row.status or "").lower() != "running":
             continue
-        matches.append({
-            "run_id": row.run_id,
-            "label": row.label,
-            "ticks_ok": row.ticks_ok or 0,
-            "novel_total": row.novel,
-            "started_at": row.started_at,
-            "last_tick_at": row.last_tick_at,
-            "status": row.status,
-            "source": row.source,
-        })
+        payload = matches_by_id.get(row.run_id)
+        if payload is None:
+            matches_by_id[row.run_id] = {
+                "run_id": row.run_id,
+                "label": row.label,
+                "ticks_ok": row.ticks_ok or 0,
+                "novel_total": row.novel or 0,
+                "started_at": row.started_at,
+                "last_tick_at": row.last_tick_at,
+                "status": row.status,
+                "source": row.source,
+            }
+            continue
+        if row.label and not payload.get("label"):
+            payload["label"] = row.label
+        if row.ticks_ok is not None:
+            payload["ticks_ok"] = row.ticks_ok
+        if row.novel is not None:
+            payload["novel_total"] = row.novel
+
+    matches = list(matches_by_id.values())
+    matches.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
     return matches
 
 
-def _active_shadow_runs() -> list[dict]:
-    rows = run_catalog.list_runs_catalog(mode="shadow", client=_get_cockpit_client())
-    matches: list[dict] = []
-    for row in rows:
-        if row.engine != "MILLENNIUM" or str(row.status or "").lower() != "running":
-            continue
-        matches.append({
-            "run_id": row.run_id,
-            "label": row.label,
-            "ticks_ok": row.ticks_ok or 0,
-            "novel_total": row.novel,
-            "started_at": row.started_at,
-            "last_tick_at": row.last_tick_at,
-            "status": row.status,
-            "source": row.source,
-        })
-    return matches
+def _active_paper_runs(launcher, state: dict | None = None) -> list[dict]:
+    return _active_mode_runs("paper", launcher=launcher, state=state)
+
+
+def _active_shadow_runs(launcher=None, state: dict | None = None) -> list[dict]:
+    return _active_mode_runs("shadow", launcher=launcher, state=state)
 
 
 def _fetch_shadow_run_id(state: dict | None = None) -> str | None:
-    shadow_runs = _active_shadow_runs()
+    shadow_runs = _active_shadow_runs(state=state)
     if not shadow_runs:
         return None
     active = [r for r in shadow_runs if str(r.get("status") or "").lower() == "running"]
@@ -2704,7 +2767,7 @@ def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
          runs still surface when nothing else is alive).
       4. ``None`` — cockpit unreachable or no paper runs at all.
     """
-    paper_runs = _active_paper_runs(launcher)
+    paper_runs = _active_paper_runs(launcher, state)
     if not paper_runs:
         return None
     active = [r for r in paper_runs if str(r.get("status") or "").lower() == "running"]
@@ -2915,7 +2978,7 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     # pick which one to render. Selection persists in
     # state["selected_paper_run_id"]
     # so the next refresh cycle keeps the same run in focus.
-    active_runs = _active_paper_runs(launcher)
+    active_runs = _active_paper_runs(launcher, state)
     if len(active_runs) >= 2:
         _render_paper_instance_picker(parent, active_runs, state, launcher)
 

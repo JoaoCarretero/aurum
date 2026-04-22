@@ -371,9 +371,7 @@ def test_fetch_shadow_snapshot_honors_selected_remote_run(monkeypatch):
     monkeypatch.setattr(evv.run_catalog, "get_run_summary", lambda *args, **kwargs: row)
     monkeypatch.setattr(evv, "_get_cockpit_client", lambda: _Client())
 
-    got_run_dir, hb, trades = evv._fetch_shadow_snapshot(
-        state={"selected_shadow_run_id": "remote-shadow"}
-    )
+    got_run_dir, hb, trades = evv._fetch_shadow_snapshot()
 
     assert str(got_run_dir).replace("\\", "/") == "remote:/remote-shadow"
     assert hb["ticks_ok"] == 44
@@ -565,8 +563,13 @@ def test_active_paper_runs_uses_catalog_rows(monkeypatch):
             self.source = "db"
 
     monkeypatch.setattr(
+        evv,
+        "_load_cockpit_runs_cached",
+        lambda **kw: [],
+    )
+    monkeypatch.setattr(
         evv.run_catalog,
-        "list_runs_catalog",
+        "collect_db_runs",
         lambda **kw: [_Row("paper_live", "running"), _Row("paper_old", "stopped")],
     )
 
@@ -594,8 +597,13 @@ def test_active_shadow_runs_uses_catalog_rows(monkeypatch):
             self.source = "db"
 
     monkeypatch.setattr(
+        evv,
+        "_load_cockpit_runs_cached",
+        lambda **kw: [],
+    )
+    monkeypatch.setattr(
         evv.run_catalog,
-        "list_runs_catalog",
+        "collect_db_runs",
         lambda **kw: [_Row("shadow_live", "running"), _Row("shadow_old", "stopped")],
     )
 
@@ -612,7 +620,7 @@ def test_fetch_shadow_run_id_honors_selected_shadow_instance(monkeypatch):
     monkeypatch.setattr(
         evv,
         "_active_shadow_runs",
-        lambda: [
+        lambda **kw: [
             {"run_id": "shadow_a", "status": "running"},
             {"run_id": "shadow_b", "status": "running"},
         ],
@@ -627,7 +635,7 @@ def test_fetch_paper_run_id_honors_selected_paper_instance(monkeypatch):
     monkeypatch.setattr(
         evv,
         "_active_paper_runs",
-        lambda launcher: [
+        lambda launcher, state=None: [
             {"run_id": "paper_a", "status": "running"},
             {"run_id": "paper_b", "status": "running"},
         ],
