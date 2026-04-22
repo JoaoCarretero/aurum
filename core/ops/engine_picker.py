@@ -593,7 +593,7 @@ def render(
 
         row = tk.Frame(track_list, bg=PANEL,
                        highlightbackground=PANEL, highlightthickness=1)
-        row.pack(fill="x", padx=4, pady=2)
+        row.pack(fill="x", padx=4, pady=1)
 
         rail = tk.Frame(row, bg=PANEL, width=3)
         rail.pack(side="left", fill="y")
@@ -607,7 +607,7 @@ def render(
         num.pack(side="left", padx=(0, 4))
 
         main = tk.Frame(row, bg=PANEL)
-        main.pack(side="left", fill="x", expand=True, pady=4)
+        main.pack(side="left", fill="x", expand=True, pady=2)
         lbl = tk.Label(main, text=t.name, font=(FONT, 9, "bold"),
                        fg=WHITE, bg=PANEL, anchor="w")
         lbl.pack(fill="x")

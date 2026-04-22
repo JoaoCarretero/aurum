@@ -15,9 +15,20 @@ from core.ui.ui_palette import (
     AMBER, AMBER_D,
     BG, BG3,
     DIM, FONT,
-    RED, TILE_RESEARCH,
+    GREEN, RED, TILE_RESEARCH,
 )
 from launcher_support.briefings import BRIEFINGS
+
+
+# Stage buckets for the BACKTEST status filter.
+# EDGE     → engines com edge validado (OOS Sharpe positivo confirmado)
+# TESTING  → em validação/calibração (research + bootstrap_staging)
+# ARCHIVED → falhas OOS ou bug-suspect (experimental + quarantined)
+_STATUS_BUCKETS: dict[str, frozenset[str]] = {
+    "EDGE":     frozenset({"validated"}),
+    "TESTING":  frozenset({"research", "bootstrap_staging"}),
+    "ARCHIVED": frozenset({"experimental", "quarantined"}),
+}
 
 
 def render(app, filter_group: str | None = None):
@@ -93,6 +104,38 @@ def render(app, filter_group: str | None = None):
                    lambda _e, _b=b, _h=hue: _b.configure(bg=_h, fg="#000000"))
             b.bind("<Leave>",
                    lambda _e, _b=b, _h=hue: _b.configure(bg=BG3, fg=_h))
+
+    # Status filter — só pra view BACKTEST. Triagem por stage do engine.
+    status_filter = None
+    if filter_group == "BACKTEST":
+        status_filter = getattr(app, "_strategies_status_filter", None)
+        # Separador visual discreto entre o rail/título e as pills de status
+        tk.Frame(strip, bg=BG3, width=1, height=16).pack(
+            side="left", padx=(4, 8))
+        status_pills = [
+            ("ALL",      None,        DIM),
+            ("EDGE",     "EDGE",      GREEN),
+            ("TESTING",  "TESTING",   AMBER),
+            ("ARCHIVED", "ARCHIVED",  RED),
+        ]
+        for pill_label, pill_val, pill_hue in status_pills:
+            active = pill_val == status_filter
+            fg = "#000000" if active else pill_hue
+            bg = pill_hue if active else BG3
+            b = tk.Label(strip, text=f" {pill_label} ",
+                         font=(FONT, 7, "bold"),
+                         fg=fg, bg=bg, padx=8, pady=3,
+                         cursor="hand2")
+            b.pack(side="left", padx=(0, 3))
+            if not active:
+                def _apply(_e=None, _v=pill_val):
+                    app._strategies_status_filter = _v
+                    app._strategies(filter_group="BACKTEST")
+                b.bind("<Button-1>", _apply)
+                b.bind("<Enter>",
+                       lambda _e, _b=b, _h=pill_hue: _b.configure(bg=_h, fg="#000000"))
+                b.bind("<Leave>",
+                       lambda _e, _b=b, _h=pill_hue: _b.configure(bg=BG3, fg=_h))
 
     # Right-side counts pill (populated after tracks load)
     counts_lbl = tk.Label(strip, text="", font=(FONT, 7, "bold"),
@@ -205,9 +248,21 @@ def render(app, filter_group: str | None = None):
         # "BACKTEST" and "TOOLS".
         tracks = [t for t in tracks if t.group == filter_group]
 
+    # Status filter — aplicado só pra BACKTEST (consulta o stage do registry
+    # via EngineTrack.stage populado por build_tracks_from_registry).
+    total_before_status = len(tracks)
+    if filter_group == "BACKTEST" and status_filter is not None:
+        bucket = _STATUS_BUCKETS.get(status_filter, frozenset())
+        tracks = [t for t in tracks if str(t.stage or "").lower() in bucket]
+
     # Counts pill — only RUNNING is meaningful, rest is noise
     running_n = sum(1 for t in tracks if t.status == "running")
-    counts_txt = f"{len(tracks)} ENGINES" + (f"  ·  {running_n} RUNNING" if running_n else "")
+    if filter_group == "BACKTEST" and status_filter is not None:
+        counts_txt = f"{len(tracks)}/{total_before_status} {status_filter}"
+    else:
+        counts_txt = f"{len(tracks)} ENGINES"
+    if running_n:
+        counts_txt += f"  ·  {running_n} RUNNING"
     try:
         app._strategies_counts_lbl.configure(text=counts_txt, fg=AMBER_D)
     except Exception:
