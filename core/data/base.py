@@ -9,6 +9,12 @@ from core import cache as _cache
 log = logging.getLogger("CITADEL")
 _vl = logging.getLogger("CITADEL.val")
 
+# Shared Session — keep-alive across the 1..N /klines page requests that
+# a single fetch() call issues, and across the fetch_all() loop that
+# engines run per scan. urllib3 pools are thread-safe for GET, which is
+# what fetch_all uses via its worker pool.
+_SESSION = requests.Session()
+
 
 def _cache_max_age_seconds(interval: str) -> float | None:
     minutes = _TF_MINUTES.get(str(interval))
@@ -47,7 +53,7 @@ def fetch(symbol: str, interval: str | None = None,
         if end_time:
             params["endTime"] = end_time
         try:
-            r = requests.get(url, params=params, timeout=20)
+            r = _SESSION.get(url, params=params, timeout=20)
             if r.status_code == 429:
                 _429_count += 1
                 if _429_count > 5:
