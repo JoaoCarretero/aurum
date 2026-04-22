@@ -636,6 +636,11 @@ def render(
         "cfg_basket":   "",
         "cfg_leverage": "",
         "cfg_plots":    "s",
+        # Run override — dict from data/aurum.db.runs row, set when user
+        # clicks a row in the LAST RUNS overview. Replaces t.sharpe etc.
+        # in the KPI tape so the user sees per-run metrics. Cleared on
+        # selection change (_sel) and on chip change back to OVERVIEW.
+        "run_override": None,
     }
     group_indices = {
         group: next((i for i, t in enumerate(tracks) if t.group == group), None)
@@ -760,20 +765,25 @@ def render(
     # KPIs move OUT of OVER into the tape so they're visible in every chip.
     # This matches the "laboratory" brief: the numbers are the lab's readout,
     # not a detail you only see when on the OVERVIEW screen.
-    _last_paint = {"sel": -1, "chip": None, "running": None}
+    _last_paint = {"sel": -1, "chip": None, "running": None, "override": None}
 
     def _paint_detail():
         # Short-circuit: nothing the paint depends on actually changed.
         # Repeated clicks on the same row + same chip used to rebuild 60+
         # widgets for nothing, which felt like a click freeze when the user
-        # clicked twice in a row.
+        # clicked twice in a row. run_override is part of the key so
+        # clicking a LAST RUNS row triggers a repaint of the KPI tape.
         running = _is_track_running(tracks[state["sel"]]) if tracks else False
-        key = (state["sel"], state["chip"], running)
+        ro = state.get("run_override") or {}
+        override_rid = ro.get("run_id") if ro else None
+        key = (state["sel"], state["chip"], running, override_rid)
         if (_last_paint["sel"] == key[0]
                 and _last_paint["chip"] == key[1]
-                and _last_paint["running"] == key[2]):
+                and _last_paint["running"] == key[2]
+                and _last_paint.get("override") == key[3]):
             return
-        _last_paint["sel"], _last_paint["chip"], _last_paint["running"] = key
+        (_last_paint["sel"], _last_paint["chip"],
+         _last_paint["running"], _last_paint["override"]) = key
 
         for w in right.winfo_children():
             try: w.destroy()
@@ -827,19 +837,37 @@ def render(
             fill="x", padx=PAD_X, pady=(8, 0))
 
         # ── 2. KPI TAPE — two groups: PERFORMANCE | TRACK RECORD ──
+        # When the user clicks a LAST RUN row, state["run_override"] holds
+        # that run's metrics; display those instead of the hydrated latest
+        # so the tape reflects the clicked history item.
         bc = brief.get("best_config") or {}
         aud = _compact_audit(bc.get("Audit") or bc.get("Status"))
-        roi = _pull_roi(bc) or ""
+        ro = state.get("run_override") or {}
+        _sh = ro.get("sharpe") if ro.get("sharpe") is not None else t.sharpe
+        _so = ro.get("sortino") if ro.get("sortino") is not None else t.sortino
+        _dd_raw = ro.get("max_dd")
+        _mdd = (_dd_raw / 100.0) if isinstance(_dd_raw, (int, float)) else t.max_dd
+        _wr_raw = ro.get("win_rate")
+        _wr = (_wr_raw / 100.0) if isinstance(_wr_raw, (int, float)) else t.win_rate
+        _trds_override = ro.get("n_trades")
+        _roi_override = ro.get("roi")
+        if isinstance(_roi_override, (int, float)):
+            roi = f"{_roi_override:+.1f}%"
+        else:
+            roi = _pull_roi(bc) or ""
         perf_cells = [
-            ("SHRP", f"{t.sharpe:.2f}" if t.sharpe is not None else "--",
-             GREEN if (t.sharpe or 0) >= 1.0 else (AMBER if (t.sharpe or 0) > 0 else WHITE)),
-            ("SORT", f"{t.sortino:.2f}" if t.sortino is not None else "--", WHITE),
-            ("MDD",  f"{t.max_dd:.1%}" if t.max_dd is not None else "--",
-             GREEN if (t.max_dd or 1) < 0.10 else (AMBER if (t.max_dd or 1) < 0.20 else RED)),
-            ("WR",   f"{t.win_rate:.0%}" if t.win_rate is not None else "--", WHITE),
+            ("SHRP", f"{_sh:.2f}" if _sh is not None else "--",
+             GREEN if (_sh or 0) >= 1.0 else (AMBER if (_sh or 0) > 0 else WHITE)),
+            ("SORT", f"{_so:.2f}" if _so is not None else "--", WHITE),
+            ("MDD",  f"{_mdd:.1%}" if _mdd is not None else "--",
+             GREEN if (_mdd or 1) < 0.10 else (AMBER if (_mdd or 1) < 0.20 else RED)),
+            ("WR",   f"{_wr:.0%}" if _wr is not None else "--", WHITE),
         ]
+        trds_txt = (str(int(_trds_override))
+                    if isinstance(_trds_override, (int, float))
+                    else (_pull_trade_count(bc) or "--"))
         track_cells = [
-            ("TRDS", _pull_trade_count(bc) or "--", DIM2),
+            ("TRDS", trds_txt, DIM2),
             ("ROI",  roi or "--",
              GREEN if roi.startswith("+") else (RED if roi.startswith("-") else DIM2)),
             ("MC+",  _pull_mc(bc) or "--", DIM2),
@@ -892,24 +920,28 @@ def render(
 
         def _mk_chip(label, key):
             active = state["chip"] == key
-            fg_c = BG if active else WHITE
+            # Chips mais prominentes: inativa tem borda amber (sinaliza
+            # interacao), ativa tem fill amber solido. Font bumped 8→9
+            # e padding 3→5 pra hit target maior.
+            fg_c = BG if active else AMBER
             bg_c = AMBER if active else BG2
-            hov = AMBER_H if active else BORDER_H
+            border_c = AMBER if active else AMBER_H
+            hov = AMBER_H if active else BG3
             b = tk.Label(chip_bar, text=f" {label} ",
-                         font=(FONT, 8, "bold"),
-                         fg=fg_c, bg=bg_c, padx=8, pady=3,
-                         highlightbackground=(AMBER if active else BORDER),
+                         font=(FONT, 9, "bold"),
+                         fg=fg_c, bg=bg_c, padx=10, pady=5,
+                         highlightbackground=border_c,
                          highlightthickness=1,
                          cursor="hand2")
-            b.pack(side="left", padx=(0, 2))
+            b.pack(side="left", padx=(0, 3))
 
             def _click(_e=None, _k=key):
                 state["chip"] = _k
                 _paint_detail()
             b.bind("<Button-1>", _click)
             if not active:
-                b.bind("<Enter>", lambda _e: b.config(bg=hov))
-                b.bind("<Leave>", lambda _e: b.config(bg=bg_c))
+                b.bind("<Enter>", lambda _e: b.config(bg=hov, fg=BG))
+                b.bind("<Leave>", lambda _e: b.config(bg=bg_c, fg=AMBER))
             return b
 
         if mode == "live":
@@ -920,10 +952,12 @@ def render(
                 ("OVER",      "OVERVIEW"),
             ]
         else:
+            # LAB (CONFIG) merged into RUN — editable params now live
+            # inline above the run buttons, so the old CONFIG chip would
+            # just duplicate the controls.
             _chips = [
                 ("OVER",  "OVERVIEW"),
                 ("BRIEF", "BRIEF"),
-                ("LAB",   "CONFIG"),
                 ("CODE",  "CODE"),
                 ("RUN",   "RUN"),
             ]
@@ -1036,110 +1070,129 @@ def render(
             return
 
     def _paint_overview(host, t: EngineTrack):
-        """LAST RUNS — cyberpunk clickable history from data/aurum.db.
+        """LAST RUNS — compact clickable history from data/aurum.db.
 
-        Substitui o antigo briefing (movido pro chip BRIEF). Cada row
-        mostra timestamp, Sharpe, ROI, trades e verdict; click abre o
-        JSON artifact no app padrao do sistema.
+        Single-row layout, institutional palette (amber/green/red/dim2).
+        Each row: timestamp, TF+period, sharpe, ROI, trades. Click a row
+        to populate the KPI tape above with that run's metrics (stored
+        in state['run_override']) and open the JSON artifact.
         """
         sbody = _scrollable(host)
-
-        hdr = tk.Frame(sbody, bg=PANEL)
-        hdr.pack(fill="x", pady=(0, 4))
-        tk.Label(hdr, text="▓▓ LAST RUNS ▓▓", font=(FONT, 8, "bold"),
-                 fg=CYAN, bg=PANEL, anchor="w").pack(side="left")
-        tk.Label(hdr, text=f"engine: {t.name}", font=(FONT, 7),
-                 fg=DIM, bg=PANEL, anchor="e").pack(side="right")
-        tk.Frame(sbody, bg=CYAN, height=1).pack(fill="x", pady=(0, 8))
-
-        runs = _query_last_runs(t.slug, limit=8)
+        runs = _query_last_runs(t.slug, limit=10)
         if not runs:
             tk.Label(sbody, text="  ▸ no runs indexed yet — run this engine to populate history",
-                     font=(FONT, 8), fg=DIM2, bg=PANEL, anchor="w",
+                     font=(FONT, 8, "italic"), fg=DIM2, bg=PANEL, anchor="w",
                      wraplength=560, justify="left"
-                     ).pack(fill="x", pady=(12, 6))
+                     ).pack(fill="x", pady=(6, 6))
             return
 
-        def _color_for(metric: str, val: Optional[float]) -> str:
-            if val is None:
+        # Column header — subtle
+        hdr = tk.Frame(sbody, bg=PANEL)
+        hdr.pack(fill="x", pady=(0, 2))
+        for txt, w_, anc in (("WHEN", 17, "w"), ("TF·DAYS", 12, "w"),
+                             ("SHRP", 8, "e"), ("ROI", 8, "e"),
+                             ("TRDS", 6, "e"), ("VER", 6, "e")):
+            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"),
+                     fg=DIM, bg=PANEL, width=w_, anchor=anc
+                     ).pack(side="left", padx=(4, 0))
+        tk.Frame(sbody, bg=BORDER, height=1).pack(fill="x")
+
+        def _sharpe_color(v):
+            if v is None:
                 return DIM
             try:
-                v = float(val)
+                f = float(v)
             except (TypeError, ValueError):
                 return DIM
-            if metric == "sharpe":
-                if v >= 1.5:
-                    return GREEN
-                if v >= 0.5:
-                    return AMBER
-                return RED
-            if metric == "roi":
-                return GREEN if v > 0 else RED
-            return WHITE
+            if f >= 1.5: return GREEN
+            if f >= 0.5: return AMBER
+            return RED
+
+        def _roi_color(v):
+            if v is None:
+                return DIM
+            try:
+                return GREEN if float(v) > 0 else RED
+            except (TypeError, ValueError):
+                return DIM
+
+        active_rid = (state.get("run_override") or {}).get("run_id")
 
         for run in runs:
-            card = tk.Frame(sbody, bg=BG2,
-                            highlightbackground=CYAN,
-                            highlightthickness=1,
-                            cursor="hand2")
-            card.pack(fill="x", pady=2)
-
-            # Top strip: timestamp + run_id (monospace) + chevrons
-            top = tk.Frame(card, bg=BG2)
-            top.pack(fill="x", padx=8, pady=(5, 2))
-            ts_raw = str(run.get("timestamp") or "")[:19].replace("T", " ")
-            tk.Label(top, text=ts_raw or "—", font=(FONT, 8, "bold"),
-                     fg=CYAN, bg=BG2, anchor="w").pack(side="left")
-            tk.Label(top, text=" ◢◢◢", font=(FONT, 7, "bold"),
-                     fg=AMBER, bg=BG2).pack(side="right")
             rid = str(run.get("run_id") or "")
-            if rid:
-                tk.Label(top, text=f"  {rid[-19:]}", font=(FONT, 7),
-                         fg=DIM, bg=BG2, anchor="w").pack(side="left")
-
-            # Metrics row
-            met = tk.Frame(card, bg=BG2)
-            met.pack(fill="x", padx=8, pady=(0, 6))
-
-            def _cell(parent, label, val_txt, val_color):
-                c = tk.Frame(parent, bg=BG2)
-                c.pack(side="left", padx=(0, 14))
-                tk.Label(c, text=label, font=(FONT, 6, "bold"),
-                         fg=DIM, bg=BG2, anchor="w").pack(anchor="w")
-                tk.Label(c, text=val_txt, font=(FONT, 9, "bold"),
-                         fg=val_color, bg=BG2, anchor="w").pack(anchor="w")
-
+            ts = str(run.get("timestamp") or "")[:16].replace("T", " ")
+            tf = str(run.get("interval") or "-").lower()
+            sd = run.get("scan_days")
+            sd_txt = f"{int(sd)}d" if isinstance(sd, (int, float)) else "-"
+            tf_days = f"{tf}·{sd_txt}"
             sh = run.get("sharpe")
             roi = run.get("roi")
             nt = run.get("n_trades")
-            tf = run.get("interval") or "—"
-            sh_txt = f"{sh:+.2f}" if isinstance(sh, (int, float)) else "—"
-            roi_txt = f"{roi:+.1f}%" if isinstance(roi, (int, float)) else "—"
-            nt_txt = str(int(nt)) if isinstance(nt, (int, float)) else "—"
+            ver = str(run.get("veredito") or "").strip().upper()
 
-            _cell(met, "SHARPE", sh_txt, _color_for("sharpe", sh))
-            _cell(met, "ROI", roi_txt, _color_for("roi", roi))
-            _cell(met, "TRADES", nt_txt, WHITE)
-            _cell(met, "TF", str(tf).upper(), AMBER)
+            sh_txt = f"{sh:+.2f}" if isinstance(sh, (int, float)) else "--"
+            roi_txt = f"{roi:+.1f}%" if isinstance(roi, (int, float)) else "--"
+            nt_txt = str(int(nt)) if isinstance(nt, (int, float)) else "--"
+            ver_txt = ("✓" if "PASS" in ver or ver == "OK"
+                       else "⚠" if "WARN" in ver
+                       else "✗" if "FAIL" in ver
+                       else "·")
+            ver_col = (GREEN if ver_txt == "✓"
+                       else AMBER if ver_txt == "⚠"
+                       else RED if ver_txt == "✗"
+                       else DIM)
 
-            ver = str(run.get("veredito") or "").strip()
-            if ver:
-                tk.Label(met, text=f"  ⟨ {ver.upper()} ⟩",
-                         font=(FONT, 7, "bold"),
-                         fg=CYAN, bg=BG2).pack(side="right")
+            is_active = rid == active_rid
+            row_bg = BG2 if is_active else PANEL
+            row = tk.Frame(sbody, bg=row_bg, cursor="hand2")
+            row.pack(fill="x", pady=0)
+
+            # Left accent rail — amber when active, invisible when not
+            rail_col = AMBER if is_active else PANEL
+            tk.Frame(row, bg=rail_col, width=2).pack(side="left", fill="y")
+
+            # Cells — same widths as header for visual alignment
+            def _c(parent, text, col, w, anchor="w"):
+                tk.Label(parent, text=text, font=(FONT, 8, "bold" if is_active else "normal"),
+                         fg=col, bg=row_bg, width=w, anchor=anchor
+                         ).pack(side="left", padx=(4, 0))
+
+            _c(row, ts or "-", AMBER if is_active else WHITE, 17, "w")
+            _c(row, tf_days, DIM2 if not is_active else AMBER_H, 12, "w")
+            _c(row, sh_txt, _sharpe_color(sh), 8, "e")
+            _c(row, roi_txt, _roi_color(roi), 8, "e")
+            _c(row, nt_txt, WHITE if is_active else DIM2, 6, "e")
+            _c(row, ver_txt, ver_col, 6, "e")
 
             json_path = run.get("json_path")
-            def _click(_e=None, _p=json_path):
+            def _click(_e=None, _r=run, _p=json_path):
+                state["run_override"] = dict(_r)
+                _paint_detail()
                 _open_run_artifact(_p)
-            for w in (card, top, met):
-                w.bind("<Button-1>", _click)
-            # Hover accent
-            def _enter(_e=None, _c=card):
-                _c.configure(highlightbackground=AMBER, bg=BG3)
-            def _leave(_e=None, _c=card):
-                _c.configure(highlightbackground=CYAN, bg=BG2)
-            card.bind("<Enter>", _enter)
-            card.bind("<Leave>", _leave)
+            def _enter(_e=None, _r=row):
+                if _r.winfo_exists():
+                    _r.configure(bg=BG3)
+                    for child in _r.winfo_children():
+                        try: child.configure(bg=BG3)
+                        except Exception: pass
+            def _leave(_e=None, _r=row, _bg=row_bg):
+                if _r.winfo_exists():
+                    _r.configure(bg=_bg)
+                    for child in _r.winfo_children():
+                        try: child.configure(bg=_bg)
+                        except Exception: pass
+            row.bind("<Button-1>", _click)
+            row.bind("<Enter>", _enter)
+            row.bind("<Leave>", _leave)
+            for child in row.winfo_children():
+                child.bind("<Button-1>", _click)
+                child.bind("<Enter>", _enter)
+                child.bind("<Leave>", _leave)
+
+        # Hint footer
+        tk.Label(sbody, text="  ▸ click a row to overlay its metrics above",
+                 font=(FONT, 7, "italic"), fg=DIM2, bg=PANEL, anchor="w"
+                 ).pack(fill="x", pady=(8, 2))
 
     def _paint_brief(host, t: EngineTrack):
         """Research brief — institutional layout (moved from OVERVIEW).
@@ -1586,35 +1639,63 @@ def render(
                          padx=4, pady=2).pack(side="left")
 
     def _paint_run(host, t: EngineTrack):
-        # Current cfg summary (reads state populated by CONFIG chip)
-        def _lookup(opts, val, default="—"):
-            for text_, v in opts:
-                if v == val: return text_
-            return default
+        # Inline editable params (merged from old LAB chip). Row of pill
+        # groups — clicking a pill flips state[cfg_*] then re-colors the
+        # row without re-rendering the whole RUN view.
+        params = tk.Frame(host, bg=PANEL)
+        params.pack(fill="x", pady=(0, 6))
 
-        per_lbl = _lookup(PERIOD_OPTS,   state["cfg_period"],   "90D")
-        bsk_lbl = _lookup(BASKET_OPTS,   state["cfg_basket"],   "DEFAULT")
-        lev_lbl = _lookup(LEVERAGE_OPTS, state["cfg_leverage"], "1x")
-        plt_lbl = "ON" if state["cfg_plots"] == "s" else "OFF"
+        def _pill_group(parent, label, opts, state_key, width_label=8):
+            row = tk.Frame(parent, bg=PANEL)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=label, font=(FONT, 7, "bold"),
+                     fg=DIM, bg=PANEL, width=width_label, anchor="w"
+                     ).pack(side="left")
+            btns: list = []
+            for text_, val in opts:
+                active = state[state_key] == val
+                b = tk.Label(row, text=f" {text_} ",
+                             font=(FONT, 7, "bold"),
+                             fg=BG if active else WHITE,
+                             bg=AMBER if active else BG3,
+                             padx=5, pady=2, cursor="hand2")
+                b.pack(side="left", padx=1)
+                btns.append((b, val))
 
-        tk.Label(host,
-                 text="  Dispara engine com a config atual (edite em CONFIG).",
-                 font=(FONT, 8), fg=DIM2, bg=PANEL,
-                 anchor="w").pack(fill="x", pady=(0, 6))
+                def _click(_e=None, _v=val, _btns=btns, _k=state_key):
+                    state[_k] = _v
+                    for _b, _bv in _btns:
+                        on = _bv == _v
+                        _b.config(fg=BG if on else WHITE,
+                                  bg=AMBER if on else BG3)
+                b.bind("<Button-1>", _click)
 
-        # Config summary chips
-        sumrow = tk.Frame(host, bg=PANEL)
-        sumrow.pack(fill="x", pady=(0, 6))
-        for lbl, val in (("PERÍODO", per_lbl), ("CESTA", bsk_lbl),
-                         ("LEV", lev_lbl), ("PLOTS", plt_lbl)):
-            cell = tk.Frame(sumrow, bg=BG2,
-                            highlightbackground=BORDER,
-                            highlightthickness=1)
-            cell.pack(side="left", padx=2, pady=1)
-            tk.Label(cell, text=lbl, font=(FONT, 6, "bold"),
-                     fg=DIM, bg=BG2, padx=4).pack(side="left")
-            tk.Label(cell, text=val, font=(FONT, 8, "bold"),
-                     fg=AMBER_H, bg=BG2, padx=4).pack(side="left")
+        _pill_group(params, "PERIOD",  PERIOD_OPTS,   "cfg_period")
+        _pill_group(params, "BASKET",  BASKET_OPTS,   "cfg_basket")
+        _pill_group(params, "LEV",     LEVERAGE_OPTS, "cfg_leverage")
+
+        # Charts toggle inline
+        tog_row = tk.Frame(params, bg=PANEL)
+        tog_row.pack(fill="x", pady=(1, 0))
+        tk.Label(tog_row, text="CHARTS", font=(FONT, 7, "bold"),
+                 fg=DIM, bg=PANEL, width=8, anchor="w").pack(side="left")
+        on = state["cfg_plots"] == "s"
+        plot_btn = tk.Label(tog_row,
+                            text=" ON " if on else " OFF ",
+                            font=(FONT, 7, "bold"),
+                            fg=BG, bg=GREEN if on else BG3,
+                            padx=6, pady=2, cursor="hand2")
+        plot_btn.pack(side="left", padx=1)
+
+        def _toggle_plots(_e=None):
+            state["cfg_plots"] = "n" if state["cfg_plots"] == "s" else "s"
+            _on = state["cfg_plots"] == "s"
+            plot_btn.config(text=" ON " if _on else " OFF ",
+                            fg=BG if _on else DIM,
+                            bg=GREEN if _on else BG3)
+        plot_btn.bind("<Button-1>", _toggle_plots)
+
+        tk.Frame(host, bg=BORDER, height=1).pack(fill="x", pady=(8, 6))
 
         # Button row — layout depends on `mode`
         btns = tk.Frame(host, bg=PANEL)
@@ -1737,6 +1818,7 @@ def render(
         if not row_widgets: return
         state["sel"] = max(0, min(len(row_widgets) - 1, i))
         state["chip"] = "OVERVIEW"  # reset to overview on selection
+        state["run_override"] = None  # drop LAST RUNS overlay on engine switch
         _apply_progress_from_selection()
         _paint_sel()  # cheap: just recolors rows
         if scroll:

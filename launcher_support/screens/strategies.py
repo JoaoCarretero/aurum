@@ -20,15 +20,17 @@ from core.ui.ui_palette import (
 from launcher_support.briefings import BRIEFINGS
 
 
-# Stage buckets for the BACKTEST status filter.
-# EDGE     → engines com edge validado (OOS Sharpe positivo confirmado)
-# TESTING  → em validação/calibração (research + bootstrap_staging)
-# ARCHIVED → falhas OOS ou bug-suspect (experimental + quarantined)
-_STATUS_BUCKETS: dict[str, frozenset[str]] = {
-    "EDGE":     frozenset({"validated"}),
-    "TESTING":  frozenset({"research", "bootstrap_staging"}),
-    "ARCHIVED": frozenset({"experimental", "quarantined"}),
-}
+# Edge-engines explicit list — Sharpe OOS positivo confirmado (CITADEL,
+# JUMP) ou real post-inflation (RENAISSANCE ~2.4) ou multi-strategy
+# orchestrator (MILLENNIUM). Não é derivado de ENGINES[stage] porque só
+# CITADEL tem stage="validated"; os outros 3 estão como "research" /
+# "bootstrap_staging" mas o João trata como edge na lista do BACKTEST.
+_EDGE_SLUGS: frozenset[str] = frozenset({
+    "citadel",
+    "jump",
+    "renaissance",
+    "millennium",
+})
 
 
 def render(app, filter_group: str | None = None):
@@ -248,12 +250,28 @@ def render(app, filter_group: str | None = None):
         # "BACKTEST" and "TOOLS".
         tracks = [t for t in tracks if t.group == filter_group]
 
-    # Status filter — aplicado só pra BACKTEST (consulta o stage do registry
-    # via EngineTrack.stage populado por build_tracks_from_registry).
+    # Status filter — aplicado só pra BACKTEST. Buckets:
+    #   EDGE     → _EDGE_SLUGS (lista explicita; ver comentario no topo)
+    #   ARCHIVED → EXPERIMENTAL_SLUGS (canonical) + quarantined stage
+    #   TESTING  → tudo em BACKTEST que nao cai em EDGE nem ARCHIVED
     total_before_status = len(tracks)
     if filter_group == "BACKTEST" and status_filter is not None:
-        bucket = _STATUS_BUCKETS.get(status_filter, frozenset())
-        tracks = [t for t in tracks if str(t.stage or "").lower() in bucket]
+        from config.engines import EXPERIMENTAL_SLUGS as _ARCHIVED_SLUGS
+
+        def _in_bucket(t) -> bool:
+            slug = t.slug
+            stage = str(getattr(t, "stage", "") or "").lower()
+            archived = slug in _ARCHIVED_SLUGS or stage == "quarantined"
+            edge = slug in _EDGE_SLUGS
+            if status_filter == "EDGE":
+                return edge
+            if status_filter == "ARCHIVED":
+                return archived
+            if status_filter == "TESTING":
+                return not edge and not archived
+            return True
+
+        tracks = [t for t in tracks if _in_bucket(t)]
 
     # Counts pill — only RUNNING is meaningful, rest is noise
     running_n = sum(1 for t in tracks if t.status == "running")
