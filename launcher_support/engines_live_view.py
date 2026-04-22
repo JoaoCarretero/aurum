@@ -2915,8 +2915,9 @@ def _render_engine_instance_picker(
     state: dict,
     launcher,
 ) -> None:
-    """RUNNING NOW strip showing every paper + shadow instance of the
-    currently-selected engine. Click to swap mode + focus the run.
+    """Vertical RUNNING NOW list showing every paper + shadow instance
+    of the currently-selected engine. Compact one-line rows, built to
+    scale to many runs (scroll when needed). Click to swap mode + focus.
     """
     if not active_runs:
         return
@@ -2926,15 +2927,32 @@ def _render_engine_instance_picker(
 
     header = tk.Frame(container, bg=BG)
     header.pack(fill="x")
-    tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
+    tk.Frame(header, bg=AMBER, width=3, height=12).pack(side="left", padx=(0, 5))
     tk.Label(header, text="RUNNING NOW", font=(FONT, 7, "bold"),
              fg=AMBER, bg=BG).pack(side="left")
     tk.Label(header, text=f"  ·  {len(active_runs)}", font=(FONT, 7),
              fg=DIM, bg=BG).pack(side="left")
-    tk.Frame(container, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
+    tk.Frame(container, bg=BORDER, height=1).pack(fill="x", pady=(2, 2))
 
-    row = tk.Frame(container, bg=BG)
-    row.pack(fill="x")
+    # Scrollable body — caps at 6 visible rows (~138 px) before scrolling
+    # so the picker never dominates the detail pane.
+    max_visible_rows = 6
+    row_h_px = 23
+    body_h = min(len(active_runs), max_visible_rows) * row_h_px + 2
+    if len(active_runs) > max_visible_rows:
+        canvas = tk.Canvas(container, bg=BG, highlightthickness=0, height=body_h)
+        vbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BG)
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=vbar.set)
+        canvas.pack(side="left", fill="x", expand=True)
+        vbar.pack(side="right", fill="y")
+        body = inner
+    else:
+        body = tk.Frame(container, bg=BG)
+        body.pack(fill="x")
 
     current_mode = state.get("mode")
     current_paper = state.get("selected_paper_run_id")
@@ -2963,29 +2981,30 @@ def _render_engine_instance_picker(
             and rid == (current_paper if mode == "paper" else current_shadow)
         )
         mode_color = _MODE_COLORS.get(mode, CYAN)
-        tab_bg = BG2 if is_active else BG
-        tab_fg = mode_color if is_active else WHITE
+        row_bg = BG2 if is_active else BG
+        row_fg = mode_color if is_active else WHITE
         border = mode_color if is_active else BORDER
 
-        tab = tk.Frame(
-            row, bg=tab_bg,
+        r_row = tk.Frame(
+            body, bg=row_bg,
             highlightbackground=border, highlightthickness=1,
             cursor="hand2",
         )
-        tab.pack(side="left", padx=(0, 6), pady=(0, 2))
+        r_row.pack(fill="x", padx=0, pady=1)
 
         dot = "●" if is_active else "○"
-        tk.Label(tab, text=dot, fg=GREEN if is_active else DIM,
-                 bg=tab_bg, font=(FONT, 10, "bold")).pack(
-            side="left", padx=(8, 0), pady=6)
-        tk.Label(tab, text=mode.upper(), fg=mode_color, bg=tab_bg,
-                 font=(FONT, 7, "bold")).pack(side="left", padx=(8, 0), pady=6)
-        tk.Label(tab, text=label, fg=tab_fg, bg=tab_bg,
-                 font=(FONT, 9, "bold")).pack(side="left", padx=(6, 0), pady=6)
-        tk.Label(tab, text=f"{ticks} tk", fg=DIM if is_active else DIM2,
-                 bg=tab_bg, font=(FONT, 8)).pack(side="left", padx=(8, 8), pady=6)
+        tk.Label(r_row, text=dot, fg=GREEN if is_active else DIM,
+                 bg=row_bg, font=(FONT, 8, "bold")).pack(
+            side="left", padx=(6, 4), pady=1)
+        tk.Label(r_row, text=f"{mode.upper():<6}", fg=mode_color,
+                 bg=row_bg, font=(FONT, 7, "bold")).pack(
+            side="left", padx=(0, 6), pady=1)
+        tk.Label(r_row, text=label, fg=row_fg, bg=row_bg,
+                 font=(FONT, 8, "bold")).pack(side="left", padx=(0, 6), pady=1)
+        tk.Label(r_row, text=f"{ticks} tk", fg=DIM if is_active else DIM2,
+                 bg=row_bg, font=(FONT, 7)).pack(side="right", padx=(0, 8), pady=1)
 
-        for w in (tab,) + tuple(tab.winfo_children()):
+        for w in (r_row,) + tuple(r_row.winfo_children()):
             w.bind("<Button-1>", _make_click(rid, mode))
 
 
