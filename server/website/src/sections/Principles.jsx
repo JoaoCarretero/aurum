@@ -1,21 +1,19 @@
 import { Reveal } from "../components/Reveal";
 import { PRINCIPLES } from "../lib/data";
+import { useT } from "../lib/i18n";
 
 export function Principles() {
+  const t = useT();
   return (
     <section id="principles" className="section section--principles">
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ VII</span>
+            <span className="section__num">{t("principles.eyebrow")}</span>
             <h2 className="section__title">
-              Seven operating <em>principles.</em>
+              {t("principles.titlePre")} <em>{t("principles.titleEm")}</em>
             </h2>
-            <p className="section__sub">
-              The mandates the code itself is written against. Each is a
-              discriminator — a condition the platform must satisfy before
-              any capital moves.
-            </p>
+            <p className="section__sub">{t("principles.sub")}</p>
           </div>
         </Reveal>
 

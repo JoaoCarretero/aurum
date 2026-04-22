@@ -2,11 +2,13 @@ import { Reveal } from "../components/Reveal";
 import { Metric } from "../components/Metric";
 import { EquityCurve } from "../components/charts/EquityCurve";
 import { ENGINES, curve } from "../lib/data";
+import { useT } from "../lib/i18n";
 
 const EQUITY_CITADEL = curve(1, 120, 0.0055, 0.014);
 const EQUITY_JUMP = curve(7, 120, 0.0038, 0.009);
 
 export function Performance() {
+  const t = useT();
   const citadel = ENGINES.find((e) => e.name === "CITADEL");
   const jump = ENGINES.find((e) => e.name === "JUMP");
   const renaissance = ENGINES.find((e) => e.name === "RENAISSANCE");
@@ -16,16 +18,11 @@ export function Performance() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ IV</span>
+            <span className="section__num">{t("performance.eyebrow")}</span>
             <h2 className="section__title">
-              Performance, <em>out-of-sample.</em>
+              {t("performance.titlePre")} <em>{t("performance.titleEm")}</em>
             </h2>
-            <p className="section__sub">
-              All figures below are walk-forward tests on windows
-              <em> before</em> any calibration occurred. Reported alongside
-              in-sample claims where relevant. Numbers degrade the honest
-              way.
-            </p>
+            <p className="section__sub">{t("performance.sub")}</p>
           </div>
         </Reveal>
 
@@ -124,9 +121,9 @@ export function Performance() {
         <Reveal delay={0.2}>
           <div className="perf-table">
             <div className="perf-table__head">
-              <h4>Cross-engine OOS summary</h4>
+              <h4>{t("performance.table.heading")}</h4>
               <span className="perf-table__stamp">
-                Window: 2022-01-01 → 2023-01-01 (360d BEAR)
+                {t("performance.table.stamp")}
               </span>
             </div>
             <table>
@@ -167,11 +164,7 @@ export function Performance() {
                 ))}
               </tbody>
             </table>
-            <p className="perf-table__foot">
-              All metrics net of slippage, spread, commission and funding.
-              Position sizing under Kelly × convex × drawdown-scale × Ω-risk
-              with aggregate notional cap at the portfolio level.
-            </p>
+            <p className="perf-table__foot">{t("performance.table.foot")}</p>
           </div>
         </Reveal>
       </div>

@@ -1,4 +1,5 @@
 import { Reveal } from "../components/Reveal";
+import { useT } from "../lib/i18n";
 
 const SIGNAL_CODE = `# engines/citadel.py  —  decision node
 def decide_direction(bar, htf, regime, vol_regime):
@@ -33,20 +34,17 @@ size = (
 return min(size, aggregate_cap_remaining())`;
 
 export function CodeShowcase() {
+  const t = useT();
   return (
     <section id="code" className="section section--code">
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ V</span>
+            <span className="section__num">{t("code.eyebrow")}</span>
             <h2 className="section__title">
-              Readable alchemy — <em>one function, one job.</em>
+              {t("code.titlePre")} <em>{t("code.titleEm")}</em>
             </h2>
-            <p className="section__sub">
-              The platform is written to be audited line-by-line. Signal,
-              risk, and sizing each live in a single pure function. No hidden
-              state, no global side-effects, no ternary magic.
-            </p>
+            <p className="section__sub">{t("code.sub")}</p>
           </div>
         </Reveal>
 

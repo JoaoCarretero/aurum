@@ -57,6 +57,88 @@ export const translations = {
     "pillars.survived.body":
       "Five of nine engines passed honest out-of-sample in the 2022 bear and 2024–25 cycles. DSR-adjusted. Four were archived. We report what we couldn't break.",
 
+    // Section heads — Thesis
+    "thesis.eyebrow": "§ I",
+    "thesis.titlePre": "Information,",
+    "thesis.titleEm": "not matter.",
+    "thesis.ledePrimary":
+      "The market encodes information — price and volume as a spiral, signal mixed with noise. Most participants are being read. AURUM runs its own laser. The task is discrimination, not prediction; process, not outcome.",
+    "thesis.ledeSecondary":
+      "The platform is engineered around a single inversion: we build the reader before we build the strategy. Data validation, regime detection, and kill-switch logic predate any engine in the system. Every Sharpe number reported passes a Deflated Sharpe Ratio haircut for trial multiplicity before it reaches a committee slide.",
+
+    // Section heads — Methodology
+    "methodology.eyebrow": "§ III",
+    "methodology.titlePre": "The anti-overfit",
+    "methodology.titleEm": "protocol.",
+    "methodology.sub":
+      "Five gates every sweep must pass before a Sharpe number is reported. No exceptions. Archival is the default outcome, not the failure.",
+    "methodology.graveyard.title": "The graveyard is",
+    "methodology.graveyard.titleEm": "methodology.",
+    "methodology.graveyard.body":
+      "engines developed, tested out-of-sample, and archived. Discipline requires killing. The engines that remain survive because the ones that failed were not kept.",
+
+    // Section heads — Performance
+    "performance.eyebrow": "§ IV",
+    "performance.titlePre": "Performance,",
+    "performance.titleEm": "out-of-sample.",
+    "performance.sub":
+      "All figures below are walk-forward tests on windows before any calibration occurred. Reported alongside in-sample claims where relevant. Numbers degrade the honest way.",
+    "performance.table.heading": "Cross-engine OOS summary",
+    "performance.table.stamp": "Window: 2022-01-01 → 2023-01-01 (360d BEAR)",
+    "performance.table.foot":
+      "All metrics net of slippage, spread, commission and funding. Position sizing under Kelly × convex × drawdown-scale × Ω-risk with aggregate notional cap at the portfolio level.",
+
+    // Section heads — CodeShowcase
+    "code.eyebrow": "§ V",
+    "code.titlePre": "Readable alchemy —",
+    "code.titleEm": "one function, one job.",
+    "code.sub":
+      "The platform is written to be audited line-by-line. Signal, risk, and sizing each live in a single pure function. No hidden state, no global side-effects, no ternary magic.",
+
+    // Section heads — Technology
+    "technology.eyebrow": "§ VI",
+    "technology.titlePre": "Nine engines. One",
+    "technology.titleEm": "orchestrator.",
+    "technology.sub":
+      "Each engine carries an institutional inspiration, a single mechanism, and its own out-of-sample verdict. MILLENNIUM allocates capital across the survivors under correlation and drawdown constraints.",
+    "technology.pipeline.title": "Signal pipeline",
+    "technology.pipeline.body":
+      "Deterministic, observable at every step, replayable from disk.",
+
+    // Section heads — Principles
+    "principles.eyebrow": "§ VII",
+    "principles.titlePre": "Seven operating",
+    "principles.titleEm": "principles.",
+    "principles.sub":
+      "The mandates the code itself is written against. Each is a discriminator — a condition the platform must satisfy before any capital moves.",
+
+    // Section heads — Research
+    "research.eyebrow": "§ VIII",
+    "research.titlePre": "Research",
+    "research.titleEm": "notes.",
+    "research.sub":
+      "Selected internal research published to prospective partners. The full archive — engine postmortems, audit logs, methodology revisions — is available under NDA.",
+    "research.requestFull": "Request full note →",
+
+    // Section heads — Contact
+    "contact.eyebrow": "§ IX",
+    "contact.titlePre": "Invitation only. Limited",
+    "contact.titleEm": "capacity.",
+    "contact.sub":
+      "AURUM allocates under a strategy-capacity constraint, not a demand constraint. Reach out for research access or to discuss allocation under NDA.",
+    "contact.form.nameLabel": "Name",
+    "contact.form.emailLabel": "Email",
+    "contact.form.orgLabel": "Organisation",
+    "contact.form.noteLabel": "Context",
+    "contact.form.namePh": "Jane Investor",
+    "contact.form.emailPh": "jane@family-office.com",
+    "contact.form.orgPh": "Optional",
+    "contact.form.notePh":
+      "What would you like to discuss — research notes, allocation timeline, technical diligence?",
+    "contact.form.send": "Send request",
+    "contact.form.sent": "Opened your mail client",
+    "contact.form.or": "Or write directly to",
+
     // Login
     "login.title": "Members access",
     "login.subtitle": "Restricted terminal. Live signals, in-house research, reports.",
@@ -142,6 +224,88 @@ export const translations = {
     "pillars.survived.title": "Sobreviveu",
     "pillars.survived.body":
       "Cinco de nove engines passaram OOS honesto no bear de 2022 e nos ciclos 2024–25. Com haircut DSR. Quatro foram arquivadas. A gente reporta o que não conseguiu quebrar.",
+
+    // Section heads — Thesis
+    "thesis.eyebrow": "§ I",
+    "thesis.titlePre": "Informação,",
+    "thesis.titleEm": "não matéria.",
+    "thesis.ledePrimary":
+      "O mercado codifica informação — preço e volume em espiral, sinal misturado com ruído. A maioria dos participantes está sendo lida. AURUM tem seu próprio laser. A tarefa é discriminar, não prever; processo, não resultado.",
+    "thesis.ledeSecondary":
+      "A plataforma é desenhada em torno de uma inversão: construímos o leitor antes de construir a estratégia. Validação de dados, detecção de regime e lógica de kill-switch precedem qualquer engine no sistema. Todo Sharpe reportado passa por haircut DSR por multiplicidade de testes antes de virar slide de comitê.",
+
+    // Section heads — Methodology
+    "methodology.eyebrow": "§ III",
+    "methodology.titlePre": "O protocolo",
+    "methodology.titleEm": "anti-overfit.",
+    "methodology.sub":
+      "Cinco portões que todo sweep precisa atravessar antes de reportar um Sharpe. Sem exceção. Arquivamento é o resultado padrão, não o fracasso.",
+    "methodology.graveyard.title": "O cemitério é",
+    "methodology.graveyard.titleEm": "metodologia.",
+    "methodology.graveyard.body":
+      "engines desenvolvidas, testadas fora da amostra e arquivadas. Disciplina exige matar. As engines que restam sobrevivem porque as que falharam não foram mantidas.",
+
+    // Section heads — Performance
+    "performance.eyebrow": "§ IV",
+    "performance.titlePre": "Performance,",
+    "performance.titleEm": "out-of-sample.",
+    "performance.sub":
+      "Todas as métricas abaixo são walk-forward em janelas anteriores a qualquer calibração. Reportadas ao lado dos claims in-sample quando relevante. Os números caem do jeito honesto.",
+    "performance.table.heading": "Resumo OOS por engine",
+    "performance.table.stamp": "Janela: 2022-01-01 → 2023-01-01 (360d BEAR)",
+    "performance.table.foot":
+      "Todas as métricas líquidas de slippage, spread, commission e funding. Sizing sob Kelly × convex × drawdown-scale × Ω-risk com cap de notional agregado no nível do portfolio.",
+
+    // Section heads — CodeShowcase
+    "code.eyebrow": "§ V",
+    "code.titlePre": "Alquimia legível —",
+    "code.titleEm": "uma função, uma missão.",
+    "code.sub":
+      "A plataforma é escrita pra ser auditada linha por linha. Sinal, risco e sizing vivem cada um em uma função pura. Sem estado oculto, sem side-effects globais, sem ternário mágico.",
+
+    // Section heads — Technology
+    "technology.eyebrow": "§ VI",
+    "technology.titlePre": "Nove engines. Um",
+    "technology.titleEm": "orquestrador.",
+    "technology.sub":
+      "Cada engine carrega uma inspiração institucional, um mecanismo único e um veredito OOS próprio. MILLENNIUM aloca capital entre as sobreviventes sob restrições de correlação e drawdown.",
+    "technology.pipeline.title": "Pipeline de sinal",
+    "technology.pipeline.body":
+      "Determinístico, observável em cada passo, replayable a partir do disco.",
+
+    // Section heads — Principles
+    "principles.eyebrow": "§ VII",
+    "principles.titlePre": "Sete princípios",
+    "principles.titleEm": "operacionais.",
+    "principles.sub":
+      "Os mandamentos contra os quais o próprio código é escrito. Cada um é um discriminador — uma condição que a plataforma precisa satisfazer antes de qualquer capital se mover.",
+
+    // Section heads — Research
+    "research.eyebrow": "§ VIII",
+    "research.titlePre": "Notas de",
+    "research.titleEm": "research.",
+    "research.sub":
+      "Research interna selecionada publicada pra partners. O arquivo completo — postmortems de engine, logs de audit, revisões de metodologia — está disponível sob NDA.",
+    "research.requestFull": "Solicitar nota completa →",
+
+    // Section heads — Contact
+    "contact.eyebrow": "§ IX",
+    "contact.titlePre": "Acesso por convite. Capacidade",
+    "contact.titleEm": "limitada.",
+    "contact.sub":
+      "AURUM aloca sob restrição de capacidade de estratégia, não de demanda. Entre em contato pra acesso à research ou pra discutir alocação sob NDA.",
+    "contact.form.nameLabel": "Nome",
+    "contact.form.emailLabel": "Email",
+    "contact.form.orgLabel": "Organização",
+    "contact.form.noteLabel": "Contexto",
+    "contact.form.namePh": "Jane Investor",
+    "contact.form.emailPh": "jane@family-office.com",
+    "contact.form.orgPh": "Opcional",
+    "contact.form.notePh":
+      "O que gostaria de discutir — notas de research, cronograma de alocação, due-diligence técnico?",
+    "contact.form.send": "Enviar solicitação",
+    "contact.form.sent": "Cliente de e-mail aberto",
+    "contact.form.or": "Ou escreva direto pra",
 
     // Login
     "login.title": "Acesso membros",

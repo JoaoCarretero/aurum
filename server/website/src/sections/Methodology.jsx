@@ -1,21 +1,19 @@
 import { Reveal } from "../components/Reveal";
 import { ANTI_OVERFIT, ARCHIVED } from "../lib/data";
+import { useT } from "../lib/i18n";
 
 export function Methodology() {
+  const t = useT();
   return (
     <section id="methodology" className="section section--methodology">
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ III</span>
+            <span className="section__num">{t("methodology.eyebrow")}</span>
             <h2 className="section__title">
-              The anti-overfit <em>protocol.</em>
+              {t("methodology.titlePre")} <em>{t("methodology.titleEm")}</em>
             </h2>
-            <p className="section__sub">
-              Five gates every sweep must pass before a Sharpe number is
-              reported. No exceptions. Archival is the default outcome, not
-              the failure.
-            </p>
+            <p className="section__sub">{t("methodology.sub")}</p>
           </div>
         </Reveal>
 
@@ -37,12 +35,11 @@ export function Methodology() {
           <div className="graveyard">
             <div className="graveyard__head">
               <h3 className="graveyard__title">
-                The graveyard is <em>methodology.</em>
+                {t("methodology.graveyard.title")}{" "}
+                <em>{t("methodology.graveyard.titleEm")}</em>
               </h3>
               <p className="graveyard__sub">
-                {ARCHIVED.length} engines developed, tested out-of-sample,
-                and archived. Discipline requires killing. The engines that
-                remain survive because the ones that failed were not kept.
+                {ARCHIVED.length} {t("methodology.graveyard.body")}
               </p>
             </div>
 

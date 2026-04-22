@@ -1,4 +1,5 @@
 import { Reveal } from "../components/Reveal";
+import { useT } from "../lib/i18n";
 
 const PILLARS = [
   {
@@ -22,34 +23,23 @@ const PILLARS = [
 ];
 
 export function Thesis() {
+  const t = useT();
   return (
     <section id="thesis" className="section section--thesis">
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ I</span>
+            <span className="section__num">{t("thesis.eyebrow")}</span>
             <h2 className="section__title">
-              Information, <em>not matter.</em>
+              {t("thesis.titlePre")} <em>{t("thesis.titleEm")}</em>
             </h2>
           </div>
         </Reveal>
 
         <Reveal delay={0.1}>
           <div className="thesis__lede">
-            <p>
-              The market encodes information — price and volume as a spiral,
-              signal mixed with noise. Most participants are being read.
-              AURUM runs its own laser. The task is discrimination, not
-              prediction; process, not outcome.
-            </p>
-            <p className="thesis__lede-secondary">
-              The platform is engineered around a single inversion: we build
-              the reader before we build the strategy. Data validation,
-              regime detection, and kill-switch logic predate any engine in
-              the system. Every sharpe number reported passes a Deflated
-              Sharpe Ratio haircut for trial multiplicity before it reaches
-              a committee slide.
-            </p>
+            <p>{t("thesis.ledePrimary")}</p>
+            <p className="thesis__lede-secondary">{t("thesis.ledeSecondary")}</p>
           </div>
         </Reveal>
 

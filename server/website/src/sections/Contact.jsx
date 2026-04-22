@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Reveal } from "../components/Reveal";
 import { SITE } from "../lib/data";
+import { useT } from "../lib/i18n";
 
 export function Contact() {
   const [state, setState] = useState({ name: "", email: "", org: "", note: "" });
   const [sent, setSent] = useState(false);
+  const t = useT();
 
   function onSubmit(e) {
     e.preventDefault();
@@ -30,15 +32,11 @@ export function Contact() {
       <div className="section__inner">
         <Reveal>
           <div className="section__head section__head--center">
-            <span className="section__num">§ IX</span>
+            <span className="section__num">{t("contact.eyebrow")}</span>
             <h2 className="section__title">
-              Invitation only. Limited <em>capacity.</em>
+              {t("contact.titlePre")} <em>{t("contact.titleEm")}</em>
             </h2>
-            <p className="section__sub">
-              AURUM allocates under a strategy-capacity constraint, not a
-              demand constraint. Reach out for research access or to
-              discuss allocation under NDA.
-            </p>
+            <p className="section__sub">{t("contact.sub")}</p>
           </div>
         </Reveal>
 
@@ -46,32 +44,28 @@ export function Contact() {
           <form className="contact-form" onSubmit={onSubmit}>
             <div className="contact-form__row">
               <label>
-                <span>Name</span>
-                <input type="text" required {...bind("name")} placeholder="Jane Investor" />
+                <span>{t("contact.form.nameLabel")}</span>
+                <input type="text" required {...bind("name")} placeholder={t("contact.form.namePh")} />
               </label>
               <label>
-                <span>Email</span>
-                <input type="email" required {...bind("email")} placeholder="jane@family-office.com" />
+                <span>{t("contact.form.emailLabel")}</span>
+                <input type="email" required {...bind("email")} placeholder={t("contact.form.emailPh")} />
               </label>
             </div>
             <label>
-              <span>Organisation</span>
-              <input type="text" {...bind("org")} placeholder="Optional" />
+              <span>{t("contact.form.orgLabel")}</span>
+              <input type="text" {...bind("org")} placeholder={t("contact.form.orgPh")} />
             </label>
             <label>
-              <span>Context</span>
-              <textarea
-                rows={4}
-                {...bind("note")}
-                placeholder="What would you like to discuss — research notes, allocation timeline, technical diligence?"
-              />
+              <span>{t("contact.form.noteLabel")}</span>
+              <textarea rows={4} {...bind("note")} placeholder={t("contact.form.notePh")} />
             </label>
             <div className="contact-form__foot">
               <button type="submit" className="btn btn--primary">
-                {sent ? "Opened your mail client" : "Send request"}
+                {sent ? t("contact.form.sent") : t("contact.form.send")}
               </button>
               <span className="contact-form__note">
-                Or write directly to <a href={`mailto:${SITE.email}`}>{SITE.email}</a>
+                {t("contact.form.or")} <a href={`mailto:${SITE.email}`}>{SITE.email}</a>
               </span>
             </div>
           </form>

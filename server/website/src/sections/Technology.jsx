@@ -1,5 +1,6 @@
 import { Reveal } from "../components/Reveal";
 import { ENGINES } from "../lib/data";
+import { useT } from "../lib/i18n";
 
 const PIPELINE = [
   { step: "Data", detail: "Binance Futures OHLCV + true bull/bear pressure, validated." },
@@ -15,21 +16,17 @@ const PIPELINE = [
 ];
 
 export function Technology() {
+  const t = useT();
   return (
     <section id="technology" className="section section--technology">
       <div className="section__inner">
         <Reveal>
           <div className="section__head">
-            <span className="section__num">§ VI</span>
+            <span className="section__num">{t("technology.eyebrow")}</span>
             <h2 className="section__title">
-              Nine engines. One <em>orchestrator.</em>
+              {t("technology.titlePre")} <em>{t("technology.titleEm")}</em>
             </h2>
-            <p className="section__sub">
-              Each engine carries an institutional inspiration, a single
-              mechanism, and its own out-of-sample verdict. MILLENNIUM
-              allocates capital across the survivors under correlation and
-              drawdown constraints.
-            </p>
+            <p className="section__sub">{t("technology.sub")}</p>
           </div>
         </Reveal>
 
@@ -67,8 +64,8 @@ export function Technology() {
         <Reveal delay={0.2}>
           <div className="pipeline">
             <div className="pipeline__head">
-              <h3>Signal pipeline</h3>
-              <p>Deterministic, observable at every step, replayable from disk.</p>
+              <h3>{t("technology.pipeline.title")}</h3>
+              <p>{t("technology.pipeline.body")}</p>
             </div>
             <ol className="pipeline__list">
               {PIPELINE.map((p, i) => (
