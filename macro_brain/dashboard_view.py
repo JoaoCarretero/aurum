@@ -353,13 +353,13 @@ def _clickable_bg_row(parent, open_fn=None) -> tk.Frame:
 def _tile(parent, label, value, change="", change_color=WHITE,
           series=None, spark_color=AMBER, metric_key: str | None = None,
           fmt: str | None = None):
-    """Render one metric tile — TradingView-vibe com sparkline viva.
+    """Render one metric tile — sem sparkline, chart so no click.
 
-    Pre 2026-04-22: v6 removeu sparklines ("visual pollution"). Joao
-    pediu pra trazer de volta — mais alive, tipo TradingView. Agora:
-    - label + valor + change% em cima
-    - sparkline (30 pontos) embaixo, cor segue direcao do ultimo tick
-    - flash verde/vermelho no valor quando muda (via tick_update)
+    Layout: label + valor + change%. Tile inteiro e clicavel e abre
+    popup com chart detalhado quando ha metric_key.
+
+    ``series`` e ``spark_color`` mantidos na assinatura pra back-compat
+    mas agora ignorados (nao ha mais canvas inline).
     """
     f = tk.Frame(parent, bg=PANEL,
                  highlightbackground=BORDER, highlightthickness=1)
@@ -368,7 +368,7 @@ def _tile(parent, label, value, change="", change_color=WHITE,
                               padx=PAD_TILE_INNER, pady=(3, 0))
     body = tk.Frame(f, bg=PANEL); body.pack(fill="x",
                                              padx=PAD_TILE_INNER,
-                                             pady=(0, 2))
+                                             pady=(0, 4))
     value_lbl = tk.Label(body, text=value, font=(FONT, 11, "bold"),
                           fg=WHITE, bg=PANEL, anchor="w")
     value_lbl.pack(side="left")
@@ -378,52 +378,25 @@ def _tile(parent, label, value, change="", change_color=WHITE,
                                fg=change_color, bg=PANEL, anchor="e")
         change_lbl.pack(side="right", padx=2)
 
-    # Sparkline canvas — line chart com area fill (TradingView-vibe).
-    # h=18 menos esticado que 14; area fill da densidade visual.
-    spark_cv = tk.Canvas(f, bg=PANEL, height=18, highlightthickness=0,
-                          borderwidth=0)
-    spark_cv.pack(fill="x", padx=PAD_TILE_INNER, pady=(0, 3))
-    if series:
-        try:
-            vals = [
-                (r.get("value") if isinstance(r, dict) else r)
-                for r in series[-30:]
-            ]
-            vals = [v for v in vals if isinstance(v, (int, float))]
-            if len(vals) >= 2:
-                spark_cv.after(
-                    30,
-                    lambda cv=spark_cv, vv=vals, sc=spark_color:
-                        _draw_spark(cv, vv, color=sc,
-                                    w=(cv.winfo_width() or 80),
-                                    h=18, fill_area=True),
-                )
-        except Exception:
-            pass
-
     _attach_hover(f)
 
     if metric_key:
         _TILE_REGISTRY[metric_key] = {
             "value": value_lbl,
             "change": change_lbl,
-            "spark": spark_cv,
+            "spark": None,
             "fmt": fmt,
             "spark_color": spark_color,
-            "last_val": None,  # flash detection
+            "last_val": None,
         }
-        # Click-to-expand — tile inteiro (frame + todos os labels) abre
-        # popup detalhado com chart de 100 barras + min/max/last.
-        _mk = metric_key
-        _lbl = label
-        _fmt = fmt
+        _mk, _lbl, _fmt = metric_key, label, fmt
 
         def _click(_e=None, m=_mk, l=_lbl, fm=_fmt):
             _open_tile_detail(m, l, fm)
 
         f.configure(cursor="hand2")
         f.bind("<Button-1>", _click)
-        for child in (value_lbl, change_lbl, spark_cv):
+        for child in (value_lbl, change_lbl):
             if child is None:
                 continue
             try:
