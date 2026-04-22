@@ -14,7 +14,7 @@ from config.params import *
 from core.indicators import indicators, swing_structure
 from core.signals import label_trade
 from core.portfolio import portfolio_allows, check_aggregate_notional, position_size
-from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
+from core.htf import merge_all_htf_to_ltf
 from core.chronos import enrich_with_regime
 import pandas as _pd
 

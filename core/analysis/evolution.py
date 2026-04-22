@@ -1,8 +1,7 @@
 """AURUM — Darwin: Adaptive Strategy Evolution via Natural Selection."""
-import json, math, copy, logging
+import json, copy, logging
 from pathlib import Path
 from datetime import datetime
-from collections import defaultdict
 import numpy as np
 
 from core.persistence import atomic_write_json

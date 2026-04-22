@@ -14,7 +14,6 @@ Pipeline:
 """
 import argparse
 import sys
-import math
 import logging
 import numpy as np
 import pandas as pd
@@ -43,7 +42,7 @@ from core import (
 )
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
-from analysis.walkforward import walk_forward, walk_forward_by_regime
+from analysis.walkforward import walk_forward
 from core.ops.run_manager import append_to_index, save_run_artifacts, snapshot_config
 from core.ops.fs import atomic_write
 

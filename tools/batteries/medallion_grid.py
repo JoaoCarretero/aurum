@@ -26,7 +26,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import copy
 import csv
 import itertools
 import logging
@@ -36,7 +35,6 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent.parent

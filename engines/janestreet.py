@@ -21,7 +21,7 @@ from pathlib import Path
 from datetime import datetime,timezone
 from urllib.parse import urlencode
 from dataclasses import dataclass,field
-from typing import Dict,List,Optional,Tuple
+from typing import Dict,List,Optional
 from collections import deque
 
 import argparse
@@ -50,7 +50,6 @@ from config.janestreet_defaults import (
     MIN_SPREAD, MIN_APR, MAX_POS, POS_PCT, LEV,
     SCAN_S, EXIT_H, MAX_DD_PCT, KILL_LOSSES,
 )
-from bot.telegram import TelegramNotifier
 from core.risk.audit_trail import AuditTrail, OrderEvent
 from core.ops.fs import atomic_write
 from core.risk.risk_gates import (

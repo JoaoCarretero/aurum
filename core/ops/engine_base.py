@@ -4,11 +4,9 @@ AURUM Finance — EngineRuntime
 Shared runtime setup (RUN_DIR, logging, report saving) for all engines.
 Eliminates ~30-50 lines of boilerplate per engine.
 """
-import json
 import logging
 import sys
 from datetime import datetime
-from pathlib import Path
 
 from config.paths import DATA_DIR
 from core.persistence import atomic_write_json
