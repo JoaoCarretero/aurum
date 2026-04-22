@@ -5536,25 +5536,44 @@ class App(tk.Tk):
     # ═══════════════════════════════════════════════════════════
     # Phase 1 redesign (2026-04-22): 3-tab layout
     # ═══════════════════════════════════════════════════════════
+    # 6-column layout after organize pass (2026-04-22):
+    # Dropped TYPE (~always PERP_PERP, goes in detail) and VOL
+    # (REALISTIC filter already gates anything uninvestable, and the
+    # detail pane shows vol ratio at the actual trade size). Left with
+    # the 6 columns that actually drive the "take this or not?" call.
     _ARB_OPPS_COLS = [
-        ("VIAB",  6,  "w"),
-        ("SYM",   9,  "w"),
-        ("TYPE",  4,  "w"),
-        ("VENUES", 16, "w"),
-        ("APR",   8,  "e"),
-        ("BKEVN", 6,  "e"),
-        ("VOL",   8,  "e"),
-        ("SCORE", 5,  "e"),
+        ("VIAB",    5,  "w"),
+        ("SYM",    11,  "w"),
+        ("VENUES", 22,  "w"),
+        ("APR",     9,  "e"),
+        ("BKEVN",   7,  "e"),
+        ("SCORE",   5,  "e"),
     ]
 
     def _arb_render_opps(self, parent):
-        """Unified OPPS table. Replaces 5 separate tabs (cex-cex/dex-dex/
-        cex-dex/basis/spot) with one scrollable table tagged by TYPE."""
-        tk.Label(parent,
-                 text="OPPS  ·  unified funding + basis + spot arbitrage "
-                      "(worth it filter via VIAB)",
-                 font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(
-            anchor="w", pady=(0, 4))
+        """Unified OPPS table. All 5 legacy tabs (cex-cex / dex-dex /
+        cex-dex / basis / spot) merged here, scored + bucketed by VIAB."""
+        head = tk.Frame(parent, bg=BG)
+        head.pack(fill="x", pady=(0, 2))
+        tk.Label(head, text="OPPS",
+                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
+        # VIAB legend — inlined so users stop wondering "why GO vs WAIT".
+        # GO is the strict triple (score/bkevn/vol), WAIT is the lenient
+        # OR-clause, SKIP is everything else.
+        legend = tk.Frame(parent, bg=BG)
+        legend.pack(fill="x", pady=(0, 4))
+        tk.Label(legend, text="GO", font=(FONT, 7, "bold"),
+                 fg=GREEN, bg=BG).pack(side="left", padx=(0, 3))
+        tk.Label(legend, text="score≥70 + bkevn≤24h + líquido",
+                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 10))
+        tk.Label(legend, text="WAIT", font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 3))
+        tk.Label(legend, text="score≥40 + (bkevn≤72h ou vol moderada)",
+                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 10))
+        tk.Label(legend, text="SKIP", font=(FONT, 7, "bold"),
+                 fg=DIM, bg=BG).pack(side="left", padx=(0, 3))
+        tk.Label(legend, text="resto", font=(FONT, 7),
+                 fg=DIM2, bg=BG).pack(side="left")
         self._arb_build_filter_bar(parent)
         self._arb_opps_selected = []
 
@@ -5681,22 +5700,23 @@ class App(tk.Tk):
             net_apr = float(a.get("net_apr", 0) or 0)
             apr_fg = GREEN if abs(net_apr) >= 50 else (
                 AMBER if abs(net_apr) >= 20 else DIM)
-            vol = a.get("volume_24h") or 0
             be = getattr(sr, "breakeven_h", None)
             be_txt = f"{be:.1f}h" if be is not None and be < 999 else "—"
             be_fg = GREEN if (be is not None and be <= 24) else (
                 AMBER if (be is not None and be <= 72) else DIM)
-            short_v = (a.get("short_venue") or "")[:7].lower()
-            long_v = (a.get("long_venue") or "")[:7].lower()
-            venues = f"{long_v}>{short_v}"[:16]
+            short_v = (a.get("short_venue") or "")[:10].lower()
+            long_v = (a.get("long_venue") or "")[:10].lower()
+            # Long leg goes first (the one you BUY), then short. Arrow
+            # direction (→) reads naturally as "take long from here,
+            # short to there". Width 22 fits "binance → bybit" plus
+            # slack for longer venue names.
+            venues = f"{long_v} → {short_v}"[:22]
             rows.append([
                 (viab, viab_fg),
-                ((a.get("symbol", "") or "—")[:9], WHITE),
-                (a.get("_type", ""), DIM),
+                ((a.get("symbol", "") or "—")[:11], WHITE),
                 (venues, AMBER_D),
                 (f"{net_apr:+.1f}%", apr_fg),
                 (be_txt, be_fg),
-                (self._fmt_vol(vol), DIM),
                 (f"{int(sr.score):>3}", DIM),
             ])
         repaint(rows)

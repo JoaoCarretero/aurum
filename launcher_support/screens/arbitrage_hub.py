@@ -39,10 +39,12 @@ def render(app, tab: str = "cex-cex"):
     app._kb("<Escape>", lambda: app._menu("main"))
     app._bind_global_nav()
 
-    _outer, outer = app._ui_page_shell(
-        "ARBITRAGE DESK",
-        "All arbitrage modes in one place — scan, execute, monitor",
-    )
+    # Skip the big _ui_page_shell title (redundant with breadcrumb) and
+    # claim the vertical real estate for the actual data. The breadcrumb
+    # at the top of the launcher window already shows "> ARBITRAGE > TAB".
+    outer = tk.Frame(app.main, bg=BG)
+    outer.pack(fill="both", expand=True, padx=16, pady=(4, 4))
+    tk.Frame(outer, bg=AMBER, height=2).pack(fill="x", pady=(0, 2))
 
     # -- Status strip --
     # Single line: LIVE dot · CEX/DEX counts · SCAN Ns ago · TOP opp
