@@ -2820,11 +2820,14 @@ def _render_run_instance_picker(
     state_key: str,
     title: str = "INSTANCES:",
 ) -> None:
-    row = tk.Frame(parent, bg=PANEL, highlightbackground=BORDER,
+    # Institutional tab strip — high contrast so the operator actually
+    # notices it. Previous version used font 7 + DIM on PANEL, which
+    # was nearly invisible next to the live panels below it.
+    row = tk.Frame(parent, bg=BG2, highlightbackground=AMBER,
                    highlightthickness=1)
-    row.pack(fill="x", padx=8, pady=(4, 2))
-    tk.Label(row, text=title, fg=DIM, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left", padx=(6, 4), pady=2)
+    row.pack(fill="x", padx=0, pady=(0, 4))
+    tk.Label(row, text=title, fg=AMBER, bg=BG2,
+             font=(FONT, 9, "bold")).pack(side="left", padx=(10, 6), pady=6)
     current = state.get(state_key)
     effective = current if current and any(
         r.get("run_id") == current for r in active_runs
@@ -2838,15 +2841,25 @@ def _render_run_instance_picker(
 
     for r in active_runs:
         rid = r.get("run_id") or ""
-        label = r.get("label") or f"#{rid.split('_')[-1][:6]}" if rid else "?"
+        label = r.get("label") or (f"#{rid.split('_')[-1][:6]}" if rid else "?")
         source = str(r.get("source") or "").lower()
         source_tag = "VPS" if source == "vps" else "LOCAL"
         ticks = r.get("ticks_ok", 0)
-        fg = AMBER if rid == effective else DIM
-        tag = tk.Label(row, text=f" {source_tag}:{label}  {ticks}tk ",
-                       fg=fg, bg=PANEL, font=(FONT, 7),
-                       padx=4, cursor="hand2")
-        tag.pack(side="left", padx=2, pady=2)
+        is_active = rid == effective
+        tag_bg = AMBER if is_active else BG3
+        tag_fg = BG if is_active else WHITE
+        border_color = AMBER if is_active else BORDER
+        tag = tk.Label(
+            row,
+            text=f"  {label}  ·  {source_tag}  ·  {ticks} tk  ",
+            fg=tag_fg, bg=tag_bg,
+            font=(FONT, 9, "bold"),
+            padx=4, pady=4,
+            cursor="hand2",
+            highlightbackground=border_color,
+            highlightthickness=1,
+        )
+        tag.pack(side="left", padx=(0, 2), pady=4)
         tag.bind("<Button-1>", _make_click(rid))
 
 
