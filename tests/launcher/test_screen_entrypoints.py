@@ -86,18 +86,16 @@ def test_screens_package_import_stays_lazy(monkeypatch):
 
 def test_engines_live_screen_schedules_first_paint_on_initial_mount(tk_root, monkeypatch):
     from launcher_support.screens.engines_live import EnginesLiveScreen
-    from launcher_support import engines_live
+    from launcher_support import engines_live_view
 
     render_calls: list[tuple[object, object]] = []
 
     def fake_render(app, host, *, on_escape):
         render_calls.append((app, host))
-        return {"root": host, "cleanup": lambda: None, "destroy": lambda: None}
+        return {"root": host, "cleanup": lambda: None}
 
-    # Rebuild de engines_live.view migrou pro pacote engines_live/.
-    # engines_live.render eh re-exportado de engines_live.view em
-    # engines_live/__init__.py, entao patch apontando pro pacote.
-    monkeypatch.setattr(engines_live, "render", fake_render)
+    # Screen uses legacy engines_live_view.render path; monkeypatch there.
+    monkeypatch.setattr(engines_live_view, "render", fake_render)
 
     app = _ProbeApp()
     conn = SimpleNamespace(active_market="crypto")

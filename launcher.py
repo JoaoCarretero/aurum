@@ -920,6 +920,7 @@ class App(tk.Tk):
         self.h_engines_btn  = _mk_nav_btn(" ▣ ENGINES ",   self._strategies_live)
         self.h_data_btn     = _mk_nav_btn(" ▤ DATA ",      self._data_center)
         self.h_arb_btn      = _mk_nav_btn(" ⇄ ARBITRAGE ", self._arbitrage_hub)
+        self.h_agents_btn   = _mk_nav_btn(" ◎ AGENTS ",    self._research_desk)
         # Extra left padding for the first button so it clears the AURUM brand.
         self.h_macro_btn.pack_configure(padx=(8, 0))
 
