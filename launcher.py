@@ -4627,6 +4627,19 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _research_desk(self):
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("research_desk")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
     # --- DATA CENTER (hub) ---------------------------------
     def _data_center(self):
         """Unified entry point for everything data: backtest metrics,

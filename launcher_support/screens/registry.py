@@ -26,6 +26,7 @@ def register_default_screens(
     from launcher_support.screens.main_menu import MainMenuScreen
     from launcher_support.screens.markets import MarketsScreen
     from launcher_support.screens.processes import ProcessesScreen
+    from launcher_support.screens.research_desk import ResearchDeskScreen
     from launcher_support.screens.risk import RiskScreen
     from launcher_support.screens.runs_history import RunsHistoryScreen
     from launcher_support.screens.settings import SettingsScreen
@@ -83,6 +84,10 @@ def register_default_screens(
     manager.register(
         "processes",
         lambda parent: ProcessesScreen(parent=parent, app=app),
+    )
+    manager.register(
+        "research_desk",
+        lambda parent: ResearchDeskScreen(parent=parent, app=app),
     )
     manager.register(
         "risk",
