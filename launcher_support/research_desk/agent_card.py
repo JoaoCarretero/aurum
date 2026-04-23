@@ -58,12 +58,14 @@ class AgentCard:
         on_assign: Callable[[AgentIdentity], None] | None = None,
         on_configure: Callable[[AgentIdentity], None] | None = None,
         on_history: Callable[[AgentIdentity], None] | None = None,
+        on_inspect: Callable[[AgentIdentity], None] | None = None,
     ):
         self.agent = agent
         self.palette = palette
         self._on_assign = on_assign
         self._on_configure = on_configure
         self._on_history = on_history
+        self._on_inspect = on_inspect
 
         # Widget refs (populados em build())
         self.frame: tk.Frame = tk.Frame(
@@ -90,16 +92,21 @@ class AgentCard:
         body.pack(side="left", fill="both", expand=True, padx=10, pady=8)
 
         # Sigil alquimico desenhado em Canvas + key name com tipografia
-        # distintiva do agente (Sprint 2).
-        header = tk.Frame(body, bg=PANEL)
+        # distintiva do agente. Click abre detail view.
+        header = tk.Frame(body, bg=PANEL, cursor="hand2")
         header.pack(fill="x")
         sigil = SigilCanvas(header, self.agent.key, size=40, bg=PANEL)
         sigil.pack(side="left", padx=(0, 6))
-        tk.Label(
+        name_lbl = tk.Label(
             header, text=self.agent.key,
             font=agent_font(self.agent.key, size=11, weight="bold"),
             fg=self.palette.primary, bg=PANEL, anchor="w",
-        ).pack(side="left", pady=(4, 0))
+            cursor="hand2",
+        )
+        name_lbl.pack(side="left", pady=(4, 0))
+        # Click no hero area (sigil + nome) abre detail
+        for clickable in (header, name_lbl, sigil.canvas):
+            clickable.bind("<Button-1>", lambda _e: self._invoke_inspect())
 
         # Status pill no canto direito do header
         self._status_label = tk.Label(
@@ -218,3 +225,7 @@ class AgentCard:
     def _invoke_history(self) -> None:
         if self._on_history is not None:
             self._on_history(self.agent)
+
+    def _invoke_inspect(self) -> None:
+        if self._on_inspect is not None:
+            self._on_inspect(self.agent)
