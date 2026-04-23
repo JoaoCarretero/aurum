@@ -121,3 +121,33 @@ class TestBuildRunId:
         ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
         # Unknown mode string → no suffix added, falls through as if mode=None.
         assert build_run_id(ts=ts, mode="nonsense") == "2026-04-20_165432"
+
+    def test_with_engine_slots_between_mode_and_label(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        assert build_run_id(ts=ts, mode="paper", engine="citadel", label="desk-a") == \
+            "2026-04-20_165432p_citadel_desk-a"
+
+    def test_engine_without_label(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        assert build_run_id(ts=ts, mode="shadow", engine="renaissance") == \
+            "2026-04-20_165432s_renaissance"
+
+    def test_engine_none_keeps_legacy_format(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        assert build_run_id(ts=ts, mode="paper", engine=None, label="desk-a") == \
+            "2026-04-20_165432p_desk-a"
+
+    def test_engine_sanitized_like_label(self):
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        # Engine name goes through sanitize_label — uppercase → lowercase.
+        assert build_run_id(ts=ts, mode="paper", engine="CITADEL") == \
+            "2026-04-20_165432p_citadel"
+
+    def test_per_engine_runners_dont_collide(self):
+        # Concretely: same ts + same label + different engines must produce
+        # distinct RUN_IDs so live_runs PK doesn't collide.
+        ts = datetime(2026, 4, 20, 16, 54, 32, tzinfo=timezone.utc)
+        c = build_run_id(ts=ts, mode="paper", engine="citadel", label="desk-a")
+        j = build_run_id(ts=ts, mode="paper", engine="jump", label="desk-a")
+        r = build_run_id(ts=ts, mode="paper", engine="renaissance", label="desk-a")
+        assert len({c, j, r}) == 3
