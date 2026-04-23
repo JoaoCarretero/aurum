@@ -1,0 +1,33 @@
+[Unit]
+Description=AURUM · PROBE diagnostic scanner (%i)
+Documentation=https://github.com/joao/aurum.finance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum
+WorkingDirectory=/srv/aurum.finance
+
+EnvironmentFile=-/etc/aurum/probe-%i.env
+Environment=PYTHONUNBUFFERED=1
+Environment=AURUM_PROBE_LABEL=%i
+ExecStart=/usr/bin/python3 tools/maintenance/probe_runner.py --tick-sec 900 --run-hours 0 --label %i
+
+MemoryMax=512M
+CPUQuota=100%
+
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=120
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/aurum.finance/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aurum-probe-%i
+
+[Install]
+WantedBy=multi-user.target
