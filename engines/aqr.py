@@ -141,7 +141,6 @@ if __name__ == "__main__":
         print("  No trades found. Run backtests first:")
         print("    python -m engines.citadel")
         print("    python -m engines.jump   # JUMP")
-        print("    python -m engines.deshaw     # DE SHAW")
         sys.exit(1)
 
     for eng, trades in engine_trades.items():
