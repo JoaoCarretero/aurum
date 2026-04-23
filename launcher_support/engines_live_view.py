@@ -1669,7 +1669,6 @@ _LEVERAGE_OPTS = [("1x", "1.0"), ("2x", "2.0"), ("3x", "3.0"), ("5x", "5.0")]
 _LIVE_FS_CACHE_TTL_S = 1.0
 _LATEST_RUN_DIR_CACHE: dict[str, tuple[float, Path | None]] = {}
 _POSITIONS_CACHE: dict[str, tuple[float, list[dict]]] = {}
-_LOG_TAIL_CACHE: dict[tuple[str, int], tuple[float, list[str]]] = {}
 _SHADOW_LATEST_CACHE: dict[str, tuple[float, tuple[Path, dict] | None]] = {}
 
 
@@ -1691,7 +1690,6 @@ def _cache_put(cache: dict, key, value) -> None:
 def _clear_live_fs_caches() -> None:
     _LATEST_RUN_DIR_CACHE.clear()
     _POSITIONS_CACHE.clear()
-    _LOG_TAIL_CACHE.clear()
     _SHADOW_LATEST_CACHE.clear()
 
 
@@ -1754,9 +1752,6 @@ def _resolve_log_path(slug: str, proc: dict) -> Path | None:
         if cand.is_file():
             return cand
     return None
-
-
-_LOG_TAIL_WINDOW_BYTES = 16 * 1024
 
 
 def _read_log_tail(path: Path | None, n: int = 18) -> list[str]:

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
 
 
 _LEVEL_PATTERNS: list[tuple[str, re.Pattern]] = [
@@ -24,7 +23,7 @@ _LEVEL_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("EXIT",  re.compile(r"\bEXIT\b")),
     ("FILL",  re.compile(r"\bFILL\b")),
     ("ORDER", re.compile(r"\bORDER\b")),
-    ("SIGNAL", re.compile(r"\bSIGNAL\b|\bnovel=[1-9]")),
+    ("SIGNAL", re.compile(r"\bSIGNAL\b|\bnovel=[1-9]\d*")),
 ]
 
 
@@ -36,7 +35,7 @@ def classify_level(line: str) -> str:
     return "INFO"
 
 
-def read_tail(path: Optional[Path], n: int = 18,
+def read_tail(path: Path | None, n: int = 18,
               max_bytes: int = 65536) -> list[str]:
     """Return the last `n` non-empty lines of a file.
 

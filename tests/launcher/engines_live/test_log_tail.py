@@ -96,3 +96,10 @@ def test_classify_priority_error_over_warn():
     """ERROR takes priority over WARN even if both keywords appear."""
     from launcher_support.engines_live.data.log_tail import classify_level
     assert classify_level("18:00 ERROR warning: something bad") == "ERROR"
+
+
+def test_classify_signal_via_novel_multi_digit():
+    """novel=10, novel=123 also tag SIGNAL (not just single-digit)."""
+    from launcher_support.engines_live.data.log_tail import classify_level
+    assert classify_level("16:00:00 INFO TICK ok=5 novel=10 open=0") == "SIGNAL"
+    assert classify_level("17:00:00 INFO TICK ok=8 novel=123 open=0") == "SIGNAL"
