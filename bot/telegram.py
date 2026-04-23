@@ -28,7 +28,7 @@ Authorization model:
 import asyncio, json, logging, time
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from core.risk.failure_policy import BEST_EFFORT, DEGRADE_AND_LOG
 from core.ops.health import runtime_health
@@ -198,7 +198,7 @@ class TelegramNotifier:
 
     async def notify_startup(self, mode: str, symbols: list):
         """Notificação de arranque."""
-        from config.params import ACCOUNT_SIZE, MAX_OPEN_POSITIONS, INTERVAL, MACRO_SYMBOL, SYMBOLS
+        from config.params import ACCOUNT_SIZE, MAX_OPEN_POSITIONS, INTERVAL, MACRO_SYMBOL
         from engines.live import LIVE_RUN_ID
         msg = (
             f"☿ <b>AURUM Finance · Live Engine v1.0</b>\n"
@@ -236,7 +236,7 @@ class TelegramNotifier:
         pnl = sum(t["pnl"] for t in e.closed_trades)
         ks = e.kill_sw.status()
 
-        from config.params import MACRO_SYMBOL, SYMBOLS
+        from config.params import MACRO_SYMBOL
         from engines.live import LIVE_MODE, TESTNET_MODE, DEMO_MODE
         mode = "DEMO" if DEMO_MODE else "TESTNET" if TESTNET_MODE else "LIVE" if LIVE_MODE else "PAPER"
 

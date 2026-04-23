@@ -6,7 +6,6 @@ status_summary. STATE_FILE redirecionado pra tmp via monkeypatch.
 from __future__ import annotations
 
 import json
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest

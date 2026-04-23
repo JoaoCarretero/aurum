@@ -143,7 +143,6 @@ def test_citadel():
     _patch_param("STOP_ATR_M", 2.1)
     _patch_param("SCORE_BY_REGIME", {"BEAR": 0.48, "BULL": 0.50, "CHOP": 0.56})
     # Also patch penalty to active-only
-    import core.signals as _sig
     _orig_penalty_line = None  # We'll work around this by patching OMEGA_WEIGHTS
     dfs = _fetch(_p.SYMBOLS, "15m", 90)
     macro = detect_macro(dfs); corr = build_corr_matrix(dfs)

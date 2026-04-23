@@ -12,12 +12,10 @@ work when the bar doesn't push far enough to activate BE.
 import pytest
 
 from config.params import (
-    TRAIL_ACTIVATE_MULT,
-    TRAIL_BE_MULT,
     TRAIL_DISTANCE_MULT,
 )
 from tools.operations.paper_executor import Position
-from tools.operations.paper_position_manager import PositionManager, ClosedTrade
+from tools.operations.paper_position_manager import PositionManager
 
 
 def _pos(direction="LONG", entry=100.0, stop=98.0, target=104.0, size=1.0,

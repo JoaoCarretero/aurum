@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import sqlite3
 
 import pytest
 from fastapi import HTTPException

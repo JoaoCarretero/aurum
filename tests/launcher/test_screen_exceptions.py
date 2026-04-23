@@ -1,7 +1,6 @@
 """Exception hierarchy for launcher_support.screens."""
 from __future__ import annotations
 
-import pytest
 
 from launcher_support.screens.exceptions import (
     ScreenError,

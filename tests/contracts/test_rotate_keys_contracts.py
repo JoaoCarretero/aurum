@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from tools.maintenance.rotate_keys import rotate, _VALID_MODES
 

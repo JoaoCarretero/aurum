@@ -16,13 +16,11 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Literal
 
 from core.ops.python_runtime import preferred_python_executable
 from core.ops import run_catalog
@@ -30,26 +28,19 @@ from core.risk.key_store import KeyStoreError, load_runtime_keys
 from core.ui.ui_palette import (
     BG, BG2, BG3, PANEL,
     BORDER, BORDER_H,
-    AMBER, AMBER_B, AMBER_D, AMBER_H,
-    WHITE, DIM, DIM2,
+    AMBER, AMBER_B, AMBER_D, WHITE, DIM, DIM2,
     GREEN, RED, CYAN, HAZARD,
-    MODE_PAPER, MODE_DEMO, MODE_TESTNET, MODE_LIVE,
     FONT,
 )
 from launcher_support.engines_sidebar import (
-    build_engine_rows,
-    render_sidebar,
     render_detail,
 )
 from launcher_support.engines_live_helpers import (
-    Bucket, Mode,
-    _MODE_ORDER, _DEFAULT_MODE, _DEFAULT_STATE_PATH, _REPO_ROOT,
-    _MODE_COLORS, _STAGE_STYLE,
-    _PROC_TO_SLUG, _ENGINE_DIR_MAP,
+    _MODE_ORDER, _REPO_ROOT,
+    _MODE_COLORS, _ENGINE_DIR_MAP,
     _stage_badge,
     footer_hints,
     cockpit_summary,
-    bucket_title,
     bucket_header_title,
     row_action_label,
     initial_selection,

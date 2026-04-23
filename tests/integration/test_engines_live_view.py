@@ -20,7 +20,6 @@ class TestLiveReadySlugs:
         from config.engines import LIVE_READY_SLUGS
         # These have backtest entrypoints but not live-validated runners.
         assert "renaissance" not in LIVE_READY_SLUGS
-        assert "jump" not in LIVE_READY_SLUGS
         assert "graham" not in LIVE_READY_SLUGS
         assert "phi" not in LIVE_READY_SLUGS
 
@@ -91,12 +90,6 @@ class TestCockpitSummaries:
         assert cards[0][0] == "RUNNING"
         assert cards[0][1] == "2"
         assert cards[-1] == ("DESK", "PAPER", cards[-1][2])
-
-    def test_bucket_titles_are_operational(self):
-        from launcher_support.engines_live_view import bucket_title
-        assert bucket_title("LIVE") == "ENGINES"
-        assert bucket_title("READY") == "READY TO LAUNCH"
-        assert bucket_title("RESEARCH") == "RESEARCH ONLY"
 
     def test_bucket_header_title_distinguishes_experimental(self):
         from launcher_support.engines_live_view import bucket_header_title

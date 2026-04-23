@@ -6,7 +6,6 @@ AURUM Phase 4-6 Tests
 """
 import sys, time, logging
 from pathlib import Path
-from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 if sys.stdout.encoding != "utf-8":

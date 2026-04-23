@@ -1,6 +1,5 @@
 import json, time, os
 from pathlib import Path
-import pytest
 from core.alchemy_state import AlchemyState, EMPTY_SNAPSHOT
 
 def _make_snap(run_dir: Path, **overrides):

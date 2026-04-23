@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from engines import bridgewater
 
@@ -71,7 +70,6 @@ def test_align_series_respects_staleness_guard_bug4_fix():
     max_staleness. Without this, a single historical probe row would
     propagate for years of subsequent candles.
     """
-    import numpy as np
     tick_times = pd.to_datetime(["2023-11-14 22:00:00", "2026-04-12 11:00:00"])
     series = pd.Series([0.7, -0.3], index=tick_times)
     candle_times = pd.Series(pd.to_datetime([

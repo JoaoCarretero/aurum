@@ -3,7 +3,6 @@
 These tests are purely structural — they verify the registry, callable
 signatures, and _mk() helper without making real network calls.
 """
-import pytest
 
 
 def test_venue_fetchers_registry_has_13_venues():

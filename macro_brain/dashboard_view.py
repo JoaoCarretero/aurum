@@ -28,7 +28,6 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
-from pathlib import Path
 
 import tkinter as tk
 
@@ -42,8 +41,7 @@ from core.ui.ui_palette import (
     BORDER, BORDER_H,
     AMBER, AMBER_H,
     WHITE, DIM, DIM2,
-    GREEN, RED, CYAN,
-    FONT,
+    GREEN, RED, FONT,
 )
 
 # ── SPACING (consistent across all tabs) ─────────────────────

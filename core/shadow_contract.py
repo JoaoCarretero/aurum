@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 RunMode = Literal["shadow", "paper", "testnet", "live", "backtest"]

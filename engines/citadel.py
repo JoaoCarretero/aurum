@@ -4,7 +4,7 @@ CITADEL v3.6 — AURUM Finance Systematic Momentum Engine
 # CITADEL (formerly AZOTH) — Trend-following + fractal alignment
 Main scan loop, reporting, and execution entry point.
 """
-import sys, time, json, logging
+import sys, json, logging
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import numpy as np
@@ -49,8 +49,7 @@ from analysis.stats import equity_stats, calc_ratios, conditional_backtest
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
 from analysis.benchmark import (
-    bear_market_analysis, year_by_year_analysis,
-    print_year_by_year, print_bear_market_enhanced, print_benchmark,
+    bear_market_analysis, print_benchmark,
 )
 
 # ── Runtime setup (lazy — only runs when setup_run() is called) ──
@@ -1050,7 +1049,7 @@ if __name__ == "__main__":
     #  PERSISTÊNCIA — tudo numa pasta por run
     # ══════════════════════════════════════════════════════════════
     from core.ops.run_manager import (
-        snapshot_config, save_run_artifacts, append_to_index, TeeLogger,
+        snapshot_config, save_run_artifacts, append_to_index,
     )
 
     _config = snapshot_config()

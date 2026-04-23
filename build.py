@@ -4,7 +4,6 @@ Build AURUM Finance into standalone .exe files
 Usage: python build.py
 """
 import PyInstaller.__main__
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent

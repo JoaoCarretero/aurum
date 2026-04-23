@@ -27,7 +27,6 @@ for _name in ("CITADEL", "DE_SHAW", "BRIDGEWATER", "JUMP", "RENAISSANCE", "HTF_F
 def _metrics(all_trades):
     from analysis.stats import equity_stats, calc_ratios
     from analysis.montecarlo import monte_carlo
-    from analysis.walkforward import walk_forward
     closed = [t for t in all_trades if t.get("result") in ("WIN", "LOSS")]
     if not closed:
         return {"n_trades": 0, "win_rate": 0, "pnl": 0, "sharpe": None,

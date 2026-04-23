@@ -6,7 +6,6 @@ São todos módulos pequenos sem lógica de trading — testes simples e diretos
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,6 @@ from core.failure_policy import (
     DEGRADE_AND_LOG,
     MUST_FAIL_LOUD,
     SKIP_AND_CONTINUE,
-    FailurePolicy,
 )
 from core.health import HealthLedger, runtime_health
 from core.persistence import atomic_write_json, atomic_write_text

@@ -4,7 +4,6 @@ Reference values computed from the formula:
   DSR = Phi(((Sharpe - E[max_Sharpe]) * sqrt(n-1)) / sqrt(1 - g3*Sharpe + g4/4 * Sharpe^2))
   E[max_Sharpe] ~ sqrt(2*log(n_trials)) for iid Gaussian (Euler-Mascheroni ignored in simple form)
 """
-import math
 import pytest
 
 from analysis.dsr import deflated_sharpe_ratio, expected_max_sharpe

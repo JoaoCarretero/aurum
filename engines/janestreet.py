@@ -5,7 +5,7 @@
 # v5.0: +OrderBook Depth +Latency Profiler +Regime Detection +Hedge Monitor
 # v5.0: +Fill Probability +Adversarial Detector +OmegaV2 +Dynamic Sizing +Order Flow
 
-import os,sys,json,time,asyncio,logging,signal,math,hmac,hashlib,statistics
+import os,sys,json,time,asyncio,logging,math,hmac,hashlib,statistics
 # Fase 4-H — engine version stamped on every audit row. Bump when the
 # arbitrage decision logic changes materially so auditing can tell which
 # code produced a given order.
@@ -1543,7 +1543,7 @@ class Engine:
 
     def _write_snapshot(s):
         """Atomic snapshot for the ALCHEMY dashboard. Called at end of each scan cycle."""
-        import os, tempfile
+        import os
         try:
             exposure=sum(p.size_usd for p in s.positions)
             drawdown=((s.account-s.peak)/s.peak*100) if s.peak>0 else 0.0

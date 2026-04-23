@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from config.engines import PROC_ENGINES, PROC_NAMES as ENGINE_NAMES
+from config.engines import PROC_ENGINES
 from config.paths import DATA_DIR, PROC_STATE_PATH
 from core.ops.python_runtime import preferred_python_executable
 from core.persistence import atomic_write_json

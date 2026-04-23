@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket
 from pydantic import BaseModel
 
 from api.models import get_conn
@@ -17,7 +17,6 @@ from api.auth import (
     hash_password,
     verify_password,
     create_token,
-    decode_token,
     get_current_user_from_token,
     get_current_user,
     require_admin,

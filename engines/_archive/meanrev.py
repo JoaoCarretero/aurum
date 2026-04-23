@@ -39,7 +39,6 @@ from config.params import (
     ACCOUNT_SIZE,
     BASKETS,
     COMMISSION,
-    FUNDING_PER_8H,
     LEVERAGE,
     SLIPPAGE,
     SPREAD,

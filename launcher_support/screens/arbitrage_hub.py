@@ -10,7 +10,6 @@ dispatches into them via the app parameter.
 """
 from __future__ import annotations
 
-from datetime import datetime
 import tkinter as tk
 
 from core.ui.ui_palette import (

@@ -21,10 +21,7 @@ from config.params import *
 from config.params import _tf_params, _TF_MINUTES
 
 from core import (
-    fetch_all, validate, indicators, swing_structure, omega,
-    detect_macro, build_corr_matrix, portfolio_allows,
-    calc_levels, label_trade, position_size,
-    prepare_htf, merge_all_htf_to_ltf,
+    fetch_all, validate, detect_macro, build_corr_matrix, prepare_htf,
 )
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo

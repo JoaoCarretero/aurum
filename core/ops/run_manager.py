@@ -27,7 +27,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from config.paths import DATA_DIR, ROOT, RUN_INDEX_PATH
+from config.paths import DATA_DIR, RUN_INDEX_PATH
 from core.persistence import atomic_write_json
 
 # ---------------------------------------------------------------------------

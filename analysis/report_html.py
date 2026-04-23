@@ -5,7 +5,6 @@ Self-contained Bloomberg-terminal-style HTML report for backtest results.
 Generates inline SVG charts, no external dependencies.
 """
 from __future__ import annotations
-import os
 from datetime import datetime
 from pathlib import Path
 from config.params import ACCOUNT_SIZE, INTERVAL

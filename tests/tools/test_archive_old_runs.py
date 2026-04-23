@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
-import pytest
 
 from tools.maintenance.archive_old_runs import select_to_archive, archive_and_remove
 

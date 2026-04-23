@@ -410,7 +410,7 @@ def _sel(title, items, hotkeys=None, sub="", hdr=""):
 # ══════════════════════════════════════════════════════════════
 
 def _launch(ek, sc, stdin, sname="", mname="", foreground=True):
-    from core.ops.proc import spawn, _is_alive, get_log_path
+    from core.ops.proc import spawn, _is_alive
     # Hawkes engines parse argv via argparse instead of reading interactive
     # prompts from stdin, so route their payload through cli_args.
     if ek in ("kepos", "graham", "medallion"):

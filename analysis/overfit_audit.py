@@ -431,7 +431,7 @@ def build_audit_html(results: dict) -> str:
     """Build HTML fragment for embedding in backtest report."""
     # Shared chart palette — see analysis/_chart_palette.py.
     from analysis._chart_palette import (
-        BG as _BG, PANEL as _PANEL, GOLD as _GOLD, GREEN as _GREEN,
+        PANEL as _PANEL, GOLD as _GOLD, GREEN as _GREEN,
         RED as _RED, GRAY as _GRAY, WHITE as _WHITE, BORDER as _BORDER,
         TEAL as _TEAL,
     )

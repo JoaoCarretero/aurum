@@ -45,8 +45,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox
 
-from code_viewer import CodeViewer
-from config.engines import ENGINE_NAMES, SCRIPT_TO_KEY
+from config.engines import SCRIPT_TO_KEY
 from core.ops.python_runtime import preferred_python_executable
 from core.ops.health import runtime_health
 from core.ops.persistence import atomic_write_json
@@ -285,7 +284,7 @@ F I N A N C E
 
 SYSTEM_TAGLINE = "INSTITUTIONAL QUANT TERMINAL"
 
-from launcher_support.briefings import BRIEFINGS, BRIEFINGS_V2
+from launcher_support.briefings import BRIEFINGS
 
 
 BASKETS_UI = [
@@ -6843,7 +6842,6 @@ class App(tk.Tk):
         so the picker renders immediately — metrics fill in shortly after."""
         try:
             import sqlite3
-            import threading
             from pathlib import Path as _P
             db = _P("data/aurum.db")
             if not db.exists():

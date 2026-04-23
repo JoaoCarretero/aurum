@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from launcher_support.screens.splash_data import (
     ENGINE_ROSTER_LAYOUT,
@@ -205,7 +204,7 @@ def test_read_macro_brain_no_theses_returns_flat(monkeypatch):
 def test_read_macro_brain_nan_confidence_becomes_none(monkeypatch):
     """Confidence NaN do macro_brain nao pode virar 'nan%' no splash."""
     import launcher_support.screens.splash_data as sd
-    import sys, types, math
+    import sys, types
     fake_mod = types.ModuleType("macro_brain.persistence.store")
     fake_mod.latest_regime = lambda: {"regime": "risk_on", "confidence": float("nan"), "reason": "rule"}
     fake_mod.active_theses = lambda: [{"direction": "long", "asset": "BTCUSDT",
