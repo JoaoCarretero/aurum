@@ -2632,14 +2632,8 @@ class App(tk.Tk):
 
     @staticmethod
     def _engine_extra_cli_flags(engine_name: str) -> list[str]:
-        """Engine-specific CLI overrides injected by the launcher.
-
-        Extend here for future engines whose params differ from config.params
-        defaults. Flags applied here don't touch config.params (core-
-        protected) — they only change the in-process dataclass for the run.
-        """
-        name = engine_name.upper().replace(" ", "").replace("_", "")
-        return []
+        from launcher_support.screens.engines import engine_extra_cli_flags
+        return engine_extra_cli_flags(engine_name)
 
     # --- INLINE LIVE EXEC (from picker RUN chip in LIVE mode) ------
     def _exec_live_inline(self, name, script, desc, mode_preset, cfg):
@@ -4853,217 +4847,95 @@ class App(tk.Tk):
 
     @timed_legacy_switch("eng_refresh")
     def _eng_refresh(self):
-        """Rebuild the proc list with RUNNING + STOPPED sections, always
-        visible. Each section sorted by recency DESC. Reschedules 2s tick."""
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.refresh_list(self)
+        from launcher_support.screens.engines import refresh
+        return refresh(self)
 
     def _eng_normalize_local_proc(self, proc: dict) -> dict:
-        from core.ops import run_catalog
-
-        return run_catalog.normalize_engine_log_local_proc(proc)
+        from launcher_support.screens.engines import normalize_local_proc
+        return normalize_local_proc(proc)
 
     def _eng_known_slugs(self) -> set[str]:
-        from core.ops import run_catalog
-
-        try:
-            from core.ops.proc import ENGINES as _ENGINES
-            proc_engines = _ENGINES
-        except Exception:
-            proc_engines = {}
-        return run_catalog.engine_known_slugs(proc_engines)
+        from launcher_support.screens.engines import known_slugs
+        return known_slugs()
 
     def _eng_base_slug(self, row: dict) -> str:
-        from core.ops import run_catalog
-
-        return run_catalog.engine_base_slug(row)
+        from launcher_support.screens.engines import base_slug
+        return base_slug(row)
 
     def _eng_is_engine_row(self, row: dict) -> bool:
-        from core.ops import run_catalog
-
-        return run_catalog.is_engine_log_row(
-            row,
-            known_slugs=self._eng_known_slugs(),
-        )
+        from launcher_support.screens.engines import is_engine_row
+        return is_engine_row(self, row)
 
     def _eng_matches_mode_filter(self, row: dict) -> bool:
-        from core.ops import run_catalog
-
-        return run_catalog.matches_engine_mode_filter(
-            row,
-            getattr(self, "_eng_mode_filter", "all"),
-        )
+        from launcher_support.screens.engines import matches_mode_filter
+        return matches_mode_filter(self, row)
 
     def _eng_row_key(self, row: dict) -> str:
-        from core.ops import run_catalog
-
-        return run_catalog.engine_log_row_key(row)
+        from launcher_support.screens.engines import row_key
+        return row_key(row)
 
     def _eng_set_mode_filter(self, mode_name: str) -> None:
-        self._eng_mode_filter = mode_name
-        self._eng_selected_key = None
-        self._eng_selected_pid = None
-        try:
-            self._eng_log_text.config(state="normal")
-            self._eng_log_text.delete("1.0", "end")
-            self._eng_log_text.config(state="disabled")
-            self._eng_log_header.configure(
-                text=f" — select an engine log in {mode_name.upper()} — ",
-                fg=DIM,
-            )
-        except Exception:
-            pass
-        self._eng_refresh()
+        from launcher_support.screens.engines import set_mode_filter
+        return set_mode_filter(self, mode_name)
 
     def _eng_refresh_filter_tabs(self) -> None:
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.refresh_filter_tabs(self)
+        from launcher_support.screens.engines import refresh_filter_tabs
+        return refresh_filter_tabs(self)
 
     def _eng_run_id_of(self, row: dict) -> str | None:
-        from core.ops import run_catalog
-
-        return run_catalog.engine_log_run_id_of(row)
+        from launcher_support.screens.engines import run_id_of
+        return run_id_of(row)
 
     def _eng_recency_key(self, row: dict) -> float:
-        """Higher = more recent. Delegated to shared run-catalog helpers."""
-        from core.ops import run_catalog
-
-        return run_catalog.engine_log_recency_key(row)
+        from launcher_support.screens.engines import recency_key
+        return recency_key(row)
 
     def _eng_scan_vps_runs(self, limit: int = 10) -> list[dict]:
-        """Resolve VPS engine-log rows via the shared run catalog."""
-        try:
-            from launcher_support.engines_live_view import _get_cockpit_client
-            from core.ops import run_catalog
-            client = _get_cockpit_client()
-        except Exception:
-            return []
-        try:
-            return run_catalog.collect_engine_log_vps_rows(client, limit=limit)
-        except Exception:
-            return []
+        from launcher_support.screens.engines import scan_vps_runs
+        return scan_vps_runs(limit=limit)
 
     def _eng_scan_historical_runs(self, *, limit: int = 15,
                                    hours: int = 48) -> list[dict]:
-        """Resolve recent local historical rows via the shared run catalog."""
-        now_ts = time.time()
-        cached = getattr(self, "_eng_historical_cache", None)
-        cached_ts = float(getattr(self, "_eng_historical_cache_ts", 0.0) or 0.0)
-        if cached is not None and (now_ts - cached_ts) < 30.0:
-            return list(cached[:limit])
-        try:
-            from core.ops import run_catalog
-            result = run_catalog.collect_engine_log_local_rows(
-                limit=limit,
-                hours=hours,
-            )
-        except Exception:
-            result = []
-        self._eng_historical_cache = result
-        self._eng_historical_cache_ts = now_ts
-        return result[:limit]
+        from launcher_support.screens.engines import scan_historical_runs
+        return scan_historical_runs(self, limit=limit, hours=hours)
 
     def _eng_render_row(self, proc: dict):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.render_row(self, proc)
+        from launcher_support.screens.engines import render_row
+        return render_row(self, proc)
 
     def _eng_uptime_of(self, proc: dict, hb: dict) -> str:
-        """Short uptime string (e.g. '2h15m', '45m'). Empty if unknown."""
-        from datetime import datetime, timezone
-        started_raw = (hb.get("started_at") or proc.get("started_at")
-                       or proc.get("started") or "")
-        if not started_raw:
-            return "—"
-        try:
-            t0 = datetime.fromisoformat(str(started_raw).replace("Z", "+00:00"))
-            if t0.tzinfo is None:
-                t0 = t0.replace(tzinfo=timezone.utc)
-        except Exception:
-            return "—"
-        if not proc.get("alive"):
-            stopped_raw = hb.get("stopped_at")
-            try:
-                t1 = datetime.fromisoformat(
-                    str(stopped_raw).replace("Z", "+00:00"))
-                if t1.tzinfo is None:
-                    t1 = t1.replace(tzinfo=timezone.utc)
-            except Exception:
-                t1 = datetime.now(timezone.utc)
-        else:
-            t1 = datetime.now(timezone.utc)
-        secs = max(0, int((t1 - t0).total_seconds()))
-        if secs < 60:
-            return f"{secs}s"
-        if secs < 3600:
-            return f"{secs // 60}m"
-        hours = secs // 3600
-        mins = (secs % 3600) // 60
-        return f"{hours}h{mins:02d}m" if hours < 24 else f"{hours // 24}d{hours % 24}h"
+        from launcher_support.screens.engines import uptime_of
+        return uptime_of(proc, hb)
 
     def _eng_select(self, proc: dict):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.select_proc(self, proc)
+        from launcher_support.screens.engines import select
+        return select(self, proc)
 
     def _eng_load_entries(self, proc: dict) -> None:
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.load_entries(self, proc)
+        from launcher_support.screens.engines import load_entries
+        return load_entries(self, proc)
 
     def _eng_fetch_entries(self, proc: dict,
                            stop: threading.Event) -> tuple[list[str], str]:
-        """Blocking fetch of entries. Returns (formatted_lines, summary)."""
-        from core.ops import run_catalog
-
-        if proc.get("_remote"):
-            rid = proc.get("_run_id")
-            if not rid:
-                return [], "no run_id"
-            try:
-                from launcher_support.engines_live_view import _get_cockpit_client
-                client = _get_cockpit_client()
-            except Exception:
-                return [], "cockpit client unavailable"
-            lines, summary = run_catalog.fetch_remote_entries(
-                client,
-                rid,
-                mode=str(proc.get("mode") or "").lower(),
-                limit=50,
-            )
-            if stop.is_set():
-                return [], summary
-            return lines, summary
-
-        # Local
-        rd = proc.get("run_dir")
-        lines, summary = run_catalog.read_local_entries(rd, limit=50)
-        if stop.is_set():
-            return [], summary
-        return lines, summary
+        from launcher_support.screens.engines import fetch_entries
+        return fetch_entries(proc, stop)
 
     def _eng_apply_entries(self, lines: list[str], summary: str) -> None:
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.apply_entries(self, lines, summary)
+        from launcher_support.screens.engines import apply_entries
+        return apply_entries(self, lines, summary)
 
     def _eng_tail_remote_worker(self, run_id: str,
                                 stop_event: threading.Event):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.tail_remote_worker(self, run_id, stop_event)
+        from launcher_support.screens.engines_live import tail_remote_worker
+        return tail_remote_worker(self, run_id, stop_event)
 
     def _eng_tail_worker(self, log_path: Path, stop_event: threading.Event):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.tail_worker(self, log_path, stop_event)
+        from launcher_support.screens.engines_live import tail_worker
+        return tail_worker(self, log_path, stop_event)
 
     def _eng_poll_logs(self):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.poll_logs(self)
+        from launcher_support.screens.engines_live import poll_logs
+        return poll_logs(self)
 
     # --- STRATEGIES (Layer 2) -----------------------------
     def _strategies(self, filter_group: str | None = None):
@@ -5077,62 +4949,8 @@ class App(tk.Tk):
         _render_strategies(self, filter_group=filter_group)
 
     def _engines_now_playing(self, host, tracks, running_map):
-        """NOW PLAYING strip — running live engines as clickable pills above
-        the picker. Clicking a pill: focuses that track + opens the LOG chip
-        on the right panel so the user lands on the live tail (iPod feel).
-        """
-        from datetime import datetime as _dt
-        bar = tk.Frame(host, bg=BG2,
-                       highlightbackground=BORDER, highlightthickness=1)
-        bar.pack(fill="x", pady=(0, 6))
-        tk.Label(bar, text="  NOW PLAYING ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=GREEN, padx=6, pady=2).pack(side="left", padx=(4, 8), pady=4)
-
-        slug_to_idx = {t.slug: i for i, t in enumerate(tracks)}
-        for slug, proc in running_map.items():
-            idx = slug_to_idx.get(slug)
-            if idx is None:
-                continue
-            name = tracks[idx].name
-            mode = (proc.get("engine") or "").upper()
-            # Uptime — derive from started timestamp (ISO)
-            up_lbl = "—"
-            try:
-                started = proc.get("started")
-                if started:
-                    t0 = _dt.fromisoformat(started)
-                    secs = (_dt.now() - t0).total_seconds()
-                    h, rem = divmod(int(secs), 3600)
-                    m, _ = divmod(rem, 60)
-                    up_lbl = f"{h}h{m:02d}m" if h else f"{m}m"
-            except Exception:
-                pass
-
-            pill = tk.Frame(bar, bg=BG3,
-                            highlightbackground=GREEN, highlightthickness=1,
-                            cursor="hand2")
-            pill.pack(side="left", padx=2, pady=4)
-            tk.Label(pill, text="●", font=(FONT, 9, "bold"),
-                     fg=GREEN, bg=BG3, padx=4).pack(side="left")
-            tk.Label(pill, text=name, font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG3).pack(side="left", padx=(0, 4))
-            tk.Label(pill, text=f" {up_lbl} ", font=(FONT, 7),
-                     fg=DIM, bg=BG3).pack(side="left")
-
-            def _focus(_e=None, _i=idx):
-                handle = getattr(self, "_strategies_picker", None)
-                if not handle:
-                    return
-                try:
-                    handle["select_index"](_i)
-                except Exception:
-                    pass
-                try:
-                    handle["open_chip"]("LOG")
-                except Exception:
-                    pass
-            for w in (pill,) + tuple(pill.winfo_children()):
-                w.bind("<Button-1>", _focus)
+        from launcher_support.screens.engines_live import engines_now_playing
+        return engines_now_playing(self, host, tracks, running_map)
 
     def _strategies_hydrate_metrics(self, tracks, picker_handle=None) -> None:
         """Populate track metrics from the DB. Runs in a background thread
