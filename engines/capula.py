@@ -500,12 +500,20 @@ def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE
 # Funding-rate fetcher (standalone — live / warmup use)
 # ════════════════════════════════════════════════════════════════════
 
-def fetch_funding_history(symbol: str, limit: int = 500) -> Optional[pd.DataFrame]:
+def fetch_funding_history(symbol: str, limit: int = 500,
+                          end_time_ms: Optional[int] = None
+                          ) -> Optional[pd.DataFrame]:
     """Fetch recent funding history for `symbol` from Binance Futures.
 
     Returns DataFrame with columns ['time', 'funding_rate'] sorted by time.
     Returns None on network / venue error so callers can fall back to
     candle-only backtest (no funding column) and abstain cleanly.
+
+    ``end_time_ms`` anchors the fetch window to a historical instant —
+    required for OOS/backtest reproducibility (AUR-10 MAJOR 2). Without
+    it the API returns the most recent ``limit`` rates ending NOW,
+    introducing look-ahead and making re-runs non-deterministic. Live
+    or fresh-warmup callers can omit it.
 
     Standalone — does not depend on JANE STREET or BRIDGEWATER. Uses the
     shared `core.sentiment.fetch_funding_rate` utility which talks to the
@@ -513,7 +521,8 @@ def fetch_funding_history(symbol: str, limit: int = 500) -> Optional[pd.DataFram
     """
     try:
         from core.sentiment import fetch_funding_rate
-        return fetch_funding_rate(symbol, limit=limit)
+        return fetch_funding_rate(symbol, limit=limit,
+                                  end_time_ms=end_time_ms)
     except Exception as e:  # pragma: no cover — network path
         log.warning("fetch_funding_history(%s) failed: %s", symbol, e)
         return None
@@ -645,7 +654,23 @@ def _build_dataset(symbols: list[str], interval: str,
     out: dict[str, pd.DataFrame] = {}
     for sym, df in all_dfs.items():
         validate(df, sym)
-        funding = fetch_funding_history(sym, limit=max(200, n_candles // 24))
+        # Anchor funding fetch to the dataset's last candle so OOS re-runs
+        # are reproducible (AUR-10 MAJOR 2).
+        end_time_ms: Optional[int] = None
+        if "time" in df.columns and len(df):
+            end_time_ms = int(
+                pd.Timestamp(df["time"].iloc[-1]).value // 1_000_000
+            )
+        funding = fetch_funding_history(
+            sym,
+            limit=max(200, n_candles // 24),
+            end_time_ms=end_time_ms,
+        )
+        if funding is None:
+            log.warning(
+                "%s: funding fetch returned None — symbol will abstain "
+                "(missing funding_rate column)", sym,
+            )
         out[sym] = join_funding_to_candles(df, funding)
     return out
 
