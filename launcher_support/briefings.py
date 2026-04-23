@@ -74,27 +74,6 @@ BRIEFINGS = {
             "Status":     "✓ EDGE CONFIRMADO — winner do battery",
         },
     },
-    "DE SHAW": {
-        "what": "Statistical arbitrage via Engle-Granger pairs cointegration. Delta-neutral exposure to mean-reverting spread dynamics; rolling OLS half-life estimation.",
-        "philosophy": "Dois ativos conectados que divergem devem convergir — como a lei da gravitação universal. Cointegração não é correlação — é um vínculo matemático, um atrator estável. Quando o spread entre dois pares cointegrados estica além do normal, a 'gravidade estatística' o puxa de volta à média. É a reversão à média de Ornstein-Uhlenbeck: o spread se comporta como uma mola — quanto mais se afasta do equilíbrio, maior a força restauradora. DE SHAW opera esta gravidade.",
-        "logic": [
-            "Teste de cointegração Engle-Granger em todos os pares de símbolos",
-            "Calcular z-score do spread com estimativa rolling OLS de half-life",
-            "Entrada quando |z-score| > 2.0 — spread a 2 desvios padrão da média",
-            "Saída quando z-score cruza 0 — reversão à média completa",
-            "Stop quando |z-score| > 3.5 — cointegração pode ter quebrado",
-        ],
-        "edge": "Market-neutral. Lucra independente da direção do mercado.",
-        "risk": "Cointegração pode quebrar permanentemente. Requer seleção cuidadosa de pares.",
-        "best_config": {
-            "TF":         "4h (1h e 15m geram ruído cointegração)",
-            "Período":    "90 dias",
-            "Basket":     "default",
-            "Z-entry":    "2.0 · Z-stop 3.5",
-            "Sharpe val": "1.27 · 92 trades · MC 63%",
-            "Status":     "? MARGINAL — universo altcoin atual sem pares cointegrados estáveis",
-        },
-    },
     "MILLENNIUM": {
         "what": "Multi-strategy portfolio orchestrator. Aggregates trade-level signals across all engines, applies rolling-Sortino performance weights, and enforces kill-switch discipline on underperformers.",
         "philosophy": "Nenhuma estratégia única sobrevive a todas as condições de mercado — assim como nenhuma partícula isolada explica toda a matéria. Mas um portfolio de estratégias não-correlacionadas, cada uma forte em regimes diferentes, cria um edge que persiste. É o princípio da superposição: sinais independentes combinados reduzem o ruído por vN enquanto preservam o sinal. MILLENNIUM orquestra — combinando sinais, gerenciando correlação, alocando capital onde a matemática aponta.",
@@ -123,25 +102,6 @@ BRIEFINGS = {
     },
 }
 
-BRIEFINGS["KEPOS"] = {
-    "what": "Critical endogeneity fade. Identifies self-exciting Hawkes regimes via branching ratio ? = 0.95 and counter-trades exhaustion moves with ATR-based risk.",
-    "philosophy": "O mercado é um processo auto-excitante — trades geram trades, como cascatas de decaimento radioativo. O branching ratio ? mede este feedback: ??1 é o ponto crítico, onde pequenos choques desencadeiam avalanches. KEPOS lê este estado de criticidade e fade o movimento — quando a multidão está convicta demais, a reversão é iminente. Física de Filimonov-Sornette aplicada a candle data: ? sustentado em regime crítico + overshoot de preço + expansão de ATR = reversão probabilística.",
-    "logic": [
-        "Calcular Hawkes ? rolling (branching ratio auto-excitante)",
-        "Gate 1: ? sustentado = 0.95 por N barras",
-        "Gate 2: preço overextended (|cum return| > 2s em janela curta)",
-        "Gate 3: ATR expandindo vs baseline (confirma climax)",
-        "Entry: fade do movimento · stop 1.2× ATR · tp 1.8× ATR",
-    ],
-    "edge": "Fade preciso em tops/bottoms locais com volatilidade climax confirmada.",
-    "risk": "? em candle data não atinge 0.95 frequentemente — poucos sinais. Research lab.",
-    "best_config": {
-        "TF":         "15m · 1h",
-        "Basket":     "layer1 (Sharpe 1.50)",
-        "Status":     "? ? diagnóstico · sinais raros em candles",
-    },
-}
-
 BRIEFINGS["GRAHAM"] = {
     "what": "Endogenous momentum engine. Trend-following exposures gated by Hawkes branching ratio; trades only when ? indicates sustainable internally-driven momentum.",
     "philosophy": "Nem toda tendência é igual. Algumas são empurradas por eventos externos (news, macro) — frágeis, efêmeras. Outras são endógenas: o mercado se auto-organiza numa direção por forças internas (order flow, posicionamento). Hawkes ? distingue os dois regimes. GRAHAM trada só tendências endógenas: quando ? está na banda ENDO (0.60-0.85), o momentum é sustentável. Fora dessa banda, stand aside.",
@@ -157,32 +117,6 @@ BRIEFINGS["GRAHAM"] = {
     "best_config": {
         "TF":         "15m",
         "Status":     "? research lab · calibração ENDO ativa",
-    },
-}
-
-BRIEFINGS["MEDALLION"] = {
-    "what": "Short-horizon ensemble with Kelly-based sizing. Aggregates seven orthogonal micro-signals (return z-score, volume surge, EMA deviation, rolling autocorrelation, RSI extreme, intraday seasonality, HMM chop probability). Direction set empirically based on observed autocorrelation regime.",
-    "philosophy": "O mercado é ruído com pequenos fios de sinal — cada indicador isolado explica quase nada. Mas o agregado de muitos sinais fracos, cada um independente, levanta a razão sinal-ruído por vN. É a lei dos grandes números aplicada à alocação: edge individual de 0.7% por trade torna-se retorno robusto quando multiplicado por milhares de operações, dimensionadas por Kelly. MEDALLION honra a metodologia Berlekamp-Laufer 1988-90: curto horizonte, regime verificado empiricamente antes da entrada, ensemble de sinais fracos, saída rápida — e coragem matemática para testar as duas direções (fade ou momentum) e seguir a que a evidência aponta.",
-    "logic": [
-        "Overshoot detector: z-score de retorno cumulativo em 10 barras",
-        "Ensemble 7-D: z-return · z-volume · EMA deviation · autocorrelation · RSI · hour-of-day seasonality · HMM chop probability",
-        "Gate de regime: exige autocorrelação rolling = 0 (mean-reversion regime ativo)",
-        "Direção: fade por default; --invert ativa momentum (calibrado pra cripto 1h)",
-        "Sizing Kelly fracional rolling empirical, fallback em priors, hard cap 2% equity",
-        "Exit: stop/TP ATR-based, time stop 8 barras, signal-flip exit",
-    ],
-    "edge": "Sharpe 2.54 · ROI +51% · MC 100% positivo · 5/6 overfit PASS · edge distribuído em 20 ativos e 365 dias.",
-    "risk": "Kelly ramp-up: primeiras ~30 trades com priors, edge só estabiliza depois. Regime-dependent — se autocorrelação virar positiva, engine vai veta por design.",
-    "best_config": {
-        "TF":         "1h (15m majors não tem edge pós-custos)",
-        "Período":    "365 dias",
-        "Basket":     "bluechip (20 ativos)",
-        "Direção":    "invert=True (momentum em cripto, não fade)",
-        "Sharpe val": "2.54 · 225 trades · ROI +51% · DD 7%",
-        "MC 1000":    "100% cenários positivos · median +$5k · RoR 0%",
-        "Walk-fwd":   "15/20 janelas teste positivas (75%)",
-        "Audit":      "5/6 PASS · 1 SKIP (regime) · 0 FAIL · breakeven 14bp",
-        "Status":     "✓ EDGE VALIDADO · backtest-ready · live requer aprovação",
     },
 }
 
@@ -456,58 +390,6 @@ for idx in range(min_idx, len(df) - MAX_HOLD - 2):
             "direction is always opposite the crowded side by construction",
             "same L2-L7 guarantees via shared-core calc_levels + label_trade",
             "signals are sparse — can produce 0 trades on short horizons",
-        ],
-    },
-    "DE SHAW": {
-        "source_files": ["engines/deshaw.py"],
-        "main_function": ("engines/deshaw.py", "scan_pair"),
-        "one_liner": "Statistical arbitrage: cointegration-driven pair trading "
-                     "with z-score mean reversion.",
-        "pseudocode": """\
-merged = calc_spread_zscore(df_a, df_b, beta, alpha)   # Engle-Granger
-for idx in range(min_idx, len(merged) - 2):
-    z = zscore[idx]
-
-    if in_trade:
-        if low[idx] <= liq_price(entry, dir): exit("LIQ")   # [Backlog #4]
-        elif z crosses mean in favorable direction: exit("WIN")
-        elif z hits stop threshold: exit("LOSS")
-        elif hold > MAX_HOLD: exit("time")
-        continue
-
-    if abs(z) < NEWTON_ZSCORE_ENTRY: continue
-    direction = "BEARISH" if z > 0 else "BULLISH"    # short/long spread
-    entry = a_open[idx+1] · (1 ± slip)               # [Backlog #1]
-    size  = position_size(account, entry, stop, score)
-    if not check_aggregate_notional(size*entry, [], account, LEVERAGE):
-        continue
-    open_trade(...)""",
-        "params": [
-            {"name": "NEWTON_ZSCORE_ENTRY","default": 2.0,"range": "1.5-3.0",
-             "unit": "s","effect": "|z| threshold to open a spread trade"},
-            {"name": "NEWTON_ZSCORE_EXIT", "default": 0.0,"range": "-0.5-0.5",
-             "unit": "s","effect": "|z| level at which winners are closed"},
-            {"name": "NEWTON_ZSCORE_STOP", "default": 3.5,"range": "3.0-5.0",
-             "unit": "s","effect": "|z| level that triggers stop-out"},
-            {"name": "NEWTON_COINT_PVALUE","default": 0.05,"range": "0.01-0.1",
-             "unit": "p","effect": "pair filter: max ADF test p-value"},
-            {"name": "NEWTON_SPREAD_WINDOW","default": 200,"range":"100-400",
-             "unit": "bars","effect": "rolling window for spread z-score"},
-            {"name": "NEWTON_MAX_HOLD",   "default": 150,"range": "80-300",
-             "unit": "bars","effect": "max hold bars before time exit"},
-        ],
-        "formulas": [
-            "spread = a_close - ß · b_close - a",
-            "z = (spread - µ_window) / s_window",
-            "pair selection: Engle-Granger cointegration, p < NEWTON_COINT_PVALUE",
-            "half_life ˜ -ln(2) / ln(?_AR1)",
-        ],
-        "invariants": [
-            "pair cointegration verified offline before scan loop",
-            "one open spread per pair at a time (in_trade bool)",
-            "entry at open[idx+1] + slippage (Backlog #1 fix)",
-            "liquidation guard inside exit loop (Backlog #4 fix)",
-            "L6 single-position cap enforced via check_aggregate_notional",
         ],
     },
     "MILLENNIUM": {
