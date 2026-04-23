@@ -32,6 +32,7 @@ ml = [
 all = ["aurum-finance[api,ml]"]
 dev = [
     "pytest>=7.0,<9",
+    "pytest-xdist>=3.5,<4",
     "httpx>=0.27,<1",
 ]
 
@@ -54,9 +55,14 @@ include = ["config*", "core*", "analysis*", "engines*", "bot*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# For fast iteration: pytest -n 6 (parallel). Note: ~41 tk-dependent
+# tests skip under parallel workers (different process = no Tk display),
+# so use sequential (no -n) for full coverage. Speed tradeoff:
+# sequential ~55s, parallel ~26s.
 addopts = "-p no:cacheprovider"
 markers = [
     "gui: requires a Tk-capable display (opt-in via -m gui or run all)",
+    "serial: test must run sequentially (xdist-unsafe: shared state, file locks, etc.)",
 ]
 norecursedirs = [
     ".git",
