@@ -12,7 +12,7 @@ import tkinter as tk
 
 from core.ui.ui_palette import (
     AMBER,
-    BG3,
+    BG, BG3, BORDER,
     DIM, DIM2, FONT,
     GREEN, PANEL, RED, WHITE,
 )
@@ -174,3 +174,80 @@ def render(app):
             except Exception:
                 pass
         app._dash_after_id = app.after(30000, app._dash_tick_refresh)
+
+
+def build_trades_tab(app, parent):
+    """Extracted from launcher.App in Fase 3 refactor."""
+    wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=12, pady=10)
+
+    # Filter row
+    filt = tk.Frame(wrap, bg=BG); filt.pack(fill="x", pady=(0, 6))
+    tk.Label(filt, text="FILTROS:", font=(FONT, 8, "bold"),
+             fg=AMBER, bg=BG).pack(side="left", padx=(0, 6))
+
+    for tag in ("all", "win", "loss"):
+        label = tag.upper()
+        btn = tk.Label(filt, text=f" {label} ", font=(FONT, 8, "bold"),
+                       fg=BG if app._dash_trades_filter["result"] == tag else DIM,
+                       bg=AMBER if app._dash_trades_filter["result"] == tag else BG3,
+                       padx=8, pady=2, cursor="hand2")
+        btn.pack(side="left", padx=2)
+        def _click(_e=None, t=tag):
+            app._dash_trades_filter["result"] = t
+            app._dash_trades_page = 0
+            app._dash_render_tab("trades")
+        btn.bind("<Button-1>", _click)
+
+    tk.Label(filt, text="  Conta:", font=(FONT, 8),
+             fg=DIM, bg=BG).pack(side="left", padx=(10, 4))
+    accs = ("paper", "testnet", "demo", "live")
+    for a in accs:
+        active = app._dash_portfolio_account == a
+        btn = tk.Label(filt, text=f" {a.upper()} ", font=(FONT, 8, "bold"),
+                       fg=BG if active else DIM,
+                       bg=AMBER if active else BG3,
+                       padx=6, pady=2, cursor="hand2")
+        btn.pack(side="left", padx=1)
+        def _aclick(_e=None, x=a):
+            app._dash_portfolio_account = x
+            # Make sure we have data for this account
+            pm = app._get_portfolio_monitor()
+            if pm.get_cached(x) is None:
+                threading.Thread(target=lambda m=x: pm.refresh(m), daemon=True).start()
+            app._dash_trades_page = 0
+            app._dash_render_tab("trades")
+        btn.bind("<Button-1>", _aclick)
+
+    # Table
+    tbl = tk.Frame(wrap, bg=PANEL,
+                   highlightbackground=BORDER, highlightthickness=1)
+    tbl.pack(fill="both", expand=True)
+    app._dash_widgets[("trades_table",)] = tbl
+
+    # Footer (page nav)
+    nav = tk.Frame(wrap, bg=BG); nav.pack(fill="x", pady=(6, 0))
+    prev_btn = tk.Label(nav, text=" ◄ prev ", font=(FONT, 8, "bold"),
+                        fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
+    prev_btn.pack(side="left", padx=2)
+    prev_btn.bind("<Button-1>", lambda e: app._dash_trades_page_change(-1))
+    page_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
+    page_lbl.pack(side="left", padx=8)
+    next_btn = tk.Label(nav, text=" next ► ", font=(FONT, 8, "bold"),
+                        fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
+    next_btn.pack(side="left", padx=2)
+    next_btn.bind("<Button-1>", lambda e: app._dash_trades_page_change(+1))
+    stats_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
+    stats_lbl.pack(side="right")
+    app._dash_widgets[("trades_page",)]  = page_lbl
+    app._dash_widgets[("trades_stats",)] = stats_lbl
+
+    # Initial render
+    app._dash_trades_render()
+
+
+
+def trades_page_change(app, delta):
+    """Extracted from launcher.App in Fase 3 refactor."""
+    app._dash_trades_page = max(0, app._dash_trades_page + delta)
+    app._dash_trades_render()
+
