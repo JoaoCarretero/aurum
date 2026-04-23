@@ -9556,16 +9556,27 @@ class App(tk.Tk):
 
 
 def __getattr__(name: str):
-    """Module-level lazy attribute for MAIN_GROUPS.
+    """Module-level lazy attribute para MAIN_GROUPS / MARKETS / _conn.
 
-    Python 3.7+ calls this when `name` is not found in the module's __dict__.
-    Since MAIN_GROUPS is intentionally absent until first access, any code that
-    reads `launcher.MAIN_GROUPS` (including tests that bypass App.__init__)
-    will trigger population here — paying the pandas+requests import cost once.
+    Python 3.7+ chama isto quando `name` nao esta em module.__dict__.
+    Os 3 nomes abaixo foram removidos do escopo top-level pelo commit
+    7532224 (lazy-load pra cortar ~530ms do boot) — mas como o launcher
+    e' importado por varios call-sites externos (launcher_support.screens.*,
+    tests, plans) que ainda esperam `launcher.MARKETS` / `launcher._conn`,
+    interceptamos aqui pra manter retrocompat sem recarregar pandas no boot.
+
+    Incidente 2026-04-23: strategies.render() acessava `_launcher_mod.MARKETS`
+    e o AttributeError engolido pelo Tk callback fazia a tela BACKTEST ficar
+    em branco. Fix local no strategies.py + este hardening defensivo.
     """
     if name == "MAIN_GROUPS":
         _ensure_main_groups()
         return globals()["MAIN_GROUPS"]
+    if name == "MARKETS":
+        _CM, _MARKETS = _lazy_connections()
+        return _MARKETS
+    if name == "_conn":
+        return _get_conn()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
