@@ -293,6 +293,8 @@ def run_probe(tick_sec: int, run_hours: float) -> int:
     stop_requested = {"flag": False, "reason": ""}
 
     def _handle_signal(signum, _frame):  # noqa: ARG001
+        if stop_requested["flag"]:
+            sys.exit(130)
         stop_requested["flag"] = True
         stop_requested["reason"] = f"signal {signum}"
         log.info("SIGNAL %s received — shutting down after current tick", signum)
