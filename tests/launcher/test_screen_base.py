@@ -145,3 +145,24 @@ def test_auto_cleanup_is_idempotent(tk_root):
     s.on_exit()
     s.on_exit()  # second call is safe no-op
     assert s.tick_count == 0
+
+
+def test_after_auto_prunes_fired_ids(tk_root):
+    """_tracked_after_ids nao cresce alem do num de timers *ativos*."""
+    import time as _time
+
+    s = _TimerScreen(parent=tk_root)
+    s.mount()
+    # Agenda 5 timers curtos (todos vao firar logo)
+    for _ in range(5):
+        s._after(5, s._tick)
+    assert len(s._tracked_after_ids) == 5
+    # Espera todos firarem (pool de update() + sleep real — update()
+    # sozinho nao processa eventos sem tempo wall-clock passar)
+    deadline = _time.time() + 1.0
+    while s.tick_count < 5 and _time.time() < deadline:
+        tk_root.update()
+        _time.sleep(0.01)
+    assert s.tick_count == 5
+    # Apos firar, lista foi podada — nao cresceu sem limite
+    assert s._tracked_after_ids == []

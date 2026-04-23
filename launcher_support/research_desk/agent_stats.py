@@ -13,7 +13,7 @@ import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
 
-from launcher_support.research_desk.agent_view import (
+from launcher_support.research_desk.paperclip_client import (
     agent_budget_cents,
     agent_spent_cents,
     format_usd_from_cents,

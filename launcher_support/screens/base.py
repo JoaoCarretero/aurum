@@ -65,8 +65,29 @@ class Screen(ABC):
     # ── lifecycle helpers ─────────────────────────────────────────
 
     def _after(self, ms: int, callback: Callable[[], Any]) -> str:
-        """Schedule a callback and track the id for cleanup in on_exit."""
-        aid = self.container.after(ms, callback)
+        """Schedule a callback and track the id for cleanup in on_exit.
+
+        Auto-prune: o wrapper remove o id da lista apos o callback firar,
+        impedindo o list de crescer sem limites em screens long-running
+        (ex: _poll_state reagenda a si mesmo a cada 5s — sem isso a
+        lista acumula centenas de ids mortos por hora).
+        """
+        # aid precisa existir antes do wrapper — usamos um container
+        # mutavel pra passar o id via closure.
+        holder: list[str] = []
+
+        def _wrapped() -> None:
+            try:
+                callback()
+            finally:
+                if holder and holder[0] in self._tracked_after_ids:
+                    try:
+                        self._tracked_after_ids.remove(holder[0])
+                    except ValueError:
+                        pass
+
+        aid = self.container.after(ms, _wrapped)
+        holder.append(aid)
         self._tracked_after_ids.append(aid)
         return aid
 

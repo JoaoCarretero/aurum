@@ -449,23 +449,54 @@ class ResearchDeskScreen(Screen):
     # ── Paperclip polling ─────────────────────────────────────────
 
     def _poll_state(self) -> None:
-        """Bate no /api/health, agrega budgets se online, e reagenda."""
-        online = self._client.is_online()
-        # Sync process status machine com health observado
+        """Bate no /api/health em thread, aplica UI na main loop, reagenda.
+
+        HTTP roda em background pra nao bloquear Tk durante o timeout
+        de 1.5s (ou ate 5s com cache miss + breaker). Callbacks de UI
+        voltam via container.after(0, ...).
+        """
+        import threading
+
+        def _work() -> None:
+            try:
+                online = self._client.is_online()
+                agents_raw: list[dict] = []
+                issues_raw: list[dict] = []
+                used_cents, cap_cents = 0, 0
+                if online:
+                    agents_raw = self._client.list_agents_cached(COMPANY_ID)
+                    issues_raw = self._client.list_issues_cached(COMPANY_ID)
+                    used_cents, cap_cents = total_budget_cents(agents_raw)
+            except Exception:  # noqa: BLE001
+                online = False
+                agents_raw = []
+                issues_raw = []
+                used_cents = cap_cents = 0
+
+            # Post resultado pra main thread
+            try:
+                self.container.after(0, lambda: self._apply_poll_result(
+                    online=online, agents_raw=agents_raw,
+                    issues_raw=issues_raw,
+                    used_cents=used_cents, cap_cents=cap_cents,
+                ))
+            except Exception:  # container destruido — screen saiu
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
+        # Reagenda proximo tick independente do resultado da thread
+        self._after(_POLL_INTERVAL_MS, self._poll_state)
+
+    def _apply_poll_result(
+        self, *, online: bool, agents_raw: list[dict],
+        issues_raw: list[dict], used_cents: int, cap_cents: int,
+    ) -> None:
+        """Roda na main thread — aplica resultado do poll_state async."""
         if online:
             self._process.mark_online()
         else:
             self._process.mark_offline()
 
-        used_cents, cap_cents = 0, 0
-        agents_raw: list[dict] = []
-        issues_raw: list[dict] = []
-        if online:
-            agents_raw = self._client.list_agents_cached(COMPANY_ID)
-            issues_raw = self._client.list_issues_cached(COMPANY_ID)
-            used_cents, cap_cents = total_budget_cents(agents_raw)
-
-        # Snapshot pra detail view consumir
         self._last_agents_raw = agents_raw
         self._last_issues_raw = issues_raw
 
@@ -473,24 +504,19 @@ class ResearchDeskScreen(Screen):
         self._apply_agent_cards(agents_raw, online=online)
         self._apply_pipeline(issues_raw, online=online)
         self._apply_artifacts()
-        # Reagenda via helper da base — cancelado automaticamente em on_exit
-        self._after(_POLL_INTERVAL_MS, self._poll_state)
 
     def _apply_artifacts(self) -> None:
         if self._artifacts_panel is None:
             return
+        # Scan unico por tick. Panel usa os 30 mais recentes; activity
+        # feed recebe ate 200 (pagina internamente via LOAD MORE).
         try:
-            entries = scan_artifacts(self.root_path, limit=30)
+            full_scan = scan_artifacts(self.root_path, limit=200)
         except Exception:
-            entries = []
-        self._artifacts_panel.update(entries)
-        # Activity feed compartilha a lista de artefatos com o painel
-        # artifacts — scan unico, consumo duplo
+            full_scan = []
+        self._artifacts_panel.update(full_scan[:30])
         if self._activity_feed is not None:
             try:
-                # Expande pra mais eventos no feed (100) mas limita
-                # a cabeca — o proprio widget pagina
-                full_scan = scan_artifacts(self.root_path, limit=200)
                 events = merge_events(
                     issues=self._last_issues_raw,
                     artifacts=full_scan,
@@ -581,18 +607,46 @@ class ResearchDeskScreen(Screen):
             )
 
     def _toggle_paperclip(self) -> None:
-        """Clique no action btn: decide start/stop pelo status atual."""
+        """Clique no action btn: decide start/stop pelo status atual.
+
+        start/stop roda em thread daemon — stop() faz proc.wait(5s)
+        + possivel kill+wait(2s), total ate 7s bloqueante se fosse
+        na main loop.
+        """
+        import threading
+
         status = self._process.status
         if status == ServerStatus.EXTERNAL or status in (
             ServerStatus.STARTING, ServerStatus.STOPPING,
         ):
             return  # botao desabilitado nesses estados
-        if self._process.is_owned():
-            ok, msg = self._process.stop(wait_sec=5.0)
-        else:
-            ok, msg = self._process.start()
+
+        is_stop = self._process.is_owned()
+
+        # Feedback imediato antes da thread disparar
+        self._flash_feedback(
+            ok=True,
+            msg="parando..." if is_stop else "iniciando...",
+        )
+
+        def _work() -> None:
+            try:
+                if is_stop:
+                    ok, msg = self._process.stop(wait_sec=5.0)
+                else:
+                    ok, msg = self._process.start()
+            except Exception as exc:  # noqa: BLE001
+                ok, msg = False, f"err: {exc}"
+            try:
+                self.container.after(0, lambda: self._post_toggle(ok, msg))
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _post_toggle(self, ok: bool, msg: str) -> None:
+        """Roda na main thread apos start/stop completar."""
         self._flash_feedback(ok=ok, msg=msg)
-        # Repoll agora pra refletir transicao imediatamente
         self._after(100, self._poll_state)
 
     def _flash_feedback(self, *, ok: bool, msg: str) -> None:
