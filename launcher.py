@@ -501,11 +501,16 @@ class App(tk.Tk):
     def __init__(self):
         boot_t0 = time.perf_counter()
         self._shutdown_done = False
+        _tk_t0 = time.perf_counter()
         super().__init__()
+        emit_timing_metric("boot.tk_root", ms=(time.perf_counter() - _tk_t0) * 1000.0)
+        _logging_t0 = time.perf_counter()
         try:
             _configure_screen_logging()
         except Exception:
             pass
+        emit_timing_metric("boot.screen_logging", ms=(time.perf_counter() - _logging_t0) * 1000.0)
+
         self.title("AURUM Terminal")
         self.configure(bg=BG)
         # Defensive: forca Tk default palette pra BG em tudo. Se alguma
@@ -514,6 +519,7 @@ class App(tk.Tk):
         # tk_setPalette varre todos widget defaults e seta em massa —
         # inclui menu/dialog/messagebox criados internamente. Chamado
         # ANTES de chrome/widgets serem criados.
+        _palette_t0 = time.perf_counter()
         try:
             self.tk_setPalette(
                 background=BG, foreground=WHITE,
@@ -522,11 +528,15 @@ class App(tk.Tk):
             )
         except Exception:
             pass
+        emit_timing_metric("boot.palette", ms=(time.perf_counter() - _palette_t0) * 1000.0)
+        _dpi_t0 = time.perf_counter()
         self._configure_windows_dpi()
         self.geometry("960x660")
         self.minsize(860, 560)
+        emit_timing_metric("boot.dpi_geometry", ms=(time.perf_counter() - _dpi_t0) * 1000.0)
 
         # Taskbar icon
+        _icon_t0 = time.perf_counter()
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("aurum.finance.terminal")
@@ -535,7 +545,9 @@ class App(tk.Tk):
             ico = ROOT / "server" / "logo" / "aurum.ico"
             if ico.exists(): self.iconbitmap(str(ico))
         except: pass
+        emit_timing_metric("boot.icon", ms=(time.perf_counter() - _icon_t0) * 1000.0)
 
+        _state_t0 = time.perf_counter()
         self.proc = None
         self.oq = queue.Queue()
         self._ui_task_queue = queue.Queue()
@@ -583,6 +595,7 @@ class App(tk.Tk):
         self._splash_pulse_after_id = None
         self._splash_canvas = None
         self._timing_starts: dict[str, float] = {}
+        emit_timing_metric("boot.state_init", ms=(time.perf_counter() - _state_t0) * 1000.0)
 
         chrome_t0 = time.perf_counter()
         if _boot_workers_enabled():
