@@ -193,6 +193,38 @@ def test_cache_survives_missing_file(client: PaperclipClient) -> None:
     assert client._load_cache("missing.json") is None  # noqa: SLF001
 
 
+def test_pause_agent_posts_to_pause_path(client: PaperclipClient) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0) -> _FakeResponse:
+        del timeout
+        captured["method"] = req.get_method()
+        captured["url"] = req.full_url
+        return _FakeResponse(b'{"paused": true}')
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        out = client.pause_agent("agent-uuid-1")
+    assert out == {"paused": True}
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/api/agents/agent-uuid-1/pause")
+
+
+def test_resume_agent_posts_to_resume_path(client: PaperclipClient) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0) -> _FakeResponse:
+        del timeout
+        captured["method"] = req.get_method()
+        captured["url"] = req.full_url
+        return _FakeResponse(b'{"paused": false}')
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        out = client.resume_agent("agent-uuid-2")
+    assert out == {"paused": False}
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/api/agents/agent-uuid-2/resume")
+
+
 def test_cache_save_invalid_dir_is_noop(tmp_path: Path) -> None:
     # Aponta cache_dir pra dentro de um arquivo pre-existente (invalido).
     # __post_init__ nao quebra, _save_cache tbm nao.

@@ -27,6 +27,7 @@ from core.ui.ui_palette import (
     DIM2,
     FONT,
     GREEN,
+    HAZARD,
     PANEL,
     WHITE,
 )
@@ -58,18 +59,23 @@ def open_agent_detail(
     agents_raw: list[dict],
     issues_raw: list[dict],
     on_assign: Callable[[AgentIdentity], None] | None = None,
+    on_toggle_pause: Callable[[AgentIdentity, bool], None] | None = None,
 ) -> None:
     """Abre o modal de detalhe. Scaneia artefatos localmente pro agent.
 
     agents_raw + issues_raw sao snapshots do poll atual do Screen (nao
     refaz HTTP aqui pra evitar lag). Artefatos sao resultado de um scan
     fresh — e rapido o suficiente pra rodar no open.
+
+    on_toggle_pause recebe (agent, currently_paused) — o Screen chama
+    client.pause_agent ou resume_agent baseado no flag.
     """
     root_path = ensure_path(root_path)
     artifacts_all = scan_artifacts(root_path, limit=200)
     artifacts_agent = filter_artifacts_for(agent, artifacts_all)
     issues_agent = filter_issues_for(agent, issues_raw)
     agent_dict = agent_dict_for(agent, agents_raw)
+    is_paused = bool(agent_dict and agent_dict.get("paused"))
 
     stats = shape_stats(
         agent=agent,
@@ -84,7 +90,9 @@ def open_agent_detail(
         stats=stats,
         artifacts=artifacts_agent[:5],
         root_path=root_path,
+        is_paused=is_paused,
         on_assign=on_assign,
+        on_toggle_pause=on_toggle_pause,
     )
 
 
@@ -97,12 +105,16 @@ class AgentDetailModal:
         stats: StatsView,
         artifacts: list[ArtifactEntry],
         root_path: Path,
+        is_paused: bool = False,
         on_assign: Callable[[AgentIdentity], None] | None,
+        on_toggle_pause: Callable[[AgentIdentity, bool], None] | None = None,
     ):
         self.agent = agent
         self.palette = AGENT_COLORS[agent.key]
         self.root_path = root_path
+        self._is_paused = is_paused
         self._on_assign = on_assign
+        self._on_toggle_pause = on_toggle_pause
 
         self.top = tk.Toplevel(parent)
         self.top.title(f"{agent.key} — {agent.role}")
@@ -303,6 +315,19 @@ class AgentDetailModal:
         assign_btn.pack(side="left")
         assign_btn.bind("<Button-1>", lambda _e: self._invoke_assign())
 
+        # Toggle pause/resume — so aparece se callback foi injetado
+        if self._on_toggle_pause is not None:
+            pause_label = "  RETOMAR  " if self._is_paused else "  PAUSAR  "
+            pause_bg = GREEN if self._is_paused else HAZARD
+            self._pause_btn = tk.Label(
+                actions, text=pause_label,
+                font=(FONT, 8, "bold"),
+                fg=BG, bg=pause_bg, cursor="hand2",
+                padx=8, pady=4,
+            )
+            self._pause_btn.pack(side="left", padx=(8, 0))
+            self._pause_btn.bind("<Button-1>", lambda _e: self._invoke_toggle_pause())
+
         close_btn = tk.Label(
             actions, text="  FECHAR  ",
             font=(FONT, 8),
@@ -316,3 +341,10 @@ class AgentDetailModal:
         if self._on_assign is not None:
             self.top.destroy()
             self._on_assign(self.agent)
+
+    def _invoke_toggle_pause(self) -> None:
+        if self._on_toggle_pause is not None:
+            # Fecha modal antes — Screen vai re-poll + reabrir se desejar
+            was_paused = self._is_paused
+            self.top.destroy()
+            self._on_toggle_pause(self.agent, was_paused)

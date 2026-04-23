@@ -265,7 +265,41 @@ class ResearchDeskScreen(Screen):
             agents_raw=self._last_agents_raw,
             issues_raw=self._last_issues_raw,
             on_assign=self._open_new_ticket_for_agent,
+            on_toggle_pause=self._toggle_agent_pause,
         )
+
+    def _toggle_agent_pause(
+        self, agent: AgentIdentity, was_paused: bool,
+    ) -> None:
+        """Chama POST /api/agents/:id/pause ou /resume. Re-poll imediato.
+
+        HTTP roda em thread daemon — nao bloqueia Tk. Resultado
+        aparece no proximo tick (alem do re-poll imediato).
+        """
+        import threading
+
+        def _run() -> None:
+            try:
+                if was_paused:
+                    self._client.resume_agent(agent.uuid)
+                else:
+                    self._client.pause_agent(agent.uuid)
+            except Exception:  # noqa: BLE001
+                pass  # erro cai no proximo poll — status pill volta
+
+        threading.Thread(target=_run, daemon=True).start()
+        # Feedback visual imediato + re-poll em 200ms (thread deve completar)
+        try:
+            verb = "retomando" if was_paused else "pausando"
+            self.app.h_stat.configure(
+                text=f"{verb} {agent.key}...", fg=AMBER_D,
+            )
+            self._after(200, self._poll_state)
+            self._after(2500, lambda: self.app.h_stat.configure(
+                text=s.STATUS_LABEL, fg=AMBER_D,
+            ))
+        except Exception:
+            pass
 
     def _submit_ticket(self, draft: TicketDraft) -> tuple[bool, str]:
         """POST /api/companies/:id/issues. Retorna (ok, msg) pro modal."""
