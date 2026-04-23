@@ -22,7 +22,7 @@ _TAB_CYCLE: dict[FocusPane, FocusPane] = {
     "strip": "detail_instances",
     "detail_instances": "detail_log",
     "detail_log": "strip",
-    "shelf": "strip",
+    "shelf": "strip",  # shelf is entered via toggle_shelf(); tab escapes back to strip
 }
 
 
