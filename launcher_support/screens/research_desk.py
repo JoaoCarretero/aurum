@@ -39,6 +39,11 @@ from core.ui.ui_palette import (
     WHITE,
 )
 from launcher_support.research_desk import strings as s
+from launcher_support.research_desk.agent_card import AgentCard
+from launcher_support.research_desk.agent_view import (
+    offline_view,
+    shape_agents_by_uuid,
+)
 from launcher_support.research_desk.agents import AGENTS, COMPANY_ID, AgentIdentity
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.paperclip_client import (
@@ -67,7 +72,7 @@ class ResearchDeskScreen(Screen):
         # Referencias de widgets preenchidas em build()
         self._subtitle_label: tk.Label | None = None
         self._state_label: tk.Label | None = None
-        self._agent_card_frames: dict[str, tk.Frame] = {}
+        self._agent_cards: dict[str, AgentCard] = {}
         self._pipeline_body: tk.Frame | None = None
         self._artifacts_body: tk.Frame | None = None
 
@@ -162,74 +167,35 @@ class ResearchDeskScreen(Screen):
             strip.grid_columnconfigure(i, weight=1, uniform="rd_agent")
 
         for i, agent in enumerate(AGENTS):
-            card = self._build_agent_card(strip, agent)
+            card = AgentCard(
+                strip,
+                agent=agent,
+                palette=AGENT_COLORS[agent.key],
+                on_assign=self._stub_action("assign"),
+                on_configure=self._stub_action("configure"),
+                on_history=self._stub_action("history"),
+            )
             card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0))
-            self._agent_card_frames[agent.key] = card
+            self._agent_cards[agent.key] = card
 
-    def _build_agent_card(self, parent: tk.Frame, agent: AgentIdentity) -> tk.Frame:
-        palette = AGENT_COLORS[agent.key]
-        card = tk.Frame(
-            parent, bg=PANEL,
-            highlightbackground=BORDER, highlightthickness=1,
-        )
+    def _stub_action(self, action: str) -> Any:
+        """Retorna handler generico que mostra msg no h_stat.
 
-        # Left accent stripe (per-agent color)
-        accent = tk.Frame(card, bg=palette.primary, width=3)
-        accent.pack(side="left", fill="y")
-
-        body = tk.Frame(card, bg=PANEL)
-        body.pack(side="left", fill="both", expand=True, padx=10, pady=8)
-
-        # Sigil placeholder (Sprint 2 substitui por SVG). Usa primeira
-        # letra do key stylizada na cor do agente.
-        sigil_frame = tk.Frame(body, bg=PANEL)
-        sigil_frame.pack(anchor="w")
-        tk.Label(
-            sigil_frame, text=agent.key[0],
-            font=(FONT, 18, "bold"),
-            fg=palette.primary, bg=PANEL,
-        ).pack(side="left")
-        tk.Label(
-            sigil_frame, text=f"  {agent.key}",
-            font=(FONT, 10, "bold"),
-            fg=palette.primary, bg=PANEL, anchor="w",
-        ).pack(side="left")
-
-        tk.Label(
-            body, text=agent.role,
-            font=(FONT, 8), fg=WHITE, bg=PANEL, anchor="w",
-        ).pack(anchor="w", pady=(2, 0))
-        tk.Label(
-            body, text=f"{agent.archetype} · {agent.stone}",
-            font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w",
-        ).pack(anchor="w")
-
-        tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(6, 4))
-
-        # Placeholders de stats (Task 1.3 popula com dados reais)
-        stat_row = tk.Frame(body, bg=PANEL)
-        stat_row.pack(fill="x")
-        tk.Label(
-            stat_row, text="status",
-            font=(FONT, 7), fg=DIM, bg=PANEL, width=10, anchor="w",
-        ).pack(side="left")
-        tk.Label(
-            stat_row, text="-",
-            font=(FONT, 7), fg=WHITE, bg=PANEL, anchor="w",
-        ).pack(side="left")
-
-        cost_row = tk.Frame(body, bg=PANEL)
-        cost_row.pack(fill="x")
-        tk.Label(
-            cost_row, text="budget",
-            font=(FONT, 7), fg=DIM, bg=PANEL, width=10, anchor="w",
-        ).pack(side="left")
-        tk.Label(
-            cost_row, text="-",
-            font=(FONT, 7), fg=WHITE, bg=PANEL, anchor="w",
-        ).pack(side="left")
-
-        return card
+        Tasks 1.6, 3.2, 3.4 substituem por handlers reais (ticket form,
+        AGENTS.md editor, history view).
+        """
+        def handler(agent: AgentIdentity) -> None:
+            try:
+                self.app.h_stat.configure(
+                    text=f"{agent.key} {action}: em breve",
+                    fg=AMBER_D,
+                )
+                self._after(2000, lambda: self.app.h_stat.configure(
+                    text=s.STATUS_LABEL, fg=AMBER_D,
+                ))
+            except Exception:
+                pass
+        return handler
 
     def _build_pipeline_panel(self, parent: tk.Frame) -> None:
         frame = tk.Frame(
@@ -307,13 +273,32 @@ class ResearchDeskScreen(Screen):
             self._process.mark_offline()
 
         used_cents, cap_cents = 0, 0
+        agents_raw: list[dict] = []
         if online:
-            agents = self._client.list_agents_cached(COMPANY_ID)
-            used_cents, cap_cents = total_budget_cents(agents)
+            agents_raw = self._client.list_agents_cached(COMPANY_ID)
+            used_cents, cap_cents = total_budget_cents(agents_raw)
 
         self._apply_state(online=online, used=used_cents, cap=cap_cents)
+        self._apply_agent_cards(agents_raw, online=online)
         # Reagenda via helper da base — cancelado automaticamente em on_exit
         self._after(_POLL_INTERVAL_MS, self._poll_state)
+
+    def _apply_agent_cards(self, agents_raw: list[dict], *, online: bool) -> None:
+        """Distribui dados de /api/companies/:id/agents nos cards por UUID.
+
+        Se offline, todos os cards mostram offline_view. Se online e UUID
+        nao retornou do Paperclip, aquele card tambem cai pra offline_view
+        (agente registrado mas nao existe mais no server).
+        """
+        if not online:
+            for card in self._agent_cards.values():
+                card.update(offline_view())
+            return
+
+        by_uuid = shape_agents_by_uuid(agents_raw)
+        for key, card in self._agent_cards.items():
+            view = by_uuid.get(card.agent.uuid)
+            card.update(view if view is not None else offline_view())
 
     def _apply_state(self, *, online: bool, used: int, cap: int) -> None:
         """Atualiza pill + subtitle + action btn. No-op se widgets destroyed."""
