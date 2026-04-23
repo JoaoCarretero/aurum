@@ -99,6 +99,12 @@ class CapulaParams:
 
     # Data schema
     funding_col: str = "funding_rate"
+    # funding_interval_h — publication cadence of the funding rate on
+    # the source venue. Binance perps publish every 8h; some venues
+    # (Bybit, dYdX) use 1h. ``scan_symbol`` multiplies per-bar funding
+    # by ``bar_minutes / (funding_interval_h * 60)`` so PnL reflects
+    # the fractional share of one full funding period — see AUR-10
+    # MAJOR 1. Do not remove.
     funding_interval_h: float = 8.0
 
     # Backtest metadata
@@ -251,14 +257,40 @@ def resolve_exit(df: pd.DataFrame, t: int, trade: dict,
 # Scan a single symbol
 # ════════════════════════════════════════════════════════════════════
 
+def _infer_bar_minutes(df: pd.DataFrame, params: CapulaParams) -> float:
+    """Minutes per bar, inferred from the ``time`` column when present.
+
+    Funding rates publish every ``funding_interval_h`` hours but candles
+    can be finer (e.g. 15m). ``merge_asof(backward)`` forward-fills the
+    same funding value onto every intra-period bar, so per-bar accrual
+    must be scaled by ``bar_minutes / funding_interval_minutes`` to avoid
+    counting each forward-filled bar as a full funding event.
+
+    Uses the median of ``time.diff()`` to be robust to gaps; falls back
+    to ``_TF_MINUTES[params.interval]`` when the DataFrame lacks a time
+    column or has fewer than two rows.
+    """
+    if "time" in df.columns and len(df) > 1:
+        times = pd.to_datetime(df["time"])
+        deltas = times.diff().dropna().dt.total_seconds() / 60.0
+        if len(deltas):
+            m = float(deltas.median())
+            if np.isfinite(m) and m > 0:
+                return m
+    return float(_TF_MINUTES.get(params.interval, 15))
+
+
 def scan_symbol(df: pd.DataFrame, symbol: str,
                 params: Optional[CapulaParams] = None,
                 initial_equity: float = ACCOUNT_SIZE) -> tuple[list, dict]:
     """Scan one symbol's DataFrame, return (trades, veto_counts).
 
     Expects `compute_features` already applied. Trades accumulate funding
-    PnL period-by-period; round-trip cost is charged at exit. LEVERAGE
-    multiplier applies to net PnL, matching KEPOS/GRAHAM convention.
+    PnL period-by-period, scaled by ``bar_minutes / (funding_interval_h
+    * 60)`` so per-bar accrual reflects the fractional share of a full
+    funding period — critical when bars are finer than the funding
+    cadence (AUR-10 MAJOR 1). Round-trip cost is charged at exit.
+    LEVERAGE multiplier applies to net PnL, matching KEPOS/GRAHAM.
     """
     params = params or CapulaParams()
     trades: list[dict] = []
@@ -277,6 +309,16 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
     open_trade: Optional[dict] = None
     accrued_funding = 0.0
 
+    # AUR-10 MAJOR 1: scale per-bar funding accrual by
+    # bar_minutes / (funding_interval_h × 60) so a forward-filled
+    # funding rate contributes only its fractional per-bar share. For
+    # matched cadence (8h bars + 8h funding) this is 1.0; for 15m bars
+    # + 8h funding it is 1/32, preventing PnL inflation.
+    bar_minutes = _infer_bar_minutes(df, params)
+    funding_interval_min = float(params.funding_interval_h) * 60.0
+    funding_scale = (bar_minutes / funding_interval_min
+                     if funding_interval_min > 0 else 1.0)
+
     for t in range(params.z_window, n):
         # Accrue funding for any open trade for this bar
         if open_trade is not None:
@@ -286,7 +328,7 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
                 direction=open_trade["direction"],
                 notional=open_trade["notional"],
                 rate=rate,
-            )
+            ) * funding_scale
             accrued_funding += period_pnl
 
             resolved = resolve_exit(df, t, open_trade, params)

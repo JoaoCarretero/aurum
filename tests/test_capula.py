@@ -386,3 +386,57 @@ def test_compute_summary_non_empty_preserves_pnl_sum():
     assert summary["pnl"] == pytest.approx(12.0, rel=1e-6)
     # compute_summary rounds to 2 decimals (AURUM convention, see kepos.py)
     assert summary["win_rate"] == pytest.approx(2 / 3 * 100, abs=0.01)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Regression — bar cadence vs funding cadence (MAJOR 1, AUR-10)
+# ════════════════════════════════════════════════════════════════════
+
+def test_scan_symbol_scales_funding_by_bar_cadence_15m_vs_8h():
+    """Regression for AUR-10 MAJOR 1 — per-bar accrual must scale by
+    (bar_minutes / funding_interval_minutes).
+
+    Binance funding publishes every 8h (480min). When the engine runs on
+    15m candles, ``merge_asof(backward)`` forward-fills each funding value
+    onto 32 consecutive bars. Without scaling, ``scan_symbol`` would accrue
+    the full funding on all 32 → PnL inflated by 32×. With the scaling
+    each 15m bar only contributes 1/32 of a full funding period.
+
+    The test builds a synthetic 15m dataset that mimics ffilled 8h funding
+    and asserts per-trade gross funding PnL stays well below what the
+    unscaled (broken) path would produce. Failure of this test means the
+    cadence-mismatch inflation is back.
+    """
+    block = 32  # 32 × 15min = 8h
+    # Structured funding cycle: strong positive period then reversion.
+    funding_events = np.concatenate([
+        np.full(6, 0.0),
+        np.full(8, 0.002),
+        np.full(6, 0.0),
+        np.full(6, -0.002),
+        np.full(4, 0.0),
+    ]).astype(float)
+    rates_15m = np.repeat(funding_events, block)  # 30 × 32 = 960 bars
+    df_15m = _df_with_funding(rates_15m, freq="15min")
+
+    params = CapulaParams(
+        z_window=150, z_entry=1.5, z_exit=0.3,
+        max_hold_periods=400, kill_switch_z=8.0,
+        kelly_fraction=0.25, max_pct_equity=0.10,
+        funding_interval_h=8.0, interval="15m",
+    )
+    df_feat = compute_features(df_15m, params)
+    trades, _ = scan_symbol(df_feat, "BTCUSDT", params, ACCOUNT_SIZE)
+
+    assert len(trades) >= 1, "expected at least one trade on the engineered cycle"
+
+    max_rate = float(np.max(np.abs(rates_15m)))
+    for tr in trades:
+        # Unscaled worst case if engine accrued full funding every bar.
+        unscaled_cap = max_rate * tr["notional"] * tr["duration"]
+        # Scaled correctly, per-bar share is 15/480 = 1/32 → gross must be
+        # well under 1/10 of the unscaled cap even with costs absorbed.
+        assert abs(tr["gross_funding_pnl"]) < unscaled_cap / 10, (
+            f"trade gross funding {tr['gross_funding_pnl']} exceeds 1/10 of "
+            f"unscaled cap {unscaled_cap} — MAJOR 1 scaling regressed"
+        )
