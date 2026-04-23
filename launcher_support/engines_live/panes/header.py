@@ -17,7 +17,7 @@ from core.ui.ui_palette import AMBER, BG, DIM, RED
 from launcher_support.engines_live.state import StateSnapshot
 from launcher_support.engines_live.widgets.pill_segment import PillSegment
 
-_MODES = ["PAPER", "DEMO", "TESTNET", "LIVE"]
+_MODES = ["PAPER", "SHADOW", "DEMO", "TESTNET", "LIVE"]
 
 
 def build_header(

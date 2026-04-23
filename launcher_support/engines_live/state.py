@@ -14,10 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal
 
-Mode = Literal["paper", "demo", "testnet", "live"]
+Mode = Literal["paper", "shadow", "demo", "testnet", "live"]
 FocusPane = Literal["strip", "detail_instances", "detail_log", "shelf"]
 
-_MODE_CYCLE: tuple[Mode, ...] = ("paper", "demo", "testnet", "live")
+_MODE_CYCLE: tuple[Mode, ...] = ("paper", "shadow", "demo", "testnet", "live")
 _TAB_CYCLE: dict[FocusPane, FocusPane] = {
     "strip": "detail_instances",
     "detail_instances": "detail_log",

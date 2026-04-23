@@ -141,13 +141,18 @@ def _refresh_data(launcher: Any, ui_state: dict, panes: dict) -> None:
         runs = cockpit.runs_cached()
         enriched = _enrich_procs(procs_rows, runs)
         cards = aggregate.build_engine_cards(enriched)
-        return cards, runs
+        not_running = _compute_not_running(cards)
+        return cards, runs, not_running
 
-    def _done(cards, runs):
+    def _done(cards, runs, not_running):
         ui_state["data"]["cards"] = cards
         ui_state["data"]["runs"] = runs
+        ui_state["data"]["not_running_engines"] = not_running
         strip_grid.update_strip_grid(
             panes["grid"], cards, ui_state["snapshot"].selected_engine,
+        )
+        research_shelf.update_shelf(
+            panes["shelf"], not_running, ui_state["snapshot"].shelf_expanded,
         )
         detail.update_detail(
             panes["det"], ui_state["snapshot"], ui_state["data"],
@@ -156,31 +161,93 @@ def _refresh_data(launcher: Any, ui_state: dict, panes: dict) -> None:
 
     def _run():
         try:
-            cards, runs = _worker()
+            cards, runs, not_running = _worker()
         except Exception:
             return
         try:
-            launcher.after(0, lambda: _done(cards, runs))
+            launcher.after(0, lambda: _done(cards, runs, not_running))
         except Exception:
             pass
 
     _executor.submit(_run)
 
 
+def _parse_started_uptime(started: Any) -> int:
+    """Best-effort parse of started_at -> uptime seconds. Returns 0 on failure."""
+    if not started:
+        return 0
+    try:
+        from datetime import datetime, timezone
+        raw = str(started).replace("Z", "+00:00")
+        t0 = datetime.fromisoformat(raw)
+        now = datetime.now(t0.tzinfo) if t0.tzinfo else datetime.now(timezone.utc).replace(tzinfo=None)
+        return max(0, int((now - t0).total_seconds()))
+    except Exception:
+        return 0
+
+
 def _enrich_procs(procs_rows: list[dict], runs: list[dict]) -> list[dict]:
-    """Merge heartbeat + run data into proc rows."""
+    """Merge local procs + VPS cockpit runs into a unified rows list.
+
+    Local procs take precedence for matching run_ids. Cockpit runs with
+    status=="running" that have no matching local proc become virtual proc
+    rows (remote VPS instances) so the strip grid shows them.
+    """
     runs_by_id = {r.get("run_id"): r for r in runs if r.get("run_id")}
+    proc_run_ids = {p.get("run_id") for p in procs_rows if p.get("run_id")}
+
     enriched: list[dict] = []
+
     for p in procs_rows:
         run_id = p.get("run_id")
         row = dict(p)
         run = runs_by_id.get(run_id) or {}
-        row["ticks_ok"] = int(run.get("tick_count") or 0)
-        row["novel_total"] = int(run.get("novel_count") or 0)
-        row["equity"] = run.get("equity")
+        row["ticks_ok"] = int(run.get("ticks_ok") or run.get("tick_count") or 0)
+        row["novel_total"] = int(run.get("novel_total") or run.get("novel_count") or 0)
+        if row.get("equity") is None:
+            row["equity"] = run.get("equity")
         row["ticks_fail"] = int(run.get("ticks_fail") or 0)
         enriched.append(row)
+
+    for run in runs:
+        rid = run.get("run_id")
+        if not rid or rid in proc_run_ids:
+            continue
+        status = str(run.get("status") or "").lower()
+        if status and status != "running":
+            continue
+        engine = str(run.get("engine") or "").lower()
+        if not engine:
+            continue
+        enriched.append({
+            "run_id": rid,
+            "engine": engine,
+            "mode": str(run.get("mode") or ""),
+            "uptime_s": _parse_started_uptime(run.get("started_at") or run.get("started")),
+            "ticks_ok": int(run.get("ticks_ok") or run.get("tick_count") or 0),
+            "novel_total": int(run.get("novel_total") or run.get("novel_count") or 0),
+            "equity": run.get("equity"),
+            "ticks_fail": int(run.get("ticks_fail") or 0),
+            "process_dead": False,
+            "heartbeat_age_s": None,
+            "source": "vps",
+            "pid": None,
+            "alive": True,
+            "status": status or "running",
+        })
+
     return enriched
+
+
+def _compute_not_running(cards: list) -> list[str]:
+    """Registry engines that have no active instance (paper or remote)."""
+    try:
+        from config.engines import ENGINES
+    except Exception:
+        return []
+    running = {getattr(c, "engine", None) for c in cards}
+    running.discard(None)
+    return sorted(slug for slug in ENGINES.keys() if slug not in running)
 
 
 def _handle_select(ui_state: dict, panes: dict, engine: str) -> None:

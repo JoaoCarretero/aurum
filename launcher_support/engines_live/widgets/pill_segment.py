@@ -21,6 +21,7 @@ from core.ui.ui_palette import (
 
 DEFAULT_COLORS = {
     "PAPER": CYAN,
+    "SHADOW": WHITE,
     "DEMO": GREEN,
     "TESTNET": AMBER,
     "LIVE": RED,

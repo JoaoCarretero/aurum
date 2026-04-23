@@ -31,6 +31,8 @@ def test_cycle_mode_wraps_around():
     s = empty_state()
     assert s.mode == "paper"
     s = cycle_mode_state(s)
+    assert s.mode == "shadow"
+    s = cycle_mode_state(s)
     assert s.mode == "demo"
     s = cycle_mode_state(s)
     assert s.mode == "testnet"
