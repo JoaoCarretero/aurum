@@ -46,9 +46,25 @@ from launcher_support.research_desk.artifact_scanner import (
     scan_artifacts,
 )
 from launcher_support.research_desk.artifacts_panel import open_markdown_viewer
+from launcher_support.research_desk.live_runs import (
+    STATUS_ERROR,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    RunView,
+    shape_runs,
+)
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.sigils import SigilCanvas
 from launcher_support.research_desk.typography import agent_font
+
+# Status -> cor do dot/label no painel LIVE RUNS
+_RUN_STATUS_COLOR = {
+    STATUS_RUNNING: AMBER,
+    STATUS_SUCCESS: GREEN,
+    STATUS_ERROR: HAZARD,
+}
+
+_RUNS_REFRESH_MS = 3000
 
 
 def open_agent_detail(
@@ -60,6 +76,7 @@ def open_agent_detail(
     issues_raw: list[dict],
     on_assign: Callable[[AgentIdentity], None] | None = None,
     on_toggle_pause: Callable[[AgentIdentity, bool], None] | None = None,
+    fetch_runs: Callable[[AgentIdentity], list[dict]] | None = None,
 ) -> None:
     """Abre o modal de detalhe. Scaneia artefatos localmente pro agent.
 
@@ -69,6 +86,10 @@ def open_agent_detail(
 
     on_toggle_pause recebe (agent, currently_paused) — o Screen chama
     client.pause_agent ou resume_agent baseado no flag.
+
+    fetch_runs e opcional — se fornecido, modal mostra painel LIVE RUNS
+    com auto-refresh 3s. Callback roda em thread daemon no Screen e
+    retorna a lista de dicts crus de /api/heartbeat-runs.
     """
     root_path = ensure_path(root_path)
     artifacts_all = scan_artifacts(root_path, limit=200)
@@ -93,6 +114,7 @@ def open_agent_detail(
         is_paused=is_paused,
         on_assign=on_assign,
         on_toggle_pause=on_toggle_pause,
+        fetch_runs=fetch_runs,
     )
 
 
@@ -108,6 +130,7 @@ class AgentDetailModal:
         is_paused: bool = False,
         on_assign: Callable[[AgentIdentity], None] | None,
         on_toggle_pause: Callable[[AgentIdentity, bool], None] | None = None,
+        fetch_runs: Callable[[AgentIdentity], list[dict]] | None = None,
     ):
         self.agent = agent
         self.palette = AGENT_COLORS[agent.key]
@@ -115,16 +138,40 @@ class AgentDetailModal:
         self._is_paused = is_paused
         self._on_assign = on_assign
         self._on_toggle_pause = on_toggle_pause
+        self._fetch_runs = fetch_runs
 
         self.top = tk.Toplevel(parent)
         self.top.title(f"{agent.key} — {agent.role}")
         self.top.configure(bg=BG)
-        self.top.geometry("640x620")
+        self.top.geometry("720x720" if fetch_runs else "640x620")
         self.top.transient(parent)
 
+        # Painel LIVE RUNS — refs populados em _build_live_runs se fetch_runs
+        self._runs_body: tk.Frame | None = None
+        self._runs_counter: tk.Label | None = None
+        self._runs_after_id: str | None = None
+        self._runs_closed: bool = False
+
         self._build(stats, artifacts)
-        self.top.bind("<Escape>", lambda _e: self.top.destroy())
+        self.top.bind("<Escape>", lambda _e: self._close())
+        self.top.protocol("WM_DELETE_WINDOW", self._close)
         self.top.focus_set()
+
+        if fetch_runs is not None:
+            self._schedule_runs_refresh(initial=True)
+
+    def _close(self) -> None:
+        self._runs_closed = True
+        if self._runs_after_id is not None:
+            try:
+                self.top.after_cancel(self._runs_after_id)
+            except Exception:
+                pass
+            self._runs_after_id = None
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
 
     def _build(self, stats: StatsView, artifacts: list[ArtifactEntry]) -> None:
         wrap = tk.Frame(self.top, bg=BG, padx=20, pady=16)
@@ -135,6 +182,9 @@ class AgentDetailModal:
         self._build_statblock(wrap, stats)
         tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
         self._build_recent_work(wrap, artifacts)
+        if self._fetch_runs is not None:
+            tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
+            self._build_live_runs(wrap)
         self._build_actions(wrap)
 
     # ── Hero (sigil + nome + tagline) ─────────────────────────────
@@ -346,5 +396,117 @@ class AgentDetailModal:
         if self._on_toggle_pause is not None:
             # Fecha modal antes — Screen vai re-poll + reabrir se desejar
             was_paused = self._is_paused
-            self.top.destroy()
+            self._close()
             self._on_toggle_pause(self.agent, was_paused)
+
+    # ── Live runs (heartbeat-runs) ───────────────────────────────
+
+    def _build_live_runs(self, parent: tk.Frame) -> None:
+        section = tk.Frame(parent, bg=BG)
+        section.pack(fill="both", expand=True, pady=(10, 0))
+
+        header = tk.Frame(section, bg=BG)
+        header.pack(fill="x")
+        tk.Label(
+            header, text="LIVE RUNS",
+            font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w",
+        ).pack(side="left")
+        self._runs_counter = tk.Label(
+            header, text="...",
+            font=(FONT, 7), fg=DIM, bg=BG, anchor="e",
+        )
+        self._runs_counter.pack(side="right")
+
+        self._runs_body = tk.Frame(section, bg=BG)
+        self._runs_body.pack(fill="both", expand=True, pady=(6, 0))
+
+        # Estado inicial
+        tk.Label(
+            self._runs_body, text="carregando...",
+            font=(FONT, 8, "italic"), fg=DIM, bg=BG, anchor="w",
+        ).pack(anchor="w")
+
+    def _schedule_runs_refresh(self, *, initial: bool = False) -> None:
+        """Dispatcha fetch em thread daemon; resultado volta em main.
+
+        initial=True agenda imediato; senao espera _RUNS_REFRESH_MS.
+        """
+        if self._runs_closed or self._fetch_runs is None:
+            return
+        import threading
+
+        def _work() -> None:
+            try:
+                raw = self._fetch_runs(self.agent)
+            except Exception:  # noqa: BLE001
+                raw = []
+            if self._runs_closed:
+                return
+            views = shape_runs(raw, limit=10)
+            try:
+                self.top.after(0, lambda: self._apply_runs(views))
+            except Exception:
+                pass
+
+        # Primeiro tick: logo, mas nao sincrono (modal precisa pintar primeiro)
+        delay = 50 if initial else _RUNS_REFRESH_MS
+        try:
+            self._runs_after_id = self.top.after(
+                delay, lambda: threading.Thread(target=_work, daemon=True).start(),
+            )
+        except Exception:
+            pass
+
+    def _apply_runs(self, views: list[RunView]) -> None:
+        if self._runs_closed or self._runs_body is None:
+            return
+        for child in self._runs_body.winfo_children():
+            child.destroy()
+
+        if self._runs_counter is not None:
+            try:
+                self._runs_counter.configure(text=f"{len(views)} runs")
+            except Exception:
+                pass
+
+        if not views:
+            tk.Label(
+                self._runs_body, text="sem runs recentes.",
+                font=(FONT, 8, "italic"), fg=DIM, bg=BG, anchor="w",
+            ).pack(anchor="w")
+        else:
+            for view in views:
+                self._render_run_row(self._runs_body, view)
+
+        # Re-arm
+        self._schedule_runs_refresh(initial=False)
+
+    def _render_run_row(self, parent: tk.Frame, view: RunView) -> None:
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", pady=1)
+
+        color = _RUN_STATUS_COLOR.get(view.status, DIM)
+        tk.Label(
+            row, text=view.status_icon,
+            font=(FONT, 10), fg=color, bg=BG, width=2, anchor="w",
+        ).pack(side="left")
+        tk.Label(
+            row, text=view.issue_title,
+            font=(FONT, 8), fg=WHITE, bg=BG, anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+        tk.Label(
+            row, text=view.duration_text,
+            font=(FONT, 7), fg=DIM, bg=BG, anchor="e", width=8,
+        ).pack(side="right")
+        tk.Label(
+            row, text=view.cost_text,
+            font=(FONT, 7), fg=self.palette.primary, bg=BG, anchor="e", width=8,
+        ).pack(side="right")
+        tk.Label(
+            row, text=view.tokens_text,
+            font=(FONT, 7), fg=DIM2, bg=BG, anchor="e", width=18,
+        ).pack(side="right")
+        tk.Label(
+            row, text=view.age_text,
+            font=(FONT, 7), fg=DIM, bg=BG, anchor="e", width=12,
+        ).pack(side="right")

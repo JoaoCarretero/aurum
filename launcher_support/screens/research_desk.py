@@ -266,7 +266,16 @@ class ResearchDeskScreen(Screen):
             issues_raw=self._last_issues_raw,
             on_assign=self._open_new_ticket_for_agent,
             on_toggle_pause=self._toggle_agent_pause,
+            fetch_runs=self._fetch_runs_for,
         )
+
+    def _fetch_runs_for(self, agent: AgentIdentity) -> list[dict]:
+        """Fetch heartbeat runs pra um agente. Chamado em thread daemon
+        pelo modal — nao bloqueia main loop do launcher."""
+        try:
+            return self._client.list_heartbeat_runs_cached(agent.uuid, limit=20)
+        except Exception:
+            return []
 
     def _toggle_agent_pause(
         self, agent: AgentIdentity, was_paused: bool,

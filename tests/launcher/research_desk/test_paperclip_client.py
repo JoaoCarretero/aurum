@@ -209,6 +209,38 @@ def test_pause_agent_posts_to_pause_path(client: PaperclipClient) -> None:
     assert captured["url"].endswith("/api/agents/agent-uuid-1/pause")
 
 
+def test_list_heartbeat_runs_fetches_by_agent(client: PaperclipClient) -> None:
+    captured: dict[str, Any] = {}
+    payload = [{"id": "run1"}, {"id": "run2"}]
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0) -> _FakeResponse:
+        del timeout
+        captured["url"] = req.full_url
+        return _FakeResponse(json.dumps(payload).encode())
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        runs = client.list_heartbeat_runs("agent-x", limit=10)
+    assert runs == payload
+    assert "agent_id=agent-x" in captured["url"]
+    assert "limit=10" in captured["url"]
+
+
+def test_list_heartbeat_runs_cached_fallback(client: PaperclipClient) -> None:
+    payload = [{"id": "r1"}]
+    with patch("urllib.request.urlopen",
+               return_value=_FakeResponse(json.dumps(payload).encode())):
+        client.list_heartbeat_runs_cached("agent-x")
+    # Segunda chamada offline retorna cache
+    with patch("urllib.request.urlopen", side_effect=_url_error()):
+        runs = client.list_heartbeat_runs_cached("agent-x")
+    assert runs == payload
+
+
+def test_list_heartbeat_runs_cached_empty_no_cache(client: PaperclipClient) -> None:
+    with patch("urllib.request.urlopen", side_effect=_url_error()):
+        assert client.list_heartbeat_runs_cached("unknown") == []
+
+
 def test_resume_agent_posts_to_resume_path(client: PaperclipClient) -> None:
     captured: dict[str, Any] = {}
 

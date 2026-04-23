@@ -153,6 +153,32 @@ class PaperclipClient:
         data = self._get(f"/api/heartbeat-runs/{run_id}")
         return data if isinstance(data, dict) else {}
 
+    def list_heartbeat_runs(
+        self, agent_id: str, limit: int = 20,
+    ) -> list[dict]:
+        """GET /api/heartbeat-runs?agent_id=X&limit=N.
+
+        Retorna lista (ordenada DESC por started_at pelo server). Tolera
+        shapes {'runs': [...]} e [...] — normaliza pra list.
+        """
+        path = f"/api/heartbeat-runs?agent_id={agent_id}&limit={limit}"
+        data = self._get(path)
+        runs = data if isinstance(data, list) else data.get("runs", [])
+        return runs if isinstance(runs, list) else []
+
+    def list_heartbeat_runs_cached(
+        self, agent_id: str, limit: int = 20,
+    ) -> list[dict]:
+        """Tentativa live; fallback cache; [] se nada disponivel."""
+        try:
+            runs = self.list_heartbeat_runs(agent_id, limit)
+            self._save_cache(f"runs_{agent_id}.json", runs)
+            return runs
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError,
+                TimeoutError, CircuitOpen):
+            cached = self._load_cache(f"runs_{agent_id}.json")
+            return cached if isinstance(cached, list) else []
+
     # ── Circuit breaker ───────────────────────────────────────────
 
     def _check_breaker(self) -> None:
