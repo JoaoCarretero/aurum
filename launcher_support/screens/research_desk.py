@@ -45,6 +45,7 @@ from launcher_support.research_desk.agent_view import (
     shape_agents_by_uuid,
 )
 from launcher_support.research_desk.agents import AGENTS, COMPANY_ID, AgentIdentity
+from launcher_support.research_desk.issue_view import IssueView
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.paperclip_client import (
     PaperclipClient,
@@ -57,6 +58,7 @@ from launcher_support.research_desk.paperclip_process import (
     ServerStatus,
     default_paperclip_cmd,
 )
+from launcher_support.research_desk.pipeline_panel import PipelinePanel
 from launcher_support.screens.base import Screen
 
 # Polling rhythm — spec says 5s. Health check separately uses shorter
@@ -73,7 +75,7 @@ class ResearchDeskScreen(Screen):
         self._subtitle_label: tk.Label | None = None
         self._state_label: tk.Label | None = None
         self._agent_cards: dict[str, AgentCard] = {}
-        self._pipeline_body: tk.Frame | None = None
+        self._pipeline_panel: PipelinePanel | None = None
         self._artifacts_body: tk.Frame | None = None
 
         # HTTP client do Paperclip — reused across mount/unmount para
@@ -211,11 +213,25 @@ class ResearchDeskScreen(Screen):
 
         body = tk.Frame(frame, bg=PANEL)
         body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
-        self._pipeline_body = body
-        tk.Label(
-            body, text=s.EMPTY_PIPELINE,
-            font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w",
-        ).pack(anchor="w")
+        self._pipeline_panel = PipelinePanel(
+            body,
+            on_row_click=self._on_issue_click,
+            empty_text=s.EMPTY_PIPELINE,
+        )
+        self._pipeline_panel.pack(fill="both", expand=True)
+
+    def _on_issue_click(self, view: IssueView) -> None:
+        """Stub — Sprint 3.1 vai abrir painel de detalhe com stream."""
+        try:
+            self.app.h_stat.configure(
+                text=f"issue {view.id[:8]}: em breve",
+                fg=AMBER_D,
+            )
+            self._after(2500, lambda: self.app.h_stat.configure(
+                text=s.STATUS_LABEL, fg=AMBER_D,
+            ))
+        except Exception:
+            pass
 
     def _build_artifacts_panel(self, parent: tk.Frame) -> None:
         frame = tk.Frame(
@@ -274,14 +290,25 @@ class ResearchDeskScreen(Screen):
 
         used_cents, cap_cents = 0, 0
         agents_raw: list[dict] = []
+        issues_raw: list[dict] = []
         if online:
             agents_raw = self._client.list_agents_cached(COMPANY_ID)
+            issues_raw = self._client.list_issues_cached(COMPANY_ID)
             used_cents, cap_cents = total_budget_cents(agents_raw)
 
         self._apply_state(online=online, used=used_cents, cap=cap_cents)
         self._apply_agent_cards(agents_raw, online=online)
+        self._apply_pipeline(issues_raw, online=online)
         # Reagenda via helper da base — cancelado automaticamente em on_exit
         self._after(_POLL_INTERVAL_MS, self._poll_state)
+
+    def _apply_pipeline(self, issues_raw: list[dict], *, online: bool) -> None:
+        if self._pipeline_panel is None:
+            return
+        if not online:
+            self._pipeline_panel.show_offline(s.OFFLINE_BANNER)
+            return
+        self._pipeline_panel.update(issues_raw)
 
     def _apply_agent_cards(self, agents_raw: list[dict], *, online: bool) -> None:
         """Distribui dados de /api/companies/:id/agents nos cards por UUID.
