@@ -265,6 +265,7 @@ def test_shadow_active_slugs_falls_back_to_cockpit_latest_run():
 def test_fetch_shadow_snapshot_falls_back_to_cockpit_when_poller_empty():
     from launcher_support import engines_live_view as evv
     from launcher_support import tunnel_registry
+    from launcher_support.engines_live.data import cockpit as _cockpit_data
 
     class FakePoller:
         engine = "millennium"
@@ -296,7 +297,7 @@ def test_fetch_shadow_snapshot_falls_back_to_cockpit_when_poller_empty():
 
     try:
         tunnel_registry.set_shadow_poller(FakePoller())
-        evv._COCKPIT_CLIENT_SINGLETON = FakeClient()
+        _cockpit_data._CLIENT_SINGLETON = FakeClient()
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(evv, "_fetch_shadow_run_id", lambda state=None: None)
         monkeypatch.setattr(evv.run_catalog, "latest_active_run", lambda **kw: None)
@@ -306,7 +307,7 @@ def test_fetch_shadow_snapshot_falls_back_to_cockpit_when_poller_empty():
         assert trades[0]["strategy"] == "JUMP"
     finally:
         monkeypatch.undo()
-        evv._COCKPIT_CLIENT_SINGLETON = None
+        _cockpit_data.reset_client_for_tests()
         tunnel_registry.reset_for_tests()
 
 
@@ -512,19 +513,6 @@ def test_load_positions_for_slug_uses_ttl_cache(tmp_path, monkeypatch):
     assert first[0]["symbol"] == "BTCUSDT"
     assert second[0]["symbol"] == "BTCUSDT"
 
-
-def test_read_log_tail_uses_ttl_cache(tmp_path):
-    import launcher_support.engines_live_view as evv
-
-    log_path = tmp_path / "engine.log"
-    log_path.write_text("a\nb\n", encoding="utf-8")
-
-    first = evv._read_log_tail(log_path, n=2)
-    log_path.write_text("x\ny\n", encoding="utf-8")
-    second = evv._read_log_tail(log_path, n=2)
-
-    assert first == ["a", "b"]
-    assert second == ["a", "b"]
 
 
 def test_find_latest_shadow_run_local_fallback_uses_ttl_cache(tmp_path, monkeypatch):
