@@ -266,18 +266,21 @@ def _vps_running_instance_count(
 
 
 def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict]:
-    now = time.monotonic()
-    cached_rows = _PROCS_CACHE.get("rows")
-    cached_ts = float(_PROCS_CACHE.get("ts") or 0.0)
-    if not force and cached_rows is not None and (now - cached_ts) <= ttl_s:
-        return list(cached_rows)  # type: ignore[arg-type]
-    try:
-        from core.ops.proc import list_procs
-        rows = list_procs()
-    except Exception:
-        rows = []
-    _PROCS_CACHE["ts"] = now
-    _PROCS_CACHE["rows"] = list(rows)
+    """Backward-compat alias. New code should use
+    launcher_support.engines_live.data.procs:list_procs directly.
+
+    Note: ttl_s is accepted for signature compatibility but ignored — the
+    underlying module uses a single fixed TTL (0.75s).
+
+    Also keeps _PROCS_CACHE in sync for the one direct read at line ~1529
+    that bypasses this function (reads _PROCS_CACHE["rows"] directly to
+    build heartbeat stubs for non-shadow modes). Remove that direct read
+    in a follow-up cleanup and this sync can be dropped.
+    """
+    from launcher_support.engines_live.data.procs import list_procs
+    rows = list_procs(force=force)
+    _PROCS_CACHE["rows"] = rows
+    _PROCS_CACHE["ts"] = __import__("time").monotonic()
     return rows
 
 
