@@ -377,3 +377,48 @@ def test_runner_rejects_stale_signal_post_prime(tmp_path, monkeypatch):
     assert heartbeat["last_scan_stale"] == 1
     assert heartbeat["last_scan_live"] == 0
     assert heartbeat["last_scan_opened"] == 0
+
+
+def test_fetch_new_bars_filters_historical_when_since_is_tz_aware(monkeypatch):
+    """Ghost-exit repro (2026-04-23 ARBUSDT RENAISSANCE).
+
+    run_one_tick stores ``last_bar_ts_by_symbol[sym] = now_iso`` with an
+    aware datetime. On the next tick _fetch_new_bars compared that aware
+    cursor to df['time'] (naive from pd.to_datetime of Binance ms), which
+    raised TypeError. The bare except: pass swallowed it and returned all
+    20 candles — including the ~5h of history before the position opened.
+    _walk_bars then triggered target/stop on a historical candle, forging
+    a trade that never existed live.
+    """
+    import pandas as pd
+    from tools.operations import millennium_paper as mp
+
+    opened_at = datetime(2026, 4, 23, 0, 1, 23, tzinfo=timezone.utc)
+    bars_naive_utc = pd.to_datetime([
+        int((opened_at.timestamp() - 3600) * 1000),  # 1h before open
+        int((opened_at.timestamp() - 60) * 1000),    # 1min before open
+        int((opened_at.timestamp() + 900) * 1000),   # 15m after open
+        int((opened_at.timestamp() + 1800) * 1000),  # 30m after open
+    ], unit="ms")
+    df = pd.DataFrame({
+        "time": bars_naive_utc,
+        "open":  [1.0, 1.0, 1.0, 1.0],
+        "high":  [10.0, 10.0, 1.1, 1.2],
+        "low":   [0.1, 0.1, 0.9, 0.9],
+        "close": [1.0, 1.0, 1.0, 1.0],
+        "vol":   [0.0, 0.0, 0.0, 0.0],
+        "tbb":   [0.0, 0.0, 0.0, 0.0],
+    })
+    monkeypatch.setattr("core.data.fetch", lambda *a, **k: df)
+
+    new_bars = mp._fetch_new_bars("ARBUSDT", opened_at.isoformat())
+
+    assert len(new_bars) == 2, (
+        f"expected 2 bars strictly after open, got {len(new_bars)}: "
+        f"{[b['time'] for b in new_bars]}"
+    )
+    for b in new_bars:
+        ts = datetime.fromisoformat(b["time"].replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        assert ts > opened_at

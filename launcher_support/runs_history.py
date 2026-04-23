@@ -905,10 +905,14 @@ def _render_detail_equity_metrics(parent: tk.Widget, r: RunSummary) -> None:
 
 
 def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
-    """Read reports/trades.jsonl if we have the run_dir; show last 10."""
+    """Read last 10 trades. Shadow runs write shadow_trades.jsonl; paper/live
+    write trades.jsonl. Each run_dir only has one of the two — try shadow
+    first (back-compat with cockpit_api), fall back to paper."""
     if r.run_dir is None:
         return
-    trades_path = r.run_dir / "reports" / "trades.jsonl"
+    trades_path = r.run_dir / "reports" / "shadow_trades.jsonl"
+    if not trades_path.exists():
+        trades_path = r.run_dir / "reports" / "trades.jsonl"
     if not trades_path.exists():
         return
     lines = []
@@ -944,8 +948,8 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
         pnl_color = GREEN if pnl >= 0 else RED
         direction = str(t.get("direction", ""))[:5]
         reason = str(t.get("exit_reason") or "")[:8]
-        ep = t.get("entry_price")
-        xp = t.get("exit_price")
+        ep = t.get("entry_price") if t.get("entry_price") is not None else t.get("entry")
+        xp = t.get("exit_price") if t.get("exit_price") is not None else t.get("exit_p")
         r_mul = t.get("r_multiple")
         cells = [
             (str(t.get("symbol", "?"))[:9], WHITE, 9, "bold"),
