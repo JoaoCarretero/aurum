@@ -67,7 +67,7 @@ from config.params import (
     SYMBOLS,
     _TF_MINUTES,
 )
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 
 log = logging.getLogger("CAPULA")
 _tl = logging.getLogger("CAPULA.trades")
