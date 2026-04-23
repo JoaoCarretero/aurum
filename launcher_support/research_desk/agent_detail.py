@@ -58,6 +58,7 @@ from launcher_support.research_desk.markdown_editor import (
     persona_path,
 )
 from launcher_support.research_desk.palette import AGENT_COLORS
+from launcher_support.research_desk.stats_db import RatiosView
 from launcher_support.research_desk.sigils import SigilCanvas
 from launcher_support.research_desk.typography import agent_font
 
@@ -81,6 +82,7 @@ def open_agent_detail(
     on_assign: Callable[[AgentIdentity], None] | None = None,
     on_toggle_pause: Callable[[AgentIdentity, bool], None] | None = None,
     fetch_runs: Callable[[AgentIdentity], list[dict]] | None = None,
+    fetch_ratios: Callable[[AgentIdentity], RatiosView | None] | None = None,
 ) -> None:
     """Abre o modal de detalhe. Scaneia artefatos localmente pro agent.
 
@@ -109,6 +111,13 @@ def open_agent_detail(
         artifacts=artifacts_agent,
     )
 
+    ratios = None
+    if fetch_ratios is not None:
+        try:
+            ratios = fetch_ratios(agent)
+        except Exception:
+            ratios = None
+
     AgentDetailModal(
         parent,
         agent=agent,
@@ -116,6 +125,7 @@ def open_agent_detail(
         artifacts=artifacts_agent[:5],
         root_path=root_path,
         is_paused=is_paused,
+        ratios=ratios,
         on_assign=on_assign,
         on_toggle_pause=on_toggle_pause,
         fetch_runs=fetch_runs,
@@ -132,6 +142,7 @@ class AgentDetailModal:
         artifacts: list[ArtifactEntry],
         root_path: Path,
         is_paused: bool = False,
+        ratios: RatiosView | None = None,
         on_assign: Callable[[AgentIdentity], None] | None,
         on_toggle_pause: Callable[[AgentIdentity, bool], None] | None = None,
         fetch_runs: Callable[[AgentIdentity], list[dict]] | None = None,
@@ -140,6 +151,7 @@ class AgentDetailModal:
         self.palette = AGENT_COLORS[agent.key]
         self.root_path = root_path
         self._is_paused = is_paused
+        self._ratios = ratios
         self._on_assign = on_assign
         self._on_toggle_pause = on_toggle_pause
         self._fetch_runs = fetch_runs
@@ -184,12 +196,63 @@ class AgentDetailModal:
         self._build_hero(wrap)
         tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
         self._build_statblock(wrap, stats)
+        if self._ratios is not None and self._ratios.total > 0:
+            tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
+            self._build_ratios(wrap, self._ratios)
         tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
         self._build_recent_work(wrap, artifacts)
         if self._fetch_runs is not None:
             tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
             self._build_live_runs(wrap)
         self._build_actions(wrap)
+
+    def _build_ratios(self, parent: tk.Frame, ratios: RatiosView) -> None:
+        """Stacked horizontal bar: ship (green) · iterate (amber) · kill (red).
+
+        Labels abaixo com contagem + pct. 30d window por padrao.
+        """
+        section = tk.Frame(parent, bg=BG)
+        section.pack(fill="x", pady=(10, 0))
+
+        tk.Label(
+            section, text="SHIP · ITERATE · KILL  (30d)",
+            font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w",
+        ).pack(anchor="w")
+
+        # Barra horizontal composta
+        bar_row = tk.Frame(section, bg=BG2, height=10)
+        bar_row.pack(fill="x", pady=(6, 2))
+        bar_row.pack_propagate(False)
+        # Pack nao aceita relwidth — usar place via frame wrapper
+        if ratios.ship_pct > 0:
+            ship = tk.Frame(bar_row, bg=GREEN)
+            ship.place(relx=0, rely=0, relwidth=ratios.ship_pct, relheight=1)
+        if ratios.iterate_pct > 0:
+            it = tk.Frame(bar_row, bg=AMBER)
+            it.place(relx=ratios.ship_pct, rely=0,
+                     relwidth=ratios.iterate_pct, relheight=1)
+        if ratios.kill_pct > 0:
+            kl = tk.Frame(bar_row, bg=HAZARD)
+            kl.place(relx=ratios.ship_pct + ratios.iterate_pct, rely=0,
+                     relwidth=ratios.kill_pct, relheight=1)
+
+        # Legenda numeric row
+        legend = tk.Frame(section, bg=BG)
+        legend.pack(fill="x")
+        for label, count, pct, color in (
+            ("ship",    ratios.ship,    ratios.ship_pct,    GREEN),
+            ("iterate", ratios.iterate, ratios.iterate_pct, AMBER),
+            ("kill",    ratios.kill,    ratios.kill_pct,    HAZARD),
+        ):
+            cell = tk.Frame(legend, bg=BG)
+            cell.pack(side="left", padx=(0, 14))
+            tk.Label(
+                cell, text="■", font=(FONT, 8), fg=color, bg=BG,
+            ).pack(side="left")
+            tk.Label(
+                cell, text=f" {label} {count}  ({int(pct * 100)}%)",
+                font=(FONT, 7), fg=DIM, bg=BG,
+            ).pack(side="left")
 
     # ── Hero (sigil + nome + tagline) ─────────────────────────────
 

@@ -74,6 +74,7 @@ from launcher_support.research_desk.paperclip_process import (
     default_paperclip_cmd,
 )
 from launcher_support.research_desk.pipeline_panel import PipelinePanel
+from launcher_support.research_desk import stats_db
 from launcher_support.research_desk.ticket_form import (
     NewTicketModal,
     TicketDraft,
@@ -85,6 +86,23 @@ from launcher_support.screens.base import Screen
 # timeout pra nao bloquear UI quando server ta offline.
 _POLL_INTERVAL_MS = 5000
 _HEALTH_TIMEOUT_SEC = 1.5
+
+
+def _count_tickets_for(agent_uuid: str, issues_raw: list[dict]) -> tuple[int, int]:
+    """Retorna (tickets_done, tickets_active) atribuidos a um agente."""
+    done = active = 0
+    for issue in issues_raw:
+        assignee = (issue.get("assigned_agent_id")
+                    or issue.get("assignee_id")
+                    or issue.get("agent_id") or "")
+        if assignee != agent_uuid:
+            continue
+        status = (issue.get("status") or "").lower()
+        if status in ("done", "closed", "completed"):
+            done += 1
+        elif status in ("todo", "in_progress", "review"):
+            active += 1
+    return done, active
 
 
 class ResearchDeskScreen(Screen):
@@ -117,6 +135,10 @@ class ResearchDeskScreen(Screen):
         # refazer HTTP na hora do click.
         self._last_agents_raw: list[dict] = []
         self._last_issues_raw: list[dict] = []
+        # Stats DB — abre lazy (so quando primeiro snapshot for gravado)
+        # pra nao custar fs I/O em screens que so navegam sem mount.
+        self._stats_db_conn = None
+        self._last_snapshot_date = ""  # detecta rollover de dia
         # Widgets do toggle paperclip
         self._action_btn: tk.Label | None = None
 
@@ -267,7 +289,22 @@ class ResearchDeskScreen(Screen):
             on_assign=self._open_new_ticket_for_agent,
             on_toggle_pause=self._toggle_agent_pause,
             fetch_runs=self._fetch_runs_for,
+            fetch_ratios=self._fetch_ratios_for,
         )
+
+    def _fetch_ratios_for(self, agent: AgentIdentity):
+        """Query SQLite pra ratios ship/iterate/kill em 30d. None se DB vazio."""
+        if self._stats_db_conn is None:
+            try:
+                from config.paths import AURUM_DB_PATH
+                self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
+            except Exception:
+                return None
+        try:
+            rows = stats_db.list_days(self._stats_db_conn, agent.key, days=30)
+            return stats_db.compute_ratios(rows)
+        except Exception:
+            return None
 
     def _fetch_runs_for(self, agent: AgentIdentity) -> list[dict]:
         """Fetch heartbeat runs pra um agente. Chamado em thread daemon
@@ -512,11 +549,22 @@ class ResearchDeskScreen(Screen):
         self._apply_state(online=online, used=used_cents, cap=cap_cents)
         self._apply_agent_cards(agents_raw, online=online)
         self._apply_pipeline(issues_raw, online=online)
-        self._apply_artifacts()
+        full_scan = self._apply_artifacts()
+        # Snapshot diario — 1x por dia por agente, so quando online (dados reais)
+        if online and agents_raw:
+            try:
+                self._maybe_record_snapshots(
+                    agents_raw=agents_raw,
+                    issues_raw=issues_raw,
+                    artifacts=full_scan,
+                )
+            except Exception:
+                pass  # DB opcional — nao bloqueia UI
 
-    def _apply_artifacts(self) -> None:
+    def _apply_artifacts(self) -> list[ArtifactEntry]:
+        """Atualiza panels + retorna o scan pra reuso (snapshots)."""
         if self._artifacts_panel is None:
-            return
+            return []
         # Scan unico por tick. Panel usa os 30 mais recentes; activity
         # feed recebe ate 200 (pagina internamente via LOAD MORE).
         try:
@@ -534,6 +582,41 @@ class ResearchDeskScreen(Screen):
                 self._activity_feed.update(events)
             except Exception:
                 pass
+        return full_scan
+
+    def _maybe_record_snapshots(
+        self, *, agents_raw: list[dict], issues_raw: list[dict],
+        artifacts: list[ArtifactEntry],
+    ) -> None:
+        """Grava snapshot diario por agente no SQLite. Idempotente via
+        upsert por (agent_key, date). Skipa se ja gravou hoje neste processo.
+        """
+        today = stats_db.today_utc()
+        if today == self._last_snapshot_date:
+            return  # ja gravou hoje neste processo
+        if self._stats_db_conn is None:
+            from config.paths import AURUM_DB_PATH
+            self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
+
+        # Indexa por UUID pra resolver agent_dict.paused/spent
+        by_uuid = {a.get("id"): a for a in agents_raw if a.get("id")}
+
+        for agent in AGENTS:
+            a_dict = by_uuid.get(agent.uuid) or {}
+            spent = int(a_dict.get("monthly_spent_cents") or
+                        a_dict.get("spent_cents") or 0)
+            done, active = _count_tickets_for(agent.uuid, issues_raw)
+            arts = sum(1 for a in artifacts if a.agent_key == agent.key)
+            stats_db.record_snapshot(
+                self._stats_db_conn,
+                agent_key=agent.key,
+                date=today,
+                tickets_done=done,
+                tickets_active=active,
+                artifacts_total=arts,
+                spent_cents=spent,
+            )
+        self._last_snapshot_date = today
 
     def _apply_pipeline(self, issues_raw: list[dict], *, online: bool) -> None:
         if self._pipeline_panel is None:
