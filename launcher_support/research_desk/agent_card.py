@@ -32,6 +32,8 @@ from core.ui.ui_palette import (
 from launcher_support.research_desk.agent_view import AgentView, offline_view
 from launcher_support.research_desk.agents import AgentIdentity
 from launcher_support.research_desk.palette import AgentPalette
+from launcher_support.research_desk.sigils import SigilCanvas
+from launcher_support.research_desk.typography import agent_font
 
 
 # Mapa status -> cor do badge de status
@@ -87,19 +89,17 @@ class AgentCard:
         body = tk.Frame(self.frame, bg=PANEL)
         body.pack(side="left", fill="both", expand=True, padx=10, pady=8)
 
-        # Sigil placeholder: 1a letra stylized (Sprint 2 substitui por SVG)
+        # Sigil alquimico desenhado em Canvas + key name com tipografia
+        # distintiva do agente (Sprint 2).
         header = tk.Frame(body, bg=PANEL)
         header.pack(fill="x")
+        sigil = SigilCanvas(header, self.agent.key, size=40, bg=PANEL)
+        sigil.pack(side="left", padx=(0, 6))
         tk.Label(
-            header, text=self.agent.key[0],
-            font=(FONT, 18, "bold"),
-            fg=self.palette.primary, bg=PANEL,
-        ).pack(side="left")
-        tk.Label(
-            header, text=f"  {self.agent.key}",
-            font=(FONT, 10, "bold"),
+            header, text=self.agent.key,
+            font=agent_font(self.agent.key, size=11, weight="bold"),
             fg=self.palette.primary, bg=PANEL, anchor="w",
-        ).pack(side="left")
+        ).pack(side="left", pady=(4, 0))
 
         # Status pill no canto direito do header
         self._status_label = tk.Label(
