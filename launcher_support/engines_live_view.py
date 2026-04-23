@@ -24,7 +24,6 @@ from pathlib import Path
 
 from core.ops.python_runtime import preferred_python_executable
 from core.ops import run_catalog
-from core.risk.key_store import KeyStoreError, load_runtime_keys
 from core.ui.ui_palette import (
     BG, BG2, BG3, PANEL,
     BORDER, BORDER_H,

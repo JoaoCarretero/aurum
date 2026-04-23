@@ -9,6 +9,7 @@ Contract:
 - force_refresh() -> list[dict]  (always fetches, updates cache)
 - get_cached_runs() -> list[dict] | None  (read-only accessor, no I/O)
 - is_loading() -> bool
+- set_loading(value: bool) -> None
 - reset_cache_for_tests() -> None
 - reset_client_for_tests() -> None
 
@@ -59,6 +60,15 @@ def get_cached_runs() -> list[dict] | None:
 def is_loading() -> bool:
     with _CACHE_LOCK:
         return bool(_CACHE_STATE["loading"])
+
+
+def set_loading(value: bool) -> None:
+    """Orchestrator sets this before dispatching background refresh,
+    clears on completion. Kept distinct from cache mutators to keep
+    the 'loading' lifecycle explicit.
+    """
+    with _CACHE_LOCK:
+        _CACHE_STATE["loading"] = bool(value)
 
 
 def _fetch_runs_from_api() -> list[dict]:

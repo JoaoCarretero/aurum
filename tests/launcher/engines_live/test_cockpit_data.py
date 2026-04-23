@@ -72,5 +72,7 @@ def test_loading_flag_toggles():
 
     cockpit.reset_cache_for_tests()
     assert cockpit.is_loading() is False
-    cockpit._CACHE_STATE["loading"] = True
+    cockpit.set_loading(True)
     assert cockpit.is_loading() is True
+    cockpit.set_loading(False)
+    assert cockpit.is_loading() is False
