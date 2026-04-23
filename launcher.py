@@ -563,17 +563,22 @@ class App(tk.Tk):
         self.minsize(860, 560)
         emit_timing_metric("boot.dpi_geometry", ms=(time.perf_counter() - _dpi_t0) * 1000.0)
 
-        # Taskbar icon
-        _icon_t0 = time.perf_counter()
-        try:
-            import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("aurum.finance.terminal")
-        except: pass
-        try:
-            ico = ROOT / "server" / "logo" / "aurum.ico"
-            if ico.exists(): self.iconbitmap(str(ico))
-        except: pass
-        emit_timing_metric("boot.icon", ms=(time.perf_counter() - _icon_t0) * 1000.0)
+        # Taskbar icon: deferred via after_idle to avoid ~70ms boot hit.
+        # Icon and AppUserModelID are cosmetic; apply after window renders.
+        _icon_scheduled_t0 = time.perf_counter()
+        def _apply_taskbar_icon():
+            _icon_t0 = time.perf_counter()
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("aurum.finance.terminal")
+            except: pass
+            try:
+                ico = ROOT / "server" / "logo" / "aurum.ico"
+                if ico.exists(): self.iconbitmap(str(ico))
+            except: pass
+            emit_timing_metric("boot.icon_deferred", ms=(time.perf_counter() - _icon_t0) * 1000.0)
+        self.after_idle(_apply_taskbar_icon)
+        emit_timing_metric("boot.icon", ms=(time.perf_counter() - _icon_scheduled_t0) * 1000.0)
 
         _state_t0 = time.perf_counter()
         self.proc = None
