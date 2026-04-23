@@ -712,6 +712,8 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
     stop = {"flag": False, "reason": ""}
 
     def _handle_signal(signum, _frame):
+        if stop["flag"]:
+            sys.exit(130)
         stop["flag"] = True
         stop["reason"] = f"signal {signum}"
 
