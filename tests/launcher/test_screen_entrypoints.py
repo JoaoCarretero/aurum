@@ -76,15 +76,15 @@ def test_screens_package_import_stays_lazy(monkeypatch):
 
 def test_engines_live_screen_schedules_first_paint_on_initial_mount(tk_root, monkeypatch):
     from launcher_support.screens.engines_live import EnginesLiveScreen
-    from launcher_support import engines_live_view
+    from launcher_support import engines_live
 
     render_calls: list[tuple[object, object]] = []
 
     def fake_render(app, host, *, on_escape):
         render_calls.append((app, host))
-        return {"root": host, "cleanup": lambda: None}
+        return {"frame": host, "state": {}, "destroy": lambda: None}
 
-    monkeypatch.setattr(engines_live_view, "render", fake_render)
+    monkeypatch.setattr(engines_live, "render", fake_render)
 
     app = _ProbeApp()
     conn = SimpleNamespace(active_market="crypto")
@@ -96,7 +96,7 @@ def test_engines_live_screen_schedules_first_paint_on_initial_mount(tk_root, mon
     assert app.paint_metrics == ["engines_live"]
     assert app.nav_bound == 1
     assert len(render_calls) == 1
-    assert app._engines_live_handle["root"] is screen.host
+    assert app._engines_live_handle["frame"] is screen.host
 
 
 def test_macro_brain_screen_defers_first_cycle_and_marks_first_paint(tk_root, monkeypatch):

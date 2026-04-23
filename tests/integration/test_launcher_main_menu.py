@@ -418,8 +418,8 @@ def test_runs_history_exit_cancels_refresh(app):
 
 def test_engines_live_routes_via_screen_manager(app, monkeypatch):
     monkeypatch.setattr(
-        "launcher_support.engines_live_view.render",
-        lambda launcher, parent, on_escape=None: {"cleanup": lambda: None},
+        "launcher_support.engines_live.render",
+        lambda launcher, parent, on_escape=None: {"frame": parent, "state": {}, "destroy": lambda: None},
     )
     app._strategies_live()
     assert app.screens.current_name() == "engines_live"
@@ -428,8 +428,8 @@ def test_engines_live_routes_via_screen_manager(app, monkeypatch):
 
 def test_engines_live_reentry_reuses_cached_screen(app, monkeypatch):
     monkeypatch.setattr(
-        "launcher_support.engines_live_view.render",
-        lambda launcher, parent, on_escape=None: {"cleanup": lambda: None},
+        "launcher_support.engines_live.render",
+        lambda launcher, parent, on_escape=None: {"frame": parent, "state": {}, "destroy": lambda: None},
     )
     app._strategies_live()
     first = app.screens._cache.get("engines_live")
@@ -443,15 +443,15 @@ def test_engines_live_reentry_reuses_cached_screen(app, monkeypatch):
 def test_engines_live_exit_cleans_handle(app, monkeypatch):
     calls = []
 
-    def _render(_launcher, _parent, on_escape=None):
+    def _render(_launcher, parent, on_escape=None):
         del on_escape
-        return {"cleanup": lambda: calls.append("cleanup")}
+        return {"frame": parent, "state": {}, "destroy": lambda: calls.append("destroy")}
 
-    monkeypatch.setattr("launcher_support.engines_live_view.render", _render)
+    monkeypatch.setattr("launcher_support.engines_live.render", _render)
     app._strategies_live()
     assert app._engines_live_handle is not None
     app._menu_main_bloomberg()
-    assert calls == ["cleanup"]
+    assert calls == ["destroy"]
     assert app._engines_live_handle is None
 
 

@@ -33,21 +33,13 @@ class EnginesLiveScreen(Screen):
         app.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run  |  M cycle mode")
         app._bind_global_nav()
 
+        # New engines_live view has a clean {frame, state, destroy} handle
+        # shape and an internal refresh tick — no rebind/refresh round-trip.
+        # Always tear down the previous handle on re-entry and rebuild.
         prior = getattr(app, "_engines_live_handle", None)
-        prior_root = prior.get("root") if isinstance(prior, dict) else None
-        if (
-            isinstance(prior, dict)
-            and prior_root is not None
-            and getattr(prior_root, "winfo_exists", lambda: False)()
-        ):
+        if isinstance(prior, dict) and callable(prior.get("destroy")):
             try:
-                rebind = prior.get("rebind")
-                if callable(rebind):
-                    rebind()
-                refresh = prior.get("refresh")
-                if callable(refresh):
-                    refresh()
-                return
+                prior["destroy"]()
             except Exception:
                 pass
 
@@ -57,14 +49,14 @@ class EnginesLiveScreen(Screen):
             except Exception:
                 pass
 
-        from launcher_support import engines_live_view
+        from launcher_support import engines_live
 
         if hasattr(app, "_schedule_first_paint_metric"):
             try:
                 app._schedule_first_paint_metric("engines_live")
             except Exception:
                 pass
-        app._engines_live_handle = engines_live_view.render(
+        app._engines_live_handle = engines_live.render(
             app,
             host,
             on_escape=lambda: app._menu("main"),
@@ -74,8 +66,9 @@ class EnginesLiveScreen(Screen):
         super().on_exit()
         app = self.app
         prior = getattr(app, "_engines_live_handle", None)
-        if prior and callable(prior.get("cleanup")):
+        if isinstance(prior, dict) and callable(prior.get("destroy")):
             try:
-                prior["cleanup"]()
+                prior["destroy"]()
             except Exception:
                 pass
+        app._engines_live_handle = None
