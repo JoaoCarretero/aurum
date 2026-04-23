@@ -269,12 +269,21 @@ def _fetch_new_bars(symbol: str, since_iso: str | None) -> list[dict]:
         return []
     df = df.copy()
     if since_iso:
+        from datetime import datetime as dt
         try:
-            from datetime import datetime as dt
             since_dt = dt.fromisoformat(since_iso.replace("Z", "+00:00"))
+        except ValueError:
+            log.warning("fetch_new_bars %s: malformed since_iso %r — skipping filter",
+                        symbol, since_iso)
+            since_dt = None
+        if since_dt is not None:
+            # df["time"] is naive UTC (pd.to_datetime of Binance klines ms).
+            # An aware cursor used to TypeError the comparison; the old bare
+            # except swallowed it, the filter was skipped, and _walk_bars got
+            # ~5h of pre-open candles — ghost-exit bug (2026-04-23 ARBUSDT).
+            if since_dt.tzinfo is not None:
+                since_dt = since_dt.astimezone(timezone.utc).replace(tzinfo=None)
             df = df[df["time"] > since_dt]
-        except Exception:  # noqa: BLE001
-            pass
     out: list[dict] = []
     for _, row in df.iterrows():
         out.append({

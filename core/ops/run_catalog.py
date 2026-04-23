@@ -567,7 +567,9 @@ def read_local_entries(run_dir: Path | str | None, *, limit: int = 50) -> tuple[
     if not run_dir:
         return [], "sem run_dir"
     base = Path(run_dir)
-    for candidate in ("reports/trades.jsonl", "reports/signals.jsonl"):
+    for candidate in ("reports/shadow_trades.jsonl",
+                      "reports/trades.jsonl",
+                      "reports/signals.jsonl"):
         path = base / candidate
         if not path.exists():
             continue

@@ -409,6 +409,34 @@ def test_read_local_entries_formats_recent_jsonl(tmp_path):
     assert "ETHUSDT" in lines[1]
 
 
+def test_read_local_entries_reads_shadow_trades(tmp_path):
+    """Shadow runs write reports/shadow_trades.jsonl, not trades.jsonl.
+    Observed 2026-04-23: RENAISSANCE shadow trade was invisible in RUNS
+    HISTORY because the reader only tried reports/trades.jsonl.
+    """
+    from core.ops import run_catalog
+
+    run_dir = _write_run(tmp_path, engine_dir_name="renaissance_shadow",
+                         run_id="S1", mode="shadow")
+    (run_dir / "reports" / "shadow_trades.jsonl").write_text(
+        json.dumps({
+            "timestamp": "2026-04-22 23:45:00",
+            "strategy": "RENAISSANCE",
+            "symbol": "ARBUSDT",
+            "direction": "BULLISH",
+            "entry": 0.12863858,
+            "exit_reason": "live",
+            "pnl": 0.0,
+        }),
+        encoding="utf-8",
+    )
+
+    lines, summary = run_catalog.read_local_entries(run_dir, limit=10)
+
+    assert summary == "1 from reports/shadow_trades.jsonl"
+    assert "ARBUSDT" in lines[0]
+
+
 def test_fetch_remote_entries_formats_records():
     from core.ops import run_catalog
 
