@@ -14,6 +14,11 @@ Spec: docs/superpowers/specs/2026-04-16-engines-live-cockpit-design.md
 """
 from __future__ import annotations
 
+# New rebuild path — the actual render() now lives in engines_live/view.py.
+# This file is preserved as a shim during the migration. After R5 it becomes
+# a 5-line re-export.
+from launcher_support.engines_live.view import render as _new_render  # noqa: F401
+
 import json
 import os
 import threading

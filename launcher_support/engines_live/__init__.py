@@ -21,3 +21,6 @@ Threading:
 Spec: docs/superpowers/specs/2026-04-23-engines-frontend-rebuild-design.md
 """
 from __future__ import annotations
+
+from launcher_support.engines_live.view import render  # noqa: F401
+from launcher_support.engines_live.data.cockpit import get_client as _get_cockpit_client  # noqa: F401
