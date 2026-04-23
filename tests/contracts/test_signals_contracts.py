@@ -24,7 +24,6 @@ from config.params import (
     SLIPPAGE,
     SPREAD,
     TARGET_RR,
-    TRAIL_ACTIVATE_MULT,
     TRAIL_BE_MULT,
     VOL_RISK_SCALE,
 )

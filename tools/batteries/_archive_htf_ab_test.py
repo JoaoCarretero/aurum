@@ -10,7 +10,6 @@ Reports side-by-side comparison.
 import sys, time, csv, logging
 from pathlib import Path
 from datetime import datetime
-from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 if sys.stdout.encoding != "utf-8":

@@ -225,7 +225,7 @@ def render_inline(parent, trade: dict, on_close) -> "tk.Frame":  # noqa: F821
     rerender)."""
     import tkinter as tk
     from core.ui.ui_palette import (
-        AMBER, AMBER_B, BG, BG2, BORDER, DIM2, FONT, PANEL, WHITE,
+        AMBER, AMBER_B, BG, BG2, DIM2, FONT, PANEL, WHITE,
     )
 
     symbol = trade.get("symbol", "?")

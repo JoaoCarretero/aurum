@@ -5,7 +5,6 @@ frame (no fullscreen). Reads live state via AlchemyState and controls
 engines/janestreet.py via parameter hot-reload and subprocess.
 """
 import tkinter as tk
-import tkinter.font as tkfont
 from pathlib import Path
 from typing import Callable
 
@@ -13,9 +12,8 @@ from typing import Callable
 # PALETTE — imported from core/ui_palette (SSOT)
 # ═══════════════════════════════════════════════════════════
 from core.ui_palette import (
-    HEV_BG, HEV_PANEL, HEV_BORDER, HEV_BORDER2,
-    HEV_AMBER, HEV_AMBER_B, HEV_AMBER_D, HEV_AMBER_DD,
-    HEV_WHITE, HEV_DIM, HEV_GREEN, HEV_RED,
+    HEV_BG, HEV_PANEL, HEV_BORDER, HEV_AMBER, HEV_AMBER_B, HEV_AMBER_D, HEV_AMBER_DD,
+    HEV_DIM, HEV_GREEN, HEV_RED,
     HEV_HAZARD, HEV_BLOOD,
 )
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from core.persistence import atomic_write_json, atomic_write_text
 

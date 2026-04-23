@@ -17,7 +17,6 @@ from config.params import (
     CHOP_BB_PERIOD,
     EMA_SPANS,
     PIVOT_N,
-    VOL_WINDOW,
 )
 from core.indicators import (
     cvd,

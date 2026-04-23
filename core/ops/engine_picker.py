@@ -29,8 +29,7 @@ from config.engines import ENGINE_GROUPS, ENGINE_SORT_WEIGHTS
 # ── PALETTE (HL2 VGUI, via SSOT) ─────────────────────────────
 from core.ui_palette import (
     BG, BG2, BG3, PANEL,
-    BORDER, BORDER_H,
-    AMBER, AMBER_H,
+    BORDER, AMBER, AMBER_H,
     WHITE, DIM, DIM2,
     GREEN, RED, CYAN,
     GLOW, FONT,

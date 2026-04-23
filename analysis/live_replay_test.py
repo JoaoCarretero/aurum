@@ -25,7 +25,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pandas as pd  # noqa: E402
 
 from config.params import SYMBOLS, MACRO_SYMBOL  # noqa: E402
 from core.data import fetch_all, validate  # noqa: E402

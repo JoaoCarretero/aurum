@@ -11,7 +11,6 @@ style so the CI line can stay simple.
 """
 from __future__ import annotations
 
-import os
 import sys
 import time
 import subprocess

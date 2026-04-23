@@ -11,7 +11,6 @@ import pytest
 from core.shadow_contract import (
     Manifest,
     Heartbeat,
-    RunSummary,
     clear_caches,
     find_runs,
     load_heartbeat,

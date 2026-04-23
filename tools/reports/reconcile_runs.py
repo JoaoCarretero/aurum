@@ -26,7 +26,6 @@ import stat
 import subprocess
 import sys
 import time
-from collections import Counter
 from pathlib import Path
 
 # Ensure repo root on path when invoked as "python tools/reports/reconcile_runs.py".

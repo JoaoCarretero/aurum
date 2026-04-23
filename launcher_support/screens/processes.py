@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from typing import Any
 
-from core.ui.ui_palette import AMBER, AMBER_D, BG, BG2, DIM, FONT, GREEN, RED, WHITE
+from core.ui.ui_palette import AMBER, BG, BG2, DIM, FONT, GREEN, RED, WHITE
 from launcher_support.screens.base import Screen
 
 

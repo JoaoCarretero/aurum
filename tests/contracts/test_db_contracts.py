@@ -9,8 +9,6 @@ Cobrem:
 from __future__ import annotations
 
 import json
-import sqlite3
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -77,7 +75,6 @@ class TestNormalizeEngine:
         assert db._normalize_engine("backtest") == "citadel"
         assert db._normalize_engine("mercurio") == "jump"
         assert db._normalize_engine("darwin") == "aqr"
-        assert db._normalize_engine("newton") == "deshaw"
 
     def test_passthrough_for_unknown(self):
         assert db._normalize_engine("citadel") == "citadel"
@@ -95,10 +92,6 @@ class TestNormalizeEngine:
         # Path como 'data/jump/2026-01-01_1000/reports/x.json' → parent parent = 'jump'
         p = "data/jump/2026-01-01_1000/reports/x.json"
         assert db._normalize_engine("", None, p) == "jump"
-
-    def test_falls_back_to_run_id_prefix(self):
-        payload = {"run_id": "deshaw_2026-01-01_1000"}
-        assert db._normalize_engine("", payload) == "deshaw"
 
     def test_unknown_when_nothing_matches(self):
         assert db._normalize_engine("", {}, None) == "unknown"

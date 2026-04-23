@@ -10,12 +10,10 @@ Cobrem 8 gates individuais + check_gates composite:
 """
 from __future__ import annotations
 
-import logging
 
 import pytest
 
 from core.risk_gates import (
-    GateDecision,
     RiskGateConfig,
     RiskState,
     check_gates,

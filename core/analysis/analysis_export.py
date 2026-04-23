@@ -25,7 +25,6 @@ Design decisions
 from __future__ import annotations
 
 import json
-import sys
 import platform
 import logging
 from collections import defaultdict, deque

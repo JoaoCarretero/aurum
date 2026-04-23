@@ -14,7 +14,6 @@ import logging
 from datetime import datetime
 
 from config.macro_params import (
-    MACRO_ACCOUNT_SIZE,
     MACRO_EXEC_MODE,
     MACRO_TIME_STOP_DAYS,
 )
@@ -195,7 +194,6 @@ def review_open_positions() -> dict:
     import json as _json
 
     from macro_brain.ml_engine.features import build_features
-    from macro_brain.ml_engine.regime import classify
     from macro_brain.persistence.store import latest_regime, _conn
 
     actions = {"closed": 0, "kept": 0, "errors": 0}

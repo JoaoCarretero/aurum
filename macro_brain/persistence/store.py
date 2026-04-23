@@ -18,7 +18,6 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from config.macro_params import MACRO_DB_PATH

@@ -17,7 +17,6 @@ Usage in any engine's scan loop:
 """
 import logging
 import pandas as pd
-import numpy as np
 from config.params import _TF_MINUTES
 
 log = logging.getLogger("HTF_FILTER")

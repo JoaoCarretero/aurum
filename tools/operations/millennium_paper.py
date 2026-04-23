@@ -48,7 +48,6 @@ from tools.operations.paper_account import PaperAccount  # noqa: E402
 from tools.operations.paper_executor import PaperExecutor, Position  # noqa: E402
 from tools.operations.paper_position_manager import (  # noqa: E402
     PositionManager,
-    ClosedTrade,
 )
 from tools.operations.paper_ks_gate import KSLiveGate, KSState  # noqa: E402
 from tools.operations.paper_metrics import MetricsStreamer  # noqa: E402

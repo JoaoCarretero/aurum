@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from engines.janestreet import Engine
 
 def test_snapshot_contains_required_keys(tmp_run, monkeypatch):

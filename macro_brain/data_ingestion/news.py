@@ -11,7 +11,7 @@ import json as _json
 import logging
 from datetime import datetime, timedelta
 from typing import Iterable
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from config.macro_params import NEWSAPI_KEY

@@ -2,7 +2,7 @@
 
 Architecturally this is the **documented exception** to the rule stated in
 CLAUDE.md that engines must not import from one another. MILLENNIUM's whole
-reason for existence is to run CITADEL (and, lazily, DE SHAW / JUMP /
+reason for existence is to run CITADEL (and, lazily, JUMP /
 BRIDGEWATER / TWO SIGMA) through a shared capital-allocation and kill-switch
 layer — it is the "multi-strategy" engine that the coding rule calls out by
 name. The static top-of-file ``from engines.citadel import ...`` below and
@@ -21,10 +21,7 @@ from config.params import *
 from config.params import _tf_params, _TF_MINUTES
 
 from core import (
-    fetch_all, validate, indicators, swing_structure, omega,
-    detect_macro, build_corr_matrix, portfolio_allows,
-    calc_levels, label_trade, position_size,
-    prepare_htf, merge_all_htf_to_ltf,
+    fetch_all, validate, detect_macro, build_corr_matrix, prepare_htf,
 )
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
@@ -1953,7 +1950,6 @@ def _menu():
         print(f"  [1]  CORE OPERATIONAL (CITADEL + RENAISSANCE + JUMP)")
         print(f"  [2]  CITADEL")
         print(f"  [3]  RENAISSANCE")
-        print(f"  [4]  NEWTON")
         print(f"  [5]  MERCURIO")
         print(f"  [6]  THOTH")
         print(f"  [7]  ALL")
@@ -1962,7 +1958,7 @@ def _menu():
         print()
         op = safe_input("  > ").strip()
         if op == "0": sys.exit(0)
-        if op in ("1","2","3","4","5","6","7","8"): return op
+        if op in ("1","2","3","5","6","7","8"): return op
         if op == "":
             _empty_streak += 1
             if _empty_streak >= 12:
@@ -2014,7 +2010,7 @@ if __name__ == "__main__":
         op = _menu()
     LABELS = {
         "1":"CORE OPERATIONAL", "2":"CITADEL", "3":"RENAISSANCE",
-        "4":"DE SHAW", "5":"JUMP", "6":"BRIDGEWATER",
+        "5":"JUMP", "6":"BRIDGEWATER",
         "7":"ALL", "8":"TWO SIGMA (ML)",
     }
     days = _ask_periodo()
@@ -2042,23 +2038,6 @@ if __name__ == "__main__":
         if not hermes_all: print("  Sem trades."); sys.exit(1)
         _resultados_por_simbolo(hermes_all, show_he=False)
         _metricas_e_export(hermes_all, label="RENAISSANCE")
-
-    elif op == "4":
-        from engines.deshaw import find_cointegrated_pairs, scan_pair
-        print(f"\n{SEP}\n  COINTEGRATION ANALYSIS\n{SEP}")
-        pairs = find_cointegrated_pairs(all_dfs)
-        newton_all = []
-        for pair in pairs:
-            df_a = all_dfs.get(pair["sym_a"])
-            df_b = all_dfs.get(pair["sym_b"])
-            if df_a is None or df_b is None: continue
-            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
-                                  pair, macro_series, corr)
-            newton_all.extend(trades)
-        newton_all.sort(key=lambda t: t["timestamp"])
-        if not newton_all: print("  Sem trades."); sys.exit(1)
-        _resultados_por_simbolo(newton_all, show_he=False)
-        _metricas_e_export(newton_all, label="DE SHAW")
 
     elif op == "5":
         from engines.jump import scan_mercurio
@@ -2099,18 +2078,6 @@ if __name__ == "__main__":
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         engine_trades["RENAISSANCE"] = hermes_all
 
-        from engines.deshaw import find_cointegrated_pairs, scan_pair
-        pairs = find_cointegrated_pairs(all_dfs)
-        newton_all = []
-        for pair in pairs:
-            df_a = all_dfs.get(pair["sym_a"])
-            df_b = all_dfs.get(pair["sym_b"])
-            if df_a is None or df_b is None: continue
-            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
-                                  pair, macro_series, corr)
-            newton_all.extend(trades)
-        engine_trades["DE SHAW"] = newton_all
-
         from engines.jump import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
@@ -2144,7 +2111,7 @@ if __name__ == "__main__":
 
         # summary per engine
         print(f"\n{SEP}\n  RESULTADOS POR ENGINE\n{SEP}")
-        for eng in ["CITADEL", "RENAISSANCE", "DE SHAW", "JUMP", "BRIDGEWATER"]:
+        for eng in ["CITADEL", "RENAISSANCE", "JUMP", "BRIDGEWATER"]:
             ts = [t for t in all_trades if t.get("strategy") == eng and t["result"] in ("WIN","LOSS")]
             if not ts: print(f"  {eng:12s}  sem trades"); continue
             w = sum(1 for t in ts if t["result"] == "WIN")
@@ -2162,18 +2129,6 @@ if __name__ == "__main__":
 
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         engine_trades["RENAISSANCE"] = hermes_all
-
-        from engines.deshaw import find_cointegrated_pairs, scan_pair
-        pairs = find_cointegrated_pairs(all_dfs)
-        newton_all = []
-        for pair in pairs:
-            df_a = all_dfs.get(pair["sym_a"])
-            df_b = all_dfs.get(pair["sym_b"])
-            if df_a is None or df_b is None: continue
-            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
-                                  pair, macro_series, corr)
-            newton_all.extend(trades)
-        engine_trades["DE SHAW"] = newton_all
 
         from engines.jump import scan_mercurio
         mercurio_all = []

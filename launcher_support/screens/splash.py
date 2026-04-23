@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.ui.ui_palette import (
-    AMBER, AMBER_B, AMBER_D, BG, BORDER, DIM, DIM2, FONT,
+    AMBER, AMBER_B, AMBER_D, BG, DIM, DIM2, FONT,
     GREEN, RED, WHITE,
 )
 

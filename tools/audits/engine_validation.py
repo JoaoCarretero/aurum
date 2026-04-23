@@ -48,16 +48,6 @@ ENGINE_SPECS = [
         notes="Backtest CLI supports --days/--basket/--leverage/--no-menu.",
     ),
     EngineSpec(
-        name="newton",
-        display="DE SHAW",
-        mode="cli",
-        script="engines/deshaw.py",
-        data_dir="data/newton",
-        report_glob="reports/newton_*_v1.json",
-        cli_args=("--no-menu",),
-        notes="CLI supports --days/--basket/--no-menu for deterministic diagnostic runs.",
-    ),
-    EngineSpec(
         name="mercurio",
         display="JUMP",
         mode="interactive",

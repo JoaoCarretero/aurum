@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import copy
 import json
-import math
 import threading
 import time
 import tkinter as tk
@@ -451,7 +450,6 @@ def _as_float(v) -> float | None:
 
 from core.ops.run_catalog import (  # noqa: E402
     RunSummary,
-    clear_collect_caches,
     collect_db_runs,
     collect_local_runs,
     collect_vps_runs,

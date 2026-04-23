@@ -45,8 +45,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox
 
-from code_viewer import CodeViewer
-from config.engines import ENGINE_NAMES, SCRIPT_TO_KEY
+from config.engines import SCRIPT_TO_KEY
 from core.ops.python_runtime import preferred_python_executable
 from core.ops.health import runtime_health
 from core.ops.persistence import atomic_write_json
@@ -247,13 +246,10 @@ SUB_MENUS = {
         ("CITADEL",      "engines/citadel.py",      "Systematic momentum — trend-following + fractal alignment"),
         ("JUMP",         "engines/jump.py",       "Order flow — CVD divergence + volume imbalance"),
         ("BRIDGEWATER",  "engines/bridgewater.py",          "Macro sentiment — funding + OI + LS ratio contrarian"),
-        ("DE SHAW",      "engines/deshaw.py",         "Statistical arb — pairs cointegration + mean reversion"),
         ("MILLENNIUM",   "engines/millennium.py",  "Multi-strategy pod — ensemble orchestrator"),
         ("TWO SIGMA",    "engines/twosigma.py",       "ML meta-ensemble — LightGBM walk-forward"),
         ("RENAISSANCE",  "engines/renaissance.py", "Harmonic patterns — Bayesian + entropy + Hurst"),
-        ("KEPOS",        "engines/kepos.py",       "Critical endogeneity fade — Hawkes ? reversal plays"),
         ("GRAHAM",       "engines/graham.py",      "Endogenous momentum — trend + Hawkes ENDO regime gate"),
-        ("MEDALLION",    "engines/medallion.py",   "Berlekamp-Laufer — 7-signal ensemble + Kelly sizing"),
     ],
     "live": [
         ("PAPER",        "engines/live.py",           "Execução simulada — sem ordens reais"),
@@ -288,7 +284,7 @@ F I N A N C E
 
 SYSTEM_TAGLINE = "INSTITUTIONAL QUANT TERMINAL"
 
-from launcher_support.briefings import BRIEFINGS, BRIEFINGS_V2
+from launcher_support.briefings import BRIEFINGS
 
 
 BASKETS_UI = [
@@ -379,11 +375,6 @@ _ENGINE_BADGES: dict[str, str] = {
     "harmonics_backtest": "??",
     "bridgewater":        "??",
     "thoth":              "??",
-    "deshaw":             "??",
-    "de_shaw":            "??",
-    "newton":             "??",
-    "kepos":              "??",
-    "medallion":          "??",
     "phi":                "??",
     "two_sigma":          "?",
     "twosigma":           "?",
@@ -2591,39 +2582,13 @@ class App(tk.Tk):
 
     @staticmethod
     def _engine_extra_cli_flags(engine_name: str) -> list[str]:
-        """Engine-specific CLI overrides that the launcher must inject for
-        Hawkes/pairs engines whose `config.params` defaults don't match the
-        validated 2026-04-16 battery configs. Without these, the engine runs
-        with tick-literature defaults (e.g. KEPOS eta_critical=0.95) that
-        produce zero trades on candle data.
+        """Engine-specific CLI overrides injected by the launcher.
 
-        Keep in sync with the CLI flags documented in the respective engine
-        docstrings. Flags applied here don't touch config.params (core-
+        Extend here for future engines whose params differ from config.params
+        defaults. Flags applied here don't touch config.params (core-
         protected) — they only change the in-process dataclass for the run.
         """
         name = engine_name.upper().replace(" ", "").replace("_", "")
-        if name == "KEPOS":
-            # H1-INV config (2026-04-16): layer1 sustained=10 k_sigma=1.0
-            # eta_crit=0.75/exit=0.65. Keeps default tp=1.8 stop=1.2
-            # (robust in 1095d; the tp=4 peak at Sharpe 2.37 was
-            # cherry-picked from 730d). price_ext_sigma stays at default 2.0.
-            return [
-                "--invert",
-                "--k-sigma", "1.0",
-                "--eta-critical", "0.75",
-                "--eta-exit", "0.65",
-                "--eta-sustained", "10",
-            ]
-        if name in ("DESHAW", "DE_SHAW", "NEWTON"):
-            # Winning config (2026-04-16): z=3.0 exit=0.0 pvalue=0.15 hl=300
-            # Validated 1095d: Sharpe 1.05, ROI +29.8%, 4/6 PASS.
-            # 5/6 PASS with bluechip_active basket (no MATIC).
-            return [
-                "--z-entry", "3.0",
-                "--z-exit", "0.0",
-                "--pvalue", "0.15",
-                "--hl-max", "300",
-            ]
         return []
 
     # --- INLINE LIVE EXEC (from picker RUN chip in LIVE mode) ------
@@ -6434,7 +6399,7 @@ class App(tk.Tk):
             if not dd.exists():
                 return 0
             for sub in ("runs", "darwin", "arbitrage",
-                        "mercurio", "newton", "thoth",
+                        "mercurio", "thoth",
                         "prometeu", "multistrategy", "live"):
                 p = dd / sub
                 if p.exists():
@@ -6877,7 +6842,6 @@ class App(tk.Tk):
         so the picker renders immediately — metrics fill in shortly after."""
         try:
             import sqlite3
-            import threading
             from pathlib import Path as _P
             db = _P("data/aurum.db")
             if not db.exists():
@@ -6888,7 +6852,6 @@ class App(tk.Tk):
                 "renaissance": "renaissance",
                 "jump":        "jump",
                 "bridgewater": "bridgewater",
-                "deshaw":      "deshaw",
                 "millennium":  "millennium",
                 "twosigma":    "twosigma",
                 "janestreet":  "janestreet",
@@ -8493,7 +8456,6 @@ class App(tk.Tk):
             "citadel":     ROOT / "data" / "runs",
             "bridgewater": ROOT / "data" / "bridgewater",
             "jump":        ROOT / "data" / "jump",
-            "deshaw":      ROOT / "data" / "deshaw",
             "renaissance": ROOT / "data" / "renaissance",
             "janestreet":  ROOT / "data" / "janestreet",
             "millennium":  ROOT / "data" / "millennium",
@@ -8660,7 +8622,7 @@ class App(tk.Tk):
         def _fmt_n(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "—"
         def _fmt_m(v): return f"${v:+,.0f}" if v is not None else "—"
         # Code-name → institutional-name (battery/marketing taxonomy).
-        # Maps both legacy lowercase file names (thoth, mercurio, newton)
+        # Maps both legacy lowercase file names (thoth, mercurio)
         # and uppercase variants. Falls back to upper() for unknowns.
         _ENGINE_NAMES = {
             "backtest":      "CITADEL",
@@ -8669,9 +8631,6 @@ class App(tk.Tk):
             "bridgewater":   "BRIDGEWATER",
             "mercurio":      "JUMP",
             "jump":          "JUMP",
-            "newton":        "DE SHAW",
-            "deshaw":        "DE SHAW",
-            "de_shaw":       "DE SHAW",
             "prometeu":      "TWO SIGMA",
             "twosigma":      "TWO SIGMA",
             "two_sigma":     "TWO SIGMA",
@@ -8698,7 +8657,7 @@ class App(tk.Tk):
         # cap in that commit are flagged; historical runs of citadel
         # (backtest.py) are untagged because L6 landed earlier there.
         _L6_FIX_DATE = "2026-04-11"
-        _L6_AFFECTED = {"mercurio", "thoth", "harmonics", "newton",
+        _L6_AFFECTED = {"mercurio", "thoth", "harmonics",
                          "multistrategy"}
 
         for run in runs[:50]:
@@ -8726,7 +8685,7 @@ class App(tk.Tk):
             pnl_col = GREEN if (pnl or 0) > 0 else (RED if (pnl or 0) < 0 else DIM)
             short_id = run_id
             for prefix in (
-                "citadel_", "thoth_", "bridgewater_", "newton_", "deshaw_",
+                "citadel_", "thoth_", "bridgewater_",
                 "mercurio_", "jump_", "multistrategy_", "millennium_",
                 "prometeu_", "twosigma_", "renaissance_", "harmonics_",
             ):
@@ -9111,17 +9070,13 @@ class App(tk.Tk):
                 "citadel":     ROOT / "data" / "runs",
                 "bridgewater": ROOT / "data" / "bridgewater",
                 "jump":        ROOT / "data" / "jump",
-                "deshaw":      ROOT / "data" / "deshaw",
                 "renaissance": ROOT / "data" / "renaissance",
                 "janestreet":  ROOT / "data" / "janestreet",
                 "millennium":  ROOT / "data" / "millennium",
                 "twosigma":    ROOT / "data" / "twosigma",
                 "aqr":         ROOT / "data" / "aqr",
-                "kepos":       ROOT / "data" / "kepos",
-                "medallion":   ROOT / "data" / "medallion",
                 "graham":      ROOT / "data" / "graham",
                 "phi":         ROOT / "data" / "phi",
-                "ornstein":    ROOT / "data" / "ornstein",
             }
             targets: list[Path] = []
             for r in rows:

@@ -22,9 +22,6 @@ LEGACY_ENGINE_ALIASES = {
     "bridgewater": "bridgewater",
     "mercurio": "jump",
     "jump": "jump",
-    "newton": "deshaw",
-    "deshaw": "deshaw",
-    "de_shaw": "deshaw",
     "prometeu": "twosigma",
     "twosigma": "twosigma",
     "two_sigma": "twosigma",
@@ -41,7 +38,7 @@ LEGACY_ENGINE_ALIASES = {
 }
 
 ENGINE_PREFIX_ALIASES = (
-    "citadel_", "thoth_", "bridgewater_", "newton_", "deshaw_",
+    "citadel_", "thoth_", "bridgewater_",
     "mercurio_", "jump_", "multistrategy_", "millennium_",
     "prometeu_", "twosigma_", "renaissance_", "harmonics_",
 )

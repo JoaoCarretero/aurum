@@ -13,7 +13,6 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pytest
 
 # Usar sys.modules pois core/__init__.py re-exporta funções com o mesmo nome
 # dos submódulos (core.indicators função vs core.indicators módulo).

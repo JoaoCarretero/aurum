@@ -1,13 +1,10 @@
 """Tests for launcher_support.ssh_tunnel.TunnelManager."""
 from __future__ import annotations
 
-import subprocess
-import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from launcher_support.ssh_tunnel import (
     TunnelConfig,

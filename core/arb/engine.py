@@ -29,7 +29,6 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_STATE_PATH = ROOT / "data" / "arb_hub" / "state.json"

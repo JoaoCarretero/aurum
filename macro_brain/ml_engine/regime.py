@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Literal
 
 from config.macro_params import REGIME_THRESHOLDS

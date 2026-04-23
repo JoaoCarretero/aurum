@@ -5,7 +5,6 @@ instance runs (spec 2026-04-20-multi-instance-runs-design.md).
 """
 from datetime import datetime, timezone
 
-import pytest
 
 from tools.operations.run_id import build_run_id, sanitize_label
 
