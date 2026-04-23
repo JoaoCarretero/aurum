@@ -40,7 +40,13 @@ from core.ui.ui_palette import (
     WHITE,
 )
 from launcher_support.research_desk import strings as s
+from launcher_support.research_desk.activity_events import (
+    ActivityEvent,
+    merge_events,
+)
+from launcher_support.research_desk.activity_feed import ActivityFeed
 from launcher_support.research_desk.agent_card import AgentCard
+from launcher_support.research_desk.agent_detail import open_agent_detail
 from launcher_support.research_desk.agent_view import (
     offline_view,
     shape_agents_by_uuid,
@@ -92,6 +98,7 @@ class ResearchDeskScreen(Screen):
         self._agent_cards: dict[str, AgentCard] = {}
         self._pipeline_panel: PipelinePanel | None = None
         self._artifacts_panel: ArtifactsPanel | None = None
+        self._activity_feed: ActivityFeed | None = None
 
         # HTTP client do Paperclip — reused across mount/unmount para
         # preservar circuit breaker state + cache em disco.
@@ -106,6 +113,10 @@ class ResearchDeskScreen(Screen):
         # real (evita redraw desnecessario a cada tick).
         self._last_online: bool | None = None
         self._last_budget: tuple[int, int] = (0, 0)
+        # Snapshot do ultimo poll — consumido pelo detail view sem
+        # refazer HTTP na hora do click.
+        self._last_agents_raw: list[dict] = []
+        self._last_issues_raw: list[dict] = []
         # Widgets do toggle paperclip
         self._action_btn: tk.Label | None = None
 
@@ -175,15 +186,17 @@ class ResearchDeskScreen(Screen):
         content = tk.Frame(parent, bg=BG)
         content.pack(fill="both", expand=True)
 
-        # Grid: top row = 4 agent cards, bottom row = pipeline | artifacts
+        # Grid: row 0 = cards, row 1 = pipeline | artifacts, row 2 = activity feed
         content.grid_columnconfigure(0, weight=1, uniform="rd_col")
         content.grid_columnconfigure(1, weight=1, uniform="rd_col")
         content.grid_rowconfigure(0, weight=0)  # cards fixos
-        content.grid_rowconfigure(1, weight=1)  # painéis crescem
+        content.grid_rowconfigure(1, weight=2)  # pipeline/artifacts grande
+        content.grid_rowconfigure(2, weight=1)  # activity feed menor
 
         self._build_agents_strip(content)
         self._build_pipeline_panel(content)
         self._build_artifacts_panel(content)
+        self._build_activity_feed(content)
 
     def _build_agents_strip(self, parent: tk.Frame) -> None:
         strip = tk.Frame(parent, bg=BG)
@@ -199,6 +212,7 @@ class ResearchDeskScreen(Screen):
                 on_assign=self._stub_action("assign"),
                 on_configure=self._stub_action("configure"),
                 on_history=self._stub_action("history"),
+                on_inspect=self._open_agent_detail,
             )
             card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0))
             self._agent_cards[agent.key] = card
@@ -240,6 +254,17 @@ class ResearchDeskScreen(Screen):
             self.container,
             submit_callback=self._submit_ticket,
             default_assignee=agent,
+        )
+
+    def _open_agent_detail(self, agent: AgentIdentity) -> None:
+        """Click no hero area de um card abre o detail modal."""
+        open_agent_detail(
+            self.container,
+            agent=agent,
+            root_path=self.root_path,
+            agents_raw=self._last_agents_raw,
+            issues_raw=self._last_issues_raw,
+            on_assign=self._open_new_ticket_for_agent,
         )
 
     def _submit_ticket(self, draft: TicketDraft) -> tuple[bool, str]:
@@ -316,6 +341,47 @@ class ResearchDeskScreen(Screen):
             self.container, root_path=self.root_path, entry=entry,
         )
 
+    def _build_activity_feed(self, parent: tk.Frame) -> None:
+        frame = tk.Frame(
+            parent, bg=PANEL,
+            highlightbackground=BORDER, highlightthickness=1,
+        )
+        frame.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+        tk.Label(
+            frame, text="ACTIVITY FEED",
+            font=(FONT, 8, "bold"), fg=AMBER_D, bg=PANEL, anchor="w",
+        ).pack(anchor="nw", padx=10, pady=(10, 4))
+        tk.Frame(frame, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 6))
+
+        body = tk.Frame(frame, bg=PANEL)
+        body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+        self._activity_feed = ActivityFeed(
+            body, on_event_click=self._on_activity_click,
+        )
+        self._activity_feed.pack(fill="both", expand=True)
+
+    def _on_activity_click(self, event: ActivityEvent) -> None:
+        """Navega pro source do evento: artifact -> markdown viewer,
+        issue -> feedback breve (detail pane real em Sprint 3.1)."""
+        payload = event.payload
+        if isinstance(payload, ArtifactEntry):
+            open_markdown_viewer(
+                self.container, root_path=self.root_path, entry=payload,
+            )
+            return
+        # Issue payload — feedback breve
+        try:
+            title = payload.get("title", "?") if isinstance(payload, dict) else "?"
+            self.app.h_stat.configure(
+                text=f"issue {title[:30]}: detalhe em breve",
+                fg=AMBER_D,
+            )
+            self._after(2500, lambda: self.app.h_stat.configure(
+                text=s.STATUS_LABEL, fg=AMBER_D,
+            ))
+        except Exception:
+            pass
+
     # ── Lifecycle ─────────────────────────────────────────────────
 
     def on_enter(self, **kwargs: Any) -> None:
@@ -365,6 +431,10 @@ class ResearchDeskScreen(Screen):
             issues_raw = self._client.list_issues_cached(COMPANY_ID)
             used_cents, cap_cents = total_budget_cents(agents_raw)
 
+        # Snapshot pra detail view consumir
+        self._last_agents_raw = agents_raw
+        self._last_issues_raw = issues_raw
+
         self._apply_state(online=online, used=used_cents, cap=cap_cents)
         self._apply_agent_cards(agents_raw, online=online)
         self._apply_pipeline(issues_raw, online=online)
@@ -380,6 +450,21 @@ class ResearchDeskScreen(Screen):
         except Exception:
             entries = []
         self._artifacts_panel.update(entries)
+        # Activity feed compartilha a lista de artefatos com o painel
+        # artifacts — scan unico, consumo duplo
+        if self._activity_feed is not None:
+            try:
+                # Expande pra mais eventos no feed (100) mas limita
+                # a cabeca — o proprio widget pagina
+                full_scan = scan_artifacts(self.root_path, limit=200)
+                events = merge_events(
+                    issues=self._last_issues_raw,
+                    artifacts=full_scan,
+                    limit=200,
+                )
+                self._activity_feed.update(events)
+            except Exception:
+                pass
 
     def _apply_pipeline(self, issues_raw: list[dict], *, online: bool) -> None:
         if self._pipeline_panel is None:
