@@ -87,7 +87,7 @@ def register_default_screens(
     )
     manager.register(
         "research_desk",
-        lambda parent: ResearchDeskScreen(parent=parent, app=app),
+        lambda parent: ResearchDeskScreen(parent=parent, app=app, root_path=root_path),
     )
     manager.register(
         "risk",

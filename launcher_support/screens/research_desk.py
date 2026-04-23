@@ -20,6 +20,7 @@ sao canceladas em on_exit.
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 from typing import Any
 
 from core.ui.ui_palette import (
@@ -45,6 +46,14 @@ from launcher_support.research_desk.agent_view import (
     shape_agents_by_uuid,
 )
 from launcher_support.research_desk.agents import AGENTS, COMPANY_ID, AgentIdentity
+from launcher_support.research_desk.artifact_scanner import (
+    ArtifactEntry,
+    scan_artifacts,
+)
+from launcher_support.research_desk.artifacts_panel import (
+    ArtifactsPanel,
+    open_markdown_viewer,
+)
 from launcher_support.research_desk.issue_view import IssueView
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.paperclip_client import (
@@ -68,15 +77,16 @@ _HEALTH_TIMEOUT_SEC = 1.5
 
 
 class ResearchDeskScreen(Screen):
-    def __init__(self, parent: tk.Misc, app: Any):
+    def __init__(self, parent: tk.Misc, app: Any, root_path: Path):
         super().__init__(parent)
         self.app = app
+        self.root_path = root_path
         # Referencias de widgets preenchidas em build()
         self._subtitle_label: tk.Label | None = None
         self._state_label: tk.Label | None = None
         self._agent_cards: dict[str, AgentCard] = {}
         self._pipeline_panel: PipelinePanel | None = None
-        self._artifacts_body: tk.Frame | None = None
+        self._artifacts_panel: ArtifactsPanel | None = None
 
         # HTTP client do Paperclip — reused across mount/unmount para
         # preservar circuit breaker state + cache em disco.
@@ -247,11 +257,17 @@ class ResearchDeskScreen(Screen):
 
         body = tk.Frame(frame, bg=PANEL)
         body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
-        self._artifacts_body = body
-        tk.Label(
-            body, text=s.EMPTY_ARTIFACTS,
-            font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w",
-        ).pack(anchor="w")
+        self._artifacts_panel = ArtifactsPanel(
+            body,
+            on_row_click=self._on_artifact_click,
+            empty_text=s.EMPTY_ARTIFACTS,
+        )
+        self._artifacts_panel.pack(fill="both", expand=True)
+
+    def _on_artifact_click(self, entry: ArtifactEntry) -> None:
+        open_markdown_viewer(
+            self.container, root_path=self.root_path, entry=entry,
+        )
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -299,8 +315,18 @@ class ResearchDeskScreen(Screen):
         self._apply_state(online=online, used=used_cents, cap=cap_cents)
         self._apply_agent_cards(agents_raw, online=online)
         self._apply_pipeline(issues_raw, online=online)
+        self._apply_artifacts()
         # Reagenda via helper da base — cancelado automaticamente em on_exit
         self._after(_POLL_INTERVAL_MS, self._poll_state)
+
+    def _apply_artifacts(self) -> None:
+        if self._artifacts_panel is None:
+            return
+        try:
+            entries = scan_artifacts(self.root_path, limit=30)
+        except Exception:
+            entries = []
+        self._artifacts_panel.update(entries)
 
     def _apply_pipeline(self, issues_raw: list[dict], *, online: bool) -> None:
         if self._pipeline_panel is None:
