@@ -21,8 +21,7 @@ class TestLiveReadySlugs:
         # These have backtest entrypoints but not live-validated runners.
         assert "renaissance" not in LIVE_READY_SLUGS
         assert "jump" not in LIVE_READY_SLUGS
-        assert "deshaw" not in LIVE_READY_SLUGS
-        assert "kepos" not in LIVE_READY_SLUGS
+        assert "graham" not in LIVE_READY_SLUGS
         assert "phi" not in LIVE_READY_SLUGS
 
     def test_live_ready_flag_on_each_engine(self):
@@ -115,9 +114,9 @@ class TestCockpitSummaries:
             live_items=[],
             ready_items=[],
             research_items=[],
-            experimental_items=[("deshaw", {"display": "DE SHAW"})],
+            experimental_items=[("graham", {"display": "GRAHAM"})],
         )
-        assert selected == ("deshaw", "RESEARCH")
+        assert selected == ("graham", "RESEARCH")
 
     def test_experimental_bucket_uses_research_title(self):
         title = "EXPERIMENTAL"
