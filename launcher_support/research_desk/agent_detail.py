@@ -53,6 +53,10 @@ from launcher_support.research_desk.live_runs import (
     RunView,
     shape_runs,
 )
+from launcher_support.research_desk.markdown_editor import (
+    open_markdown_editor,
+    persona_path,
+)
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.sigils import SigilCanvas
 from launcher_support.research_desk.typography import agent_font
@@ -378,6 +382,16 @@ class AgentDetailModal:
             self._pause_btn.pack(side="left", padx=(8, 0))
             self._pause_btn.bind("<Button-1>", lambda _e: self._invoke_toggle_pause())
 
+        # Edit persona file
+        edit_btn = tk.Label(
+            actions, text="  EDIT PERSONA  ",
+            font=(FONT, 8, "bold"),
+            fg=WHITE, bg=BG3, cursor="hand2",
+            padx=8, pady=4,
+        )
+        edit_btn.pack(side="left", padx=(8, 0))
+        edit_btn.bind("<Button-1>", lambda _e: self._open_persona_editor())
+
         close_btn = tk.Label(
             actions, text="  FECHAR  ",
             font=(FONT, 8),
@@ -398,6 +412,14 @@ class AgentDetailModal:
             was_paused = self._is_paused
             self._close()
             self._on_toggle_pause(self.agent, was_paused)
+
+    def _open_persona_editor(self) -> None:
+        """Abre markdown_editor sobre docs/agents/{key}.md (ou AGENTS.md)."""
+        target = persona_path(self.agent.key, self.root_path)
+        open_markdown_editor(
+            self.top, path=target,
+            title_hint=f"{self.agent.key} persona · {target.name}",
+        )
 
     # ── Live runs (heartbeat-runs) ───────────────────────────────
 
