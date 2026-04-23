@@ -27,18 +27,30 @@ from core.ui.ui_palette import (
     AMBER_D,
     BG,
     BG2,
-    BG3,
     BORDER,
     DIM,
     DIM2,
     FONT,
+    GREEN,
     PANEL,
+    RED,
     WHITE,
 )
 from launcher_support.research_desk import strings as s
-from launcher_support.research_desk.agents import AGENTS, AgentIdentity
+from launcher_support.research_desk.agents import AGENTS, COMPANY_ID, AgentIdentity
 from launcher_support.research_desk.palette import AGENT_COLORS
+from launcher_support.research_desk.paperclip_client import (
+    PaperclipClient,
+    PaperclipConfig,
+    format_usd_from_cents,
+    total_budget_cents,
+)
 from launcher_support.screens.base import Screen
+
+# Polling rhythm — spec says 5s. Health check separately uses shorter
+# timeout pra nao bloquear UI quando server ta offline.
+_POLL_INTERVAL_MS = 5000
+_HEALTH_TIMEOUT_SEC = 1.5
 
 
 class ResearchDeskScreen(Screen):
@@ -51,6 +63,16 @@ class ResearchDeskScreen(Screen):
         self._agent_card_frames: dict[str, tk.Frame] = {}
         self._pipeline_body: tk.Frame | None = None
         self._artifacts_body: tk.Frame | None = None
+
+        # HTTP client do Paperclip — reused across mount/unmount para
+        # preservar circuit breaker state + cache em disco.
+        self._client = PaperclipClient(
+            cfg=PaperclipConfig(timeout_sec=_HEALTH_TIMEOUT_SEC),
+        )
+        # Ultimo estado conhecido, pra o label piscar somente em mudanca
+        # real (evita redraw desnecessario a cada tick).
+        self._last_online: bool | None = None
+        self._last_budget: tuple[int, int] = (0, 0)
 
     # ── Build ─────────────────────────────────────────────────────
 
@@ -241,7 +263,9 @@ class ResearchDeskScreen(Screen):
         app._kb("<Key-0>", self._back)
         app._bind_global_nav()
 
-        self._refresh_subtitle()
+        # Primeiro tick imediato pra evitar mostrar OFFLINE por 5s
+        # quando o server na verdade esta online.
+        self._poll_state()
 
     def _back(self) -> None:
         """Volta pro main menu Bloomberg (desk router)."""
@@ -250,15 +274,43 @@ class ResearchDeskScreen(Screen):
         except Exception:
             pass
 
-    def _refresh_subtitle(self) -> None:
-        """Task 1.2 vai plugar state real do paperclip; aqui mantem stub."""
-        if self._subtitle_label is None:
-            return
-        self._subtitle_label.configure(
-            text=s.SUBTITLE_FMT.format(
-                n=len(AGENTS),
-                state=s.STATE_OFFLINE.lower(),
-                used="$0.00",
-                cap="$0.00",
+    # ── Paperclip polling ─────────────────────────────────────────
+
+    def _poll_state(self) -> None:
+        """Bate no /api/health, agrega budgets se online, e reagenda."""
+        online = self._client.is_online()
+        used_cents, cap_cents = 0, 0
+        if online:
+            agents = self._client.list_agents_cached(COMPANY_ID)
+            used_cents, cap_cents = total_budget_cents(agents)
+
+        self._apply_state(online=online, used=used_cents, cap=cap_cents)
+        # Reagenda via helper da base — cancelado automaticamente em on_exit
+        self._after(_POLL_INTERVAL_MS, self._poll_state)
+
+    def _apply_state(self, *, online: bool, used: int, cap: int) -> None:
+        """Atualiza pill + subtitle. No-op se os widgets ja foram destroyed."""
+        # Pill ONLINE/OFFLINE
+        if self._state_label is not None:
+            if online:
+                self._state_label.configure(
+                    text=f" {s.STATE_ONLINE} ", fg=BG, bg=GREEN,
+                )
+            else:
+                self._state_label.configure(
+                    text=f" {s.STATE_OFFLINE} ", fg=WHITE, bg=RED,
+                )
+
+        # Subtitle com counts + budget agregado
+        if self._subtitle_label is not None:
+            self._subtitle_label.configure(
+                text=s.SUBTITLE_FMT.format(
+                    n=len(AGENTS),
+                    state=s.STATE_ONLINE.lower() if online else s.STATE_OFFLINE.lower(),
+                    used=format_usd_from_cents(used),
+                    cap=format_usd_from_cents(cap),
+                )
             )
-        )
+
+        self._last_online = online
+        self._last_budget = (used, cap)
