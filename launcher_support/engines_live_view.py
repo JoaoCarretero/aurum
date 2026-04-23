@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import tkinter as tk
@@ -1756,6 +1757,33 @@ def _resolve_log_path(slug: str, proc: dict) -> Path | None:
 
 _LOG_TAIL_WINDOW_BYTES = 16 * 1024
 
+# Log level classifier — first match wins, priority order matters.
+# ERROR > WARN > EXIT > FILL > ORDER > SIGNAL > INFO.
+_LOG_LEVEL_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("ERROR",  re.compile(r"\b(ERROR|FATAL|CRITICAL|Traceback)\b")),
+    ("WARN",   re.compile(r"\b(WARNING|WARN|STALE|SKIP)\b", re.IGNORECASE)),
+    ("EXIT",   re.compile(r"\bEXIT\b")),
+    ("FILL",   re.compile(r"\bFILL\b")),
+    ("ORDER",  re.compile(r"\bORDER\b")),
+    ("SIGNAL", re.compile(r"\bSIGNAL\b|\bnovel=[1-9]\d*")),
+]
+
+_LOG_LEVEL_COLORS: dict[str, str] = {
+    "ERROR": RED,
+    "WARN": AMBER_B,
+    "EXIT": DIM2,
+    "FILL": GREEN,
+    "ORDER": AMBER,
+    "SIGNAL": CYAN,
+}
+
+
+def _classify_log_level(line: str) -> str:
+    for name, pat in _LOG_LEVEL_PATTERNS:
+        if pat.search(line):
+            return name
+    return "INFO"
+
 
 def _read_log_tail(path: Path | None, n: int = 18) -> list[str]:
     if path is None:
@@ -1896,6 +1924,9 @@ def _render_log_panel(parent, column, state, launcher, proc, snap):
                       wrap="none", highlightbackground=BORDER, highlightthickness=0,
                       state="disabled")
     log_box.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    for _lvl, _color in _LOG_LEVEL_COLORS.items():
+        log_box.tag_configure(_lvl, foreground=_color)
+    log_box.tag_configure("ERROR", foreground=RED, font=(FONT, 8, "bold"))
     state["log_box"] = log_box
     _schedule_log_tail(state, launcher, proc)
 
@@ -3970,7 +4001,17 @@ def _schedule_log_tail(state, launcher, proc):
     lines = _read_log_tail(_resolve_log_path(slug, proc), n=18)
     box.configure(state="normal")
     box.delete("1.0", "end")
-    box.insert("end", "\n".join(lines) if lines else "(no log available)")
+    if lines:
+        for i, ln in enumerate(lines):
+            if i > 0:
+                box.insert("end", "\n")
+            level = _classify_log_level(ln)
+            if level == "INFO":
+                box.insert("end", ln)
+            else:
+                box.insert("end", ln, level)
+    else:
+        box.insert("end", "(no log available)")
     box.configure(state="disabled")
     box.see("end")
     try:
