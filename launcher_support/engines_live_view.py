@@ -59,6 +59,10 @@ from launcher_support.engines_live_helpers import (
     _uptime_seconds,
     running_slugs_from_procs,
     _sanitize_instance_label,
+    # R5.1: pure helpers migrated from this module
+    _is_remote_run,
+    _remote_run_id,
+    _engine_registry_for_sidebar,
 )
 from launcher_support.screens._metrics import emit_timing_metric
 # signal_detail_popup.render_inline eh chamado via engines_sidebar.render_detail
@@ -1890,22 +1894,6 @@ def _get_cockpit_client():
     return get_client()
 
 
-def _is_remote_run(run_dir: Path) -> bool:
-    # Path() on Windows normaliza "remote://x" pra "remote:\x" ou "remote:/x".
-    # Aceita as três formas pra robustez cross-platform.
-    s = str(run_dir).replace("\\", "/")
-    return s.startswith("remote:/") or s.startswith("remote://")
-
-
-def _remote_run_id(run_dir: Path) -> str:
-    s = str(run_dir).replace("\\", "/")
-    if s.startswith("remote://"):
-        return s[len("remote://"):]
-    if s.startswith("remote:/"):
-        return s[len("remote:/"):]
-    return s
-
-
 def _get_tunnel_status_label() -> tuple[str, str]:
     """Return (text, fg_color) pro badge TUNNEL na linha de status.
 
@@ -2241,35 +2229,6 @@ def _refresh_shadow_panel(launcher, state) -> None:
 # Layout completo dedicado pro modo SHADOW. Le do ShadowPoller cache
 # (nunca bloqueia o UI thread) e se auto-refresh a cada 5s via
 # launcher.after. Se a cache esta vazia, renderiza empty-state.
-
-def _engine_registry_for_sidebar(state) -> list[dict]:
-    """Return list de {slug, display} pra sidebar. Inclui todas engines
-    exibidas no bucket LIVE/READY atual — evita depender de import
-    circular com launcher.ENGINES.
-
-    Antes 2026-04-22: paper mode hardcoded pra so mostrar MILLENNIUM.
-    Agora CITADEL/JUMP/RENAISSANCE tem runners paper+shadow proprios
-    (per-engine runners 2e065db); a sidebar cobre todas as engines
-    com runs ao vivo no bucket LIVE.
-    """
-    by_bucket = state.get("engines_by_bucket") or {}
-    seen: set[str] = set()
-    out: list[dict] = []
-    for bucket in ("LIVE", "READY"):
-        for item in by_bucket.get(bucket, []):
-            slug = item.get("slug") or ""
-            if not slug or slug in seen:
-                continue
-            seen.add(slug)
-            out.append({
-                "slug": slug,
-                "display": item.get("display") or slug.upper(),
-            })
-    if not out:
-        slug = state.get("selected_slug") or "millennium"
-        out.append({"slug": slug, "display": slug.upper()})
-    return out
-
 
 def _render_detail_shadow(parent, slug, meta, state, launcher):
     """Render SHADOW cockpit detail pane — sidebar eh renderizada pelo

@@ -271,3 +271,52 @@ def _sanitize_instance_label(raw: str) -> str:
     label = re.sub(r"[^a-z0-9-]+", "-", str(raw or "").strip().lower())
     label = re.sub(r"-{2,}", "-", label).strip("-")
     return label[:40]
+
+
+def _is_remote_run(run_dir: Path) -> bool:
+    """Detect whether a run path came from the VPS cockpit (remote:// prefix).
+
+    Path() on Windows normalizes "remote://x" to "remote:\\x" or "remote:/x".
+    Accepts all three forms for cross-platform robustness.
+    """
+    s = str(run_dir).replace("\\", "/")
+    return s.startswith("remote:/") or s.startswith("remote://")
+
+
+def _remote_run_id(run_dir: Path) -> str:
+    """Strip the remote:// prefix and return the bare run id."""
+    s = str(run_dir).replace("\\", "/")
+    if s.startswith("remote://"):
+        return s[len("remote://"):]
+    if s.startswith("remote:/"):
+        return s[len("remote:/"):]
+    return s
+
+
+def _engine_registry_for_sidebar(state) -> list[dict]:
+    """Return list of {slug, display} for sidebar. Includes all engines
+    exibidas no bucket LIVE/READY atual — avoids circular import com
+    launcher.ENGINES.
+
+    Antes 2026-04-22: paper mode hardcoded pra so mostrar MILLENNIUM.
+    Agora CITADEL/JUMP/RENAISSANCE tem runners paper+shadow proprios
+    (per-engine runners 2e065db); a sidebar cobre todas as engines
+    com runs ao vivo no bucket LIVE.
+    """
+    by_bucket = state.get("engines_by_bucket") or {}
+    seen: set[str] = set()
+    out: list[dict] = []
+    for bucket in ("LIVE", "READY"):
+        for item in by_bucket.get(bucket, []):
+            slug = item.get("slug") or ""
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            out.append({
+                "slug": slug,
+                "display": item.get("display") or slug.upper(),
+            })
+    if not out:
+        slug = state.get("selected_slug") or "millennium"
+        out.append({"slug": slug, "display": slug.upper()})
+    return out
