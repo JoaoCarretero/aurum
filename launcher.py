@@ -136,8 +136,7 @@ from launcher_support.menu_data import (
 # PALETTE — imported from core/ui_palette (SSOT)
 # -----------------------------------------------------------
 from core.ui.ui_palette import (
-    BG, BG2, BG3, PANEL, BORDER, BORDER_H,
-    AMBER, AMBER_D, AMBER_B,
+    BG, BG2, BG3, PANEL, BORDER, AMBER, AMBER_D, AMBER_B,
     WHITE, DIM, DIM2, GREEN, RED,
     FONT,
 )
