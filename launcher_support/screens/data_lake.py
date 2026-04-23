@@ -16,6 +16,7 @@ from tkinter import messagebox
 
 from config.params import BASKETS
 from core import cache as cache_mod
+from core.ui.scroll import bind_mousewheel
 from core.ui.ui_palette import (
     AMBER, AMBER_B, AMBER_D,
     BG, BG2, BG3, BORDER,
@@ -125,10 +126,7 @@ def render(app) -> None:
     rows_frame.bind("<Configure>",
                     lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
-    def _on_wheel(event):
-        canvas.yview_scroll(-1 * (event.delta // 120), "units")
-    canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_wheel))
-    canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+    bind_mousewheel(canvas)
 
     total_lbl = tk.Label(left_panel, text="", font=(FONT, 8),
                          fg=DIM, bg=BG, anchor="w")

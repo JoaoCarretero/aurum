@@ -308,7 +308,8 @@ PERIODS_UI = [
     ("30 DIAS",   "~1 mês — validação rápida",        "30"),
     ("90 DIAS",   "~3 meses — backtest padrão",        "90"),
     ("180 DIAS",  "~6 meses — médio prazo",            "180"),
-    ("365 DIAS",  "~1 ano — ciclo completo",           "365"),
+    ("360 DIAS",  "~1 ano — ciclo completo",           "360"),
+    ("720 DIAS",  "~2 anos — walk-forward longo",      "720"),
 ]
 
 
@@ -510,6 +511,18 @@ class App(tk.Tk):
         super().__init__()
         try:
             _configure_screen_logging()
+        except Exception:
+            pass
+        # Auto-cleanup stale live_runs rows no startup — paper runner tem
+        # bug latente de nao marcar SIGTERM stopped; sem isso, o cockpit
+        # lista "runs travadas" fantasmas. Threshold 30min (2x tick_sec).
+        try:
+            from core.ops.db_live_runs import cleanup_stale_rows
+            cleaned = cleanup_stale_rows(stale_minutes=30)
+            if cleaned:
+                import logging
+                logging.getLogger(__name__).info(
+                    "startup: cleaned %d stale live_runs rows", cleaned)
         except Exception:
             pass
         self.title("AURUM Terminal")
@@ -7595,8 +7608,21 @@ class App(tk.Tk):
                 for run_dir in runs_root.iterdir():
                     if not run_dir.is_dir():
                         continue
-                    run_id = run_dir.name
+                    # Skip runs bugadas/incompletas — sem summary.json nem
+                    # report.html nem reports/*.json. Antes o browser
+                    # listava pastas orfas (backtest morto mid-run) com
+                    # campos "—" e clicks ficavam "travados" abrindo
+                    # detail panel sem dados. Se tem 1+ artifact, mostra.
                     summary_path = run_dir / "summary.json"
+                    report_html = run_dir / "report.html"
+                    has_artifact = (
+                        summary_path.exists()
+                        or report_html.exists()
+                        or bool(self._bt_report_candidates(run_dir))
+                    )
+                    if not has_artifact:
+                        continue
+                    run_id = run_dir.name
                     config_path = run_dir / "config.json"
                     summary = self._bt_read_json(summary_path)
                     config = self._bt_read_json(config_path)

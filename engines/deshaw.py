@@ -1,6 +1,35 @@
 """
-AURUM Finance — NEWTON Engine v1.0
+AURUM Finance — DE SHAW Engine v1.0 (ARCHIVED)
 Statistical Mean Reversion via Pairs Trading (Engle-Granger Cointegration)
+
+🗄️ ARCHIVED 2026-04-22 — NO_EDGE veredito confirmado
+
+Audit verdict (docs/audits/2026-04-22_deshaw_phi_ornstein_archive_verdict.md):
+- Backtest 360d bluechip 1h (2026-04-22): Sharpe −0.19, ROI −0.33%
+- 4 gates do overfit audit falharam:
+  - Walk-forward FAIL: 3/5 windows negativas (W2 −1.43, W5 −4.29)
+  - Regime concentration FAIL: 98/101 trades em BULL (esperado CHOP-only)
+  - Symbol concentration FAIL: FETUSDT 363% do PnL negativo
+  - Temporal decay FAIL: 246% deterioracao entre halves
+- Edge de 2026-04-16 (Sharpe +1.15 730d z=3.0 pvalue=0.15) era overfit
+  massivo. Colapsou em janela recente.
+
+Grid esgotado: z-entry (2.0→4.0), pvalue (0.05→0.15), half-life
+(100→300), regime gates (CHOP, CHOP+BULL), HMM thresholds — todas
+combinacoes razoaveis testadas sem edge OOS.
+
+Mecanismo quebrado em crypto: cointegracao pressupoe relacao
+estrutural persistente e regime-independente. Crypto e regime-
+dependent — BEAR correlacoes colapsam, BULL spreads desacoplam,
+CHOP reversion e fragil.
+
+Nao reformular, nao re-tunar. Se aparecer evidencia nova (e.g.,
+pares intra-setor stable+stable, ou nova janela de dados com
+cointegration robusta), reabrir com NOVA hipotese, nao novo grid.
+
+Conceito original abaixo, mantido pra referencia historica.
+
+---
 
 Conceito: pares co-integrados divergem do equilíbrio e convergem.
 Oposto do AZOTH — opera reversão à média em vez de trend-following.
@@ -10,28 +39,6 @@ Pipeline:
   2. Z-score do spread com rolling window
   3. Half-life via OLS (Ornstein-Uhlenbeck)
   4. Entry: |z| > 2.0, Exit: z cruza 0, Stop: |z| > 3.5
-
-Edge status (2026-04-16)
-------------------------
-Defaults (NEWTON_ZSCORE_ENTRY=2.0) flagged "NÃO USAR EM LIVE" — 18 prior
-iterations, no edge. 2026-04-16 sweep cracked it by loosening pvalue:
-  730d bluechip 1h:
-    defaults z=2.0:                  1741t ROI -15.4%  Sharpe -0.68   (2/6)
-    z=3.0 exit=0.0 pvalue=0.05:      1060t ROI  +3.1%  Sharpe +0.14   (3/6)
-    z=3.0 exit=0.0 pvalue=0.10 hl=300: 1487t ROI +27.3% Sharpe +1.01  (5/6 WARN)
-    z=3.0 exit=0.0 pvalue=0.15 hl=300: 1571t ROI +33.6% Sharpe +1.15  (5/6 WARN) ★
-    z=3.5 pvalue=0.05:               regress (over-selective)
-    4h / layer1 / majors:            fail (no pairs or catastrophic)
-  1095d bluechip 1h validation:
-    z=3.0 pvalue=0.10:                933t ROI +26.9%  Sharpe +1.02   (4/6 FAIL-A)
-    z=3.0 pvalue=0.15 hl=300:         933t ROI +29.8%  Sharpe +1.05   (4/6 FAIL-A) ★
-Walk-forward shows one negative window (W3) in 3y, others solid.
-ATOMUSDT concentration 59% in 1095d (was ARB 48% in 730d — different
-symbol carries depending on period).
-
-Recommended config: `--z-entry 3.0 --z-exit 0.0 --pvalue 0.15 --hl-max 300`.
-Engine is now a real candidate but not FROZEN-ready until walk-forward
-survives 6/6 formal; the W3 negative needs understanding.
 
 CLI overrides --z-entry / --z-exit / --z-stop / --pvalue / --hl-max /
 --max-hold / --size-mult enable sweeps without touching config.params.
@@ -1476,6 +1483,8 @@ if __name__ == "__main__":
     roi = ratios["ret"]
     _config = _apply_runtime_snapshot_overrides(snapshot_config(), BASKET_NAME)
     _summary = {
+        "engine": "DE SHAW",
+        "run_id": RUN_ID,
         "basket": BASKET_NAME,
         "n_trades": len(closed),
         "win_rate": round(wr, 2),
@@ -1495,7 +1504,6 @@ if __name__ == "__main__":
         "leverage": LEVERAGE,
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,
-        "engine": "DE SHAW",
         "n_pairs": len(pairs),
     }
 

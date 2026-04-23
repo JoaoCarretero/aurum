@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import tkinter as tk
 
+from core.ui.scroll import bind_mousewheel
 from core.ui.ui_palette import (
     AMBER, AMBER_D,
     BG, BORDER,
@@ -88,25 +89,7 @@ def render(app):
     inner.bind("<Configure>",
                lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
 
-    # Mouse wheel — scoped to the list (not bind_all, which would leak)
-    def _on_wheel(event, c=canvas):
-        try:
-            c.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        except tk.TclError:
-            pass
-
-    def _enter(_e=None, c=canvas):
-        c.bind_all("<MouseWheel>", _on_wheel)
-
-    def _leave(_e=None, c=canvas):
-        try:
-            c.unbind_all("<MouseWheel>")
-        except tk.TclError:
-            pass
-    canvas.bind("<Enter>", _enter)
-    canvas.bind("<Leave>", _leave)
-    inner.bind("<Enter>", _enter)
-    inner.bind("<Leave>", _leave)
+    bind_mousewheel(canvas)
 
     app._dash_widgets[("bt_list",)] = inner
     app._dash_widgets[("bt_canvas",)] = canvas
@@ -145,24 +128,7 @@ def render(app):
                      lambda e, c=d_canvas:
                      c.configure(scrollregion=c.bbox("all")))
 
-    def _on_dwheel(event, c=d_canvas):
-        try:
-            c.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        except tk.TclError:
-            pass
-
-    def _d_enter(_e=None, c=d_canvas):
-        c.bind_all("<MouseWheel>", _on_dwheel)
-
-    def _d_leave(_e=None, c=d_canvas):
-        try:
-            c.unbind_all("<MouseWheel>")
-        except tk.TclError:
-            pass
-    d_canvas.bind("<Enter>", _d_enter)
-    d_canvas.bind("<Leave>", _d_leave)
-    detail_body.bind("<Enter>", _d_enter)
-    detail_body.bind("<Leave>", _d_leave)
+    bind_mousewheel(d_canvas)
 
     app._dash_widgets[("bt_detail",)] = detail_body
 

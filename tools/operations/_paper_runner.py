@@ -75,7 +75,7 @@ LABEL: str | None = sanitize_label(
     os.environ.get(f"AURUM_{ENGINE_UPPER}_PAPER_LABEL")
     or os.environ.get("AURUM_PAPER_LABEL")
 )
-RUN_ID = build_run_id(RUN_TS, LABEL, mode="paper")
+RUN_ID = build_run_id(RUN_TS, LABEL, mode="paper", engine=ENGINE_NAME)
 RUN_DIR = ROOT / "data" / f"{ENGINE_NAME}_paper" / RUN_ID
 LOGS_DIR = RUN_DIR / "logs"
 REPORTS_DIR = RUN_DIR / "reports"
@@ -109,7 +109,7 @@ def _configure_run(label: str | None) -> None:
     global POSITIONS_PATH, ACCOUNT_PATH, HEARTBEAT_PATH, MANIFEST_PATH
     global KILL_FLAG
     LABEL = sanitize_label(label)
-    RUN_ID = build_run_id(RUN_TS, LABEL, mode="paper")
+    RUN_ID = build_run_id(RUN_TS, LABEL, mode="paper", engine=ENGINE_NAME)
     RUN_DIR = ROOT / "data" / f"{ENGINE_NAME}_paper" / RUN_ID
     LOGS_DIR = RUN_DIR / "logs"
     REPORTS_DIR = RUN_DIR / "reports"
@@ -712,6 +712,8 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
     stop = {"flag": False, "reason": ""}
 
     def _handle_signal(signum, _frame):
+        if stop["flag"]:
+            sys.exit(130)
         stop["flag"] = True
         stop["reason"] = f"signal {signum}"
 

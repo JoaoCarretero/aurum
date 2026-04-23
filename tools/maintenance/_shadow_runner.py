@@ -65,7 +65,7 @@ LABEL: str | None = sanitize_label(
     os.environ.get(f"AURUM_{ENGINE_UPPER}_SHADOW_LABEL")
     or os.environ.get("AURUM_SHADOW_LABEL")
 )
-RUN_ID = build_run_id(RUN_TS, LABEL, mode="shadow")
+RUN_ID = build_run_id(RUN_TS, LABEL, mode="shadow", engine=ENGINE_NAME)
 RUN_DIR = ROOT / "data" / f"{ENGINE_NAME}_shadow" / RUN_ID
 LOGS_DIR = RUN_DIR / "logs"
 REPORTS_DIR = RUN_DIR / "reports"
@@ -84,7 +84,7 @@ def _configure_run(label: str | None) -> None:
     global LABEL, RUN_ID, RUN_DIR, LOGS_DIR, REPORTS_DIR, STATE_DIR
     global SHADOW_LOG, TRADES_PATH, HEARTBEAT_PATH, KILL_FLAG
     LABEL = sanitize_label(label)
-    RUN_ID = build_run_id(RUN_TS, LABEL, mode="shadow")
+    RUN_ID = build_run_id(RUN_TS, LABEL, mode="shadow", engine=ENGINE_NAME)
     RUN_DIR = ROOT / "data" / f"{ENGINE_NAME}_shadow" / RUN_ID
     LOGS_DIR = RUN_DIR / "logs"
     REPORTS_DIR = RUN_DIR / "reports"
@@ -466,6 +466,8 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     stop_requested = {"flag": False, "reason": ""}
 
     def _handle_signal(signum, _frame):  # noqa: ARG001
+        if stop_requested["flag"]:
+            sys.exit(130)
         stop_requested["flag"] = True
         stop_requested["reason"] = f"signal {signum}"
         log.info("SIGNAL %s received — shutting down after current tick", signum)

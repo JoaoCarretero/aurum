@@ -33,7 +33,7 @@ class MacroBrainScreen(Screen):
 
         app.h_path.configure(text="")
         app.h_stat.configure(text="COCKPIT", fg=AMBER)
-        app.f_lbl.configure(text="ESC main menu  |  R refresh  |  C run cycle  |  bg cycle 5m")
+        app.f_lbl.configure(text="ESC main menu  |  R refresh  |  C run cycle  |  ui 3s · bg 5m")
         app._bind_global_nav()
         app._schedule_first_paint_metric("macro_brain")
 
@@ -66,6 +66,9 @@ class MacroBrainScreen(Screen):
         def still_here() -> bool:
             return getattr(app, "_macro_page_token", None) is token
 
+        # UI tick real-time (3s) — apenas re-le do SQLite + atualiza labels
+        # in-place via _TILE_REGISTRY. Sem network, sem rebuild. Reflete
+        # novos dados do brain em <=3s apos chegarem no DB.
         def auto_tick() -> None:
             if not still_here():
                 return
@@ -75,8 +78,11 @@ class MacroBrainScreen(Screen):
                 tick_update()
             except Exception:
                 pass
-            app._macro_render_after = self._after(10_000, auto_tick)
+            app._macro_render_after = self._after(3_000, auto_tick)
 
+        # Background data cycle (5min) — chama brain.run_once que tem
+        # throttle interno por job (news 15min, macro 24h, etc). Mantido
+        # em 300s porque APIs externas (FRED, Yahoo) tem rate limits.
         def auto_cycle() -> None:
             if not still_here():
                 return
@@ -91,7 +97,7 @@ class MacroBrainScreen(Screen):
 
             threading.Thread(target=work, daemon=True).start()
             app._macro_cycle_after = self._after(300_000, auto_cycle)
-        app._macro_render_after = self._after(10_000, auto_tick)
+        app._macro_render_after = self._after(3_000, auto_tick)
         # Defer the first background cycle so the first screen paint wins CPU.
         app._macro_cycle_after = self._after(30_000, auto_cycle)
         try:
