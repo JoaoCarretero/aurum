@@ -4253,61 +4253,11 @@ class App(tk.Tk):
 
     # -- Auto-refresh loop -------------------------------------
     def _arb_schedule_refresh(self, delay_ms: int = 15_000):
-        """Re-scan every delay_ms while the arbitrage desk is on screen.
-
-        We identify "on screen" by checking that self._arb_tab_labels still
-        exists and isn't destroyed — the moment the user leaves the hub
-        (back to main menu, another page), that dict is replaced or the
-        widgets are gone, and the scheduled tick no-ops instead of trying
-        to repaint dead Tk widgets.
-        """
-        try:
-            # Cancel previous pending refresh if any
-            prev = getattr(self, "_arb_refresh_after", None)
-            if prev:
-                try:
-                    self.after_cancel(prev)
-                except Exception:
-                    pass
-            def _tick():
-                labels = getattr(self, "_arb_tab_labels", None)
-                if not labels:
-                    return
-                first = next(iter(labels.values()), None)
-                try:
-                    if first is None or not first.winfo_exists():
-                        return
-                except Exception:
-                    return
-                # Skip network fetch if scanner cache is still fresh —
-                # triggered when a manual R-refresh or tab switch already
-                # kicked a scan a few seconds ago.
-                if not self._arb_scan_is_fresh():
-                    self._arb_hub_scan_async()
-                self._arb_refresh_after = self.after(delay_ms, _tick)
-            self._arb_refresh_after = self.after(delay_ms, _tick)
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import schedule_refresh
+        return schedule_refresh(self, delay_ms)
     def _arb_schedule_clock(self):
-        """Tick every second — updates scan staleness + engine pill."""
-        def _tick():
-            # Short-circuit if status strip widgets gone (user left hub)
-            scan_lbl = getattr(self, "_arb_scan_age", None)
-            if scan_lbl is None:
-                return
-            try:
-                if not scan_lbl.winfo_exists():
-                    return
-                self._arb_update_status_strip()
-                self.after(1000, _tick)
-            except Exception:
-                pass
-        try:
-            self.after(1000, _tick)
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import schedule_clock
+        return schedule_clock(self)
     def _arb_update_status_strip(self):
         from launcher_support.screens.arbitrage_hub import update_status_strip
         return update_status_strip(self)
@@ -4346,139 +4296,37 @@ class App(tk.Tk):
     _ARB_REALISTIC_VOL_MIN = 5_000_000.0
 
     def _arb_filter_state(self) -> dict:
-        if not hasattr(self, "_arb_filters"):
-            # First access — try loading persisted state, else defaults
-            self._arb_filters = self._arb_load_filters()
-        return self._arb_filters
-
+        from launcher_support.screens.arbitrage_hub import filter_state
+        return filter_state(self)
     @staticmethod
     def _arb_filters_path():
-        from pathlib import Path as _P
-        return _P("data") / "arb_hub" / "filters.json"
-
+        from launcher_support.screens.arbitrage_hub import filters_path
+        return filters_path()
     def _arb_load_filters(self) -> dict:
-        """Load persisted filter state from disk. Falls back to defaults."""
-        import json as _json
-        base = dict(self._ARB_FILTER_DEFAULTS)
-        try:
-            path = self._arb_filters_path()
-            if path.exists():
-                raw = _json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    # Only accept keys the defaults know about — prevents
-                    # stale schema entries from polluting the state.
-                    for k, v in raw.items():
-                        if k in base:
-                            base[k] = v
-        except Exception:
-            pass
-        return base
-
+        from launcher_support.screens.arbitrage_hub import load_filters
+        return load_filters(self)
     def _arb_save_filters(self) -> None:
-        """Persist current filter state to disk (atomic write)."""
-        import json as _json
-        try:
-            path = self._arb_filters_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                _json.dumps(self._arb_filters, indent=2), encoding="utf-8")
-            tmp.replace(path)
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import save_filters
+        return save_filters(self)
     def _arb_fmt_filter(self, key: str, val) -> str:
-        if key == "min_apr":
-            return f"APR\u2265{int(val)}%"
-        if key == "min_volume":
-            if val == 0: return "VOL\u2265OFF"
-            if val >= 1_000_000: return f"VOL\u2265{int(val/1_000_000)}M"
-            return f"VOL\u2265{int(val/1_000)}K"
-        if key == "min_oi":
-            if val == 0: return "OI\u2265OFF"
-            if val >= 1_000_000: return f"OI\u2265{int(val/1_000_000)}M"
-            return f"OI\u2265{int(val/1_000)}K"
-        if key == "risk_max":
-            return f"RISK\u2264{val}"
-        if key == "grade_min":
-            return f"GRADE\u2265{val}"
-        return f"{key}={val}"
-
+        from launcher_support.screens.arbitrage_hub import fmt_filter
+        return fmt_filter(self, key, val)
     def _arb_rerender_current_tab(self) -> None:
         from launcher_support.screens.arbitrage_hub import rerender_current_tab
         return rerender_current_tab(self)
 
     def _arb_set_grade_min(self, grade: str) -> None:
-        """Set grade_min filter (for [GO ONLY]/[+WAIT]/[ALL] toolbar)."""
-        self._arb_filter_state()["grade_min"] = grade
-        # Refresh chip display if visible
-        lbl = getattr(self, "_arb_filter_labels", {}).get("grade_min")
-        if lbl is not None:
-            try:
-                lbl.configure(text=f" {self._arb_fmt_filter('grade_min', grade)} ")
-            except Exception:
-                pass
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
+        from launcher_support.screens.arbitrage_hub import set_grade_min
+        return set_grade_min(self, grade)
     def _arb_toggle_risky_venues(self) -> None:
-        state = self._arb_filter_state()
-        state["exclude_risky_venues"] = not state.get("exclude_risky_venues", False)
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
+        from launcher_support.screens.arbitrage_hub import toggle_risky_venues
+        return toggle_risky_venues(self)
     def _arb_toggle_realistic(self) -> None:
-        state = self._arb_filter_state()
-        state["realistic_only"] = not state.get("realistic_only", True)
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
+        from launcher_support.screens.arbitrage_hub import toggle_realistic
+        return toggle_realistic(self)
     def _arb_refresh_viab_toolbar(self) -> None:
-        """Repaint the top viability toolbar's active/inactive states."""
-        btns = getattr(self, "_arb_viab_btns", {})
-        if not btns:
-            return
-        state = self._arb_filter_state()
-        active = state.get("grade_min", "MAYBE")
-        palette = {
-            "GO":    (GREEN, BG),      # [GO ONLY]
-            "MAYBE": (AMBER, BG),      # [+WAIT]
-            "SKIP":  (DIM, BG),        # [ALL]
-        }
-        for key, (btn, grade) in btns.items():
-            if key == "risky":
-                continue
-            try:
-                if grade == active:
-                    fg, _bg = BG, palette[grade][0]
-                    btn.configure(fg=fg, bg=_bg)
-                else:
-                    fg, _bg = palette[grade][0], palette[grade][1]
-                    btn.configure(fg=fg, bg=_bg)
-            except Exception:
-                pass
-        risky_btn = btns.get("risky", (None,))[0]
-        if risky_btn is not None:
-            try:
-                on = state.get("exclude_risky_venues", False)
-                risky_btn.configure(
-                    text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
-                    fg=RED if on else DIM, bg=BG)
-            except Exception:
-                pass
-        real_btn = btns.get("realistic", (None,))[0]
-        if real_btn is not None:
-            try:
-                on = state.get("realistic_only", True)
-                real_btn.configure(
-                    text=f" {'[X]' if on else '[ ]'} REALISTIC ",
-                    fg=AMBER if on else DIM, bg=BG)
-            except Exception:
-                pass
-
+        from launcher_support.screens.arbitrage_hub import refresh_viab_toolbar
+        return refresh_viab_toolbar(self)
     def _arb_build_viab_toolbar(self, parent):
         from launcher_support.screens.arbitrage_hub import build_viab_toolbar
         return build_viab_toolbar(self, parent)
@@ -4494,90 +4342,8 @@ class App(tk.Tk):
     _ARB_SIM_SIZES = (500.0, 1000.0, 2500.0, 5000.0)
 
     def _arb_simulate(self, pair: dict, size_usd: float) -> dict:
-        """Project funding / fees / net for a given position size.
-
-        Formula matches SimpleArbEngine:
-          - entry fee: size × (10 + 5) / 10_000 = 0.15% at open
-          - exit fee: same 0.15% at close → RT = 30 bps
-          - funding: size × apr/100 × hours / 8760  (continuous approx
-            of 3× 8h funding payments/day × 365)
-
-        Decay scenario: 4h at full APR, then APR halves, hold to 24h.
-        Gives a concrete "what if the spread fades" number alongside
-        the "if it holds" row.
-        """
-        apr = abs(float(pair.get("net_apr") or pair.get("apr")
-                         or pair.get("basis_apr") or 0))
-        rt_fee_bps = 30.0
-        rt_fee_usd = size_usd * rt_fee_bps / 10_000.0
-
-        def _funding(hold_h: float, apr_pct: float) -> float:
-            return size_usd * (apr_pct / 100.0) * (hold_h / 8760.0)
-
-        holds = [8, 24, 72]
-        rows = []
-        for h in holds:
-            f = _funding(h, apr)
-            rows.append({
-                "hold_h": h,
-                "funding": round(f, 2),
-                "fees":    round(rt_fee_usd, 2),
-                "net":     round(f - rt_fee_usd, 2),
-            })
-        # Decay scenario: 4h @ full, 20h @ 50%, exit at 24h total
-        decay_funding = _funding(4.0, apr) + _funding(20.0, apr * 0.5)
-        decay_row = {
-            "label":   "decay→50% @4h, hold 24h",
-            "funding": round(decay_funding, 2),
-            "fees":    round(rt_fee_usd, 2),
-            "net":     round(decay_funding - rt_fee_usd, 2),
-        }
-
-        bkevn_h = round(rt_fee_bps * 87.6 / apr, 2) if apr > 0 else None
-
-        # Risk block. Liquidation distances assume exchange defaults
-        # (~20x short perp, ~25x long perp with small maintenance buffer).
-        # These are rough — real launcher doesn't set leverage here.
-        liq_short_pct = 4.5
-        liq_long_pct  = 3.5
-
-        vol = (pair.get("volume_24h")
-               or self._pair_min(pair.get("volume_24h_short"),
-                                  pair.get("volume_24h_long")) or 0)
-        vol_f = float(vol) if vol else 0.0
-        vol_ratio = vol_f / size_usd if (vol_f > 0 and size_usd > 0) else None
-        # Slippage ballpark: 10bps baseline, scales down with sqrt(ratio/10).
-        # Not a market impact model — just "small / ok / concerning" flag.
-        slippage_bps = None
-        if vol_ratio and vol_ratio > 0:
-            slippage_bps = round(10.0 / max((vol_ratio / 10.0) ** 0.5, 0.1), 2)
-
-        from core.arb.arb_scoring import _DEFAULT_VENUE_RELIABILITY
-        sv = (pair.get("short_venue") or pair.get("venue_perp")
-              or pair.get("venue_a") or "").lower()
-        lv = (pair.get("long_venue") or pair.get("venue_spot")
-              or pair.get("venue_b") or "").lower()
-
-        return {
-            "size_usd":   size_usd,
-            "apr":        apr,
-            "rt_fee_usd": round(rt_fee_usd, 2),
-            "bkevn_h":    bkevn_h,
-            "rows":       rows,
-            "decay":      decay_row,
-            "risk": {
-                "liq_short_pct": liq_short_pct,
-                "liq_long_pct":  liq_long_pct,
-                "slippage_bps":  slippage_bps,
-                "vol":           vol_f,
-                "vol_ratio":     vol_ratio,
-                "short_venue":   sv,
-                "long_venue":    lv,
-                "short_rel":     _DEFAULT_VENUE_RELIABILITY.get(sv),
-                "long_rel":      _DEFAULT_VENUE_RELIABILITY.get(lv),
-            },
-        }
-
+        from launcher_support.screens.arbitrage_hub import simulate
+        return simulate(self, pair, size_usd)
     @timed_legacy_switch("arb_detail")
     def _arb_show_detail(self, pair: dict):
         from launcher_support.screens.arbitrage_hub import show_detail
@@ -4589,72 +4355,11 @@ class App(tk.Tk):
         from launcher_support.screens.arbitrage_hub import toggle_detail_adv
         return toggle_detail_adv(self)
     def _arb_viab_reason(self, pair: dict, res) -> str:
-        """Human-readable reason for the VIAB verdict (top 2-3 factors)."""
-        viab = getattr(res, "viab", res.grade)
-        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
-        be = getattr(res, "breakeven_h", None)
-        vol_score = (res.factors.get("volume") or 0)
-        if viab == "GO":
-            parts = [f"high APR ({apr:.0f}%)"]
-            if be is not None:
-                parts.append(f"fast breakeven ({be:.1f}h)")
-            if vol_score >= 40:
-                parts.append("liquid")
-            return "  Why GO: " + ", ".join(parts)
-        if viab in ("WAIT", "MAYBE"):
-            parts = [f"APR {apr:.0f}%"]
-            if be is not None:
-                parts.append(f"bkevn {be:.1f}h")
-            if vol_score < 40:
-                parts.append("liquidity moderate")
-            return "  Why WAIT: " + ", ".join(parts)
-        # SKIP
-        reasons = []
-        if apr < 20:
-            reasons.append(f"APR too low ({apr:.0f}%)")
-        if be is not None and be > 72:
-            reasons.append(f"slow breakeven ({be:.1f}h)")
-        if vol_score < 20:
-            reasons.append("illiquid")
-        return "  Why SKIP: " + ", ".join(reasons) if reasons else ""
-
+        from launcher_support.screens.arbitrage_hub import viab_reason
+        return viab_reason(self, pair, res)
     def _arb_open_as_paper(self, pair: dict, *, size_usd: float | None = None) -> None:
-        """Open this opp as a paper position immediately (bypass tick).
-
-        When size_usd is given, temporarily override engine.size_usd for
-        this one open so the user-chosen size from the detail chips is
-        honored. Restores the original default after so the tick loop
-        keeps opening at its configured default.
-        """
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is None or not engine.running:
-            return
-        import time as _time
-        try:
-            opp = dict(pair)
-            if "net_apr" not in opp:
-                opp["net_apr"] = opp.get("apr") or opp.get("basis_apr") or 0
-            if "short_venue" not in opp:
-                opp["short_venue"] = opp.get("venue_perp") or opp.get("venue_a") or ""
-            if "long_venue" not in opp:
-                opp["long_venue"] = opp.get("venue_spot") or opp.get("venue_b") or ""
-            if "mark_price" not in opp:
-                opp["mark_price"] = opp.get("spot_price") or opp.get("price_a") or 0
-            original_size = engine.size_usd
-            try:
-                if size_usd is not None:
-                    engine.size_usd = float(size_usd)
-                engine._open(opp, _time.time())
-            finally:
-                engine.size_usd = original_size
-            engine._persist()
-            self.after(200, lambda: self._arbitrage_hub("positions"))
-        except Exception as e:
-            import logging
-            logging.getLogger("aurum.arb_hub").warning(
-                "open_as_paper failed for %s: %s", pair.get("symbol"), e,
-                exc_info=True)
-
+        from launcher_support.screens.arbitrage_hub import open_as_paper
+        return open_as_paper(self, pair, size_usd=size_usd)
     @staticmethod
     def _pair_min(a, b):
         vals = [v for v in (a, b) if v is not None]
@@ -4676,145 +4381,18 @@ class App(tk.Tk):
 
     @staticmethod
     def _arb_venue_label(pair: dict) -> str:
-        if pair.get("long_venue") and pair.get("short_venue"):
-            return f"{pair['long_venue']} \u2192 {pair['short_venue']}"
-        return str(pair.get("venue") or "\u2014")
-
+        from launcher_support.screens.arbitrage_hub import venue_label
+        return venue_label(pair)
     @staticmethod
     def _arb_pair_label(pair: dict) -> str:
-        sym = pair.get("symbol") or pair.get("sym") or "\u2014"
-        venue = (f"{pair.get('long_venue', '')} \u2194 {pair.get('short_venue', '')}"
-                 if pair.get("long_venue") else pair.get("venue", ""))
-        venue_clean = venue.strip(" \u2194")
-        return f"{sym}  \u00b7  {venue_clean}"
-
-    # -- Scoring filter ---------------------------------------
+        from launcher_support.screens.arbitrage_hub import pair_label
+        return pair_label(pair)
     def _arb_score_fallback(self, pair: dict):
-        """Synthesize a ScoreResult from net_apr alone.
-
-        arb_pairs() doesn't propagate volume_24h / open_interest per leg,
-        so score_opp returns mostly-None factors and grades SKIP for
-        everything. When that happens, fall back to a pure-APR score so the
-        table doesn't look all-SKIP.
-        """
-        from core.arb.arb_scoring import ScoreResult
-        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
-        # APR → score mapping: 0% = 0, 50%+ = 100
-        score = min(100.0, apr * 2.0)
-        if score >= 70:
-            grade = "GO"
-        elif score >= 40:
-            grade = "MAYBE"
-        else:
-            grade = "SKIP"
-        return ScoreResult(score=round(score, 0), grade=grade,
-                            factors={"net_apr": score})
-
+        from launcher_support.screens.arbitrage_hub import score_fallback
+        return score_fallback(self, pair)
     def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
-        """Apply user filters + scoring to each pair.
-
-        Scores via arb_scoring.score_opp — cached by (symbol, venues,
-        apr_round_1dp) with TTL = scan interval to avoid re-scoring the
-        same pair on tab switches within 15s. Falls back to APR-only
-        heuristic when scoring factors are all None.
-        Returns (pair_dict, ScoreResult) in descending score order.
-        """
-        from core.arb.arb_scoring import score_opp
-        state = self._arb_filter_state()
-        min_apr    = state.get("min_apr", 0)
-        min_volume = state.get("min_volume", 0)
-        min_oi     = state.get("min_oi", 0)
-        risk_max   = state.get("risk_max", "HIGH")
-        grade_min  = state.get("grade_min", "SKIP")
-        _R = {"LOW": 0, "MED": 1, "HIGH": 2}
-        _G = {"GO": 0, "MAYBE": 1, "SKIP": 2}
-        risk_cap  = _R.get(risk_max, 2)
-        grade_cap = _G.get(grade_min, 2)
-
-        # Score cache — TTL matches scanner cache (30s is the scan ttl,
-        # so scoring is the same for 30s regardless of tab flips).
-        import time as _time
-        cache = getattr(self, "_arb_score_cache", None)
-        if cache is None or (_time.time() - cache.get("ts", 0)) > 30.0:
-            cache = {"ts": _time.time(), "map": {}}
-            self._arb_score_cache = cache
-        cache_map = cache["map"]
-
-        exclude_risky = state.get("exclude_risky_venues", False)
-        realistic_only = state.get("realistic_only", True)
-        apr_max = self._ARB_REALISTIC_APR_MAX
-        vol_min_realistic = self._ARB_REALISTIC_VOL_MIN
-        risky_venues = self._ARB_RISKY_VENUES
-        out = []
-        for p in (pairs or []):
-            # Cheap filters first
-            apr = abs(float(p.get("net_apr") or p.get("apr") or 0))
-            if apr < min_apr:
-                continue
-            # REALISTIC filter — cap APR at 500% (stale funding territory)
-            # before the other checks so we spend zero cycles on them.
-            if realistic_only and apr > apr_max:
-                continue
-            vol = (p.get("volume_24h")
-                   or self._pair_min(p.get("volume_24h_short"),
-                                      p.get("volume_24h_long")) or 0)
-            if min_volume and float(vol) < min_volume:
-                continue
-            if realistic_only and float(vol) < vol_min_realistic:
-                continue
-            oi = (p.get("open_interest")
-                  or self._pair_min(p.get("open_interest_short"),
-                                     p.get("open_interest_long")) or 0)
-            if min_oi and float(oi) < min_oi:
-                continue
-            risk = p.get("risk", "HIGH")
-            if _R.get(risk, 2) > risk_cap:
-                continue
-            # [NO RISKY VENUES] toolbar toggle — drop pairs involving
-            # low-reliability venues (bingx, bitget, paradex).
-            if exclude_risky:
-                sv = (p.get("short_venue") or p.get("venue_perp") or
-                      p.get("venue_a") or "").lower()
-                lv = (p.get("long_venue") or p.get("venue_spot") or
-                      p.get("venue_b") or "").lower()
-                if sv in risky_venues or lv in risky_venues:
-                    continue
-
-            # Cache key: symbol + venues + apr rounded to 1dp (the only
-            # field that changes meaningfully between scans).
-            ckey = (
-                p.get("symbol", ""),
-                p.get("short_venue", "") or p.get("venue_perp", "") or p.get("venue_a", ""),
-                p.get("long_venue", "") or p.get("venue_spot", "") or p.get("venue_b", ""),
-                round(apr, 1),
-                p.get("_type", ""),
-            )
-            sr = cache_map.get(ckey)
-            if sr is None:
-                try:
-                    sr = score_opp(p)
-                    populated = sum(1 for v in sr.factors.values() if v is not None)
-                    if populated <= 1:
-                        sr = self._arb_score_fallback(p)
-                except Exception:
-                    sr = self._arb_score_fallback(p)
-                cache_map[ckey] = sr
-
-            if _G.get(sr.grade, 2) > grade_cap:
-                continue
-            out.append((p, sr))
-        # Sort: grade bucket (GO first), then BKEVN asc (fastest payback),
-        # then SCORE desc as tiebreaker. Fastest-to-breakeven is what
-        # actually matters — high score with 80h bkevn is a trap.
-        def _key(t):
-            _p, _sr = t
-            be = getattr(_sr, "breakeven_h", None)
-            be_val = be if be is not None else 9999.0
-            return (_G.get(_sr.grade, 2), be_val, -_sr.score)
-        out.sort(key=_key)
-        return out
-
-    # -- Tab renderers ------------------------------------------
+        from launcher_support.screens.arbitrage_hub import filter_and_score
+        return filter_and_score(self, pairs)
     _ARB_PAIRS_COLS = [
         ("#",     3,  "e"), ("SYM",    7, "w"),
         ("LONG",  10, "w"), ("SHORT",  10, "w"),
@@ -4863,213 +4441,31 @@ class App(tk.Tk):
         return paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot)
     # -- Engine control shortcuts ------------------------------
     def _arb_engine_start(self, mode: str):
-        """Start SimpleArbEngine (in-process, paper mode)."""
-        if mode == "demo":
-            # Demo/testnet requires venue auth — not supported in the simple
-            # in-process engine. Fall back to paper silently.
-            mode = "paper"
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is None:
-            from core.arb.engine import SimpleArbEngine
-            engine = SimpleArbEngine()
-            self._arb_simple_engine = engine
-        if not engine.running:
-            engine.start(mode=mode)
-        try:
-            self.after(500, lambda: self._arbitrage_hub("engine"))
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import engine_start
+        return engine_start(self, mode)
     def _arb_engine_stop(self):
-        """Stop the in-process SimpleArbEngine."""
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            engine.stop()
-        try:
-            self.after(500, lambda: self._arbitrage_hub("engine"))
-        except Exception:
-            pass
-
-    # -- Background scan: populates status strip + active tab ----
+        from launcher_support.screens.arbitrage_hub import engine_stop
+        return engine_stop(self)
     _ARB_SCAN_FRESH_SECS = 10  # within this window, skip new scan
 
     def _arb_scan_is_fresh(self) -> bool:
-        """True if last scan is within the fresh window (no need to rescan)."""
-        import time as _time
-        last = getattr(self, "_arb_last_scan_ts", 0) or 0
-        return (_time.time() - last) < self._ARB_SCAN_FRESH_SECS
-
+        from launcher_support.screens.arbitrage_hub import scan_is_fresh
+        return scan_is_fresh(self)
     def _arb_hub_scan_async(self):
-        """Run FundingScanner in a worker thread and push results to the UI.
-
-        The scanner is cached (CACHE_TTL) so hopping between tabs doesn't
-        hammer venue APIs. After the scan returns, the status strip is
-        always refreshed; the active tab's table is repainted with live
-        data via whichever ``_arb_*_repaint`` callback is registered.
-        """
-        import threading
-        if _test_mode_enabled():
-            self._ui_call_soon(lambda: self._arb_hub_telem_update(
-                {"dex_online": 0, "cex_online": 0, "total": 0},
-                None, [], [], [], [], [], []))
-            return
-        try:
-            from core.ui.funding_scanner import FundingScanner
-        except Exception as e:
-            self._arb_set_status_error(f"scanner unavailable: {str(e)[:40]}")
-            return
-        scanner = getattr(self, "_funding_scanner", None)
-        if scanner is None:
-            scanner = FundingScanner()
-            self._funding_scanner = scanner
-
-        def _worker():
-            try:
-                opps = scanner.scan()
-                stats = scanner.stats()
-                # Lower min_spread_apr from 5% to 1% — the UI filter handles
-                # tighter thresholds now; we want the scanner to hand us as
-                # many candidates as possible so the post-filter has options
-                # to display.
-                arb_cc = scanner.arb_pairs(mode="cex-cex", min_spread_apr=1.0)
-                arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=1.0)
-                arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=1.0)
-                basis = []
-                spot = []
-                try:
-                    scanner.scan_spot()
-                    basis = scanner.basis_pairs(min_basis_bps=5)[:20]
-                    spot = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
-                except Exception:
-                    pass
-                top = opps[0] if opps else None
-                try:
-                    self._ui_call_soon(lambda: self._arb_hub_telem_update(
-                        stats, top, opps, arb_cc, arb_dd, arb_cd, basis, spot))
-                except (RuntimeError, tk.TclError):
-                    # Tk root gone (test teardown / app shutdown) — drop update
-                    pass
-            except Exception as e:
-                try:
-                    self._ui_call_soon(lambda: self._arb_set_status_error(
-                        f"scan failed: {str(e)[:40]}"))
-                except (RuntimeError, tk.TclError):
-                    pass
-
-        threading.Thread(target=_worker, daemon=True).start()
-
+        from launcher_support.screens.arbitrage_hub import hub_scan_async
+        return hub_scan_async(self)
     def _arb_set_status_error(self, msg: str):
-        """Paint the right side of the status strip with an error tag
-        and flip the live dot to red so the scan state is obvious at a
-        glance (green = fresh data, red = scan failed, dim = pending)."""
-        dot = getattr(self, "_arb_live_dot", None)
-        if dot is not None:
-            try: dot.configure(fg=RED)
-            except Exception: pass
-        lbl = getattr(self, "_arb_sum_best", None)
-        if lbl is not None:
-            try:
-                lbl.configure(text=msg, fg=RED)
-            except Exception:
-                pass
-
+        from launcher_support.screens.arbitrage_hub import set_status_error
+        return set_status_error(self, msg)
     def _arb_hub_telem_update(self, stats, top, opps, arb_cc, arb_dd, arb_cd,
                                basis, spot):
-        """Populate the status strip and the active tab's table.
-
-        stats     : dict from FundingScanner.stats() — dex_online / cex_online
-        top       : top FundingOpp across all venues (or None)
-        opps      : full list of FundingOpp from scanner.scan()
-        arb_cc    : list of CEX↔CEX arb pairs (dict) — paired funding diff
-        arb_dd    : list of DEX↔DEX arb pairs
-        arb_cd    : list of CEX↔DEX arb pairs
-        basis     : list of basis (spot-perp) pairs from scanner.basis_pairs
-        spot      : list of spot spread pairs from scanner.spot_arb_pairs
-
-        Each tab renderer registers a repaint callback (e.g. _arb_cex_repaint);
-        we only call the one for the currently active tab.
-        """
-        # Status strip — data flowed in, flip the live dot to green.
-        dex_on = (stats or {}).get("dex_online", 0)
-        cex_on = (stats or {}).get("cex_online", 0)
-        try:
-            dot = getattr(self, "_arb_live_dot", None)
-            if dot is not None:
-                dot.configure(fg=GREEN)
-            self._arb_sum_cex.configure(text=f"CEX  {cex_on}", fg=WHITE)
-            self._arb_sum_dex.configure(text=f"DEX  {dex_on}", fg=WHITE)
-            top_s = "—"
-            top_fg = DIM2
-            if top is not None and getattr(top, "apr", None) is not None:
-                try:
-                    apr_v = float(top.apr)
-                    top_s = f"{apr_v:+.2f}%"
-                    top_fg = GREEN if apr_v > 0 else (RED if apr_v < 0 else DIM2)
-                except Exception:
-                    pass
-            self._arb_sum_best.configure(text=f"TOP  {top_s}", fg=top_fg)
-        except Exception:
-            pass
-
-        # Cache raw results so tab switches can repaint without rescanning
-        import time as _time
-        self._arb_last_scan_ts = _time.time()
-        self._arb_cache = {
-            "stats": stats, "top": top, "opps": opps,
-            "arb_cc": arb_cc, "arb_dd": arb_dd, "arb_cd": arb_cd,
-            "basis": basis, "spot": spot,
-        }
-        # Push scan age + engine state into the status strip right away
-        try:
-            self._arb_update_status_strip()
-        except Exception:
-            pass
-
-        # Route to the repaint callback for the active tab.
-        # Phase 1 redesign: unified OPPS table consolidates 5 old tabs.
-        tab = getattr(self, "_arb_tab", "opps")
-        if tab == "opps":
-            self._arb_paint_opps(arb_cc, arb_dd, arb_cd, basis, spot)
-        # positions + history tabs don't consume scanner data directly —
-        # they read from _arb_simple_engine via their render fn.
-
-        # Feed SimpleArbEngine — any tab keeps the engine ticking as long
-        # as scanner returns data. The engine only processes FUNDING opps
-        # (arb_cc + arb_cd) and enriches with per-venue 24h volume from
-        # the raw FundingOpp list.
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            try:
-                self._arb_feed_engine(engine, opps, arb_cc + arb_cd)
-            except Exception as e:
-                # Never let engine errors kill the scan loop
-                try:
-                    import logging
-                    logging.getLogger("aurum.arb_hub").warning(
-                        "engine tick failed: %s", e, exc_info=True)
-                except Exception:
-                    pass
-
+        from launcher_support.screens.arbitrage_hub import hub_telem_update
+        return hub_telem_update(self, stats, top, opps, arb_cc, arb_dd, arb_cd,
+                               basis, spot)
     @staticmethod
     def _arb_feed_engine(engine, raw_opps, arb_pairs_merged):
-        """Enrich arb pairs with volume_24h per leg, then tick engine."""
-        vol_lookup: dict[tuple[str, str], float] = {}
-        for o in raw_opps:
-            try:
-                vol_lookup[(o.symbol, o.venue)] = float(o.volume_24h)
-            except Exception:
-                continue
-        enriched: list[dict] = []
-        for ap in arb_pairs_merged:
-            sym = ap.get("symbol")
-            short_v = ap.get("short_venue", "")
-            long_v = ap.get("long_venue", "")
-            ap2 = dict(ap)
-            ap2["volume_short"] = vol_lookup.get((sym, short_v), 0)
-            ap2["volume_long"] = vol_lookup.get((sym, long_v), 0)
-            enriched.append(ap2)
-        engine.tick(enriched)
-
+        from launcher_support.screens.arbitrage_hub import feed_engine
+        return feed_engine(engine, raw_opps, arb_pairs_merged)
     def _arb_paint_pairs(self, pairs, repaint, selected_attr: str):
         from launcher_support.screens.arbitrage_hub import paint_pairs
         return paint_pairs(self, pairs, repaint, selected_attr)
