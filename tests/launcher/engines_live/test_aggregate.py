@@ -111,3 +111,44 @@ def test_error_cards_sorted_first():
 
     engines_ordered = [c.engine for c in cards]
     assert engines_ordered == ["millennium", "citadel"]  # error first despite higher sort_weight
+
+
+def test_heartbeat_at_exact_boundary_is_live():
+    """heartbeat_age_s == 2*tick_sec is still classified as live (strict >)."""
+    from launcher_support.engines_live.data.aggregate import build_engine_cards
+
+    procs = [_make_proc("citadel", "paper", "desk-a", "rid-1")]
+    procs[0]["heartbeat_age_s"] = 1800  # == 2 * tick_sec(900)
+    cards = build_engine_cards(procs, tick_sec=900)
+
+    assert cards[0].live_count == 1
+    assert cards[0].stale_count == 0
+
+
+def test_process_dead_increments_error_count():
+    """process_dead=True triggers error state even without ticks_fail."""
+    from launcher_support.engines_live.data.aggregate import build_engine_cards
+
+    procs = [_make_proc("citadel", "paper", "desk-a", "rid-1")]
+    procs[0]["process_dead"] = True
+    cards = build_engine_cards(procs)
+
+    assert cards[0].error_count == 1
+    assert cards[0].live_count == 0
+
+
+def test_missing_uptime_defaults_to_zero():
+    """Missing uptime_s field yields max_uptime_s=0, no crash."""
+    from launcher_support.engines_live.data.aggregate import build_engine_cards
+
+    proc = {
+        "run_id": "rid-1",
+        "engine": "citadel", "mode": "paper", "label": "desk-a",
+        "equity": 10000.0, "ticks_ok": 17, "novel_total": 0,
+        "ticks_fail": 0, "heartbeat_age_s": 30,
+        # NO uptime_s field
+    }
+    cards = build_engine_cards([proc])
+
+    assert len(cards) == 1
+    assert cards[0].max_uptime_s == 0

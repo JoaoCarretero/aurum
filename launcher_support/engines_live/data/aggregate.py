@@ -82,6 +82,15 @@ def build_engine_cards(procs: Iterable[dict], *,
     Returns:
       List of EngineCard, sorted: errors first, then by sort_weight asc,
       then alphabetical by engine slug.
+
+    Note:
+      `procs` must be pre-enriched. Each dict is expected to carry heartbeat
+      fields (`heartbeat_age_s`, `process_dead`) and cockpit/run metadata
+      (`equity`, `ticks_ok`, `novel_total`, `ticks_fail`) in addition to the
+      base proc fields (`engine`, `mode`, `uptime_s`). The enrichment step
+      (joining `data.procs` rows with `data.cockpit` runs and heartbeat reads)
+      is the caller's responsibility — typically done in view.py before
+      calling this transform.
     """
     by_engine: dict[str, list[dict]] = {}
     for p in procs:
@@ -106,7 +115,9 @@ def build_engine_cards(procs: Iterable[dict], *,
                 stale += 1
             else:
                 error += 1
-            modes.add(_mode_char(r.get("mode", "")))
+            char = _mode_char(r.get("mode", ""))
+            if char != "?":
+                modes.add(char)
             max_uptime = max(max_uptime, int(r.get("uptime_s") or 0))
             eq = r.get("equity")
             if eq is not None:
