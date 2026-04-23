@@ -61,7 +61,7 @@ def list_procs(force: bool = False) -> list[dict]:
 
     try:
         from core.ops.proc import list_procs as _core_list_procs
-        rows = _core_list_procs()
+        rows = _core_list_procs(max_age=0 if force else None)
     except Exception:
         rows = []
 
@@ -81,6 +81,7 @@ def read_heartbeat(run_dir: Path) -> dict | None:
     if not hb_path.exists():
         return None
     try:
-        return json.loads(hb_path.read_text(encoding="utf-8"))
+        data = json.loads(hb_path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    return data if isinstance(data, dict) else None

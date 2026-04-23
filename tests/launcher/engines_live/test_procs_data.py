@@ -18,7 +18,9 @@ def test_snapshot_empty_when_list_procs_raises(monkeypatch):
 
     import core.ops.proc as _proc_mod
 
-    monkeypatch.setattr(_proc_mod, "list_procs", lambda **kw: (_ for _ in ()).throw(OSError("no file")))
+    def _raising(**kw):
+        raise OSError("no file")
+    monkeypatch.setattr(_proc_mod, "list_procs", _raising)
 
     rows = procs.list_procs()
     assert rows == []
@@ -113,3 +115,49 @@ def test_heartbeat_returns_none_if_missing(tmp_path):
 
     result = procs.read_heartbeat(tmp_path / "nonexistent")
     assert result is None
+
+
+def test_heartbeat_returns_none_for_non_dict_json(tmp_path):
+    """read_heartbeat() returns None when heartbeat.json contains non-dict JSON."""
+    from launcher_support.engines_live.data import procs
+
+    hb_path = tmp_path / "run_dir" / "state" / "heartbeat.json"
+    hb_path.parent.mkdir(parents=True)
+    hb_path.write_text(json.dumps([1, 2, 3]))
+
+    result = procs.read_heartbeat(tmp_path / "run_dir")
+    assert result is None
+
+
+def test_snapshot_ttl_expires_triggers_fresh_fetch(monkeypatch):
+    """After TTL elapses, a re-fetch happens (not just cache return)."""
+    from launcher_support.engines_live.data import procs
+    import core.ops.proc as _proc_mod
+
+    call_count = [0]
+    fake_rows = [[{"engine": "citadel"}], [{"engine": "jump"}]]
+
+    def _fake(**kw):
+        idx = call_count[0]
+        call_count[0] += 1
+        return fake_rows[min(idx, len(fake_rows) - 1)]
+
+    monkeypatch.setattr(_proc_mod, "list_procs", _fake)
+    procs.reset_cache_for_tests()
+
+    # Freeze time via monkeypatch
+    fake_now = [1000.0]
+    monkeypatch.setattr(procs.time, "monotonic", lambda: fake_now[0])
+
+    # First call — populates cache with fake_rows[0]
+    r1 = procs.list_procs()
+    assert r1[0]["engine"] == "citadel"
+    assert call_count[0] == 1
+
+    # Advance past TTL
+    fake_now[0] = 1000.0 + procs.CACHE_TTL_S + 0.1
+
+    # Second call — should re-fetch (fake_rows[1])
+    r2 = procs.list_procs()
+    assert r2[0]["engine"] == "jump"
+    assert call_count[0] == 2

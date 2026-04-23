@@ -280,7 +280,7 @@ def _list_procs_cached(*, force: bool = False, ttl_s: float = 0.75) -> list[dict
     from launcher_support.engines_live.data.procs import list_procs
     rows = list_procs(force=force)
     _PROCS_CACHE["rows"] = rows
-    _PROCS_CACHE["ts"] = __import__("time").monotonic()
+    _PROCS_CACHE["ts"] = time.monotonic()
     return rows
 
 
