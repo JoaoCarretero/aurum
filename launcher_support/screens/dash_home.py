@@ -7,14 +7,24 @@ the next 10s tick via app.after.
 from __future__ import annotations
 
 from datetime import datetime
+import threading
 import tkinter as tk
 
 from core.ui.ui_palette import (
     AMBER, AMBER_B, AMBER_D,
-    BG,
+    BG, BORDER,
     DIM, DIM2, FONT,
     GREEN, PANEL, RED, WHITE,
 )
+
+# _get_conn lives in launcher (__main__ when run normally). We access it via
+# sys.modules to avoid the __main__-vs-launcher double-import problem.
+import sys as _sys
+
+
+def _get_conn():
+    main = _sys.modules.get("__main__") or _sys.modules.get("launcher")
+    return main._get_conn()
 
 
 def render(app):
@@ -205,3 +215,119 @@ def render(app):
             except Exception:
                 pass
         app._dash_after_id = app.after(10000, app._dash_tick_refresh)
+
+
+def build_home_tab(app, parent):
+    """CS 1.6 style HOME: connection status + account management + engines.
+
+    No heavy aggregations — only what's immediately actionable.
+    Renders instantly with cached state; background refresh is lightweight.
+
+    Extracted from launcher.App in Fase 3 refactor.
+    """
+    wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=8)
+
+    # -- HUD header --
+    hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x")
+    tk.Label(hdr, text="[ HOME ]", font=(FONT, 9, "bold"),
+             fg=AMBER, bg=BG).pack(side="left")
+    tk.Label(hdr, text="personal control panel",
+             font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=(8, 0))
+    clock_l = tk.Label(hdr, text="", font=(FONT, 7), fg=DIM2, bg=BG)
+    clock_l.pack(side="right")
+    app._dash_widgets[("home_clock",)] = clock_l
+    tk.Frame(wrap, bg=AMBER_D, height=1).pack(fill="x", pady=(2, 8))
+
+    # -- CONNECTIONS box --
+    def box(title, parent_):
+        f = tk.Frame(parent_, bg=PANEL,
+                     highlightbackground=BORDER, highlightthickness=1)
+        tk.Label(f, text=f" [ {title} ] ",
+                 font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
+                 padx=6, pady=2).pack(side="top", anchor="nw", padx=6, pady=(6, 2))
+        return f
+
+    conn_box = box("CONNECTIONS", wrap)
+    conn_box.pack(fill="x", pady=(0, 6))
+    conn_inner = tk.Frame(conn_box, bg=PANEL)
+    conn_inner.pack(fill="x", padx=10, pady=(0, 8))
+    app._dash_widgets[("home_conn",)] = conn_inner
+
+    # -- ACCOUNTS box --
+    acc_box = box("ACCOUNTS", wrap)
+    acc_box.pack(fill="x", pady=(0, 6))
+    acc_inner = tk.Frame(acc_box, bg=PANEL)
+    acc_inner.pack(fill="x", padx=10, pady=(0, 8))
+    app._dash_widgets[("home_accs",)] = acc_inner
+
+    # -- ENGINES box --
+    eng_box = box("RUNNING ENGINES", wrap)
+    eng_box.pack(fill="x", pady=(0, 6))
+    eng_inner = tk.Frame(eng_box, bg=PANEL)
+    eng_inner.pack(fill="x", padx=10, pady=(0, 8))
+    app._dash_widgets[("home_engines",)] = eng_inner
+
+    app.f_lbl.configure(
+        text="HOME · connections + accounts + engines · "
+             "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit · R refresh"
+    )
+
+    # Show a brief "connecting..." placeholder inside each panel until the
+    # first fetch completes and populates real data. Avoids a blank flash
+    # on tab switch.
+    for key in ("home_conn", "home_accs", "home_engines"):
+        inner = app._dash_widgets.get((key,))
+        if inner is not None:
+            tk.Label(inner, text="  connecting...",
+                     font=(FONT, 8), fg=DIM2, bg=PANEL,
+                     anchor="w").pack(fill="x", pady=2)
+    # First real render comes from _dash_home_fetch_async which is
+    # invoked by _dash_render_tab right after this build method returns.
+
+
+
+def home_fetch_async(app):
+    """Lightweight background refresh: only ping exchange + list_procs.
+
+    Does NOT call PortfolioMonitor.refresh for live accounts (too slow) —
+    only loads the paper state locally, which is instant.
+
+    Extracted from launcher.App in Fase 3 refactor.
+    """
+    if not getattr(app, "_dash_alive", False):
+        return
+
+    def worker():
+        snap: dict = {}
+        # Paper state: local file read — instant
+        try:
+            from core.ui.portfolio_monitor import PortfolioMonitor
+            snap["paper"] = PortfolioMonitor.paper_state_load()
+        except Exception:
+            snap["paper"] = None
+        # Exchange latency
+        try:
+            snap["latency"] = _get_conn().ping("binance_futures")
+        except Exception:
+            snap["latency"] = None
+        # Running engines
+        try:
+            from core.ops.proc import list_procs
+            snap["procs"] = list_procs()
+        except Exception:
+            snap["procs"] = []
+        # Check which accounts have keys (instant — reads keys.json)
+        try:
+            pm = app._get_portfolio_monitor()
+            snap["has_keys"] = {m: pm.has_keys(m)
+                                for m in ("testnet", "demo", "live")}
+        except Exception:
+            snap["has_keys"] = {}
+
+        app._dash_home_snap = snap
+        if getattr(app, "_dash_alive", False):
+            try: app.after(0, app._dash_home_render)
+            except Exception: pass
+
+    threading.Thread(target=worker, daemon=True).start()
+

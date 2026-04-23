@@ -6136,113 +6136,16 @@ class App(tk.Tk):
 
     # -- PORTFOLIO TAB -------------------------------------
     def _dash_build_portfolio_tab(self, parent):
-        pm = self._get_portfolio_monitor()
-
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True)
-
-        # Inner accounts column
-        col = tk.Frame(wrap, bg=PANEL, width=170); col.pack(side="left", fill="y")
-        col.pack_propagate(False)
-
-        tk.Label(col, text=" ACCOUNTS ", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(10, 4))
-        tk.Frame(col, bg=DIM2, height=1).pack(fill="x", padx=10)
-
-        accounts = [
-            ("testnet", "TESTNET", GREEN),
-            ("demo",    "DEMO",    AMBER),
-            ("live",    "LIVE",    RED),
-            ("paper",   "PAPER",   DIM),
-        ]
-        self._dash_widgets[("portfolio_account_btns",)] = {}
-        for acc_id, label, color in accounts:
-            status = pm.status(acc_id)
-            row = tk.Frame(col, bg=PANEL, cursor="hand2")
-            row.pack(fill="x", padx=8, pady=(6, 0))
-            icon = "●" if status in ("live", "paper") else "○"
-            icon_color = color if status in ("live", "paper") else DIM
-
-            top_l = tk.Label(row, text=f"{icon} {label}", font=(FONT, 9, "bold"),
-                             fg=WHITE if status in ("live", "paper") else DIM,
-                             bg=PANEL, anchor="w")
-            top_l.pack(fill="x")
-            tk.Label(row, text=icon, font=(FONT, 7), fg=icon_color,
-                     bg=PANEL).place(in_=top_l, x=-2, y=2)
-
-            sub_l = tk.Label(row, text="…",
-                             font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w")
-            sub_l.pack(fill="x")
-            self._dash_widgets[("portfolio_account_btns",)][acc_id] = (row, top_l, sub_l)
-
-            def _click(_e=None, a=acc_id):
-                self._dash_portfolio_account = a
-                self._dash_portfolio_fetch_async()
-                self._dash_portfolio_repaint_account_btns()
-            for w in (row, top_l, sub_l):
-                w.bind("<Button-1>", _click)
-                w.bind("<Enter>", lambda e, l=top_l, s=status:
-                       l.configure(fg=AMBER))
-                w.bind("<Leave>", lambda e, l=top_l, s=status:
-                       l.configure(fg=WHITE if s in ("live", "paper") else DIM))
-
-        self._dash_portfolio_repaint_account_btns()
-
-        # Right details panel — built/refreshed by _dash_portfolio_render
-        details = tk.Frame(wrap, bg=BG)
-        details.pack(side="left", fill="both", expand=True, padx=12, pady=10)
-        self._dash_widgets[("portfolio_details",)] = details
-
-        # Cached-first: if we have a snapshot for the active account, render it
-        # immediately instead of showing a "Loading..." placeholder. The async
-        # refresh will replace it as soon as fresh data arrives.
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        if pm.get_cached(mode) is not None:
-            # Defer render so the details frame is fully packed first
-            self.after(0, self._dash_portfolio_render)
-        else:
-            tk.Label(details, text="Loading account…",
-                     font=(FONT, 9), fg=DIM, bg=BG).pack(pady=20)
+        from launcher_support.screens.dash_portfolio import build_portfolio_tab
+        return build_portfolio_tab(self, parent)
 
     def _dash_portfolio_repaint_account_btns(self):
-        btns = self._dash_widgets.get(("portfolio_account_btns",)) or {}
-        active = getattr(self, "_dash_portfolio_account", "paper")
-        pm = self._get_portfolio_monitor()
-        for acc_id, (row, top_l, sub_l) in btns.items():
-            cached = pm.get_cached(acc_id) or {}
-            status = pm.status(acc_id)
-            if status == "no_keys":
-                sub_l.configure(text="sem keys", fg=DIM)
-            elif status == "paper":
-                eq = cached.get("equity", 0) or 0
-                sub_l.configure(text=f"${eq:,.0f}", fg=AMBER_D)
-            else:
-                eq = cached.get("equity")
-                if eq is None:
-                    sub_l.configure(text="…", fg=DIM)
-                else:
-                    sub_l.configure(text=f"${eq:,.2f}", fg=GREEN)
-            row.configure(bg=BG3 if acc_id == active else PANEL)
-            top_l.configure(bg=BG3 if acc_id == active else PANEL)
-            sub_l.configure(bg=BG3 if acc_id == active else PANEL)
+        from launcher_support.screens.dash_portfolio import repaint_account_btns
+        return repaint_account_btns(self)
 
     def _dash_portfolio_fetch_async(self):
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "market") != "portfolio":
-            return
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        pm = self._get_portfolio_monitor()
-
-        def worker():
-            try:
-                pm.refresh(mode)
-            except Exception:
-                pass
-            if getattr(self, "_dash_alive", False):
-                try: self.after(0, self._dash_portfolio_render)
-                except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        from launcher_support.screens.dash_portfolio import portfolio_fetch_async
+        return portfolio_fetch_async(self)
 
     def _dash_portfolio_render(self):
         """Delegate to launcher_support.screens.dash_portfolio.render. Full
@@ -6310,75 +6213,12 @@ class App(tk.Tk):
 
     # -- TRADES TAB -----------------------------------------
     def _dash_build_trades_tab(self, parent):
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=12, pady=10)
-
-        # Filter row
-        filt = tk.Frame(wrap, bg=BG); filt.pack(fill="x", pady=(0, 6))
-        tk.Label(filt, text="FILTROS:", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 6))
-
-        for tag in ("all", "win", "loss"):
-            label = tag.upper()
-            btn = tk.Label(filt, text=f" {label} ", font=(FONT, 8, "bold"),
-                           fg=BG if self._dash_trades_filter["result"] == tag else DIM,
-                           bg=AMBER if self._dash_trades_filter["result"] == tag else BG3,
-                           padx=8, pady=2, cursor="hand2")
-            btn.pack(side="left", padx=2)
-            def _click(_e=None, t=tag):
-                self._dash_trades_filter["result"] = t
-                self._dash_trades_page = 0
-                self._dash_render_tab("trades")
-            btn.bind("<Button-1>", _click)
-
-        tk.Label(filt, text="  Conta:", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(10, 4))
-        accs = ("paper", "testnet", "demo", "live")
-        for a in accs:
-            active = self._dash_portfolio_account == a
-            btn = tk.Label(filt, text=f" {a.upper()} ", font=(FONT, 8, "bold"),
-                           fg=BG if active else DIM,
-                           bg=AMBER if active else BG3,
-                           padx=6, pady=2, cursor="hand2")
-            btn.pack(side="left", padx=1)
-            def _aclick(_e=None, x=a):
-                self._dash_portfolio_account = x
-                # Make sure we have data for this account
-                pm = self._get_portfolio_monitor()
-                if pm.get_cached(x) is None:
-                    threading.Thread(target=lambda m=x: pm.refresh(m), daemon=True).start()
-                self._dash_trades_page = 0
-                self._dash_render_tab("trades")
-            btn.bind("<Button-1>", _aclick)
-
-        # Table
-        tbl = tk.Frame(wrap, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1)
-        tbl.pack(fill="both", expand=True)
-        self._dash_widgets[("trades_table",)] = tbl
-
-        # Footer (page nav)
-        nav = tk.Frame(wrap, bg=BG); nav.pack(fill="x", pady=(6, 0))
-        prev_btn = tk.Label(nav, text=" ◄ prev ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
-        prev_btn.pack(side="left", padx=2)
-        prev_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(-1))
-        page_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        page_lbl.pack(side="left", padx=8)
-        next_btn = tk.Label(nav, text=" next ► ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
-        next_btn.pack(side="left", padx=2)
-        next_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(+1))
-        stats_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        stats_lbl.pack(side="right")
-        self._dash_widgets[("trades_page",)]  = page_lbl
-        self._dash_widgets[("trades_stats",)] = stats_lbl
-
-        # Initial render
-        self._dash_trades_render()
+        from launcher_support.screens.dash_trades import build_trades_tab
+        return build_trades_tab(self, parent)
 
     def _dash_trades_page_change(self, delta):
-        self._dash_trades_page = max(0, self._dash_trades_page + delta)
-        self._dash_trades_render()
+        from launcher_support.screens.dash_trades import trades_page_change
+        return trades_page_change(self, delta)
 
     def _dash_trades_render(self):
         """Delegate to launcher_support.screens.dash_trades.render. Full
@@ -6390,108 +6230,12 @@ class App(tk.Tk):
 
     # -- HOME TAB (personal snapshot) -----------------------
     def _dash_build_home_tab(self, parent):
-        """CS 1.6 style HOME: connection status + account management + engines.
-        No heavy aggregations — only what's immediately actionable.
-        Renders instantly with cached state; background refresh is lightweight."""
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=8)
-
-        # -- HUD header --
-        hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x")
-        tk.Label(hdr, text="[ HOME ]", font=(FONT, 9, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(hdr, text="personal control panel",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=(8, 0))
-        clock_l = tk.Label(hdr, text="", font=(FONT, 7), fg=DIM2, bg=BG)
-        clock_l.pack(side="right")
-        self._dash_widgets[("home_clock",)] = clock_l
-        tk.Frame(wrap, bg=AMBER_D, height=1).pack(fill="x", pady=(2, 8))
-
-        # -- CONNECTIONS box --
-        def box(title, parent_):
-            f = tk.Frame(parent_, bg=PANEL,
-                         highlightbackground=BORDER, highlightthickness=1)
-            tk.Label(f, text=f" [ {title} ] ",
-                     font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
-                     padx=6, pady=2).pack(side="top", anchor="nw", padx=6, pady=(6, 2))
-            return f
-
-        conn_box = box("CONNECTIONS", wrap)
-        conn_box.pack(fill="x", pady=(0, 6))
-        conn_inner = tk.Frame(conn_box, bg=PANEL)
-        conn_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_conn",)] = conn_inner
-
-        # -- ACCOUNTS box --
-        acc_box = box("ACCOUNTS", wrap)
-        acc_box.pack(fill="x", pady=(0, 6))
-        acc_inner = tk.Frame(acc_box, bg=PANEL)
-        acc_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_accs",)] = acc_inner
-
-        # -- ENGINES box --
-        eng_box = box("RUNNING ENGINES", wrap)
-        eng_box.pack(fill="x", pady=(0, 6))
-        eng_inner = tk.Frame(eng_box, bg=PANEL)
-        eng_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_engines",)] = eng_inner
-
-        self.f_lbl.configure(
-            text="HOME · connections + accounts + engines · "
-                 "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit · R refresh"
-        )
-
-        # Show a brief "connecting..." placeholder inside each panel until the
-        # first fetch completes and populates real data. Avoids a blank flash
-        # on tab switch.
-        for key in ("home_conn", "home_accs", "home_engines"):
-            inner = self._dash_widgets.get((key,))
-            if inner is not None:
-                tk.Label(inner, text="  connecting...",
-                         font=(FONT, 8), fg=DIM2, bg=PANEL,
-                         anchor="w").pack(fill="x", pady=2)
-        # First real render comes from _dash_home_fetch_async which is
-        # invoked by _dash_render_tab right after this build method returns.
+        from launcher_support.screens.dash_home import build_home_tab
+        return build_home_tab(self, parent)
 
     def _dash_home_fetch_async(self):
-        """Lightweight background refresh: only ping exchange + list_procs.
-        Does NOT call PortfolioMonitor.refresh for live accounts (too slow) —
-        only loads the paper state locally, which is instant."""
-        if not getattr(self, "_dash_alive", False):
-            return
-
-        def worker():
-            snap: dict = {}
-            # Paper state: local file read — instant
-            try:
-                from core.ui.portfolio_monitor import PortfolioMonitor
-                snap["paper"] = PortfolioMonitor.paper_state_load()
-            except Exception:
-                snap["paper"] = None
-            # Exchange latency
-            try:
-                snap["latency"] = _get_conn().ping("binance_futures")
-            except Exception:
-                snap["latency"] = None
-            # Running engines
-            try:
-                from core.ops.proc import list_procs
-                snap["procs"] = list_procs()
-            except Exception:
-                snap["procs"] = []
-            # Check which accounts have keys (instant — reads keys.json)
-            try:
-                pm = self._get_portfolio_monitor()
-                snap["has_keys"] = {m: pm.has_keys(m)
-                                    for m in ("testnet", "demo", "live")}
-            except Exception:
-                snap["has_keys"] = {}
-
-            self._dash_home_snap = snap
-            if getattr(self, "_dash_alive", False):
-                try: self.after(0, self._dash_home_render)
-                except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        from launcher_support.screens.dash_home import home_fetch_async
+        return home_fetch_async(self)
 
     def _dash_home_render(self):
         """Delegate to launcher_support.screens.dash_home.render. The
