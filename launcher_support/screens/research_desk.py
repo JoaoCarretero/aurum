@@ -27,11 +27,13 @@ from core.ui.ui_palette import (
     AMBER_D,
     BG,
     BG2,
+    BG3,
     BORDER,
     DIM,
     DIM2,
     FONT,
     GREEN,
+    HAZARD,
     PANEL,
     RED,
     WHITE,
@@ -44,6 +46,11 @@ from launcher_support.research_desk.paperclip_client import (
     PaperclipConfig,
     format_usd_from_cents,
     total_budget_cents,
+)
+from launcher_support.research_desk.paperclip_process import (
+    PaperclipProcess,
+    ServerStatus,
+    default_paperclip_cmd,
 )
 from launcher_support.screens.base import Screen
 
@@ -69,10 +76,16 @@ class ResearchDeskScreen(Screen):
         self._client = PaperclipClient(
             cfg=PaperclipConfig(timeout_sec=_HEALTH_TIMEOUT_SEC),
         )
+        # Process manager — reused across mount/unmount para preservar
+        # ownership do subprocess (se o user navega pra outro screen e
+        # volta, o paperclip continua rodando).
+        self._process = PaperclipProcess(cmd=default_paperclip_cmd())
         # Ultimo estado conhecido, pra o label piscar somente em mudanca
         # real (evita redraw desnecessario a cada tick).
         self._last_online: bool | None = None
         self._last_budget: tuple[int, int] = (0, 0)
+        # Widgets do toggle paperclip
+        self._action_btn: tk.Label | None = None
 
     # ── Build ─────────────────────────────────────────────────────
 
@@ -103,7 +116,7 @@ class ResearchDeskScreen(Screen):
         )
         self._subtitle_label.pack(anchor="w", pady=(3, 0))
 
-        # Paperclip state pill (OFFLINE default — Task 1.2 polling real state)
+        # Paperclip state pill + action button (start/stop)
         pill = tk.Frame(strip, bg=BG)
         pill.pack(side="right", padx=(12, 0))
         tk.Label(
@@ -116,6 +129,14 @@ class ResearchDeskScreen(Screen):
             fg=BG, bg=DIM, padx=6, pady=2,
         )
         self._state_label.pack(side="left")
+
+        self._action_btn = tk.Label(
+            pill, text=f"  {s.BTN_START_PAPERCLIP}  ",
+            font=(FONT, 7, "bold"),
+            fg=BG, bg=GREEN, cursor="hand2", padx=4, pady=2,
+        )
+        self._action_btn.pack(side="left", padx=(8, 0))
+        self._action_btn.bind("<Button-1>", lambda _e: self._toggle_paperclip())
 
         tk.Frame(parent, bg=BG2, height=6).pack(fill="x")
         tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
@@ -279,6 +300,12 @@ class ResearchDeskScreen(Screen):
     def _poll_state(self) -> None:
         """Bate no /api/health, agrega budgets se online, e reagenda."""
         online = self._client.is_online()
+        # Sync process status machine com health observado
+        if online:
+            self._process.mark_online()
+        else:
+            self._process.mark_offline()
+
         used_cents, cap_cents = 0, 0
         if online:
             agents = self._client.list_agents_cached(COMPANY_ID)
@@ -289,24 +316,24 @@ class ResearchDeskScreen(Screen):
         self._after(_POLL_INTERVAL_MS, self._poll_state)
 
     def _apply_state(self, *, online: bool, used: int, cap: int) -> None:
-        """Atualiza pill + subtitle. No-op se os widgets ja foram destroyed."""
-        # Pill ONLINE/OFFLINE
+        """Atualiza pill + subtitle + action btn. No-op se widgets destroyed."""
+        status = self._process.status
+
+        # Pill reflete health real + ownership
         if self._state_label is not None:
-            if online:
-                self._state_label.configure(
-                    text=f" {s.STATE_ONLINE} ", fg=BG, bg=GREEN,
-                )
-            else:
-                self._state_label.configure(
-                    text=f" {s.STATE_OFFLINE} ", fg=WHITE, bg=RED,
-                )
+            pill_text, pill_fg, pill_bg = _pill_style_for(status, online)
+            self._state_label.configure(text=pill_text, fg=pill_fg, bg=pill_bg)
+
+        # Action button (start/stop/external)
+        if self._action_btn is not None:
+            self._update_action_button(status)
 
         # Subtitle com counts + budget agregado
         if self._subtitle_label is not None:
             self._subtitle_label.configure(
                 text=s.SUBTITLE_FMT.format(
                     n=len(AGENTS),
-                    state=s.STATE_ONLINE.lower() if online else s.STATE_OFFLINE.lower(),
+                    state=status.value,
                     used=format_usd_from_cents(used),
                     cap=format_usd_from_cents(cap),
                 )
@@ -314,3 +341,73 @@ class ResearchDeskScreen(Screen):
 
         self._last_online = online
         self._last_budget = (used, cap)
+
+    def _update_action_button(self, status: ServerStatus) -> None:
+        assert self._action_btn is not None
+        if status == ServerStatus.EXTERNAL:
+            self._action_btn.configure(
+                text="  EXTERNO  ",
+                fg=DIM, bg=BG3, cursor="arrow",
+            )
+        elif status == ServerStatus.STARTING:
+            self._action_btn.configure(
+                text="  INICIANDO...  ",
+                fg=BG, bg=HAZARD, cursor="arrow",
+            )
+        elif status == ServerStatus.STOPPING:
+            self._action_btn.configure(
+                text="  PARANDO...  ",
+                fg=BG, bg=HAZARD, cursor="arrow",
+            )
+        elif self._process.is_owned():
+            self._action_btn.configure(
+                text=f"  {s.BTN_STOP_PAPERCLIP}  ",
+                fg=WHITE, bg=RED, cursor="hand2",
+            )
+        else:
+            self._action_btn.configure(
+                text=f"  {s.BTN_START_PAPERCLIP}  ",
+                fg=BG, bg=GREEN, cursor="hand2",
+            )
+
+    def _toggle_paperclip(self) -> None:
+        """Clique no action btn: decide start/stop pelo status atual."""
+        status = self._process.status
+        if status == ServerStatus.EXTERNAL or status in (
+            ServerStatus.STARTING, ServerStatus.STOPPING,
+        ):
+            return  # botao desabilitado nesses estados
+        if self._process.is_owned():
+            ok, msg = self._process.stop(wait_sec=5.0)
+        else:
+            ok, msg = self._process.start()
+        self._flash_feedback(ok=ok, msg=msg)
+        # Repoll agora pra refletir transicao imediatamente
+        self._after(100, self._poll_state)
+
+    def _flash_feedback(self, *, ok: bool, msg: str) -> None:
+        """Mostra feedback breve no status do launcher."""
+        app = self.app
+        try:
+            app.h_stat.configure(
+                text=f"paperclip: {msg}",
+                fg=AMBER if ok else RED,
+            )
+            # Restaura DESK label depois de 2.5s
+            self._after(2500, lambda: app.h_stat.configure(
+                text=s.STATUS_LABEL, fg=AMBER_D,
+            ))
+        except Exception:
+            pass
+
+
+def _pill_style_for(status: ServerStatus, online: bool) -> tuple[str, str, str]:
+    """(text, fg, bg) pra pill dado status do processo + health observado."""
+    if status == ServerStatus.STARTING:
+        return f" {s.STATE_STARTING} ", BG, HAZARD
+    if status == ServerStatus.EXTERNAL:
+        # online confirmado mas spawned fora — marca distinto do owned.
+        return f" {s.STATE_ONLINE} ", BG, AMBER
+    if online:
+        return f" {s.STATE_ONLINE} ", BG, GREEN
+    return f" {s.STATE_OFFLINE} ", WHITE, RED
