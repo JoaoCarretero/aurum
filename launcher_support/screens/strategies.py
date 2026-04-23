@@ -44,11 +44,15 @@ def render(app, filter_group: str | None = None):
     """
     app._clr()
     app._clear_kb()
-    # MARKETS + _conn are App-module globals; accessed via app.__module__
-    # here so the screen module stays independent from launcher.py.
+    # MARKETS + ConnectionManager foram movidos pra lazy-load no commit
+    # 7532224 (perf: defer pandas+requests import). Aqui acessamos via os
+    # helpers expostos pelo launcher — _lazy_connections() devolve
+    # (ConnectionManager, MARKETS) e _get_conn() devolve o singleton.
     import launcher as _launcher_mod
-    market_label = _launcher_mod.MARKETS.get(
-        _launcher_mod._conn.active_market, {}
+    _CM, _MARKETS = _launcher_mod._lazy_connections()
+    _conn_inst = _launcher_mod._get_conn()
+    market_label = _MARKETS.get(
+        _conn_inst.active_market, {}
     ).get("label", "UNKNOWN")
 
     _titles = {

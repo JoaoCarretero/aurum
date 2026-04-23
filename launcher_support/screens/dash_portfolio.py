@@ -7,11 +7,12 @@ portfolio monitor and the paper-edit dialog.
 """
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 
 from core.ui.ui_palette import (
     AMBER, AMBER_B, AMBER_D,
-    BG, BORDER,
+    BG, BG3, BORDER,
     DIM, DIM2, FONT,
     GREEN, PANEL, RED, WHITE,
 )
@@ -369,3 +370,121 @@ def render(app):
             except Exception:
                 pass
         app._dash_after_id = app.after(15000, app._dash_tick_refresh)
+
+
+def build_portfolio_tab(app, parent):
+    """Extracted from launcher.App in Fase 3 refactor."""
+    pm = app._get_portfolio_monitor()
+
+    wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True)
+
+    # Inner accounts column
+    col = tk.Frame(wrap, bg=PANEL, width=170); col.pack(side="left", fill="y")
+    col.pack_propagate(False)
+
+    tk.Label(col, text=" ACCOUNTS ", font=(FONT, 8, "bold"),
+             fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(10, 4))
+    tk.Frame(col, bg=DIM2, height=1).pack(fill="x", padx=10)
+
+    accounts = [
+        ("testnet", "TESTNET", GREEN),
+        ("demo",    "DEMO",    AMBER),
+        ("live",    "LIVE",    RED),
+        ("paper",   "PAPER",   DIM),
+    ]
+    app._dash_widgets[("portfolio_account_btns",)] = {}
+    for acc_id, label, color in accounts:
+        status = pm.status(acc_id)
+        row = tk.Frame(col, bg=PANEL, cursor="hand2")
+        row.pack(fill="x", padx=8, pady=(6, 0))
+        icon = "●" if status in ("live", "paper") else "○"
+        icon_color = color if status in ("live", "paper") else DIM
+
+        top_l = tk.Label(row, text=f"{icon} {label}", font=(FONT, 9, "bold"),
+                         fg=WHITE if status in ("live", "paper") else DIM,
+                         bg=PANEL, anchor="w")
+        top_l.pack(fill="x")
+        tk.Label(row, text=icon, font=(FONT, 7), fg=icon_color,
+                 bg=PANEL).place(in_=top_l, x=-2, y=2)
+
+        sub_l = tk.Label(row, text="…",
+                         font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w")
+        sub_l.pack(fill="x")
+        app._dash_widgets[("portfolio_account_btns",)][acc_id] = (row, top_l, sub_l)
+
+        def _click(_e=None, a=acc_id):
+            app._dash_portfolio_account = a
+            app._dash_portfolio_fetch_async()
+            app._dash_portfolio_repaint_account_btns()
+        for w in (row, top_l, sub_l):
+            w.bind("<Button-1>", _click)
+            w.bind("<Enter>", lambda e, l=top_l, s=status:
+                   l.configure(fg=AMBER))
+            w.bind("<Leave>", lambda e, l=top_l, s=status:
+                   l.configure(fg=WHITE if s in ("live", "paper") else DIM))
+
+    app._dash_portfolio_repaint_account_btns()
+
+    # Right details panel — built/refreshed by _dash_portfolio_render
+    details = tk.Frame(wrap, bg=BG)
+    details.pack(side="left", fill="both", expand=True, padx=12, pady=10)
+    app._dash_widgets[("portfolio_details",)] = details
+
+    # Cached-first: if we have a snapshot for the active account, render it
+    # immediately instead of showing a "Loading..." placeholder. The async
+    # refresh will replace it as soon as fresh data arrives.
+    mode = getattr(app, "_dash_portfolio_account", "paper")
+    if pm.get_cached(mode) is not None:
+        # Defer render so the details frame is fully packed first
+        app.after(0, app._dash_portfolio_render)
+    else:
+        tk.Label(details, text="Loading account…",
+                 font=(FONT, 9), fg=DIM, bg=BG).pack(pady=20)
+
+
+
+def repaint_account_btns(app):
+    """Extracted from launcher.App in Fase 3 refactor."""
+    btns = app._dash_widgets.get(("portfolio_account_btns",)) or {}
+    active = getattr(app, "_dash_portfolio_account", "paper")
+    pm = app._get_portfolio_monitor()
+    for acc_id, (row, top_l, sub_l) in btns.items():
+        cached = pm.get_cached(acc_id) or {}
+        status = pm.status(acc_id)
+        if status == "no_keys":
+            sub_l.configure(text="sem keys", fg=DIM)
+        elif status == "paper":
+            eq = cached.get("equity", 0) or 0
+            sub_l.configure(text=f"${eq:,.0f}", fg=AMBER_D)
+        else:
+            eq = cached.get("equity")
+            if eq is None:
+                sub_l.configure(text="…", fg=DIM)
+            else:
+                sub_l.configure(text=f"${eq:,.2f}", fg=GREEN)
+        row.configure(bg=BG3 if acc_id == active else PANEL)
+        top_l.configure(bg=BG3 if acc_id == active else PANEL)
+        sub_l.configure(bg=BG3 if acc_id == active else PANEL)
+
+
+
+def portfolio_fetch_async(app):
+    """Extracted from launcher.App in Fase 3 refactor."""
+    if not getattr(app, "_dash_alive", False):
+        return
+    if getattr(app, "_dash_tab", "market") != "portfolio":
+        return
+    mode = getattr(app, "_dash_portfolio_account", "paper")
+    pm = app._get_portfolio_monitor()
+
+    def worker():
+        try:
+            pm.refresh(mode)
+        except Exception:
+            pass
+        if getattr(app, "_dash_alive", False):
+            try: app.after(0, app._dash_portfolio_render)
+            except Exception: pass
+
+    threading.Thread(target=worker, daemon=True).start()
+

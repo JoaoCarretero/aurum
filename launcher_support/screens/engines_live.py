@@ -79,3 +79,117 @@ class EnginesLiveScreen(Screen):
                 prior["cleanup"]()
             except Exception:
                 pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Functions extracted from launcher.App in Fase 3 refactor (Task 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def tail_remote_worker(app, run_id: str, stop_event) -> None:
+    """Background worker to tail a remote (VPS) engine log.
+
+    Extracted from launcher.App._eng_tail_remote_worker in Fase 3 refactor.
+    """
+    from launcher_support import engine_logs_view
+
+    engine_logs_view.tail_remote_worker(app, run_id, stop_event)
+
+
+def tail_worker(app, log_path, stop_event) -> None:
+    """Background worker to tail a local engine log file.
+
+    Extracted from launcher.App._eng_tail_worker in Fase 3 refactor.
+    """
+    from launcher_support import engine_logs_view
+
+    engine_logs_view.tail_worker(app, log_path, stop_event)
+
+
+def poll_logs(app) -> None:
+    """UI-thread poll: drain the log queue, update the text widget.
+
+    Extracted from launcher.App._eng_poll_logs in Fase 3 refactor.
+    """
+    from launcher_support import engine_logs_view
+
+    engine_logs_view.poll_logs(app)
+
+
+def scan_vps_runs_live(limit: int = 10) -> list:
+    """Resolve VPS engine-log rows (live module variant).
+
+    Extracted from launcher.App._eng_scan_vps_runs in Fase 3 refactor.
+    Canonical version is in launcher_support.screens.engines.scan_vps_runs.
+    """
+    from launcher_support.screens.engines import scan_vps_runs
+    return scan_vps_runs(limit=limit)
+
+
+def engines_now_playing(app, host, tracks, running_map) -> None:
+    """NOW PLAYING strip -- running live engines as clickable pills above
+    the picker. Clicking a pill: focuses that track + opens the LOG chip
+    on the right panel so the user lands on the live tail (iPod feel).
+
+    Extracted from launcher.App._engines_now_playing in Fase 3 refactor.
+    """
+    import tkinter as tk
+    from datetime import datetime as _dt
+    try:
+        from core.ui.ui_palette import BG, BG2, BG3, BORDER, DIM, FONT, GREEN, WHITE
+    except ImportError:
+        BG = BG2 = BG3 = "#1a1a1a"
+        BORDER = "#333333"
+        DIM = "#888888"
+        FONT = "Consolas"
+        GREEN = "#00ff88"
+        WHITE = "#ffffff"
+
+    bar = tk.Frame(host, bg=BG2,
+                   highlightbackground=BORDER, highlightthickness=1)
+    bar.pack(fill="x", pady=(0, 6))
+    tk.Label(bar, text="  NOW PLAYING ", font=(FONT, 7, "bold"),
+             fg=BG, bg=GREEN, padx=6, pady=2).pack(side="left", padx=(4, 8), pady=4)
+
+    slug_to_idx = {t.slug: i for i, t in enumerate(tracks)}
+    for slug, proc in running_map.items():
+        idx = slug_to_idx.get(slug)
+        if idx is None:
+            continue
+        name = tracks[idx].name
+        up_lbl = "—"
+        try:
+            started = proc.get("started")
+            if started:
+                t0 = _dt.fromisoformat(started)
+                secs = (_dt.now() - t0).total_seconds()
+                h, rem = divmod(int(secs), 3600)
+                m, _ = divmod(rem, 60)
+                up_lbl = f"{h}h{m:02d}m" if h else f"{m}m"
+        except Exception:
+            pass
+
+        pill = tk.Frame(bar, bg=BG3,
+                        highlightbackground=GREEN, highlightthickness=1,
+                        cursor="hand2")
+        pill.pack(side="left", padx=2, pady=4)
+        tk.Label(pill, text="●", font=(FONT, 9, "bold"),
+                 fg=GREEN, bg=BG3, padx=4).pack(side="left")
+        tk.Label(pill, text=name, font=(FONT, 8, "bold"),
+                 fg=WHITE, bg=BG3).pack(side="left", padx=(0, 4))
+        tk.Label(pill, text=f" {up_lbl} ", font=(FONT, 7),
+                 fg=DIM, bg=BG3).pack(side="left")
+
+        def _focus(_e=None, _i=idx):
+            handle = getattr(app, "_strategies_picker", None)
+            if not handle:
+                return
+            try:
+                handle["select_index"](_i)
+            except Exception:
+                pass
+            try:
+                handle["open_chip"]("LOG")
+            except Exception:
+                pass
+        for w in (pill,) + tuple(pill.winfo_children()):
+            w.bind("<Button-1>", _focus)

@@ -2632,14 +2632,8 @@ class App(tk.Tk):
 
     @staticmethod
     def _engine_extra_cli_flags(engine_name: str) -> list[str]:
-        """Engine-specific CLI overrides injected by the launcher.
-
-        Extend here for future engines whose params differ from config.params
-        defaults. Flags applied here don't touch config.params (core-
-        protected) — they only change the in-process dataclass for the run.
-        """
-        name = engine_name.upper().replace(" ", "").replace("_", "")
-        return []
+        from launcher_support.screens.engines import engine_extra_cli_flags
+        return engine_extra_cli_flags(engine_name)
 
     # --- INLINE LIVE EXEC (from picker RUN chip in LIVE mode) ------
     def _exec_live_inline(self, name, script, desc, mode_preset, cfg):
@@ -4248,273 +4242,25 @@ class App(tk.Tk):
     }
 
     def _arbitrage_hub(self, tab: str = "opps"):
-        """Delegate to launcher_support.screens.arbitrage_hub.render.
-        Full hub (status strip + tab strip + content area + scanner +
-        refresh loop) lives there. Tab renderers (_arb_render_*) stay
-        on App and are dispatched via the app parameter.
-        """
-        # Route legacy tab ids to their new home
-        tab = self._ARB_LEGACY_TAB_MAP.get(tab, tab)
-        # Speed: if already on the requested tab with live widgets, just
-        # repaint from cache instead of tearing down and rebuilding the
-        # whole shell (status strip, tab strip, etc.). Saves ~40 widget
-        # destroys + re-creates per tab click.
-        current = getattr(self, "_arb_tab", None)
-        labels = getattr(self, "_arb_tab_labels", None)
-        if current == tab and labels:
-            try:
-                first = next(iter(labels.values()), None)
-                if first is not None and first.winfo_exists():
-                    self._arb_rerender_current_tab()
-                    return
-            except Exception:
-                pass
-        from launcher_support.screens.arbitrage_hub import render as _render_arbitrage_hub
-        _render_arbitrage_hub(self, tab=tab)
+        from launcher_support.screens.arbitrage_hub import render_hub
+        return render_hub(self, tab)
 
     # -- Auto-refresh loop -------------------------------------
     def _arb_schedule_refresh(self, delay_ms: int = 15_000):
-        """Re-scan every delay_ms while the arbitrage desk is on screen.
-
-        We identify "on screen" by checking that self._arb_tab_labels still
-        exists and isn't destroyed — the moment the user leaves the hub
-        (back to main menu, another page), that dict is replaced or the
-        widgets are gone, and the scheduled tick no-ops instead of trying
-        to repaint dead Tk widgets.
-        """
-        try:
-            # Cancel previous pending refresh if any
-            prev = getattr(self, "_arb_refresh_after", None)
-            if prev:
-                try:
-                    self.after_cancel(prev)
-                except Exception:
-                    pass
-            def _tick():
-                labels = getattr(self, "_arb_tab_labels", None)
-                if not labels:
-                    return
-                first = next(iter(labels.values()), None)
-                try:
-                    if first is None or not first.winfo_exists():
-                        return
-                except Exception:
-                    return
-                # Skip network fetch if scanner cache is still fresh —
-                # triggered when a manual R-refresh or tab switch already
-                # kicked a scan a few seconds ago.
-                if not self._arb_scan_is_fresh():
-                    self._arb_hub_scan_async()
-                self._arb_refresh_after = self.after(delay_ms, _tick)
-            self._arb_refresh_after = self.after(delay_ms, _tick)
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import schedule_refresh
+        return schedule_refresh(self, delay_ms)
     def _arb_schedule_clock(self):
-        """Tick every second — updates scan staleness + engine pill."""
-        def _tick():
-            # Short-circuit if status strip widgets gone (user left hub)
-            scan_lbl = getattr(self, "_arb_scan_age", None)
-            if scan_lbl is None:
-                return
-            try:
-                if not scan_lbl.winfo_exists():
-                    return
-                self._arb_update_status_strip()
-                self.after(1000, _tick)
-            except Exception:
-                pass
-        try:
-            self.after(1000, _tick)
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import schedule_clock
+        return schedule_clock(self)
     def _arb_update_status_strip(self):
-        """Refresh scan staleness + engine pill in the hub status strip."""
-        import time as _time
-        # Scan staleness
-        scan_lbl = getattr(self, "_arb_scan_age", None)
-        if scan_lbl is not None:
-            try:
-                last = getattr(self, "_arb_last_scan_ts", 0) or 0
-                if last > 0:
-                    age = int(_time.time() - last)
-                    if age < 60:
-                        txt, fg = f"SCAN {age}s ago", GREEN if age <= 20 else AMBER
-                    else:
-                        txt, fg = f"SCAN {age // 60}m ago", RED
-                else:
-                    txt, fg = "SCAN —", DIM
-                scan_lbl.configure(text=txt, fg=fg)
-            except Exception:
-                pass
-        # Engine pill
-        pill = getattr(self, "_arb_engine_pill", None)
-        acctlbl = getattr(self, "_arb_engine_acctlbl", None)
-        ddlbl = getattr(self, "_arb_engine_ddlbl", None)
-        engine = getattr(self, "_arb_simple_engine", None)
-        if pill is not None:
-            try:
-                if engine is not None and engine.running:
-                    snap = engine.snapshot()
-                    mode = snap.get("mode", "paper").upper()
-                    pill.configure(
-                        text=f" {mode} RUN ",
-                        bg=GREEN if not snap.get("killed") else RED,
-                        fg=BG,
-                    )
-                    if acctlbl is not None:
-                        acctlbl.configure(
-                            text=f"ACCT ${snap.get('account', 0):,.0f}",
-                            fg=WHITE)
-                    if ddlbl is not None:
-                        dd = float(snap.get("drawdown_pct", 0) or 0)
-                        ddlbl.configure(
-                            text=f"DD {dd:+.2f}%",
-                            fg=RED if dd > 5 else (AMBER if dd > 1 else DIM))
-                else:
-                    pill.configure(text=" OFF ", bg=DIM, fg=BG)
-                    if acctlbl is not None:
-                        acctlbl.configure(text="", fg=DIM)
-                    if ddlbl is not None:
-                        ddlbl.configure(text="", fg=DIM)
-            except Exception:
-                pass
+        from launcher_support.screens.arbitrage_hub import update_status_strip
+        return update_status_strip(self)
 
     # -- Table helper used by every tab -------------------------
     def _arb_make_table(self, parent, cols: list[tuple[str, int, str]],
                          on_click=None):
-        """Build a grid-aligned header + body. Returns (body_frame, repaint_fn).
-
-        cols: list of (label, width_chars, anchor). Header and body share the
-        same grid column configuration, so cells stay perfectly aligned no
-        matter the row content. Previous pack-based implementation drifted
-        when cell text lengths varied.
-
-        on_click(row_idx): optional callback fired when the user clicks any
-        cell of a body row. Lets each tab attach a detail pane that reacts
-        to the selected pair.
-        """
-        # Header row
-        hdr = tk.Frame(parent, bg=BG)
-        hdr.pack(fill="x", padx=2)
-        for i, (label, w, anchor) in enumerate(cols):
-            hdr.grid_columnconfigure(i, minsize=w * 7, weight=0, uniform="arb")
-            sticky = "w" if anchor == "w" else "e"
-            tk.Label(hdr, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG, anchor=anchor).grid(
-                row=0, column=i, sticky=sticky + "ns", padx=3, pady=(0, 2))
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(0, 2))
-
-        # Body uses the same column config so each column lines up to header
-        body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, padx=2)
-        for i, (_, w, _) in enumerate(cols):
-            body.grid_columnconfigure(i, minsize=w * 7, weight=0, uniform="arb")
-
-        # In-place row cache: list of (cells, hover_bg) per current row.
-        # repaint() diffs rows against this cache and only mutates cells
-        # that actually changed, so a 15s scan refresh doesn't flicker —
-        # text just updates like a terminal ticker.
-        state = {"rows": [], "placeholder": None}
-
-        def _clear_placeholder():
-            if state["placeholder"] is not None:
-                state["placeholder"].destroy()
-                state["placeholder"] = None
-
-        def _set_placeholder(msg: str):
-            # Only replace the message if different — avoid flicker cycles.
-            ph = state["placeholder"]
-            if ph is not None:
-                try:
-                    if ph.cget("text") == msg:
-                        return
-                    ph.configure(text=msg)
-                    return
-                except Exception:
-                    pass
-            # Remove any rows first (placeholder = empty state)
-            for (cells, _) in state["rows"]:
-                for c in cells:
-                    c.destroy()
-            state["rows"] = []
-            state["placeholder"] = tk.Label(
-                body, text=msg, font=(FONT, 8),
-                fg=DIM2, bg=BG, justify="center")
-            state["placeholder"].grid(
-                row=0, column=0, columnspan=len(cols), pady=16)
-
-        def _make_row(ri: int, row, bg_row: str):
-            cells = []
-            for ci, ((txt, fg), (_, _, anchor)) in enumerate(zip(row, cols)):
-                sticky = "w" if anchor == "w" else "e"
-                cursor = "hand2" if on_click else "arrow"
-                cell = tk.Label(body, text=txt, font=(FONT, 8),
-                                 fg=fg, bg=bg_row, anchor=anchor,
-                                 cursor=cursor)
-                cell.grid(row=ri, column=ci,
-                          sticky=sticky + "nsew", padx=3, pady=1)
-                cells.append(cell)
-                if on_click is not None:
-                    cell.bind(
-                        "<Button-1>", lambda _e, _i=ri: on_click(_i))
-            if on_click is not None:
-                def _hover_in(_e, cells=cells):
-                    for c in cells:
-                        c.configure(bg=BG3)
-                def _hover_out(_e, cells=cells, bgx=bg_row):
-                    for c in cells:
-                        c.configure(bg=bgx)
-                for c in cells:
-                    c.bind("<Enter>", _hover_in)
-                    c.bind("<Leave>", _hover_out)
-            return cells
-
-        def _update_row(cells, row, bg_row):
-            for c, (txt, fg) in zip(cells, row):
-                # Only push changes — comparing beforehand keeps Tk from
-                # redrawing cells whose text/fg are identical to current.
-                try:
-                    if c.cget("text") != txt:
-                        c.configure(text=txt)
-                    if c.cget("fg") != fg:
-                        c.configure(fg=fg)
-                    if c.cget("bg") != bg_row:
-                        c.configure(bg=bg_row)
-                except Exception:
-                    pass
-
-        def repaint(rows: list[list[tuple[str, str]]]):
-            """Diff-update rows in place. No destroy+rebuild on normal
-            refresh, so the table reads like a ticker instead of blinking."""
-            if not rows:
-                has_scan = getattr(self, "_arb_cache", None) is not None
-                msg = ("  \u2014 no pairs match current filters \u2014\n"
-                       "  click filter chips above to relax"
-                       if has_scan else
-                       "  \u2014 scanning venues, hold on \u2014")
-                _set_placeholder(msg)
-                return
-
-            _clear_placeholder()
-            # Update existing rows in place where possible
-            for ri, row in enumerate(rows):
-                bg_row = BG if ri % 2 == 0 else BG2
-                if ri < len(state["rows"]):
-                    cells, _ = state["rows"][ri]
-                    _update_row(cells, row, bg_row)
-                    state["rows"][ri] = (cells, bg_row)
-                else:
-                    cells = _make_row(ri, row, bg_row)
-                    state["rows"].append((cells, bg_row))
-            # Trim excess rows (previous refresh had more data than this one)
-            while len(state["rows"]) > len(rows):
-                cells, _ = state["rows"].pop()
-                for c in cells:
-                    c.destroy()
-
-        return body, repaint
+        from launcher_support.screens.arbitrage_hub import make_table
+        return make_table(self, parent, cols, on_click)
 
     # -- Shared filter bar (click to cycle each chip) ---------
     _ARB_APR_OPTS   = [5, 10, 20, 50, 100]
@@ -4544,733 +4290,70 @@ class App(tk.Tk):
     _ARB_REALISTIC_VOL_MIN = 5_000_000.0
 
     def _arb_filter_state(self) -> dict:
-        if not hasattr(self, "_arb_filters"):
-            # First access — try loading persisted state, else defaults
-            self._arb_filters = self._arb_load_filters()
-        return self._arb_filters
-
+        from launcher_support.screens.arbitrage_hub import filter_state
+        return filter_state(self)
     @staticmethod
     def _arb_filters_path():
-        from pathlib import Path as _P
-        return _P("data") / "arb_hub" / "filters.json"
-
+        from launcher_support.screens.arbitrage_hub import filters_path
+        return filters_path()
     def _arb_load_filters(self) -> dict:
-        """Load persisted filter state from disk. Falls back to defaults."""
-        import json as _json
-        base = dict(self._ARB_FILTER_DEFAULTS)
-        try:
-            path = self._arb_filters_path()
-            if path.exists():
-                raw = _json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    # Only accept keys the defaults know about — prevents
-                    # stale schema entries from polluting the state.
-                    for k, v in raw.items():
-                        if k in base:
-                            base[k] = v
-        except Exception:
-            pass
-        return base
-
+        from launcher_support.screens.arbitrage_hub import load_filters
+        return load_filters(self)
     def _arb_save_filters(self) -> None:
-        """Persist current filter state to disk (atomic write)."""
-        import json as _json
-        try:
-            path = self._arb_filters_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                _json.dumps(self._arb_filters, indent=2), encoding="utf-8")
-            tmp.replace(path)
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import save_filters
+        return save_filters(self)
     def _arb_fmt_filter(self, key: str, val) -> str:
-        if key == "min_apr":
-            return f"APR\u2265{int(val)}%"
-        if key == "min_volume":
-            if val == 0: return "VOL\u2265OFF"
-            if val >= 1_000_000: return f"VOL\u2265{int(val/1_000_000)}M"
-            return f"VOL\u2265{int(val/1_000)}K"
-        if key == "min_oi":
-            if val == 0: return "OI\u2265OFF"
-            if val >= 1_000_000: return f"OI\u2265{int(val/1_000_000)}M"
-            return f"OI\u2265{int(val/1_000)}K"
-        if key == "risk_max":
-            return f"RISK\u2264{val}"
-        if key == "grade_min":
-            return f"GRADE\u2265{val}"
-        return f"{key}={val}"
-
+        from launcher_support.screens.arbitrage_hub import fmt_filter
+        return fmt_filter(self, key, val)
     def _arb_rerender_current_tab(self) -> None:
-        """Repaint the active tab from cached scan data (no network)."""
-        cache = getattr(self, "_arb_cache", None)
-        if not cache:
-            return
-        try:
-            self._arb_hub_telem_update(
-                cache.get("stats"), cache.get("top"),
-                cache.get("opps", []), cache.get("arb_cc", []),
-                cache.get("arb_dd", []), cache.get("arb_cd", []),
-                cache.get("basis", []), cache.get("spot", []))
-        except Exception:
-            pass
+        from launcher_support.screens.arbitrage_hub import rerender_current_tab
+        return rerender_current_tab(self)
 
     def _arb_set_grade_min(self, grade: str) -> None:
-        """Set grade_min filter (for [GO ONLY]/[+WAIT]/[ALL] toolbar)."""
-        self._arb_filter_state()["grade_min"] = grade
-        # Refresh chip display if visible
-        lbl = getattr(self, "_arb_filter_labels", {}).get("grade_min")
-        if lbl is not None:
-            try:
-                lbl.configure(text=f" {self._arb_fmt_filter('grade_min', grade)} ")
-            except Exception:
-                pass
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
+        from launcher_support.screens.arbitrage_hub import set_grade_min
+        return set_grade_min(self, grade)
     def _arb_toggle_risky_venues(self) -> None:
-        state = self._arb_filter_state()
-        state["exclude_risky_venues"] = not state.get("exclude_risky_venues", False)
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
+        from launcher_support.screens.arbitrage_hub import toggle_risky_venues
+        return toggle_risky_venues(self)
     def _arb_toggle_realistic(self) -> None:
-        state = self._arb_filter_state()
-        state["realistic_only"] = not state.get("realistic_only", True)
-        self._arb_refresh_viab_toolbar()
-        self._arb_save_filters()
-        self._arb_rerender_current_tab()
-
+        from launcher_support.screens.arbitrage_hub import toggle_realistic
+        return toggle_realistic(self)
     def _arb_refresh_viab_toolbar(self) -> None:
-        """Repaint the top viability toolbar's active/inactive states."""
-        btns = getattr(self, "_arb_viab_btns", {})
-        if not btns:
-            return
-        state = self._arb_filter_state()
-        active = state.get("grade_min", "MAYBE")
-        palette = {
-            "GO":    (GREEN, BG),      # [GO ONLY]
-            "MAYBE": (AMBER, BG),      # [+WAIT]
-            "SKIP":  (DIM, BG),        # [ALL]
-        }
-        for key, (btn, grade) in btns.items():
-            if key == "risky":
-                continue
-            try:
-                if grade == active:
-                    fg, _bg = BG, palette[grade][0]
-                    btn.configure(fg=fg, bg=_bg)
-                else:
-                    fg, _bg = palette[grade][0], palette[grade][1]
-                    btn.configure(fg=fg, bg=_bg)
-            except Exception:
-                pass
-        risky_btn = btns.get("risky", (None,))[0]
-        if risky_btn is not None:
-            try:
-                on = state.get("exclude_risky_venues", False)
-                risky_btn.configure(
-                    text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
-                    fg=RED if on else DIM, bg=BG)
-            except Exception:
-                pass
-        real_btn = btns.get("realistic", (None,))[0]
-        if real_btn is not None:
-            try:
-                on = state.get("realistic_only", True)
-                real_btn.configure(
-                    text=f" {'[X]' if on else '[ ]'} REALISTIC ",
-                    fg=AMBER if on else DIM, bg=BG)
-            except Exception:
-                pass
-
+        from launcher_support.screens.arbitrage_hub import refresh_viab_toolbar
+        return refresh_viab_toolbar(self)
     def _arb_build_viab_toolbar(self, parent):
-        """Phase 2: 3-button viability toolbar + NO RISKY VENUES toggle.
-
-        Sits ABOVE the advanced filter chips. User picks a viability
-        bucket ([GO ONLY]/[+WAIT]/[ALL]) and optionally excludes venues
-        with low reliability. Simpler than the 5-chip cycling bar and
-        answers the "does this position make sense?" question directly.
-        """
-        bar = tk.Frame(parent, bg=BG)
-        bar.pack(fill="x", pady=(0, 3))
-
-        # VIAB label dropped — legend row above already establishes the
-        # semantics, and the GO/WAIT/ALL chips are self-explanatory.
-
-        state = self._arb_filter_state()
-        active = state.get("grade_min", "MAYBE")
-        self._arb_viab_btns = {}
-
-        viab_buttons = [
-            ("GO ONLY", "GO",    GREEN),
-            ("+WAIT",   "MAYBE", AMBER),
-            ("ALL",     "SKIP",  DIM),
-        ]
-        for label, grade, color in viab_buttons:
-            is_active = (grade == active)
-            fg = BG if is_active else color
-            bg = color if is_active else BG
-            btn = tk.Label(
-                bar, text=f"  {label}  ",
-                font=(FONT, 8, "bold"),
-                fg=fg, bg=bg, cursor="hand2",
-                padx=8, pady=3, bd=0, highlightthickness=0,
-            )
-            btn.pack(side="left", padx=(0, 2))
-            btn.bind("<Button-1>", lambda _e, _g=grade: self._arb_set_grade_min(_g))
-            self._arb_viab_btns[label] = (btn, grade)
-
-        # Divider
-        tk.Frame(bar, bg=BORDER, width=1, height=18).pack(
-            side="left", fill="y", padx=(10, 10))
-
-        # [NO RISKY VENUES] toggle
-        on = state.get("exclude_risky_venues", False)
-        risky_btn = tk.Label(
-            bar,
-            text=f" {'[X]' if on else '[ ]'} NO RISKY VENUES ",
-            font=(FONT, 8, "bold"),
-            fg=RED if on else DIM, bg=BG,
-            cursor="hand2", padx=6, pady=3,
-        )
-        risky_btn.pack(side="left")
-        risky_btn.bind("<Button-1>", lambda _e: self._arb_toggle_risky_venues())
-        self._arb_viab_btns["risky"] = (risky_btn, None)
-
-        # [REALISTIC] toggle — hides APR>500% (stale funding) and vol<$5M
-        # (can't execute without slippage eating the edge). Default ON so
-        # the first-open view is clean.
-        real_on = state.get("realistic_only", True)
-        real_btn = tk.Label(
-            bar,
-            text=f" {'[X]' if real_on else '[ ]'} REALISTIC ",
-            font=(FONT, 8, "bold"),
-            fg=AMBER if real_on else DIM, bg=BG,
-            cursor="hand2", padx=6, pady=3,
-        )
-        real_btn.pack(side="left", padx=(6, 0))
-        real_btn.bind("<Button-1>", lambda _e: self._arb_toggle_realistic())
-        self._arb_viab_btns["realistic"] = (real_btn, None)
-
+        from launcher_support.screens.arbitrage_hub import build_viab_toolbar
+        return build_viab_toolbar(self, parent)
     def _arb_build_filter_bar(self, parent):
-        """Render the shared filter chip strip. Click a chip to cycle its value.
-
-        Filters persist across tab switches via self._arb_filters. Any value
-        change re-renders the active tab from the cached scan (no network).
-        """
-        # Phase 2: viability toolbar on top, chips below as "advanced"
-        self._arb_build_viab_toolbar(parent)
-
-        # Phase 4: ADVANCED chips collapsed by default. Clickable toggle.
-        state = self._arb_filter_state()
-        adv_container = tk.Frame(parent, bg=BG)
-        adv_container.pack(fill="x", pady=(0, 4))
-
-        header = tk.Frame(adv_container, bg=BG)
-        header.pack(fill="x")
-        advanced_expanded = getattr(self, "_arb_advanced_expanded", False)
-        arrow = "▼" if advanced_expanded else "▶"
-        toggle = tk.Label(
-            header, text=f" {arrow} ADVANCED FILTERS ",
-            font=(FONT, 7, "bold"),
-            fg=DIM, bg=BG, cursor="hand2", padx=4)
-        toggle.pack(side="left")
-
-        def _toggle_advanced(_e=None):
-            self._arb_advanced_expanded = not getattr(self, "_arb_advanced_expanded", False)
-            # Force full rebuild (not fast-path) by clearing tab labels
-            self._arb_tab_labels = None
-            self._arbitrage_hub(self._arb_tab)
-        toggle.bind("<Button-1>", _toggle_advanced)
-
-        # Early-return if collapsed — chip bar never mounted
-        if not advanced_expanded:
-            return
-
-        bar = tk.Frame(adv_container, bg=BG2)
-        bar.pack(fill="x", pady=(2, 0))
-        tk.Label(bar, text=" click pra ciclar ",
-                 font=(FONT, 6), fg=DIM, bg=BG2).pack(
-            side="left", padx=(0, 6))
-
-        self._arb_filter_labels = {}
-        filter_defs = [
-            ("min_apr",    self._ARB_APR_OPTS),
-            ("min_volume", self._ARB_VOL_OPTS),
-            ("min_oi",     self._ARB_OI_OPTS),
-            ("risk_max",   self._ARB_RISK_OPTS),
-            ("grade_min",  self._ARB_GRADE_OPTS),
-        ]
-        for fkey, fopts in filter_defs:
-            cur = state.get(fkey)
-            lbl = tk.Label(bar, text=f" {self._arb_fmt_filter(fkey, cur)} ",
-                           font=(FONT, 7, "bold"), fg=AMBER, bg=BG3,
-                           cursor="hand2", padx=6, pady=2)
-            lbl.pack(side="left", padx=2, pady=2)
-            self._arb_filter_labels[fkey] = lbl
-            # Hover signals "this is a chip you can click to cycle"
-            # — previously only the cursor changed, easy to miss.
-            lbl.bind("<Enter>",
-                     lambda _e, w=lbl: w.config(bg=BORDER_H, fg=AMBER_B))
-            lbl.bind("<Leave>",
-                     lambda _e, w=lbl: w.config(bg=BG3, fg=AMBER))
-
-            def _cycle(_e=None, _k=fkey, _opts=fopts):
-                s = self._arb_filter_state()
-                cur = s.get(_k)
-                try:
-                    idx = _opts.index(cur)
-                except ValueError:
-                    idx = 0
-                nxt = _opts[(idx + 1) % len(_opts)]
-                s[_k] = nxt
-                self._arb_filter_labels[_k].configure(
-                    text=f" {self._arb_fmt_filter(_k, nxt)} ")
-                # Keep viability toolbar in sync when grade_min changes
-                if _k == "grade_min":
-                    self._arb_refresh_viab_toolbar()
-                self._arb_save_filters()
-                self._arb_rerender_current_tab()
-            lbl.bind("<Button-1>", _cycle)
-
+        from launcher_support.screens.arbitrage_hub import build_filter_bar
+        return build_filter_bar(self, parent)
     # -- Detail pane (populated on row click) ------------------
     def _arb_build_detail_pane(self, parent):
-        """Reserve a detail panel below the table. Empty-state is just a
-        single-line hint (no separate title + body frames) so the OPPS
-        table keeps the full vertical budget until the user clicks a row.
-        Body is BG2 so _arb_show_detail's BG2 child labels render as a
-        cohesive card when populated.
-        """
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(4, 0))
-        body = tk.Frame(parent, bg=BG2)
-        body.pack(fill="x", pady=(0, 0))
-        default = tk.Label(
-            body,
-            text="  DETAIL  ›  clique numa linha pra simular posição",
-            font=(FONT, 7), fg=DIM, bg=BG2)
-        default.pack(anchor="w", padx=4, pady=(2, 2))
-        self._arb_detail_body = body
-        self._arb_detail_default = default
-
+        from launcher_support.screens.arbitrage_hub import build_detail_pane
+        return build_detail_pane(self, parent)
     # Size chips for the detail simulator. Matches the reasonable range
     # for paper mode ($5k account, max 3 positions — $500 to $5k per leg).
     _ARB_SIM_SIZES = (500.0, 1000.0, 2500.0, 5000.0)
 
     def _arb_simulate(self, pair: dict, size_usd: float) -> dict:
-        """Project funding / fees / net for a given position size.
-
-        Formula matches SimpleArbEngine:
-          - entry fee: size × (10 + 5) / 10_000 = 0.15% at open
-          - exit fee: same 0.15% at close → RT = 30 bps
-          - funding: size × apr/100 × hours / 8760  (continuous approx
-            of 3× 8h funding payments/day × 365)
-
-        Decay scenario: 4h at full APR, then APR halves, hold to 24h.
-        Gives a concrete "what if the spread fades" number alongside
-        the "if it holds" row.
-        """
-        apr = abs(float(pair.get("net_apr") or pair.get("apr")
-                         or pair.get("basis_apr") or 0))
-        rt_fee_bps = 30.0
-        rt_fee_usd = size_usd * rt_fee_bps / 10_000.0
-
-        def _funding(hold_h: float, apr_pct: float) -> float:
-            return size_usd * (apr_pct / 100.0) * (hold_h / 8760.0)
-
-        holds = [8, 24, 72]
-        rows = []
-        for h in holds:
-            f = _funding(h, apr)
-            rows.append({
-                "hold_h": h,
-                "funding": round(f, 2),
-                "fees":    round(rt_fee_usd, 2),
-                "net":     round(f - rt_fee_usd, 2),
-            })
-        # Decay scenario: 4h @ full, 20h @ 50%, exit at 24h total
-        decay_funding = _funding(4.0, apr) + _funding(20.0, apr * 0.5)
-        decay_row = {
-            "label":   "decay→50% @4h, hold 24h",
-            "funding": round(decay_funding, 2),
-            "fees":    round(rt_fee_usd, 2),
-            "net":     round(decay_funding - rt_fee_usd, 2),
-        }
-
-        bkevn_h = round(rt_fee_bps * 87.6 / apr, 2) if apr > 0 else None
-
-        # Risk block. Liquidation distances assume exchange defaults
-        # (~20x short perp, ~25x long perp with small maintenance buffer).
-        # These are rough — real launcher doesn't set leverage here.
-        liq_short_pct = 4.5
-        liq_long_pct  = 3.5
-
-        vol = (pair.get("volume_24h")
-               or self._pair_min(pair.get("volume_24h_short"),
-                                  pair.get("volume_24h_long")) or 0)
-        vol_f = float(vol) if vol else 0.0
-        vol_ratio = vol_f / size_usd if (vol_f > 0 and size_usd > 0) else None
-        # Slippage ballpark: 10bps baseline, scales down with sqrt(ratio/10).
-        # Not a market impact model — just "small / ok / concerning" flag.
-        slippage_bps = None
-        if vol_ratio and vol_ratio > 0:
-            slippage_bps = round(10.0 / max((vol_ratio / 10.0) ** 0.5, 0.1), 2)
-
-        from core.arb.arb_scoring import _DEFAULT_VENUE_RELIABILITY
-        sv = (pair.get("short_venue") or pair.get("venue_perp")
-              or pair.get("venue_a") or "").lower()
-        lv = (pair.get("long_venue") or pair.get("venue_spot")
-              or pair.get("venue_b") or "").lower()
-
-        return {
-            "size_usd":   size_usd,
-            "apr":        apr,
-            "rt_fee_usd": round(rt_fee_usd, 2),
-            "bkevn_h":    bkevn_h,
-            "rows":       rows,
-            "decay":      decay_row,
-            "risk": {
-                "liq_short_pct": liq_short_pct,
-                "liq_long_pct":  liq_long_pct,
-                "slippage_bps":  slippage_bps,
-                "vol":           vol_f,
-                "vol_ratio":     vol_ratio,
-                "short_venue":   sv,
-                "long_venue":    lv,
-                "short_rel":     _DEFAULT_VENUE_RELIABILITY.get(sv),
-                "long_rel":      _DEFAULT_VENUE_RELIABILITY.get(lv),
-            },
-        }
-
+        from launcher_support.screens.arbitrage_hub import simulate
+        return simulate(self, pair, size_usd)
     @timed_legacy_switch("arb_detail")
     def _arb_show_detail(self, pair: dict):
-        """Render the simulator detail pane for a selected pair.
-
-        Layout (top-down): header | status line (APR/VIAB/SCORE/BKEVN) |
-        size chips | simulation table (8h/24h/72h + decay row) | risk
-        block (liq/slip/venues) | why-line | collapsible ADVANCED factor
-        breakdown | size-aware OPEN AS PAPER button.
-        """
-        body = getattr(self, "_arb_detail_body", None)
-        if body is None:
-            return
-        for w in body.winfo_children():
-            w.destroy()
-
-        # Track selected pair + size + ADVANCED expansion between clicks
-        self._arb_detail_pair = pair
-        if not hasattr(self, "_arb_detail_size"):
-            self._arb_detail_size = 1000.0
-        if not hasattr(self, "_arb_detail_adv"):
-            self._arb_detail_adv = False
-        size_usd = self._arb_detail_size
-
-        try:
-            from core.arb.arb_scoring import score_opp
-            res = score_opp(pair)
-        except Exception:
-            res = None
-
-        # -- Header -----------------------------------------------
-        tk.Label(body, text=self._arb_pair_label(pair),
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(4, 1))
-
-        # -- Status line: APR / VIAB / SCORE / BKEVN --------------
-        apr_val = float(pair.get("net_apr") or pair.get("apr") or 0)
-        status = tk.Frame(body, bg=BG2); status.pack(fill="x", padx=6)
-        tk.Label(status, text=f"APR {apr_val:+.1f}%",
-                 font=(FONT, 9, "bold"),
-                 fg=GREEN if abs(apr_val) >= 50 else AMBER,
-                 bg=BG2).pack(side="left")
-        if res is not None:
-            viab = getattr(res, "viab", res.grade)
-            viab_fg = (GREEN if viab == "GO" else
-                       AMBER if viab in ("WAIT", "MAYBE") else DIM)
-            tk.Label(status, text=f"  ·  {viab}",
-                     font=(FONT, 9, "bold"), fg=viab_fg, bg=BG2).pack(side="left")
-            tk.Label(status, text=f"  ·  score {res.score:.0f}",
-                     font=(FONT, 8), fg=WHITE, bg=BG2).pack(side="left")
-            be = getattr(res, "breakeven_h", None)
-            if be is not None:
-                be_fg = GREEN if be <= 24 else (AMBER if be <= 72 else DIM)
-                tk.Label(status, text=f"  ·  bkevn {be:.1f}h",
-                         font=(FONT, 8), fg=be_fg, bg=BG2).pack(side="left")
-
-        # -- Size chips -------------------------------------------
-        size_row = tk.Frame(body, bg=BG2)
-        size_row.pack(fill="x", padx=6, pady=(6, 2))
-        tk.Label(size_row, text="SIZE", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=BG2).pack(side="left", padx=(0, 6))
-        for s in self._ARB_SIM_SIZES:
-            is_sel = abs(s - size_usd) < 0.01
-            chip = tk.Label(
-                size_row,
-                text=f"  ${int(s):,}  " if s >= 1000 else f"  ${int(s)}  ",
-                font=(FONT, 8, "bold"),
-                fg=BG if is_sel else WHITE,
-                bg=AMBER if is_sel else BG3,
-                cursor="hand2", padx=4, pady=2,
-            )
-            chip.pack(side="left", padx=(0, 3))
-            chip.bind("<Button-1>",
-                      lambda _e, _s=s: self._arb_set_detail_size(_s))
-
-        # -- Simulation table -------------------------------------
-        sim = self._arb_simulate(pair, size_usd)
-        sim_frame = tk.Frame(body, bg=BG2)
-        sim_frame.pack(fill="x", padx=6, pady=(4, 4))
-        cols = [("HOLD", 10, "w"), ("FUNDING", 10, "e"),
-                ("FEES", 9, "e"), ("NET", 10, "e")]
-        for j, (c, w, a) in enumerate(cols):
-            tk.Label(sim_frame, text=c, font=(FONT, 7, "bold"),
-                     fg=AMBER, bg=BG2, width=w, anchor=a).grid(
-                row=0, column=j, sticky=a, padx=2)
-        for i, r in enumerate(sim["rows"], start=1):
-            hold_txt = f"{r['hold_h']}h"
-            if sim["bkevn_h"] is not None and r["hold_h"] >= sim["bkevn_h"]:
-                hold_txt += "  ✓"
-            tk.Label(sim_frame, text=hold_txt, font=(FONT, 8),
-                     fg=WHITE, bg=BG2, width=10, anchor="w").grid(
-                row=i, column=0, sticky="w", padx=2)
-            tk.Label(sim_frame, text=f"+${r['funding']:.2f}",
-                     font=(FONT, 8), fg=GREEN, bg=BG2,
-                     width=10, anchor="e").grid(
-                row=i, column=1, sticky="e", padx=2)
-            tk.Label(sim_frame, text=f"-${r['fees']:.2f}",
-                     font=(FONT, 8), fg=RED, bg=BG2,
-                     width=9, anchor="e").grid(
-                row=i, column=2, sticky="e", padx=2)
-            net_fg = GREEN if r["net"] > 0 else RED
-            tk.Label(sim_frame, text=f"${r['net']:+.2f}",
-                     font=(FONT, 8, "bold"), fg=net_fg, bg=BG2,
-                     width=10, anchor="e").grid(
-                row=i, column=3, sticky="e", padx=2)
-        # Decay scenario row
-        decay_i = len(sim["rows"]) + 1
-        d = sim["decay"]
-        tk.Label(sim_frame, text=d["label"], font=(FONT, 7, "italic"),
-                 fg=DIM2, bg=BG2, width=20, anchor="w").grid(
-            row=decay_i, column=0, columnspan=2, sticky="w",
-            padx=2, pady=(3, 0))
-        tk.Label(sim_frame, text=f"-${d['fees']:.2f}",
-                 font=(FONT, 7, "italic"), fg=DIM2, bg=BG2,
-                 width=9, anchor="e").grid(
-            row=decay_i, column=2, sticky="e", padx=2, pady=(3, 0))
-        decay_fg = GREEN if d["net"] > 0 else RED
-        tk.Label(sim_frame, text=f"${d['net']:+.2f}",
-                 font=(FONT, 7, "italic"), fg=decay_fg, bg=BG2,
-                 width=10, anchor="e").grid(
-            row=decay_i, column=3, sticky="e", padx=2, pady=(3, 0))
-
-        # -- Risk block -------------------------------------------
-        tk.Frame(body, bg=BORDER, height=1).pack(
-            fill="x", padx=6, pady=(2, 2))
-        risk = sim["risk"]
-        risk_frame = tk.Frame(body, bg=BG2)
-        risk_frame.pack(fill="x", padx=6, pady=(2, 2))
-        tk.Label(risk_frame, text="RISK", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG2).grid(row=0, column=0, sticky="w",
-                                         padx=(0, 8))
-        liq_txt = (f"liq {risk['liq_short_pct']:.1f}% short · "
-                   f"{risk['liq_long_pct']:.1f}% long")
-        tk.Label(risk_frame, text=liq_txt, font=(FONT, 7),
-                 fg=DIM2, bg=BG2).grid(row=0, column=1, sticky="w")
-        if risk["slippage_bps"] is not None:
-            slip_fg = (GREEN if risk["slippage_bps"] < 5 else
-                       AMBER if risk["slippage_bps"] < 15 else RED)
-            slip_txt = (f"slip ~{risk['slippage_bps']:.1f}bps "
-                        f"(vol ratio {risk['vol_ratio']:,.0f}x)")
-        else:
-            slip_fg = DIM
-            slip_txt = "slip —"
-        tk.Label(risk_frame, text=slip_txt, font=(FONT, 7),
-                 fg=slip_fg, bg=BG2).grid(row=1, column=1, sticky="w")
-        venue_bits = []
-        for name, rel in (("short", risk["short_rel"]),
-                          ("long",  risk["long_rel"])):
-            ven = risk["short_venue"] if name == "short" else risk["long_venue"]
-            if rel is not None:
-                venue_bits.append(f"{ven} {rel:.0f}")
-            elif ven:
-                venue_bits.append(f"{ven} ?")
-        ven_fg = DIM2
-        if risk["short_rel"] and risk["long_rel"]:
-            worst = min(risk["short_rel"], risk["long_rel"])
-            ven_fg = GREEN if worst >= 97 else (AMBER if worst >= 94 else RED)
-        tk.Label(risk_frame, text="venues " + " · ".join(venue_bits),
-                 font=(FONT, 7), fg=ven_fg, bg=BG2).grid(
-            row=2, column=1, sticky="w")
-
-        # -- Why line ---------------------------------------------
-        if res is not None:
-            reason = self._arb_viab_reason(pair, res)
-            if reason:
-                tk.Label(body, text=reason,
-                         font=(FONT, 7), fg=DIM, bg=BG2,
-                         anchor="w", justify="left", wraplength=600).pack(
-                    fill="x", padx=6, pady=(2, 2))
-
-        # -- ADVANCED (collapsible factor breakdown) --------------
-        if res is not None:
-            adv_on = self._arb_detail_adv
-            adv_head = tk.Label(
-                body,
-                text=("▼ ADVANCED  (factor breakdown)" if adv_on
-                      else "▶ ADVANCED  (factor breakdown)"),
-                font=(FONT, 7), fg=DIM, bg=BG2,
-                anchor="w", cursor="hand2",
-            )
-            adv_head.pack(fill="x", padx=6, pady=(2, 0))
-            adv_head.bind(
-                "<Button-1>",
-                lambda _e: self._arb_toggle_detail_adv())
-            if adv_on:
-                adv_grid = tk.Frame(body, bg=BG2)
-                adv_grid.pack(fill="x", padx=12, pady=(2, 4))
-                factor_rows = [
-                    ("NET APR", res.factors.get("net_apr"),
-                        f"{apr_val:+.1f}%"),
-                    ("VOLUME",  res.factors.get("volume"),
-                        self._fmt_vol(pair.get("volume_24h")
-                                      or self._pair_min(pair.get("volume_24h_short"),
-                                                         pair.get("volume_24h_long")))),
-                    ("OI",      res.factors.get("oi"),
-                        self._fmt_vol(pair.get("open_interest")
-                                      or self._pair_min(pair.get("open_interest_short"),
-                                                         pair.get("open_interest_long")))),
-                    ("RISK",    res.factors.get("risk"),
-                        pair.get("risk", "—")),
-                    ("SLIP",    res.factors.get("slippage"), "—"),
-                    ("VENUE",   res.factors.get("venue"),
-                        self._arb_venue_label(pair)),
-                ]
-                for i, (label, score, value) in enumerate(factor_rows):
-                    adv_grid.grid_columnconfigure(1, weight=1)
-                    tk.Label(adv_grid, text=label, font=(FONT, 7, "bold"),
-                             fg=DIM, bg=BG2, width=8, anchor="w").grid(
-                        row=i, column=0, sticky="w", padx=(0, 6))
-                    tk.Label(adv_grid, text=value, font=(FONT, 8),
-                             fg=WHITE, bg=BG2, anchor="w").grid(
-                        row=i, column=1, sticky="w")
-                    s_txt = "—" if score is None else f"{score:.0f}/100"
-                    s_fg = (GREEN if (score or 0) >= 70 else
-                            AMBER if (score or 0) >= 40 else DIM)
-                    tk.Label(adv_grid, text=s_txt, font=(FONT, 7),
-                             fg=s_fg, bg=BG2, width=10, anchor="e").grid(
-                        row=i, column=2, sticky="e")
-
-        # -- Action bar: size-aware OPEN AS PAPER POSITION --------
-        tk.Frame(body, bg=BORDER, height=1).pack(
-            fill="x", padx=6, pady=(2, 2))
-        action = tk.Frame(body, bg=BG2)
-        action.pack(fill="x", padx=6, pady=(2, 6))
-
-        engine = getattr(self, "_arb_simple_engine", None)
-        engine_running = engine is not None and engine.running
-        size_label = (f"${int(size_usd):,}" if size_usd >= 1000
-                      else f"${int(size_usd)}")
-        if engine_running:
-            btn_text = f" OPEN AS PAPER — {size_label} "
-            btn_fg, btn_bg = BG, GREEN
-            btn_cmd = lambda _e=None, _p=pair, _s=size_usd: (
-                self._arb_open_as_paper(_p, size_usd=_s))
-        else:
-            btn_text = " START ENGINE FIRST (POSITIONS tab) "
-            btn_fg, btn_bg = DIM, BG3
-            btn_cmd = lambda _e=None: None
-        btn = tk.Label(action, text=btn_text,
-                       font=(FONT, 8, "bold"),
-                       fg=btn_fg, bg=btn_bg,
-                       cursor="hand2" if engine_running else "arrow",
-                       padx=10, pady=4)
-        btn.pack(side="left")
-        btn.bind("<Button-1>", btn_cmd)
-
+        from launcher_support.screens.arbitrage_hub import show_detail
+        return show_detail(self, pair)
     def _arb_set_detail_size(self, size_usd: float) -> None:
-        """Size chip click - re-render detail with new size."""
-        self._arb_detail_size = float(size_usd)
-        pair = getattr(self, "_arb_detail_pair", None)
-        if pair is not None:
-            self._arb_show_detail(pair)
-
+        from launcher_support.screens.arbitrage_hub import set_detail_size
+        return set_detail_size(self, size_usd)
     def _arb_toggle_detail_adv(self) -> None:
-        """ADVANCED section expand/collapse toggle."""
-        self._arb_detail_adv = not getattr(self, "_arb_detail_adv", False)
-        pair = getattr(self, "_arb_detail_pair", None)
-        if pair is not None:
-            self._arb_show_detail(pair)
-
+        from launcher_support.screens.arbitrage_hub import toggle_detail_adv
+        return toggle_detail_adv(self)
     def _arb_viab_reason(self, pair: dict, res) -> str:
-        """Human-readable reason for the VIAB verdict (top 2-3 factors)."""
-        viab = getattr(res, "viab", res.grade)
-        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
-        be = getattr(res, "breakeven_h", None)
-        vol_score = (res.factors.get("volume") or 0)
-        if viab == "GO":
-            parts = [f"high APR ({apr:.0f}%)"]
-            if be is not None:
-                parts.append(f"fast breakeven ({be:.1f}h)")
-            if vol_score >= 40:
-                parts.append("liquid")
-            return "  Why GO: " + ", ".join(parts)
-        if viab in ("WAIT", "MAYBE"):
-            parts = [f"APR {apr:.0f}%"]
-            if be is not None:
-                parts.append(f"bkevn {be:.1f}h")
-            if vol_score < 40:
-                parts.append("liquidity moderate")
-            return "  Why WAIT: " + ", ".join(parts)
-        # SKIP
-        reasons = []
-        if apr < 20:
-            reasons.append(f"APR too low ({apr:.0f}%)")
-        if be is not None and be > 72:
-            reasons.append(f"slow breakeven ({be:.1f}h)")
-        if vol_score < 20:
-            reasons.append("illiquid")
-        return "  Why SKIP: " + ", ".join(reasons) if reasons else ""
-
+        from launcher_support.screens.arbitrage_hub import viab_reason
+        return viab_reason(self, pair, res)
     def _arb_open_as_paper(self, pair: dict, *, size_usd: float | None = None) -> None:
-        """Open this opp as a paper position immediately (bypass tick).
-
-        When size_usd is given, temporarily override engine.size_usd for
-        this one open so the user-chosen size from the detail chips is
-        honored. Restores the original default after so the tick loop
-        keeps opening at its configured default.
-        """
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is None or not engine.running:
-            return
-        import time as _time
-        try:
-            opp = dict(pair)
-            if "net_apr" not in opp:
-                opp["net_apr"] = opp.get("apr") or opp.get("basis_apr") or 0
-            if "short_venue" not in opp:
-                opp["short_venue"] = opp.get("venue_perp") or opp.get("venue_a") or ""
-            if "long_venue" not in opp:
-                opp["long_venue"] = opp.get("venue_spot") or opp.get("venue_b") or ""
-            if "mark_price" not in opp:
-                opp["mark_price"] = opp.get("spot_price") or opp.get("price_a") or 0
-            original_size = engine.size_usd
-            try:
-                if size_usd is not None:
-                    engine.size_usd = float(size_usd)
-                engine._open(opp, _time.time())
-            finally:
-                engine.size_usd = original_size
-            engine._persist()
-            self.after(200, lambda: self._arbitrage_hub("positions"))
-        except Exception as e:
-            import logging
-            logging.getLogger("aurum.arb_hub").warning(
-                "open_as_paper failed for %s: %s", pair.get("symbol"), e,
-                exc_info=True)
-
+        from launcher_support.screens.arbitrage_hub import open_as_paper
+        return open_as_paper(self, pair, size_usd=size_usd)
     @staticmethod
     def _pair_min(a, b):
         vals = [v for v in (a, b) if v is not None]
@@ -5292,145 +4375,18 @@ class App(tk.Tk):
 
     @staticmethod
     def _arb_venue_label(pair: dict) -> str:
-        if pair.get("long_venue") and pair.get("short_venue"):
-            return f"{pair['long_venue']} \u2192 {pair['short_venue']}"
-        return str(pair.get("venue") or "\u2014")
-
+        from launcher_support.screens.arbitrage_hub import venue_label
+        return venue_label(pair)
     @staticmethod
     def _arb_pair_label(pair: dict) -> str:
-        sym = pair.get("symbol") or pair.get("sym") or "\u2014"
-        venue = (f"{pair.get('long_venue', '')} \u2194 {pair.get('short_venue', '')}"
-                 if pair.get("long_venue") else pair.get("venue", ""))
-        venue_clean = venue.strip(" \u2194")
-        return f"{sym}  \u00b7  {venue_clean}"
-
-    # -- Scoring filter ---------------------------------------
+        from launcher_support.screens.arbitrage_hub import pair_label
+        return pair_label(pair)
     def _arb_score_fallback(self, pair: dict):
-        """Synthesize a ScoreResult from net_apr alone.
-
-        arb_pairs() doesn't propagate volume_24h / open_interest per leg,
-        so score_opp returns mostly-None factors and grades SKIP for
-        everything. When that happens, fall back to a pure-APR score so the
-        table doesn't look all-SKIP.
-        """
-        from core.arb.arb_scoring import ScoreResult
-        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
-        # APR → score mapping: 0% = 0, 50%+ = 100
-        score = min(100.0, apr * 2.0)
-        if score >= 70:
-            grade = "GO"
-        elif score >= 40:
-            grade = "MAYBE"
-        else:
-            grade = "SKIP"
-        return ScoreResult(score=round(score, 0), grade=grade,
-                            factors={"net_apr": score})
-
+        from launcher_support.screens.arbitrage_hub import score_fallback
+        return score_fallback(self, pair)
     def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
-        """Apply user filters + scoring to each pair.
-
-        Scores via arb_scoring.score_opp — cached by (symbol, venues,
-        apr_round_1dp) with TTL = scan interval to avoid re-scoring the
-        same pair on tab switches within 15s. Falls back to APR-only
-        heuristic when scoring factors are all None.
-        Returns (pair_dict, ScoreResult) in descending score order.
-        """
-        from core.arb.arb_scoring import score_opp
-        state = self._arb_filter_state()
-        min_apr    = state.get("min_apr", 0)
-        min_volume = state.get("min_volume", 0)
-        min_oi     = state.get("min_oi", 0)
-        risk_max   = state.get("risk_max", "HIGH")
-        grade_min  = state.get("grade_min", "SKIP")
-        _R = {"LOW": 0, "MED": 1, "HIGH": 2}
-        _G = {"GO": 0, "MAYBE": 1, "SKIP": 2}
-        risk_cap  = _R.get(risk_max, 2)
-        grade_cap = _G.get(grade_min, 2)
-
-        # Score cache — TTL matches scanner cache (30s is the scan ttl,
-        # so scoring is the same for 30s regardless of tab flips).
-        import time as _time
-        cache = getattr(self, "_arb_score_cache", None)
-        if cache is None or (_time.time() - cache.get("ts", 0)) > 30.0:
-            cache = {"ts": _time.time(), "map": {}}
-            self._arb_score_cache = cache
-        cache_map = cache["map"]
-
-        exclude_risky = state.get("exclude_risky_venues", False)
-        realistic_only = state.get("realistic_only", True)
-        apr_max = self._ARB_REALISTIC_APR_MAX
-        vol_min_realistic = self._ARB_REALISTIC_VOL_MIN
-        risky_venues = self._ARB_RISKY_VENUES
-        out = []
-        for p in (pairs or []):
-            # Cheap filters first
-            apr = abs(float(p.get("net_apr") or p.get("apr") or 0))
-            if apr < min_apr:
-                continue
-            # REALISTIC filter — cap APR at 500% (stale funding territory)
-            # before the other checks so we spend zero cycles on them.
-            if realistic_only and apr > apr_max:
-                continue
-            vol = (p.get("volume_24h")
-                   or self._pair_min(p.get("volume_24h_short"),
-                                      p.get("volume_24h_long")) or 0)
-            if min_volume and float(vol) < min_volume:
-                continue
-            if realistic_only and float(vol) < vol_min_realistic:
-                continue
-            oi = (p.get("open_interest")
-                  or self._pair_min(p.get("open_interest_short"),
-                                     p.get("open_interest_long")) or 0)
-            if min_oi and float(oi) < min_oi:
-                continue
-            risk = p.get("risk", "HIGH")
-            if _R.get(risk, 2) > risk_cap:
-                continue
-            # [NO RISKY VENUES] toolbar toggle — drop pairs involving
-            # low-reliability venues (bingx, bitget, paradex).
-            if exclude_risky:
-                sv = (p.get("short_venue") or p.get("venue_perp") or
-                      p.get("venue_a") or "").lower()
-                lv = (p.get("long_venue") or p.get("venue_spot") or
-                      p.get("venue_b") or "").lower()
-                if sv in risky_venues or lv in risky_venues:
-                    continue
-
-            # Cache key: symbol + venues + apr rounded to 1dp (the only
-            # field that changes meaningfully between scans).
-            ckey = (
-                p.get("symbol", ""),
-                p.get("short_venue", "") or p.get("venue_perp", "") or p.get("venue_a", ""),
-                p.get("long_venue", "") or p.get("venue_spot", "") or p.get("venue_b", ""),
-                round(apr, 1),
-                p.get("_type", ""),
-            )
-            sr = cache_map.get(ckey)
-            if sr is None:
-                try:
-                    sr = score_opp(p)
-                    populated = sum(1 for v in sr.factors.values() if v is not None)
-                    if populated <= 1:
-                        sr = self._arb_score_fallback(p)
-                except Exception:
-                    sr = self._arb_score_fallback(p)
-                cache_map[ckey] = sr
-
-            if _G.get(sr.grade, 2) > grade_cap:
-                continue
-            out.append((p, sr))
-        # Sort: grade bucket (GO first), then BKEVN asc (fastest payback),
-        # then SCORE desc as tiebreaker. Fastest-to-breakeven is what
-        # actually matters — high score with 80h bkevn is a trap.
-        def _key(t):
-            _p, _sr = t
-            be = getattr(_sr, "breakeven_h", None)
-            be_val = be if be is not None else 9999.0
-            return (_G.get(_sr.grade, 2), be_val, -_sr.score)
-        out.sort(key=_key)
-        return out
-
-    # -- Tab renderers ------------------------------------------
+        from launcher_support.screens.arbitrage_hub import filter_and_score
+        return filter_and_score(self, pairs)
     _ARB_PAIRS_COLS = [
         ("#",     3,  "e"), ("SYM",    7, "w"),
         ("LONG",  10, "w"), ("SHORT",  10, "w"),
@@ -5446,149 +4402,8 @@ class App(tk.Tk):
     # live in self._arb_cache (populated by _arb_hub_scan_async).
 
     def _arb_render_engine(self, parent):
-        """SimpleArbEngine (in-process) controls + live risk + positions."""
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            snap = engine.snapshot()
-            running_badge = ("RUN", GREEN)
-        else:
-            snap = {
-                "mode": "—", "running": False, "killed": False,
-                "account": 0, "peak": 0, "drawdown_pct": 0,
-                "realized_pnl": 0, "unrealized_pnl": 0, "exposure_usd": 0,
-                "losses_streak": 0, "trades_count": 0, "positions": [],
-            }
-            running_badge = ("OFF", RED)
-
-        # Status strip (engine-specific)
-        top = tk.Frame(parent, bg=BG)
-        top.pack(fill="x", pady=(0, 4))
-        tk.Label(top, text="ARB ENGINE",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(top, text=f"  ·  {running_badge[0]}  ·  mode {snap.get('mode', '—')}",
-                 font=(FONT, 8), fg=running_badge[1], bg=BG).pack(side="left")
-        if snap.get("killed"):
-            tk.Label(top, text="  ·  KILLED", font=(FONT, 8, "bold"),
-                     fg=RED, bg=BG).pack(side="left")
-
-        # Live risk gauges
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
-        gauges = tk.Frame(parent, bg=BG)
-        gauges.pack(fill="x", pady=(0, 4))
-        for k, label, fmt in [
-            ("account", "ACCT", "${:,.0f}"),
-            ("drawdown_pct", "DD", "{:+.2f}%"),
-            ("exposure_usd", "EXPO", "${:,.0f}"),
-            ("realized_pnl", "REAL", "${:+,.2f}"),
-            ("unrealized_pnl", "UPNL", "${:+,.2f}"),
-            ("losses_streak", "STREAK", "{}"),
-            ("trades_count", "TRADES", "{}"),
-        ]:
-            val = snap.get(k, 0) or 0
-            try:
-                vtxt = fmt.format(val)
-            except Exception:
-                vtxt = "—"
-            col = tk.Frame(gauges, bg=BG)
-            col.pack(side="left", padx=(0, 16))
-            tk.Label(col, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG).pack(anchor="w")
-            tk.Label(col, text=vtxt, font=(FONT, 10, "bold"),
-                     fg=WHITE, bg=BG).pack(anchor="w")
-
-        # Controls
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        ctrls = tk.Frame(parent, bg=BG)
-        ctrls.pack(fill="x", pady=(0, 4))
-        tk.Label(ctrls, text="  controls:",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left")
-        for text, cmd, color in [
-            ("START PAPER", lambda: self._arb_engine_start("paper"), GREEN),
-            ("STOP",        self._arb_engine_stop,                    RED),
-        ]:
-            b = tk.Label(ctrls, text=f"  {text}  ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=color, cursor="hand2", padx=6, pady=1)
-            b.pack(side="left", padx=(6, 0))
-            b.bind("<Button-1>", lambda _e, _c=cmd: _c())
-
-        # Live positions table (Phase 3: proper diff-updating _arb_make_table
-        # instead of tk.Text — gains colored APR/PnL, click-to-detail, etc.)
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        tk.Label(parent, text="OPEN POSITIONS",
-                 font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        positions = snap.get("positions", [])
-        pos_cols = [
-            ("SYM",      10, "w"),
-            ("VENUES",   18, "w"),
-            ("APR NOW",  9,  "e"),
-            ("ACCRUED",  9,  "e"),
-            ("NET P&L",  9,  "e"),
-            ("OPEN",     7,  "e"),
-        ]
-        _, pos_repaint = self._arb_make_table(parent, pos_cols)
-        if positions:
-            pos_rows = []
-            for p in positions:
-                entry_apr = float(p.get("entry_apr", 0) or 0)
-                cur_apr = float(p.get("current_apr", 0) or 0)
-                # APR decay color: RED if below 50% of entry
-                if abs(entry_apr) > 0 and abs(cur_apr) / abs(entry_apr) < 0.5:
-                    apr_fg = RED
-                elif abs(cur_apr) >= 50:
-                    apr_fg = GREEN
-                else:
-                    apr_fg = AMBER
-                accrued = float(p.get("funding_accrued", 0) or 0)
-                fees = float(p.get("fees_paid", 0) or 0)
-                # Entry fees already deducted; approximate exit fee for
-                # net-P&L preview (matches SimpleArbEngine._close math).
-                exit_fee_est = fees  # symmetric
-                net_pnl = accrued - fees - exit_fee_est
-                sv = (p.get("venue_short", "") or "")[:8]
-                lv = (p.get("venue_long", "") or "")[:8]
-                pos_rows.append([
-                    ((p.get("symbol", "") or "—")[:10], WHITE),
-                    (f"{lv}>{sv}"[:18], AMBER_D),
-                    (f"{cur_apr:+.1f}%", apr_fg),
-                    (f"${accrued:+.2f}", GREEN if accrued >= 0 else RED),
-                    (f"${net_pnl:+.2f}", GREEN if net_pnl >= 0 else RED),
-                    (f"{p.get('hours_open', 0):.1f}h", DIM),
-                ])
-            pos_repaint(pos_rows)
-        else:
-            pos_repaint([])
-            tk.Label(parent, text="  no positions open — start engine in POSITIONS tab",
-                     font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=4)
-
-        # Recent closed trades (tail, proper table)
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        tk.Label(parent, text="RECENT CLOSES",
-                 font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        closed_cols = [
-            ("SYM",     10, "w"),
-            ("REASON",  11, "w"),
-            ("HOLD",    6,  "e"),
-            ("P&L",     9,  "e"),
-        ]
-        _, closed_repaint = self._arb_make_table(parent, closed_cols)
-        recent = (snap.get("closed_recent", []) or
-                  (engine.closed[-10:] if engine is not None else []))
-        if recent:
-            closed_rows = []
-            for c in reversed(recent):
-                pnl = float(c.get("pnl", 0) or 0)
-                closed_rows.append([
-                    ((c.get("symbol", "") or "—")[:10], WHITE),
-                    ((c.get("exit_reason", "") or "")[:11], DIM),
-                    (f"{c.get('hours_open', 0):.1f}h", DIM),
-                    (f"${pnl:+.2f}", GREEN if pnl >= 0 else RED),
-                ])
-            closed_repaint(closed_rows)
-        else:
-            closed_repaint([])
-            tk.Label(parent, text="  no closes yet",
-                     font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=4)
-
+        from launcher_support.screens.arbitrage_hub import render_engine
+        return render_engine(self, parent)
     # ═══════════════════════════════════════════════════════════
     # Phase 1 redesign (2026-04-22): 3-tab layout
     # ═══════════════════════════════════════════════════════════
@@ -5607,485 +4422,53 @@ class App(tk.Tk):
     ]
 
     def _arb_render_opps(self, parent):
-        """Unified OPPS table. All 5 legacy tabs (cex-cex / dex-dex /
-        cex-dex / basis / spot) merged here, scored + bucketed by VIAB.
-
-        Header collapses the tab title + VIAB legend into one row so
-        the table shows up within ~80px of the status strip.
-        """
-        head = tk.Frame(parent, bg=BG)
-        head.pack(fill="x", pady=(0, 3))
-        # GO / WAIT / SKIP legend inline — surfaces the triage rule
-        # without burning a second row on it. Colors match the table
-        # cells so the eye bridges legend→rows automatically.
-        tk.Label(head, text="GO", font=(FONT, 7, "bold"),
-                 fg=GREEN, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(head, text="score≥70 · bkevn≤24h · líquido",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
-        tk.Label(head, text="WAIT", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(head, text="score≥40 · bkevn≤72h OU vol moderada",
-                 font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left", padx=(0, 8))
-        tk.Label(head, text="SKIP", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=BG).pack(side="left", padx=(0, 3))
-        tk.Label(head, text="resto", font=(FONT, 7),
-                 fg=DIM2, bg=BG).pack(side="left")
-        self._arb_build_filter_bar(parent)
-        self._arb_opps_selected = []
-
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_opps_selected):
-                self._arb_show_detail(self._arb_opps_selected[ri])
-
-        _, repaint = self._arb_make_table(parent, self._ARB_OPPS_COLS,
-                                          on_click=_on_click)
-        self._arb_opps_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
+        from launcher_support.screens.arbitrage_hub import render_opps
+        return render_opps(self, parent)
     def _arb_render_positions(self, parent):
-        """Live paper engine positions + controls. Inherits body from
-        legacy _arb_render_engine — no destruction, just routed via
-        the new 3-tab layout."""
-        self._arb_render_engine(parent)
-
+        from launcher_support.screens.arbitrage_hub import render_positions
+        return render_positions(self, parent)
     def _arb_render_history(self, parent):
-        """Closed trades log from SimpleArbEngine. Newest first, realized
-        PnL total at top. Read-only; rebuilds only when len(closed)
-        changes."""
-        engine = getattr(self, "_arb_simple_engine", None)
-        closed = (engine.closed if engine is not None else [])
-
-        total_pnl = round(sum(c.get("pnl", 0) for c in closed), 2)
-        n = len(closed)
-        header = tk.Frame(parent, bg=BG)
-        header.pack(fill="x", pady=(0, 4))
-        tk.Label(header, text="HISTORY",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(header, text=f"  ·  {n} trades closed  ·  realized ",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(side="left")
-        pnl_fg = GREEN if total_pnl >= 0 else RED
-        tk.Label(header, text=f"${total_pnl:+,.2f}",
-                 font=(FONT, 9, "bold"), fg=pnl_fg, bg=BG).pack(side="left")
-
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 6))
-
-        if not closed:
-            tk.Label(parent,
-                     text="  No closed trades yet. Start the engine in POSITIONS tab.",
-                     font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w", pady=8)
-            return
-
-        cols = [
-            ("SYM",    9,  "w"),
-            ("VENUES", 16, "w"),
-            ("REASON", 11, "w"),
-            ("HOLD",   6,  "e"),
-            ("PNL",    9,  "e"),
-        ]
-        _, repaint = self._arb_make_table(parent, cols)
-        rows = []
-        for c in reversed(closed):  # newest first
-            pnl = c.get("pnl", 0) or 0
-            pnl_fg = GREEN if pnl >= 0 else RED
-            venues = f"{c.get('venue_short','')}/{c.get('venue_long','')}"[:16]
-            rows.append([
-                (c.get("symbol", "")[:9], WHITE),
-                (venues, AMBER_D),
-                (c.get("exit_reason", "")[:11], DIM),
-                (f"{c.get('hours_open', 0):.1f}h", DIM),
-                (f"${pnl:+,.2f}", pnl_fg),
-            ])
-        repaint(rows)
-
+        from launcher_support.screens.arbitrage_hub import render_history
+        return render_history(self, parent)
     def _arb_paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot):
-        """Unified OPPS painter — merges 5 opp types, applies filter+score,
-        caps at 50 rows, paints with VIAB column."""
-        repaint = getattr(self, "_arb_opps_repaint", None)
-        if repaint is None:
-            return
-
-        # Tag each type
-        tagged: list[dict] = []
-        for p in (arb_cc or []):
-            pp = dict(p); pp["_type"] = "CC"; tagged.append(pp)
-        for p in (arb_dd or []):
-            pp = dict(p); pp["_type"] = "DD"; tagged.append(pp)
-        for p in (arb_cd or []):
-            pp = dict(p); pp["_type"] = "CD"; tagged.append(pp)
-        for p in (basis or []):
-            pp = dict(p); pp["_type"] = "BS"
-            # Adapt basis to look like an arb pair for scoring
-            pp.setdefault("net_apr", pp.get("basis_apr"))
-            pp.setdefault("short_venue", pp.get("venue_perp"))
-            pp.setdefault("long_venue", pp.get("venue_spot"))
-            pp.setdefault("volume_24h_short", pp.get("volume_perp"))
-            pp.setdefault("volume_24h_long", pp.get("volume_spot"))
-            pp.setdefault("volume_24h", min(
-                pp.get("volume_perp", 0) or 0,
-                pp.get("volume_spot", 0) or 0))
-            tagged.append(pp)
-        for p in (spot or []):
-            pp = dict(p); pp["_type"] = "SP"
-            # Spot spread: convert bps to rough APR equivalent — treat
-            # as a one-shot trade (no funding cycle), so scoring is only
-            # meaningful for viewing. Use spread_bps as APR proxy.
-            pp.setdefault("net_apr", abs(pp.get("spread_bps", 0) or 0) / 100.0)
-            pp.setdefault("short_venue", pp.get("venue_a"))
-            pp.setdefault("long_venue", pp.get("venue_b"))
-            pp.setdefault("volume_24h_short", pp.get("volume_a"))
-            pp.setdefault("volume_24h_long", pp.get("volume_b"))
-            pp.setdefault("volume_24h", min(
-                pp.get("volume_a", 0) or 0,
-                pp.get("volume_b", 0) or 0))
-            tagged.append(pp)
-
-        # Apply filter+score (with cache) and render cap
-        filtered = self._arb_filter_and_score(tagged)[:50]
-        self._arb_opps_selected = [p for p, _ in filtered]
-
-        rows = []
-        for a, sr in filtered:
-            viab = getattr(sr, "viab", sr.grade)
-            if viab == "GO":
-                viab_fg = GREEN
-            elif viab in ("WAIT", "MAYBE"):
-                viab_fg = AMBER
-            else:
-                viab_fg = DIM
-            net_apr = float(a.get("net_apr", 0) or 0)
-            apr_fg = GREEN if abs(net_apr) >= 50 else (
-                AMBER if abs(net_apr) >= 20 else DIM)
-            be = getattr(sr, "breakeven_h", None)
-            be_txt = f"{be:.1f}h" if be is not None and be < 999 else "—"
-            be_fg = GREEN if (be is not None and be <= 24) else (
-                AMBER if (be is not None and be <= 72) else DIM)
-            short_v = (a.get("short_venue") or "")[:10].lower()
-            long_v = (a.get("long_venue") or "")[:10].lower()
-            # Long leg goes first (the one you BUY), then short. Arrow
-            # direction (→) reads naturally as "take long from here,
-            # short to there". Width 22 fits "binance → bybit" plus
-            # slack for longer venue names.
-            venues = f"{long_v} → {short_v}"[:22]
-            rows.append([
-                (viab, viab_fg),
-                ((a.get("symbol", "") or "—")[:11], WHITE),
-                (venues, AMBER_D),
-                (f"{net_apr:+.1f}%", apr_fg),
-                (be_txt, be_fg),
-                (f"{int(sr.score):>3}", DIM),
-            ])
-        repaint(rows)
-
+        from launcher_support.screens.arbitrage_hub import paint_opps
+        return paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot)
     # -- Engine control shortcuts ------------------------------
     def _arb_engine_start(self, mode: str):
-        """Start SimpleArbEngine (in-process, paper mode)."""
-        if mode == "demo":
-            # Demo/testnet requires venue auth — not supported in the simple
-            # in-process engine. Fall back to paper silently.
-            mode = "paper"
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is None:
-            from core.arb.engine import SimpleArbEngine
-            engine = SimpleArbEngine()
-            self._arb_simple_engine = engine
-        if not engine.running:
-            engine.start(mode=mode)
-        try:
-            self.after(500, lambda: self._arbitrage_hub("engine"))
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import engine_start
+        return engine_start(self, mode)
     def _arb_engine_stop(self):
-        """Stop the in-process SimpleArbEngine."""
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            engine.stop()
-        try:
-            self.after(500, lambda: self._arbitrage_hub("engine"))
-        except Exception:
-            pass
-
-    # -- Background scan: populates status strip + active tab ----
+        from launcher_support.screens.arbitrage_hub import engine_stop
+        return engine_stop(self)
     _ARB_SCAN_FRESH_SECS = 10  # within this window, skip new scan
 
     def _arb_scan_is_fresh(self) -> bool:
-        """True if last scan is within the fresh window (no need to rescan)."""
-        import time as _time
-        last = getattr(self, "_arb_last_scan_ts", 0) or 0
-        return (_time.time() - last) < self._ARB_SCAN_FRESH_SECS
-
+        from launcher_support.screens.arbitrage_hub import scan_is_fresh
+        return scan_is_fresh(self)
     def _arb_hub_scan_async(self):
-        """Run FundingScanner in a worker thread and push results to the UI.
-
-        The scanner is cached (CACHE_TTL) so hopping between tabs doesn't
-        hammer venue APIs. After the scan returns, the status strip is
-        always refreshed; the active tab's table is repainted with live
-        data via whichever ``_arb_*_repaint`` callback is registered.
-        """
-        import threading
-        if _test_mode_enabled():
-            self._ui_call_soon(lambda: self._arb_hub_telem_update(
-                {"dex_online": 0, "cex_online": 0, "total": 0},
-                None, [], [], [], [], [], []))
-            return
-        try:
-            from core.ui.funding_scanner import FundingScanner
-        except Exception as e:
-            self._arb_set_status_error(f"scanner unavailable: {str(e)[:40]}")
-            return
-        scanner = getattr(self, "_funding_scanner", None)
-        if scanner is None:
-            scanner = FundingScanner()
-            self._funding_scanner = scanner
-
-        def _worker():
-            try:
-                opps = scanner.scan()
-                stats = scanner.stats()
-                # Lower min_spread_apr from 5% to 1% — the UI filter handles
-                # tighter thresholds now; we want the scanner to hand us as
-                # many candidates as possible so the post-filter has options
-                # to display.
-                arb_cc = scanner.arb_pairs(mode="cex-cex", min_spread_apr=1.0)
-                arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=1.0)
-                arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=1.0)
-                basis = []
-                spot = []
-                try:
-                    scanner.scan_spot()
-                    basis = scanner.basis_pairs(min_basis_bps=5)[:20]
-                    spot = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
-                except Exception:
-                    pass
-                top = opps[0] if opps else None
-                try:
-                    self._ui_call_soon(lambda: self._arb_hub_telem_update(
-                        stats, top, opps, arb_cc, arb_dd, arb_cd, basis, spot))
-                except (RuntimeError, tk.TclError):
-                    # Tk root gone (test teardown / app shutdown) — drop update
-                    pass
-            except Exception as e:
-                try:
-                    self._ui_call_soon(lambda: self._arb_set_status_error(
-                        f"scan failed: {str(e)[:40]}"))
-                except (RuntimeError, tk.TclError):
-                    pass
-
-        threading.Thread(target=_worker, daemon=True).start()
-
+        from launcher_support.screens.arbitrage_hub import hub_scan_async
+        return hub_scan_async(self)
     def _arb_set_status_error(self, msg: str):
-        """Paint the right side of the status strip with an error tag
-        and flip the live dot to red so the scan state is obvious at a
-        glance (green = fresh data, red = scan failed, dim = pending)."""
-        dot = getattr(self, "_arb_live_dot", None)
-        if dot is not None:
-            try: dot.configure(fg=RED)
-            except Exception: pass
-        lbl = getattr(self, "_arb_sum_best", None)
-        if lbl is not None:
-            try:
-                lbl.configure(text=msg, fg=RED)
-            except Exception:
-                pass
-
+        from launcher_support.screens.arbitrage_hub import set_status_error
+        return set_status_error(self, msg)
     def _arb_hub_telem_update(self, stats, top, opps, arb_cc, arb_dd, arb_cd,
                                basis, spot):
-        """Populate the status strip and the active tab's table.
-
-        stats     : dict from FundingScanner.stats() — dex_online / cex_online
-        top       : top FundingOpp across all venues (or None)
-        opps      : full list of FundingOpp from scanner.scan()
-        arb_cc    : list of CEX↔CEX arb pairs (dict) — paired funding diff
-        arb_dd    : list of DEX↔DEX arb pairs
-        arb_cd    : list of CEX↔DEX arb pairs
-        basis     : list of basis (spot-perp) pairs from scanner.basis_pairs
-        spot      : list of spot spread pairs from scanner.spot_arb_pairs
-
-        Each tab renderer registers a repaint callback (e.g. _arb_cex_repaint);
-        we only call the one for the currently active tab.
-        """
-        # Status strip — data flowed in, flip the live dot to green.
-        dex_on = (stats or {}).get("dex_online", 0)
-        cex_on = (stats or {}).get("cex_online", 0)
-        try:
-            dot = getattr(self, "_arb_live_dot", None)
-            if dot is not None:
-                dot.configure(fg=GREEN)
-            self._arb_sum_cex.configure(text=f"CEX  {cex_on}", fg=WHITE)
-            self._arb_sum_dex.configure(text=f"DEX  {dex_on}", fg=WHITE)
-            top_s = "—"
-            top_fg = DIM2
-            if top is not None and getattr(top, "apr", None) is not None:
-                try:
-                    apr_v = float(top.apr)
-                    top_s = f"{apr_v:+.2f}%"
-                    top_fg = GREEN if apr_v > 0 else (RED if apr_v < 0 else DIM2)
-                except Exception:
-                    pass
-            self._arb_sum_best.configure(text=f"TOP  {top_s}", fg=top_fg)
-        except Exception:
-            pass
-
-        # Cache raw results so tab switches can repaint without rescanning
-        import time as _time
-        self._arb_last_scan_ts = _time.time()
-        self._arb_cache = {
-            "stats": stats, "top": top, "opps": opps,
-            "arb_cc": arb_cc, "arb_dd": arb_dd, "arb_cd": arb_cd,
-            "basis": basis, "spot": spot,
-        }
-        # Push scan age + engine state into the status strip right away
-        try:
-            self._arb_update_status_strip()
-        except Exception:
-            pass
-
-        # Route to the repaint callback for the active tab.
-        # Phase 1 redesign: unified OPPS table consolidates 5 old tabs.
-        tab = getattr(self, "_arb_tab", "opps")
-        if tab == "opps":
-            self._arb_paint_opps(arb_cc, arb_dd, arb_cd, basis, spot)
-        # positions + history tabs don't consume scanner data directly —
-        # they read from _arb_simple_engine via their render fn.
-
-        # Feed SimpleArbEngine — any tab keeps the engine ticking as long
-        # as scanner returns data. The engine only processes FUNDING opps
-        # (arb_cc + arb_cd) and enriches with per-venue 24h volume from
-        # the raw FundingOpp list.
-        engine = getattr(self, "_arb_simple_engine", None)
-        if engine is not None and engine.running:
-            try:
-                self._arb_feed_engine(engine, opps, arb_cc + arb_cd)
-            except Exception as e:
-                # Never let engine errors kill the scan loop
-                try:
-                    import logging
-                    logging.getLogger("aurum.arb_hub").warning(
-                        "engine tick failed: %s", e, exc_info=True)
-                except Exception:
-                    pass
-
+        from launcher_support.screens.arbitrage_hub import hub_telem_update
+        return hub_telem_update(self, stats, top, opps, arb_cc, arb_dd, arb_cd,
+                               basis, spot)
     @staticmethod
     def _arb_feed_engine(engine, raw_opps, arb_pairs_merged):
-        """Enrich arb pairs with volume_24h per leg, then tick engine."""
-        vol_lookup: dict[tuple[str, str], float] = {}
-        for o in raw_opps:
-            try:
-                vol_lookup[(o.symbol, o.venue)] = float(o.volume_24h)
-            except Exception:
-                continue
-        enriched: list[dict] = []
-        for ap in arb_pairs_merged:
-            sym = ap.get("symbol")
-            short_v = ap.get("short_venue", "")
-            long_v = ap.get("long_venue", "")
-            ap2 = dict(ap)
-            ap2["volume_short"] = vol_lookup.get((sym, short_v), 0)
-            ap2["volume_long"] = vol_lookup.get((sym, long_v), 0)
-            enriched.append(ap2)
-        engine.tick(enriched)
-
+        from launcher_support.screens.arbitrage_hub import feed_engine
+        return feed_engine(engine, raw_opps, arb_pairs_merged)
     def _arb_paint_pairs(self, pairs, repaint, selected_attr: str):
-        """Render the 9-column pair table with scoring filter applied.
-
-        selected_attr: name of the instance attribute that holds the filtered
-        pair list, so click handlers can map row index → pair dict.
-        """
-        if repaint is None:
-            return
-        filtered = self._arb_filter_and_score(pairs)[:20]
-        # Expose filtered list so _on_click resolves correctly
-        setattr(self, selected_attr, [p for p, _ in filtered])
-
-        rows = []
-        for i, (a, sr) in enumerate(filtered, 1):
-            net_apr = float(a.get("net_apr", 0) or 0)
-            apr_fg = GREEN if net_apr >= 20 else (AMBER if net_apr >= 10 else DIM)
-            risk = a.get("risk", "\u2014")
-            risk_fg = RED if risk == "HIGH" else (AMBER if risk == "MED" else GREEN)
-            vol = (a.get("volume_24h") or
-                   self._pair_min(a.get("volume_24h_short"),
-                                   a.get("volume_24h_long")) or 0)
-            oi = (a.get("open_interest") or
-                  self._pair_min(a.get("open_interest_short"),
-                                  a.get("open_interest_long")) or 0)
-            grade_fg = (GREEN if sr.grade == "GO" else
-                        AMBER if sr.grade == "MAYBE" else DIM)
-            grade_txt = f"{int(sr.score):>2} {sr.grade}"
-            rows.append([
-                (f"{i:>2}", DIM),
-                ((a.get("symbol", "\u2014") or "\u2014")[:7], WHITE),
-                ((a.get("long_venue") or "\u2014")[:10].lower(), AMBER_D),
-                ((a.get("short_venue") or "\u2014")[:10].lower(), AMBER_D),
-                (f"{net_apr:+.1f}%", apr_fg),
-                (self._fmt_vol(vol), DIM),
-                (self._fmt_vol(oi), DIM),
-                (risk, risk_fg),
-                (grade_txt, grade_fg),
-            ])
-        repaint(rows)
-
+        from launcher_support.screens.arbitrage_hub import paint_pairs
+        return paint_pairs(self, pairs, repaint, selected_attr)
     def _arb_paint_basis(self, basis):
-        repaint = getattr(self, "_arb_basis_repaint", None)
-        if repaint is None:
-            return
-        # Filter: basis pairs can be scored via arb_scoring — each leg has a
-        # net_apr-equivalent (basis_apr). Use the user's APR floor + grade
-        # filter; volume/OI filters don't apply (basis data is thinner).
-        state = self._arb_filter_state()
-        min_apr = state.get("min_apr", 0)
-        filtered_list = []
-        for p in (basis or []):
-            if abs(float(p.get("basis_apr", 0) or 0)) < min_apr:
-                continue
-            filtered_list.append(p)
-        filtered_list = filtered_list[:20]
-        self._arb_basis_selected = filtered_list
-        rows = []
-        for i, p in enumerate(filtered_list, 1):
-            bps = p.get("basis_bps", 0)
-            bps_fg = GREEN if abs(bps) >= 20 else (AMBER if abs(bps) >= 10 else DIM)
-            rows.append([
-                (f"{i:>2}", DIM),
-                (p.get("symbol", "\u2014")[:7], WHITE),
-                (p.get("venue_perp", "\u2014")[:9].lower(), AMBER_D),
-                (p.get("venue_spot", "\u2014")[:9].lower(), AMBER_D),
-                (f"${p.get('mark_price', 0):,.2f}", DIM),
-                (f"${p.get('spot_price', 0):,.2f}", DIM),
-                (f"{bps:+.0f}bps", bps_fg),
-                (f"{p.get('basis_apr', 0):.0f}%", bps_fg),
-            ])
-        repaint(rows)
-
+        from launcher_support.screens.arbitrage_hub import paint_basis
+        return paint_basis(self, basis)
     def _arb_paint_spot(self, spot):
-        repaint = getattr(self, "_arb_spot_repaint", None)
-        if repaint is None:
-            return
-        # Spot spreads have bps but no APR; apply a minimum-bps tripwire via
-        # the risk filter as a loose proxy — HIGH = =3bps, MED = =8, LOW = =15.
-        state = self._arb_filter_state()
-        risk_max = state.get("risk_max", "HIGH")
-        thresholds = {"HIGH": 3, "MED": 8, "LOW": 15}
-        min_bps = thresholds.get(risk_max, 3)
-        filtered_list = [p for p in (spot or [])
-                         if float(p.get("spread_bps", 0) or 0) >= min_bps][:20]
-        self._arb_spot_selected = filtered_list
-        rows = []
-        for i, p in enumerate(filtered_list, 1):
-            bps = p.get("spread_bps", 0)
-            bps_fg = GREEN if bps >= 15 else (AMBER if bps >= 8 else DIM)
-            rows.append([
-                (f"{i:>2}", DIM),
-                (p.get("symbol", "\u2014")[:7], WHITE),
-                (p.get("venue_a", "\u2014")[:9].lower(), AMBER_D),
-                (p.get("venue_b", "\u2014")[:9].lower(), AMBER_D),
-                (f"${p.get('price_a', 0):,.4f}", DIM),
-                (f"${p.get('price_b', 0):,.4f}", DIM),
-                (f"{bps:.1f}bps", bps_fg),
-            ])
-        repaint(rows)
-
+        from launcher_support.screens.arbitrage_hub import paint_spot
+        return paint_spot(self, spot)
     # ---------------------------------------------------------------
     # LEGACY SCREENS — thin redirects to the unified ARBITRAGE DESK.
     # The old standalone basis / spot / funding screens were folded into
@@ -6093,171 +4476,28 @@ class App(tk.Tk):
     # migrate to _arbitrage_hub(tab=…).
     # ---------------------------------------------------------------
     def _arb_basis_screen(self):
-        """Redirect: old basis screen → BASIS tab of the unified desk."""
-        self._arbitrage_hub(tab="basis")
-
+        from launcher_support.screens.arbitrage_hub import basis_screen
+        return basis_screen(self)
     def _arb_basis_screen_legacy(self):
-        """Spot-perp basis trade screen — shows basis opportunities."""
-        self._clr(); self._clear_kb()
-        self.history.append("_arbitrage_hub")
-        self.h_path.configure(text="> ARBITRAGE > BASIS TRADE")
-        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
-        self.f_lbl.configure(text="R refresh  |  ESC back")
-
-        self._kb("<Escape>", lambda: self._arbitrage_hub())
-        self._kb("<Key-r>", lambda: self._arb_basis_screen())
-        self._bind_global_nav()
-
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True, padx=24, pady=12)
-
-        tk.Label(outer, text="BASIS TRADE", font=(FONT, 10, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="center")
-        tk.Label(outer, text="spot-perp basis  \u00b7  buy spot, short perp",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
-
-        # Table
-        cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("PERP", 10, "w"),
-                ("SPOT", 10, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
-                ("BASIS", 8, "e"), ("APR", 8, "e")]
-        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
-        for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
-
-        inner = tk.Frame(outer, bg=BG)
-        inner.pack(fill="both", expand=True)
-
-        # Fetch basis pairs in background
-        import threading
-        def _worker():
-            try:
-                from core.ui.funding_scanner import FundingScanner
-                scanner = getattr(self, "_funding_scanner", None)
-                if scanner is None:
-                    scanner = FundingScanner()
-                    self._funding_scanner = scanner
-                scanner.scan()
-                scanner.scan_spot()
-                pairs = scanner.basis_pairs(min_basis_bps=5)[:20]
-                self._ui_call_soon(lambda: self._arb_basis_paint(inner, cols, pairs))
-            except Exception as e:
-                self._ui_call_soon(lambda: tk.Label(inner,
-                    text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
-        threading.Thread(target=_worker, daemon=True).start()
-
+        from launcher_support.screens.arbitrage_hub import basis_screen_legacy
+        return basis_screen_legacy(self)
     @timed_legacy_switch("arb_basis")
     def _arb_basis_paint(self, inner, cols, pairs):
-        for w in inner.winfo_children():
-            w.destroy()
-        try:
-            self.h_stat.configure(text=f"{len(pairs)} BASIS", fg=AMBER)
-        except Exception:
-            pass
-        if not pairs:
-            tk.Label(inner, text="  \u2014 no basis opportunities above 5bps \u2014",
-                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
-            return
-        for i, p in enumerate(pairs, 1):
-            bg = BG if i % 2 == 1 else BG2
-            rf = tk.Frame(inner, bg=bg); rf.pack(fill="x")
-            basis_fg = GREEN if abs(p["basis_bps"]) >= 20 else (AMBER if abs(p["basis_bps"]) >= 10 else DIM)
-            cells = [
-                (f"{i:>3}", DIM), (p["symbol"], WHITE),
-                (p["venue_perp"], AMBER_D), (p["venue_spot"], AMBER_D),
-                (f"${p['mark_price']:,.2f}", DIM),
-                (f"${p['spot_price']:,.2f}", DIM),
-                (f"{p['basis_bps']:+.0f}bps", basis_fg),
-                (f"{p['basis_apr']:.0f}%", basis_fg),
-            ]
-            for (txt, fg), (_, w, anchor) in zip(cells, cols):
-                tk.Label(rf, text=txt, font=(FONT, 8), fg=fg, bg=bg,
-                         width=w, anchor=anchor).pack(side="left")
-
+        from launcher_support.screens.arbitrage_hub import basis_paint
+        return basis_paint(self, inner, cols, pairs)
     # ---------------------------------------------------------------
     # SPOT ↔ SPOT SCREEN — cross-venue spot price divergence
     # ---------------------------------------------------------------
     def _arb_spot_screen(self):
-        """Redirect: old spot screen → SPOT tab of the unified desk."""
-        self._arbitrage_hub(tab="spot")
-
+        from launcher_support.screens.arbitrage_hub import spot_screen
+        return spot_screen(self)
     def _arb_spot_screen_legacy(self):
-        """Spot-spot spread screen — cross-venue spot price divergence."""
-        self._clr(); self._clear_kb()
-        self.history.append("_arbitrage_hub")
-        self.h_path.configure(text="> ARBITRAGE > SPOT \u2194 SPOT")
-        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
-        self.f_lbl.configure(text="R refresh  |  ESC back")
-
-        self._kb("<Escape>", lambda: self._arbitrage_hub())
-        self._kb("<Key-r>", lambda: self._arb_spot_screen())
-        self._bind_global_nav()
-
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True, padx=24, pady=12)
-
-        tk.Label(outer, text="SPOT SPREAD", font=(FONT, 10, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="center")
-        tk.Label(outer, text="cross-venue spot price divergence",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
-
-        cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("VENUE A", 10, "w"),
-                ("VENUE B", 10, "w"), ("PRICE A", 12, "e"), ("PRICE B", 12, "e"),
-                ("SPREAD", 10, "e")]
-        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
-        for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
-
-        inner = tk.Frame(outer, bg=BG)
-        inner.pack(fill="both", expand=True)
-
-        import threading
-        def _worker():
-            try:
-                from core.ui.funding_scanner import FundingScanner
-                scanner = getattr(self, "_funding_scanner", None)
-                if scanner is None:
-                    scanner = FundingScanner()
-                    self._funding_scanner = scanner
-                scanner.scan_spot()
-                pairs = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
-                self._ui_call_soon(lambda: self._arb_spot_paint(inner, cols, pairs))
-            except Exception as e:
-                self._ui_call_soon(lambda: tk.Label(inner,
-                    text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
-        threading.Thread(target=_worker, daemon=True).start()
-
+        from launcher_support.screens.arbitrage_hub import spot_screen_legacy
+        return spot_screen_legacy(self)
     @timed_legacy_switch("arb_spot")
     def _arb_spot_paint(self, inner, cols, pairs):
-        for w in inner.winfo_children():
-            w.destroy()
-        try:
-            self.h_stat.configure(text=f"{len(pairs)} SPREADS", fg=AMBER)
-        except Exception:
-            pass
-        if not pairs:
-            tk.Label(inner, text="  \u2014 no spot spreads above 3bps \u2014",
-                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
-            return
-        for i, p in enumerate(pairs, 1):
-            bg = BG if i % 2 == 1 else BG2
-            rf = tk.Frame(inner, bg=bg); rf.pack(fill="x")
-            spread_fg = GREEN if p["spread_bps"] >= 15 else (AMBER if p["spread_bps"] >= 8 else DIM)
-            cells = [
-                (f"{i:>3}", DIM), (p["symbol"], WHITE),
-                (p["venue_a"], AMBER_D), (p["venue_b"], AMBER_D),
-                (f"${p['price_a']:,.4f}", DIM), (f"${p['price_b']:,.4f}", DIM),
-                (f"{p['spread_bps']:.1f}bps", spread_fg),
-            ]
-            for (txt, fg), (_, w, anchor) in zip(cells, cols):
-                tk.Label(rf, text=txt, font=(FONT, 8), fg=fg, bg=bg,
-                         width=w, anchor=anchor).pack(side="left")
-
+        from launcher_support.screens.arbitrage_hub import spot_paint
+        return spot_paint(self, inner, cols, pairs)
     # ---------------------------------------------------------------
     # FUNDING SCANNER SCREEN — shared between DEX-DEX and CEX-DEX modes
     # ---------------------------------------------------------------
@@ -6607,217 +4847,95 @@ class App(tk.Tk):
 
     @timed_legacy_switch("eng_refresh")
     def _eng_refresh(self):
-        """Rebuild the proc list with RUNNING + STOPPED sections, always
-        visible. Each section sorted by recency DESC. Reschedules 2s tick."""
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.refresh_list(self)
+        from launcher_support.screens.engines import refresh
+        return refresh(self)
 
     def _eng_normalize_local_proc(self, proc: dict) -> dict:
-        from core.ops import run_catalog
-
-        return run_catalog.normalize_engine_log_local_proc(proc)
+        from launcher_support.screens.engines import normalize_local_proc
+        return normalize_local_proc(proc)
 
     def _eng_known_slugs(self) -> set[str]:
-        from core.ops import run_catalog
-
-        try:
-            from core.ops.proc import ENGINES as _ENGINES
-            proc_engines = _ENGINES
-        except Exception:
-            proc_engines = {}
-        return run_catalog.engine_known_slugs(proc_engines)
+        from launcher_support.screens.engines import known_slugs
+        return known_slugs()
 
     def _eng_base_slug(self, row: dict) -> str:
-        from core.ops import run_catalog
-
-        return run_catalog.engine_base_slug(row)
+        from launcher_support.screens.engines import base_slug
+        return base_slug(row)
 
     def _eng_is_engine_row(self, row: dict) -> bool:
-        from core.ops import run_catalog
-
-        return run_catalog.is_engine_log_row(
-            row,
-            known_slugs=self._eng_known_slugs(),
-        )
+        from launcher_support.screens.engines import is_engine_row
+        return is_engine_row(self, row)
 
     def _eng_matches_mode_filter(self, row: dict) -> bool:
-        from core.ops import run_catalog
-
-        return run_catalog.matches_engine_mode_filter(
-            row,
-            getattr(self, "_eng_mode_filter", "all"),
-        )
+        from launcher_support.screens.engines import matches_mode_filter
+        return matches_mode_filter(self, row)
 
     def _eng_row_key(self, row: dict) -> str:
-        from core.ops import run_catalog
-
-        return run_catalog.engine_log_row_key(row)
+        from launcher_support.screens.engines import row_key
+        return row_key(row)
 
     def _eng_set_mode_filter(self, mode_name: str) -> None:
-        self._eng_mode_filter = mode_name
-        self._eng_selected_key = None
-        self._eng_selected_pid = None
-        try:
-            self._eng_log_text.config(state="normal")
-            self._eng_log_text.delete("1.0", "end")
-            self._eng_log_text.config(state="disabled")
-            self._eng_log_header.configure(
-                text=f" — select an engine log in {mode_name.upper()} — ",
-                fg=DIM,
-            )
-        except Exception:
-            pass
-        self._eng_refresh()
+        from launcher_support.screens.engines import set_mode_filter
+        return set_mode_filter(self, mode_name)
 
     def _eng_refresh_filter_tabs(self) -> None:
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.refresh_filter_tabs(self)
+        from launcher_support.screens.engines import refresh_filter_tabs
+        return refresh_filter_tabs(self)
 
     def _eng_run_id_of(self, row: dict) -> str | None:
-        from core.ops import run_catalog
-
-        return run_catalog.engine_log_run_id_of(row)
+        from launcher_support.screens.engines import run_id_of
+        return run_id_of(row)
 
     def _eng_recency_key(self, row: dict) -> float:
-        """Higher = more recent. Delegated to shared run-catalog helpers."""
-        from core.ops import run_catalog
-
-        return run_catalog.engine_log_recency_key(row)
+        from launcher_support.screens.engines import recency_key
+        return recency_key(row)
 
     def _eng_scan_vps_runs(self, limit: int = 10) -> list[dict]:
-        """Resolve VPS engine-log rows via the shared run catalog."""
-        try:
-            from launcher_support.engines_live_view import _get_cockpit_client
-            from core.ops import run_catalog
-            client = _get_cockpit_client()
-        except Exception:
-            return []
-        try:
-            return run_catalog.collect_engine_log_vps_rows(client, limit=limit)
-        except Exception:
-            return []
+        from launcher_support.screens.engines import scan_vps_runs
+        return scan_vps_runs(limit=limit)
 
     def _eng_scan_historical_runs(self, *, limit: int = 15,
                                    hours: int = 48) -> list[dict]:
-        """Resolve recent local historical rows via the shared run catalog."""
-        now_ts = time.time()
-        cached = getattr(self, "_eng_historical_cache", None)
-        cached_ts = float(getattr(self, "_eng_historical_cache_ts", 0.0) or 0.0)
-        if cached is not None and (now_ts - cached_ts) < 30.0:
-            return list(cached[:limit])
-        try:
-            from core.ops import run_catalog
-            result = run_catalog.collect_engine_log_local_rows(
-                limit=limit,
-                hours=hours,
-            )
-        except Exception:
-            result = []
-        self._eng_historical_cache = result
-        self._eng_historical_cache_ts = now_ts
-        return result[:limit]
+        from launcher_support.screens.engines import scan_historical_runs
+        return scan_historical_runs(self, limit=limit, hours=hours)
 
     def _eng_render_row(self, proc: dict):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.render_row(self, proc)
+        from launcher_support.screens.engines import render_row
+        return render_row(self, proc)
 
     def _eng_uptime_of(self, proc: dict, hb: dict) -> str:
-        """Short uptime string (e.g. '2h15m', '45m'). Empty if unknown."""
-        from datetime import datetime, timezone
-        started_raw = (hb.get("started_at") or proc.get("started_at")
-                       or proc.get("started") or "")
-        if not started_raw:
-            return "—"
-        try:
-            t0 = datetime.fromisoformat(str(started_raw).replace("Z", "+00:00"))
-            if t0.tzinfo is None:
-                t0 = t0.replace(tzinfo=timezone.utc)
-        except Exception:
-            return "—"
-        if not proc.get("alive"):
-            stopped_raw = hb.get("stopped_at")
-            try:
-                t1 = datetime.fromisoformat(
-                    str(stopped_raw).replace("Z", "+00:00"))
-                if t1.tzinfo is None:
-                    t1 = t1.replace(tzinfo=timezone.utc)
-            except Exception:
-                t1 = datetime.now(timezone.utc)
-        else:
-            t1 = datetime.now(timezone.utc)
-        secs = max(0, int((t1 - t0).total_seconds()))
-        if secs < 60:
-            return f"{secs}s"
-        if secs < 3600:
-            return f"{secs // 60}m"
-        hours = secs // 3600
-        mins = (secs % 3600) // 60
-        return f"{hours}h{mins:02d}m" if hours < 24 else f"{hours // 24}d{hours % 24}h"
+        from launcher_support.screens.engines import uptime_of
+        return uptime_of(proc, hb)
 
     def _eng_select(self, proc: dict):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.select_proc(self, proc)
+        from launcher_support.screens.engines import select
+        return select(self, proc)
 
     def _eng_load_entries(self, proc: dict) -> None:
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.load_entries(self, proc)
+        from launcher_support.screens.engines import load_entries
+        return load_entries(self, proc)
 
     def _eng_fetch_entries(self, proc: dict,
                            stop: threading.Event) -> tuple[list[str], str]:
-        """Blocking fetch of entries. Returns (formatted_lines, summary)."""
-        from core.ops import run_catalog
-
-        if proc.get("_remote"):
-            rid = proc.get("_run_id")
-            if not rid:
-                return [], "no run_id"
-            try:
-                from launcher_support.engines_live_view import _get_cockpit_client
-                client = _get_cockpit_client()
-            except Exception:
-                return [], "cockpit client unavailable"
-            lines, summary = run_catalog.fetch_remote_entries(
-                client,
-                rid,
-                mode=str(proc.get("mode") or "").lower(),
-                limit=50,
-            )
-            if stop.is_set():
-                return [], summary
-            return lines, summary
-
-        # Local
-        rd = proc.get("run_dir")
-        lines, summary = run_catalog.read_local_entries(rd, limit=50)
-        if stop.is_set():
-            return [], summary
-        return lines, summary
+        from launcher_support.screens.engines import fetch_entries
+        return fetch_entries(proc, stop)
 
     def _eng_apply_entries(self, lines: list[str], summary: str) -> None:
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.apply_entries(self, lines, summary)
+        from launcher_support.screens.engines import apply_entries
+        return apply_entries(self, lines, summary)
 
     def _eng_tail_remote_worker(self, run_id: str,
                                 stop_event: threading.Event):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.tail_remote_worker(self, run_id, stop_event)
+        from launcher_support.screens.engines_live import tail_remote_worker
+        return tail_remote_worker(self, run_id, stop_event)
 
     def _eng_tail_worker(self, log_path: Path, stop_event: threading.Event):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.tail_worker(self, log_path, stop_event)
+        from launcher_support.screens.engines_live import tail_worker
+        return tail_worker(self, log_path, stop_event)
 
     def _eng_poll_logs(self):
-        from launcher_support import engine_logs_view
-
-        engine_logs_view.poll_logs(self)
+        from launcher_support.screens.engines_live import poll_logs
+        return poll_logs(self)
 
     # --- STRATEGIES (Layer 2) -----------------------------
     def _strategies(self, filter_group: str | None = None):
@@ -6831,62 +4949,8 @@ class App(tk.Tk):
         _render_strategies(self, filter_group=filter_group)
 
     def _engines_now_playing(self, host, tracks, running_map):
-        """NOW PLAYING strip — running live engines as clickable pills above
-        the picker. Clicking a pill: focuses that track + opens the LOG chip
-        on the right panel so the user lands on the live tail (iPod feel).
-        """
-        from datetime import datetime as _dt
-        bar = tk.Frame(host, bg=BG2,
-                       highlightbackground=BORDER, highlightthickness=1)
-        bar.pack(fill="x", pady=(0, 6))
-        tk.Label(bar, text="  NOW PLAYING ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=GREEN, padx=6, pady=2).pack(side="left", padx=(4, 8), pady=4)
-
-        slug_to_idx = {t.slug: i for i, t in enumerate(tracks)}
-        for slug, proc in running_map.items():
-            idx = slug_to_idx.get(slug)
-            if idx is None:
-                continue
-            name = tracks[idx].name
-            mode = (proc.get("engine") or "").upper()
-            # Uptime — derive from started timestamp (ISO)
-            up_lbl = "—"
-            try:
-                started = proc.get("started")
-                if started:
-                    t0 = _dt.fromisoformat(started)
-                    secs = (_dt.now() - t0).total_seconds()
-                    h, rem = divmod(int(secs), 3600)
-                    m, _ = divmod(rem, 60)
-                    up_lbl = f"{h}h{m:02d}m" if h else f"{m}m"
-            except Exception:
-                pass
-
-            pill = tk.Frame(bar, bg=BG3,
-                            highlightbackground=GREEN, highlightthickness=1,
-                            cursor="hand2")
-            pill.pack(side="left", padx=2, pady=4)
-            tk.Label(pill, text="●", font=(FONT, 9, "bold"),
-                     fg=GREEN, bg=BG3, padx=4).pack(side="left")
-            tk.Label(pill, text=name, font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG3).pack(side="left", padx=(0, 4))
-            tk.Label(pill, text=f" {up_lbl} ", font=(FONT, 7),
-                     fg=DIM, bg=BG3).pack(side="left")
-
-            def _focus(_e=None, _i=idx):
-                handle = getattr(self, "_strategies_picker", None)
-                if not handle:
-                    return
-                try:
-                    handle["select_index"](_i)
-                except Exception:
-                    pass
-                try:
-                    handle["open_chip"]("LOG")
-                except Exception:
-                    pass
-            for w in (pill,) + tuple(pill.winfo_children()):
-                w.bind("<Button-1>", _focus)
+        from launcher_support.screens.engines_live import engines_now_playing
+        return engines_now_playing(self, host, tracks, running_map)
 
     def _strategies_hydrate_metrics(self, tracks, picker_handle=None) -> None:
         """Populate track metrics from the DB. Runs in a background thread
@@ -7890,113 +5954,16 @@ class App(tk.Tk):
 
     # -- PORTFOLIO TAB -------------------------------------
     def _dash_build_portfolio_tab(self, parent):
-        pm = self._get_portfolio_monitor()
-
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True)
-
-        # Inner accounts column
-        col = tk.Frame(wrap, bg=PANEL, width=170); col.pack(side="left", fill="y")
-        col.pack_propagate(False)
-
-        tk.Label(col, text=" ACCOUNTS ", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(10, 4))
-        tk.Frame(col, bg=DIM2, height=1).pack(fill="x", padx=10)
-
-        accounts = [
-            ("testnet", "TESTNET", GREEN),
-            ("demo",    "DEMO",    AMBER),
-            ("live",    "LIVE",    RED),
-            ("paper",   "PAPER",   DIM),
-        ]
-        self._dash_widgets[("portfolio_account_btns",)] = {}
-        for acc_id, label, color in accounts:
-            status = pm.status(acc_id)
-            row = tk.Frame(col, bg=PANEL, cursor="hand2")
-            row.pack(fill="x", padx=8, pady=(6, 0))
-            icon = "●" if status in ("live", "paper") else "○"
-            icon_color = color if status in ("live", "paper") else DIM
-
-            top_l = tk.Label(row, text=f"{icon} {label}", font=(FONT, 9, "bold"),
-                             fg=WHITE if status in ("live", "paper") else DIM,
-                             bg=PANEL, anchor="w")
-            top_l.pack(fill="x")
-            tk.Label(row, text=icon, font=(FONT, 7), fg=icon_color,
-                     bg=PANEL).place(in_=top_l, x=-2, y=2)
-
-            sub_l = tk.Label(row, text="…",
-                             font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w")
-            sub_l.pack(fill="x")
-            self._dash_widgets[("portfolio_account_btns",)][acc_id] = (row, top_l, sub_l)
-
-            def _click(_e=None, a=acc_id):
-                self._dash_portfolio_account = a
-                self._dash_portfolio_fetch_async()
-                self._dash_portfolio_repaint_account_btns()
-            for w in (row, top_l, sub_l):
-                w.bind("<Button-1>", _click)
-                w.bind("<Enter>", lambda e, l=top_l, s=status:
-                       l.configure(fg=AMBER))
-                w.bind("<Leave>", lambda e, l=top_l, s=status:
-                       l.configure(fg=WHITE if s in ("live", "paper") else DIM))
-
-        self._dash_portfolio_repaint_account_btns()
-
-        # Right details panel — built/refreshed by _dash_portfolio_render
-        details = tk.Frame(wrap, bg=BG)
-        details.pack(side="left", fill="both", expand=True, padx=12, pady=10)
-        self._dash_widgets[("portfolio_details",)] = details
-
-        # Cached-first: if we have a snapshot for the active account, render it
-        # immediately instead of showing a "Loading..." placeholder. The async
-        # refresh will replace it as soon as fresh data arrives.
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        if pm.get_cached(mode) is not None:
-            # Defer render so the details frame is fully packed first
-            self.after(0, self._dash_portfolio_render)
-        else:
-            tk.Label(details, text="Loading account…",
-                     font=(FONT, 9), fg=DIM, bg=BG).pack(pady=20)
+        from launcher_support.screens.dash_portfolio import build_portfolio_tab
+        return build_portfolio_tab(self, parent)
 
     def _dash_portfolio_repaint_account_btns(self):
-        btns = self._dash_widgets.get(("portfolio_account_btns",)) or {}
-        active = getattr(self, "_dash_portfolio_account", "paper")
-        pm = self._get_portfolio_monitor()
-        for acc_id, (row, top_l, sub_l) in btns.items():
-            cached = pm.get_cached(acc_id) or {}
-            status = pm.status(acc_id)
-            if status == "no_keys":
-                sub_l.configure(text="sem keys", fg=DIM)
-            elif status == "paper":
-                eq = cached.get("equity", 0) or 0
-                sub_l.configure(text=f"${eq:,.0f}", fg=AMBER_D)
-            else:
-                eq = cached.get("equity")
-                if eq is None:
-                    sub_l.configure(text="…", fg=DIM)
-                else:
-                    sub_l.configure(text=f"${eq:,.2f}", fg=GREEN)
-            row.configure(bg=BG3 if acc_id == active else PANEL)
-            top_l.configure(bg=BG3 if acc_id == active else PANEL)
-            sub_l.configure(bg=BG3 if acc_id == active else PANEL)
+        from launcher_support.screens.dash_portfolio import repaint_account_btns
+        return repaint_account_btns(self)
 
     def _dash_portfolio_fetch_async(self):
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "market") != "portfolio":
-            return
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        pm = self._get_portfolio_monitor()
-
-        def worker():
-            try:
-                pm.refresh(mode)
-            except Exception:
-                pass
-            if getattr(self, "_dash_alive", False):
-                try: self.after(0, self._dash_portfolio_render)
-                except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        from launcher_support.screens.dash_portfolio import portfolio_fetch_async
+        return portfolio_fetch_async(self)
 
     def _dash_portfolio_render(self):
         """Delegate to launcher_support.screens.dash_portfolio.render. Full
@@ -8064,75 +6031,12 @@ class App(tk.Tk):
 
     # -- TRADES TAB -----------------------------------------
     def _dash_build_trades_tab(self, parent):
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=12, pady=10)
-
-        # Filter row
-        filt = tk.Frame(wrap, bg=BG); filt.pack(fill="x", pady=(0, 6))
-        tk.Label(filt, text="FILTROS:", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 6))
-
-        for tag in ("all", "win", "loss"):
-            label = tag.upper()
-            btn = tk.Label(filt, text=f" {label} ", font=(FONT, 8, "bold"),
-                           fg=BG if self._dash_trades_filter["result"] == tag else DIM,
-                           bg=AMBER if self._dash_trades_filter["result"] == tag else BG3,
-                           padx=8, pady=2, cursor="hand2")
-            btn.pack(side="left", padx=2)
-            def _click(_e=None, t=tag):
-                self._dash_trades_filter["result"] = t
-                self._dash_trades_page = 0
-                self._dash_render_tab("trades")
-            btn.bind("<Button-1>", _click)
-
-        tk.Label(filt, text="  Conta:", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(10, 4))
-        accs = ("paper", "testnet", "demo", "live")
-        for a in accs:
-            active = self._dash_portfolio_account == a
-            btn = tk.Label(filt, text=f" {a.upper()} ", font=(FONT, 8, "bold"),
-                           fg=BG if active else DIM,
-                           bg=AMBER if active else BG3,
-                           padx=6, pady=2, cursor="hand2")
-            btn.pack(side="left", padx=1)
-            def _aclick(_e=None, x=a):
-                self._dash_portfolio_account = x
-                # Make sure we have data for this account
-                pm = self._get_portfolio_monitor()
-                if pm.get_cached(x) is None:
-                    threading.Thread(target=lambda m=x: pm.refresh(m), daemon=True).start()
-                self._dash_trades_page = 0
-                self._dash_render_tab("trades")
-            btn.bind("<Button-1>", _aclick)
-
-        # Table
-        tbl = tk.Frame(wrap, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1)
-        tbl.pack(fill="both", expand=True)
-        self._dash_widgets[("trades_table",)] = tbl
-
-        # Footer (page nav)
-        nav = tk.Frame(wrap, bg=BG); nav.pack(fill="x", pady=(6, 0))
-        prev_btn = tk.Label(nav, text=" ◄ prev ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
-        prev_btn.pack(side="left", padx=2)
-        prev_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(-1))
-        page_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        page_lbl.pack(side="left", padx=8)
-        next_btn = tk.Label(nav, text=" next ► ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
-        next_btn.pack(side="left", padx=2)
-        next_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(+1))
-        stats_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        stats_lbl.pack(side="right")
-        self._dash_widgets[("trades_page",)]  = page_lbl
-        self._dash_widgets[("trades_stats",)] = stats_lbl
-
-        # Initial render
-        self._dash_trades_render()
+        from launcher_support.screens.dash_trades import build_trades_tab
+        return build_trades_tab(self, parent)
 
     def _dash_trades_page_change(self, delta):
-        self._dash_trades_page = max(0, self._dash_trades_page + delta)
-        self._dash_trades_render()
+        from launcher_support.screens.dash_trades import trades_page_change
+        return trades_page_change(self, delta)
 
     def _dash_trades_render(self):
         """Delegate to launcher_support.screens.dash_trades.render. Full
@@ -8144,108 +6048,12 @@ class App(tk.Tk):
 
     # -- HOME TAB (personal snapshot) -----------------------
     def _dash_build_home_tab(self, parent):
-        """CS 1.6 style HOME: connection status + account management + engines.
-        No heavy aggregations — only what's immediately actionable.
-        Renders instantly with cached state; background refresh is lightweight."""
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=8)
-
-        # -- HUD header --
-        hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x")
-        tk.Label(hdr, text="[ HOME ]", font=(FONT, 9, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(hdr, text="personal control panel",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=(8, 0))
-        clock_l = tk.Label(hdr, text="", font=(FONT, 7), fg=DIM2, bg=BG)
-        clock_l.pack(side="right")
-        self._dash_widgets[("home_clock",)] = clock_l
-        tk.Frame(wrap, bg=AMBER_D, height=1).pack(fill="x", pady=(2, 8))
-
-        # -- CONNECTIONS box --
-        def box(title, parent_):
-            f = tk.Frame(parent_, bg=PANEL,
-                         highlightbackground=BORDER, highlightthickness=1)
-            tk.Label(f, text=f" [ {title} ] ",
-                     font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
-                     padx=6, pady=2).pack(side="top", anchor="nw", padx=6, pady=(6, 2))
-            return f
-
-        conn_box = box("CONNECTIONS", wrap)
-        conn_box.pack(fill="x", pady=(0, 6))
-        conn_inner = tk.Frame(conn_box, bg=PANEL)
-        conn_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_conn",)] = conn_inner
-
-        # -- ACCOUNTS box --
-        acc_box = box("ACCOUNTS", wrap)
-        acc_box.pack(fill="x", pady=(0, 6))
-        acc_inner = tk.Frame(acc_box, bg=PANEL)
-        acc_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_accs",)] = acc_inner
-
-        # -- ENGINES box --
-        eng_box = box("RUNNING ENGINES", wrap)
-        eng_box.pack(fill="x", pady=(0, 6))
-        eng_inner = tk.Frame(eng_box, bg=PANEL)
-        eng_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_engines",)] = eng_inner
-
-        self.f_lbl.configure(
-            text="HOME · connections + accounts + engines · "
-                 "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit · R refresh"
-        )
-
-        # Show a brief "connecting..." placeholder inside each panel until the
-        # first fetch completes and populates real data. Avoids a blank flash
-        # on tab switch.
-        for key in ("home_conn", "home_accs", "home_engines"):
-            inner = self._dash_widgets.get((key,))
-            if inner is not None:
-                tk.Label(inner, text="  connecting...",
-                         font=(FONT, 8), fg=DIM2, bg=PANEL,
-                         anchor="w").pack(fill="x", pady=2)
-        # First real render comes from _dash_home_fetch_async which is
-        # invoked by _dash_render_tab right after this build method returns.
+        from launcher_support.screens.dash_home import build_home_tab
+        return build_home_tab(self, parent)
 
     def _dash_home_fetch_async(self):
-        """Lightweight background refresh: only ping exchange + list_procs.
-        Does NOT call PortfolioMonitor.refresh for live accounts (too slow) —
-        only loads the paper state locally, which is instant."""
-        if not getattr(self, "_dash_alive", False):
-            return
-
-        def worker():
-            snap: dict = {}
-            # Paper state: local file read — instant
-            try:
-                from core.ui.portfolio_monitor import PortfolioMonitor
-                snap["paper"] = PortfolioMonitor.paper_state_load()
-            except Exception:
-                snap["paper"] = None
-            # Exchange latency
-            try:
-                snap["latency"] = _get_conn().ping("binance_futures")
-            except Exception:
-                snap["latency"] = None
-            # Running engines
-            try:
-                from core.ops.proc import list_procs
-                snap["procs"] = list_procs()
-            except Exception:
-                snap["procs"] = []
-            # Check which accounts have keys (instant — reads keys.json)
-            try:
-                pm = self._get_portfolio_monitor()
-                snap["has_keys"] = {m: pm.has_keys(m)
-                                    for m in ("testnet", "demo", "live")}
-            except Exception:
-                snap["has_keys"] = {}
-
-            self._dash_home_snap = snap
-            if getattr(self, "_dash_alive", False):
-                try: self.after(0, self._dash_home_render)
-                except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        from launcher_support.screens.dash_home import home_fetch_async
+        return home_fetch_async(self)
 
     def _dash_home_render(self):
         """Delegate to launcher_support.screens.dash_home.render. The
@@ -9556,16 +7364,27 @@ class App(tk.Tk):
 
 
 def __getattr__(name: str):
-    """Module-level lazy attribute for MAIN_GROUPS.
+    """Module-level lazy attribute para MAIN_GROUPS / MARKETS / _conn.
 
-    Python 3.7+ calls this when `name` is not found in the module's __dict__.
-    Since MAIN_GROUPS is intentionally absent until first access, any code that
-    reads `launcher.MAIN_GROUPS` (including tests that bypass App.__init__)
-    will trigger population here — paying the pandas+requests import cost once.
+    Python 3.7+ chama isto quando `name` nao esta em module.__dict__.
+    Os 3 nomes abaixo foram removidos do escopo top-level pelo commit
+    7532224 (lazy-load pra cortar ~530ms do boot) — mas como o launcher
+    e' importado por varios call-sites externos (launcher_support.screens.*,
+    tests, plans) que ainda esperam `launcher.MARKETS` / `launcher._conn`,
+    interceptamos aqui pra manter retrocompat sem recarregar pandas no boot.
+
+    Incidente 2026-04-23: strategies.render() acessava `_launcher_mod.MARKETS`
+    e o AttributeError engolido pelo Tk callback fazia a tela BACKTEST ficar
+    em branco. Fix local no strategies.py + este hardening defensivo.
     """
     if name == "MAIN_GROUPS":
         _ensure_main_groups()
         return globals()["MAIN_GROUPS"]
+    if name == "MARKETS":
+        _CM, _MARKETS = _lazy_connections()
+        return _MARKETS
+    if name == "_conn":
+        return _get_conn()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
