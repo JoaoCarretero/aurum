@@ -1768,13 +1768,16 @@ _LOG_LEVEL_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("SIGNAL", re.compile(r"\bSIGNAL\b|\bnovel=[1-9]\d*")),
 ]
 
-_LOG_LEVEL_COLORS: dict[str, str] = {
-    "ERROR": RED,
-    "WARN": AMBER_B,
-    "EXIT": DIM2,
-    "FILL": GREEN,
-    "ORDER": AMBER,
-    "SIGNAL": CYAN,
+# (foreground, bold) — INFO dimmed so noise fades back; SIGNAL/EXIT/ERROR
+# bold so the operator's eye lands on the lines that matter.
+_LOG_LEVEL_STYLE: dict[str, tuple[str, bool]] = {
+    "INFO":   (DIM,    False),
+    "SIGNAL": (AMBER,  True),
+    "ORDER":  (CYAN,   False),
+    "FILL":   (GREEN,  False),
+    "EXIT":   (WHITE,  True),
+    "WARN":   (HAZARD, False),
+    "ERROR":  (RED,    True),
 }
 
 
@@ -1924,9 +1927,12 @@ def _render_log_panel(parent, column, state, launcher, proc, snap):
                       wrap="none", highlightbackground=BORDER, highlightthickness=0,
                       state="disabled")
     log_box.pack(fill="both", expand=True, padx=10, pady=(0, 8))
-    for _lvl, _color in _LOG_LEVEL_COLORS.items():
-        log_box.tag_configure(_lvl, foreground=_color)
-    log_box.tag_configure("ERROR", foreground=RED, font=(FONT, 8, "bold"))
+    for _lvl, (_fg, _bold) in _LOG_LEVEL_STYLE.items():
+        if _bold:
+            log_box.tag_configure(_lvl, foreground=_fg,
+                                  font=(FONT, 8, "bold"))
+        else:
+            log_box.tag_configure(_lvl, foreground=_fg)
     state["log_box"] = log_box
     _schedule_log_tail(state, launcher, proc)
 
@@ -4005,11 +4011,7 @@ def _schedule_log_tail(state, launcher, proc):
         for i, ln in enumerate(lines):
             if i > 0:
                 box.insert("end", "\n")
-            level = _classify_log_level(ln)
-            if level == "INFO":
-                box.insert("end", ln)
-            else:
-                box.insert("end", ln, level)
+            box.insert("end", ln, _classify_log_level(ln))
     else:
         box.insert("end", "(no log available)")
     box.configure(state="disabled")
