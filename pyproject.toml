@@ -55,9 +55,10 @@ include = ["config*", "core*", "analysis*", "engines*", "bot*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-p no:cacheprovider"
+addopts = "-p no:cacheprovider -n 6"
 markers = [
     "gui: requires a Tk-capable display (opt-in via -m gui or run all)",
+    "serial: test must run sequentially (xdist-unsafe: shared state, file locks, etc.)",
 ]
 norecursedirs = [
     ".git",
