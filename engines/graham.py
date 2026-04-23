@@ -1008,6 +1008,23 @@ def save_run(run_dir: Path, trades: list[dict], summary: dict,
     atomic_write(run_dir / "summary.json",
                  json.dumps(payload, indent=2, default=str))
 
+    # Registra o run em data/index.json pra aparecer em DATA > BACKTEST
+    # RUNS e no engine picker LAST RUNS (mesmo caminho de KEPOS/MEDALLION).
+    try:
+        from core.ops.run_manager import append_to_index, snapshot_config
+        cfg_snap = snapshot_config()
+        cfg_snap["GRAHAM_PARAMS"] = asdict(params)
+        append_to_index(run_dir, {
+            **summary,
+            "engine": "GRAHAM",
+            "basket": meta.get("basket") or "default",
+            "interval": getattr(params, "interval", None) or "15m",
+            "period_days": meta.get("scan_days") or meta.get("days"),
+            "n_symbols": len(per_sym),
+        }, cfg_snap, overfit_results=None)
+    except Exception as e:  # pragma: no cover
+        logging.getLogger("GRAHAM").warning("append_to_index failed: %s", e)
+
 
 # ════════════════════════════════════════════════════════════════════
 # CLI helpers

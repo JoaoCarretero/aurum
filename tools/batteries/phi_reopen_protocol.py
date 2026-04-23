@@ -42,7 +42,7 @@ from engines.phi import (
 log = logging.getLogger("phi_reopen")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-TRAIN_START = "2023-01-01"
+TRAIN_START = "2023-07-01"
 TRAIN_END = "2024-01-01"
 TEST_END = "2025-01-01"
 HOLDOUT_END = "2026-04-21"
@@ -59,18 +59,10 @@ GRID = [
     {"cluster_min_confluences": 1, "cluster_atr_tolerance": 0.5, "omega_phi_entry": 0.382, "ema200_distance_atr": 0.382},
     {"cluster_min_confluences": 1, "cluster_atr_tolerance": 0.5, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.200},
     {"cluster_min_confluences": 1, "cluster_atr_tolerance": 0.5, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.382},
-    {"cluster_min_confluences": 1, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.382, "ema200_distance_atr": 0.200},
-    {"cluster_min_confluences": 1, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.382, "ema200_distance_atr": 0.382},
-    {"cluster_min_confluences": 1, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.200},
-    {"cluster_min_confluences": 1, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.382},
     {"cluster_min_confluences": 2, "cluster_atr_tolerance": 0.5, "omega_phi_entry": 0.382, "ema200_distance_atr": 0.200},
     {"cluster_min_confluences": 2, "cluster_atr_tolerance": 0.5, "omega_phi_entry": 0.382, "ema200_distance_atr": 0.382},
     {"cluster_min_confluences": 2, "cluster_atr_tolerance": 0.5, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.200},
     {"cluster_min_confluences": 2, "cluster_atr_tolerance": 0.5, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.382},
-    {"cluster_min_confluences": 2, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.382, "ema200_distance_atr": 0.200},
-    {"cluster_min_confluences": 2, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.382, "ema200_distance_atr": 0.382},
-    {"cluster_min_confluences": 2, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.200},
-    {"cluster_min_confluences": 2, "cluster_atr_tolerance": 1.0, "omega_phi_entry": 0.500, "ema200_distance_atr": 0.382},
 ]
 
 BASE_PARAMS = PhiParams(

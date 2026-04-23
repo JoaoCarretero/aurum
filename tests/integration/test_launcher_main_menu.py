@@ -171,8 +171,8 @@ def test_menu_main_bloomberg_realigns_tile_slots_on_resize(app, monkeypatch):
     monkeypatch.setattr(app._menu_canvas, "winfo_width", lambda: 1400)
     monkeypatch.setattr(app._menu_canvas, "winfo_height", lambda: 900)
     app._render_main_menu()
-    assert app._active_tile_slots[0][1:] == (292, 316)
-    assert app._active_cd_center == (700, 436)
+    assert app._active_tile_slots[0][1:] == (307, 267)
+    assert app._active_cd_center == (700, 450)
 
 
 def test_focus_moves_with_arrow_right(app):
@@ -286,8 +286,11 @@ def test_data_center_reentry_reuses_cached_screen(app):
 
 
 def test_engine_logs_routes_via_screen_manager(app):
+    # _data_engines agora aponta pro wrapper unificado "engines"
+    # (chip bar HISTORY/LIVE/LOGS). engine_logs continua registrado
+    # mas nao e mais o destino direto do menu DATA CENTER.
     app._data_engines()
-    assert app.screens.current_name() == "engine_logs"
+    assert app.screens.current_name() == "engines"
     assert app.main.winfo_manager() == ""
 
 

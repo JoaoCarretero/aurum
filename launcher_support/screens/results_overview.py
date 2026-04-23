@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import tkinter as tk
 
+from core.ui.scroll import bind_mousewheel
 from core.ui.ui_palette import (
     AMBER, AMBER_D,
     BG, BG2, BG3,
@@ -47,18 +48,7 @@ def render(app, parent):
     canvas.pack(side="left", fill="both", expand=True)
     sb.pack(side="right", fill="y")
 
-    # Scroll only while cursor is over this canvas (no global bleed-through)
-    def _on_enter(_e=None, c=canvas):
-        c.bind_all("<MouseWheel>",
-                   lambda ev: c.yview_scroll(-1 * (ev.delta // 120), "units"))
-
-    def _on_leave(_e=None, c=canvas):
-        try:
-            c.unbind_all("<MouseWheel>")
-        except Exception:
-            pass
-    canvas.bind("<Enter>", _on_enter)
-    canvas.bind("<Leave>", _on_leave)
+    bind_mousewheel(canvas)
 
     pad = 24
 

@@ -74,6 +74,12 @@ _TILE_REGISTRY: dict[str, dict] = {}
 
 def _clear_tile_registry() -> None:
     _TILE_REGISTRY.clear()
+    # _STATUSBAR refs apontam pra widgets que tb sao destruidos no
+    # render() parent.destroy() loop. Limpar junto evita stale refs.
+    try:
+        _STATUSBAR.clear()
+    except NameError:
+        pass
 
 
 def _read_vps_status() -> tuple[bool, str]:
@@ -219,18 +225,85 @@ def _fmt_age(ts):
 
 # ── UI PRIMITIVES ────────────────────────────────────────────
 
-def _draw_spark(canvas, values, color=AMBER, w=80, h=14):
+_AREA_FILL_AMBER = "#4a3d23"  # amber muted pra area fill (AMBER * 0.35 sobre PANEL)
+_AREA_FILL_GREEN = "#3a4a28"
+_AREA_FILL_RED   = "#4a2a24"
+
+
+def _area_fill_for(color: str) -> str:
+    if color == GREEN:
+        return _AREA_FILL_GREEN
+    if color == RED:
+        return _AREA_FILL_RED
+    return _AREA_FILL_AMBER
+
+
+def _draw_spark(canvas, values, color=AMBER, w=80, h=14,
+                show_bounds: bool = False, fill_area: bool = True):
+    """Sparkline line chart com area fill opcional abaixo da linha.
+
+    ``fill_area``: True desenha polygon muted abaixo da linha (vibe
+    TradingView). Default True pros tiles normais.
+    ``show_bounds``: linhas dotted no min/max. Default False (bounds
+    poluem em canvas pequeno).
+    """
     canvas.delete("all")
-    if not values or len(values) < 2: return
+    if not values or len(values) < 2:
+        return
     mn, mx = min(values), max(values)
     rng = mx - mn if mx > mn else 1.0
+
+    if show_bounds and h >= 18:
+        canvas.create_line(2, 2, w - 2, 2, fill=DIM2, dash=(1, 3))
+        canvas.create_line(2, h - 2, w - 2, h - 2, fill=DIM2, dash=(1, 3))
+
     pts = []
     for i, v in enumerate(values):
         x = 2 + (w - 4) * (i / (len(values) - 1))
         y = h - 2 - (h - 4) * ((v - mn) / rng)
         pts.append(x); pts.append(y)
-    if len(pts) >= 4:
-        canvas.create_line(*pts, fill=color, width=1)
+    if len(pts) < 4:
+        return
+
+    # Area fill polygon — da linha ate o piso, cor muted.
+    if fill_area and h >= 10:
+        poly = [pts[0], h - 1] + pts + [pts[-2], h - 1]
+        canvas.create_polygon(*poly, fill=_area_fill_for(color), outline="")
+
+    # Smooth=True da uma curva Catmull-Rom — anti-alias visual barato.
+    canvas.create_line(*pts, fill=color, width=1,
+                       smooth=True if len(values) <= 60 else False)
+
+
+def _draw_spark_candles(canvas, values, w=80, h=14, show_bounds: bool = True):
+    """Mini-candle sparkline — cada ponto e uma barra vertical verde (close
+    maior que anterior) ou vermelha (menor). Vibe Bloomberg OHLC density.
+
+    Cada barra ocupa da linha do close anterior ate o atual — altura
+    relativa no range total da serie.
+    """
+    canvas.delete("all")
+    if not values or len(values) < 2:
+        return
+    mn, mx = min(values), max(values)
+    rng = mx - mn if mx > mn else 1.0
+    n = len(values)
+    bw = max(1.0, (w - 4) / n - 0.5)
+
+    if show_bounds and h >= 12:
+        canvas.create_line(2, 2, w - 2, 2, fill=DIM2, dash=(1, 2))
+        canvas.create_line(2, h - 2, w - 2, h - 2, fill=DIM2, dash=(1, 2))
+
+    for i in range(1, n):
+        v, p = values[i], values[i - 1]
+        fill = GREEN if v >= p else RED
+        x = 2 + (w - 4) * (i / (n - 1))
+        y1 = h - 2 - (h - 4) * ((v - mn) / rng)
+        y2 = h - 2 - (h - 4) * ((p - mn) / rng)
+        canvas.create_rectangle(
+            x - bw / 2, min(y1, y2), x + bw / 2, max(y1, y2) + 1,
+            fill=fill, outline="",
+        )
 
 
 def _attach_hover(widget: tk.Widget, default_border: str = BORDER,
@@ -280,12 +353,13 @@ def _clickable_bg_row(parent, open_fn=None) -> tk.Frame:
 def _tile(parent, label, value, change="", change_color=WHITE,
           series=None, spark_color=AMBER, metric_key: str | None = None,
           fmt: str | None = None):
-    """Render one metric tile — stat-block style, no sparkline.
+    """Render one metric tile — sem sparkline, chart so no click.
 
-    ``series`` / ``spark_color`` kept in the signature for call-site
-    compatibility but ignored: v6 grimoire palette drops sparklines to
-    cut visual pollution. Registry stores ``spark=None`` so tick_update
-    skips the canvas-refresh branch cleanly.
+    Layout: label + valor + change%. Tile inteiro e clicavel e abre
+    popup com chart detalhado quando ha metric_key.
+
+    ``series`` e ``spark_color`` mantidos na assinatura pra back-compat
+    mas agora ignorados (nao ha mais canvas inline).
     """
     f = tk.Frame(parent, bg=PANEL,
                  highlightbackground=BORDER, highlightthickness=1)
@@ -303,10 +377,9 @@ def _tile(parent, label, value, change="", change_color=WHITE,
         change_lbl = tk.Label(body, text=change, font=(FONT, 7, "bold"),
                                fg=change_color, bg=PANEL, anchor="e")
         change_lbl.pack(side="right", padx=2)
+
     _attach_hover(f)
 
-    # Register this tile so tick_update can re-target its labels without
-    # rebuilding the layout. spark=None → tick_update skips spark branch.
     if metric_key:
         _TILE_REGISTRY[metric_key] = {
             "value": value_lbl,
@@ -314,8 +387,359 @@ def _tile(parent, label, value, change="", change_color=WHITE,
             "spark": None,
             "fmt": fmt,
             "spark_color": spark_color,
+            "last_val": None,
         }
+        _mk, _lbl, _fmt = metric_key, label, fmt
+
+        def _click(_e=None, m=_mk, l=_lbl, fm=_fmt):
+            _open_tile_detail(m, l, fm)
+
+        f.configure(cursor="hand2")
+        f.bind("<Button-1>", _click)
+        for child in (value_lbl, change_lbl):
+            if child is None:
+                continue
+            try:
+                child.configure(cursor="hand2")
+                child.bind("<Button-1>", _click)
+            except Exception:
+                pass
     return f
+
+
+# ── NORTH-STAR WATCHLIST + STATUS BAR state ──────────────────
+# Refs globais pra tick_update refrescar o statusbar em place, sem
+# rebuild. Populados em _render_northstar / _render_statusbar.
+_STATUSBAR: dict = {}
+_TICK_STATS = {"count": 0, "last_changed": 0, "last_tick_at": None}
+
+
+def _render_northstar(parent) -> None:
+    """Ticker tape compacto no topo — 5 metricas (BTC/ETH/S&P/DXY/BTC.D)
+    em 1 linha so. Cada cell: [LABEL] VALUE +CHG%, tudo horizontal.
+
+    ~24px altura total (era 90px+ com candle). Click abre popup de drill.
+    Registra em _TILE_REGISTRY pra tick_update refrescar automatico.
+    """
+    from macro_brain.persistence.store import macro_series_many
+
+    bar = tk.Frame(parent, bg=BG2,
+                   highlightbackground=AMBER, highlightthickness=1)
+    bar.pack(fill="x", pady=(3, 2))
+
+    specs = [
+        ("BTC_SPOT",       "BTC",    "${:,.0f}"),
+        ("ETH_SPOT",       "ETH",    "${:,.2f}"),
+        ("SP500",          "S&P",    "{:,.2f}"),
+        ("DXY",            "DXY",    "{:.2f}"),
+        ("BTC_DOMINANCE",  "BTC.D",  "{:.2f}%"),
+    ]
+
+    metrics_keys = [m for m, _, _ in specs]
+    try:
+        series_map = macro_series_many(metrics_keys)
+    except Exception:
+        series_map = {}
+
+    for idx, (metric, lbl_text, fmt) in enumerate(specs):
+        s = series_map.get(metric) or []
+        val = s[-1].get("value") if s else None
+        prev = s[-2].get("value") if len(s) > 1 else None
+
+        # Separator vertical entre cells (exceto primeira)
+        if idx > 0:
+            tk.Frame(bar, bg=BORDER, width=1).pack(
+                side="left", fill="y", pady=3)
+
+        cell = tk.Frame(bar, bg=BG2, cursor="hand2")
+        cell.pack(side="left", fill="x", expand=True, padx=0, pady=2)
+
+        lbl = tk.Label(cell, text=lbl_text, font=(FONT, 7, "bold"),
+                       fg=AMBER, bg=BG2, cursor="hand2")
+        lbl.pack(side="left", padx=(10, 4))
+
+        vs = fmt.format(val) if val is not None else "—"
+        vlbl = tk.Label(cell, text=vs, font=(FONT, 9, "bold"),
+                        fg=WHITE, bg=BG2, cursor="hand2")
+        vlbl.pack(side="left")
+
+        pct = _pct_change(val, prev) if val is not None else None
+        ch = f"{pct:+.2f}%" if pct is not None else ""
+        cc = GREEN if (pct or 0) > 0 else (RED if (pct or 0) < 0 else DIM)
+        chlbl = tk.Label(cell, text=ch, font=(FONT, 7, "bold"),
+                         fg=cc, bg=BG2, cursor="hand2")
+        chlbl.pack(side="left", padx=(6, 10))
+
+        _TILE_REGISTRY[metric] = {
+            "value": vlbl,
+            "change": chlbl,
+            "spark": None,
+            "fmt": fmt,
+            "spark_color": AMBER,
+            "last_val": val if isinstance(val, (int, float)) else None,
+            "north_star": True,
+        }
+
+        # Click-to-expand — cell inteira abre detail popup.
+        _mk, _lbl_txt, _fmt = metric, lbl_text, fmt
+        def _click(_e=None, m=_mk, l=_lbl_txt, fm=_fmt):
+            _open_tile_detail(m, l, fm)
+        for w in (cell, lbl, vlbl, chlbl):
+            w.bind("<Button-1>", _click)
+
+
+def _render_statusbar(parent) -> None:
+    """Barra fixa no bottom: ● LIVE · 47 tiles · last tick Xs ago · clock.
+
+    Refs armazenadas em _STATUSBAR module-level pra tick_update refrescar.
+    """
+    bar = tk.Frame(parent, bg=BG2,
+                   highlightbackground=BORDER, highlightthickness=1)
+    bar.pack(fill="x", side="bottom", pady=(2, 0))
+
+    dot = tk.Label(bar, text="●", font=(FONT, 9, "bold"),
+                   fg=GREEN, bg=BG2)
+    dot.pack(side="left", padx=(8, 4), pady=2)
+    status = tk.Label(bar, text="LIVE", font=(FONT, 7, "bold"),
+                      fg=WHITE, bg=BG2)
+    status.pack(side="left", padx=2, pady=2)
+
+    def _sep():
+        return tk.Label(bar, text="│", font=(FONT, 7),
+                        fg=DIM, bg=BG2)
+
+    _sep().pack(side="left", padx=4)
+    tiles_lbl = tk.Label(bar, text="0 tiles", font=(FONT, 7),
+                         fg=DIM2, bg=BG2)
+    tiles_lbl.pack(side="left", padx=2)
+
+    _sep().pack(side="left", padx=4)
+    tick_lbl = tk.Label(bar, text="no tick yet", font=(FONT, 7),
+                        fg=DIM2, bg=BG2)
+    tick_lbl.pack(side="left", padx=2)
+
+    clock_lbl = tk.Label(bar, text="—", font=(FONT, 7, "bold"),
+                         fg=AMBER, bg=BG2)
+    clock_lbl.pack(side="right", padx=8)
+
+    tk.Label(bar, text="aurum macro", font=(FONT, 6),
+             fg=DIM, bg=BG2).pack(side="right", padx=(0, 4))
+
+    _STATUSBAR.update({
+        "dot": dot, "status": status, "tiles": tiles_lbl,
+        "tick": tick_lbl, "clock": clock_lbl,
+    })
+
+
+def _statusbar_tick(changed: int) -> None:
+    """Chamado por tick_update apos cada refresh. Atualiza counters +
+    clock UTC in-place."""
+    if not _STATUSBAR:
+        return
+    now = datetime.utcnow()
+    try:
+        clock = _STATUSBAR.get("clock")
+        if clock and clock.winfo_exists():
+            clock.configure(text=now.strftime("%H:%M:%S UTC"))
+        tiles = _STATUSBAR.get("tiles")
+        if tiles and tiles.winfo_exists():
+            tiles.configure(text=f"{len(_TILE_REGISTRY)} tiles")
+        tick = _STATUSBAR.get("tick")
+        if tick and tick.winfo_exists():
+            if changed > 0:
+                tick.configure(
+                    text=f"{changed} chg · just now", fg=GREEN,
+                )
+            else:
+                tick.configure(
+                    text=f"stable · {_TICK_STATS.get('count', 0)} ticks",
+                    fg=DIM2,
+                )
+    except Exception:
+        pass
+
+
+def _draw_detail_chart(canvas, values, color=AMBER, w=420, h=260,
+                       fmt: str | None = None):
+    """Detail line chart estilo TradingView — area fill + grid X/Y +
+    last-value highlight dashed + Y-axis labels (max/last/min).
+
+    Proporcao alvo ~1.6:1 (nao esticado). Margem direita 48px pra labels.
+    """
+    canvas.delete("all")
+    if not values or len(values) < 2:
+        return
+    mn, mx = min(values), max(values)
+    rng = mx - mn if mx > mn else 1.0
+    pad_l, pad_r, pad_t, pad_b = 10, 50, 10, 10
+    plot_w = w - pad_l - pad_r
+    plot_h = h - pad_t - pad_b
+    last = values[-1]
+
+    # Grid Y — 4 linhas horizontais dotted
+    for i in range(1, 4):
+        y = pad_t + plot_h * i / 4
+        canvas.create_line(pad_l, y, w - pad_r, y,
+                           fill=BORDER, dash=(1, 4))
+    # Grid X — 4 linhas verticais dotted
+    for i in range(1, 4):
+        x = pad_l + plot_w * i / 4
+        canvas.create_line(x, pad_t, x, h - pad_b,
+                           fill=BORDER, dash=(1, 4))
+
+    # Pontos da linha
+    pts = []
+    for i, v in enumerate(values):
+        x = pad_l + plot_w * (i / (len(values) - 1))
+        y = pad_t + plot_h * (1 - (v - mn) / rng)
+        pts.append(x); pts.append(y)
+
+    # Area fill abaixo da linha
+    if len(pts) >= 4:
+        poly = [pts[0], h - pad_b] + pts + [pts[-2], h - pad_b]
+        canvas.create_polygon(*poly, fill=_area_fill_for(color),
+                              outline="")
+        canvas.create_line(*pts, fill=color, width=2,
+                           smooth=True if len(values) <= 60 else False)
+
+    # Last value horizontal dashed highlight (atravessa plot area)
+    last_y = pad_t + plot_h * (1 - (last - mn) / rng)
+    canvas.create_line(pad_l, last_y, w - pad_r, last_y,
+                       fill=DIM, dash=(2, 3))
+
+    # Dot no ultimo ponto
+    last_x = pad_l + plot_w
+    canvas.create_oval(last_x - 3, last_y - 3,
+                       last_x + 3, last_y + 3,
+                       fill=color, outline=WHITE, width=1)
+
+    # Y-axis labels (direita)
+    def _lbl(y, text, fg, bold=False):
+        font = (FONT, 7, "bold") if bold else (FONT, 7)
+        canvas.create_text(w - pad_r + 5, y, anchor="w",
+                           text=text, font=font, fill=fg)
+
+    _lbl(pad_t,           _fmt_val(mx, fmt), DIM)
+    _lbl(last_y,          _fmt_val(last, fmt), color, bold=True)
+    _lbl(h - pad_b,       _fmt_val(mn, fmt), DIM)
+
+
+def _open_tile_detail(metric_key: str, label: str,
+                     fmt: str | None = None) -> None:
+    """Click-to-expand popup (Toplevel 460x340) com line chart area-filled
+    + grid X/Y + last-value highlight. Proporcao 1.6:1, nao esticado.
+    """
+    try:
+        from macro_brain.persistence.store import macro_series_many
+        s = (macro_series_many([metric_key]) or {}).get(metric_key) or []
+        vals = [
+            r["value"] for r in s[-100:]
+            if isinstance(r.get("value"), (int, float))
+        ]
+
+        top = tk.Toplevel()
+        top.title(f"{label} — {metric_key}")
+        top.configure(bg=BG)
+        top.geometry("460x340")
+
+        tk.Label(top, text=f"  [ {label} · {metric_key} ]",
+                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG,
+                 anchor="w").pack(fill="x", padx=10, pady=(10, 4))
+
+        cv = tk.Canvas(top, bg=PANEL, width=420, height=260,
+                       highlightthickness=1,
+                       highlightbackground=BORDER)
+        cv.pack(padx=10, pady=2)
+
+        if len(vals) >= 2:
+            # Direction-colored line: green se tendencia up, red se down
+            line_color = AMBER
+            if len(vals) >= 2:
+                delta = vals[-1] - vals[0]
+                if delta > 0:
+                    line_color = GREEN
+                elif delta < 0:
+                    line_color = RED
+            cv.after(
+                30,
+                lambda c=line_color: _draw_detail_chart(
+                    cv, vals, color=c, w=420, h=260, fmt=fmt,
+                ),
+            )
+            avg = sum(vals) / len(vals)
+            foot_text = (
+                f"  n={len(vals)}   "
+                f"min {_fmt_val(min(vals), fmt)}   "
+                f"avg {_fmt_val(avg, fmt)}   "
+                f"max {_fmt_val(max(vals), fmt)}   "
+                f"last {_fmt_val(vals[-1], fmt)}"
+            )
+        else:
+            foot_text = f"  {label}: sem dados suficientes (n={len(vals)})"
+
+        tk.Label(top, text=foot_text, font=(FONT, 7),
+                 fg=DIM, bg=BG, anchor="w").pack(
+            fill="x", padx=10, pady=(6, 2))
+
+        tk.Label(top, text="  esc · close",
+                 font=(FONT, 6), fg=DIM2, bg=BG,
+                 anchor="w").pack(fill="x", padx=10, pady=(0, 6))
+
+        top.bind("<Escape>", lambda _e: top.destroy())
+        top.focus_set()
+    except Exception as exc:
+        log.warning("open tile detail failed: %s", exc)
+
+
+def _fmt_val(v, fmt: str | None) -> str:
+    if fmt:
+        try:
+            return fmt.format(v)
+        except (ValueError, TypeError):
+            pass
+    return f"{v:.4g}"
+
+
+def _lerp_hex(c1: str, c2: str, t: float) -> str:
+    """Linear-interpolate dois hex colors (#rrggbb). t em [0,1]."""
+    try:
+        r1, g1, b1 = int(c1[1:3], 16), int(c1[3:5], 16), int(c1[5:7], 16)
+        r2, g2, b2 = int(c2[1:3], 16), int(c2[3:5], 16), int(c2[5:7], 16)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception:
+        return c2
+
+
+def _flash_label(lbl: tk.Label, up: bool, steps: int = 8,
+                 dur_ms: int = 480, base_bg: str = PANEL) -> None:
+    """Fade gradient no bg do value_lbl: verde/vermelho intenso → base_bg,
+    em ``steps`` quadros distribuidos em ``dur_ms``.
+
+    base_bg default PANEL (tiles normais); north-star passa BG2.
+    """
+    try:
+        if not lbl.winfo_exists():
+            return
+        src_bg = GREEN if up else RED
+        src_fg = BG
+
+        def _step(i: int = 0):
+            if not lbl.winfo_exists():
+                return
+            t = i / steps
+            lbl.configure(
+                bg=_lerp_hex(src_bg, base_bg, t),
+                fg=_lerp_hex(src_fg, WHITE, t),
+            )
+            if i < steps:
+                lbl.after(dur_ms // steps, lambda: _step(i + 1))
+
+        _step()
+    except Exception:
+        pass
 
 
 def _grid(parent, data, specs, spark_color=AMBER):
@@ -372,7 +796,9 @@ def tick_update() -> int:
         return 0
 
     try:
-        series_map = macro_series_many(list(live_refs))
+        # tail=2: so precisamos de latest + prev pra value label, change%,
+        # e flash direction. Evita varrer historia inteira a cada 3s.
+        series_map = macro_series_many(list(live_refs), tail=2)
     except Exception:
         return 0
 
@@ -395,6 +821,19 @@ def tick_update() -> int:
 
         try:
             if value_lbl.cget("text") != vs:
+                # Flash verde/vermelho antes de atualizar, pra sinalizar
+                # direcao do movimento (tipo TradingView tape).
+                last_val = refs.get("last_val")
+                if last_val is not None and isinstance(val, (int, float)):
+                    try:
+                        base_bg = BG2 if refs.get("north_star") else PANEL
+                        if val > last_val:
+                            _flash_label(value_lbl, up=True, base_bg=base_bg)
+                        elif val < last_val:
+                            _flash_label(value_lbl, up=False, base_bg=base_bg)
+                    except Exception:
+                        pass
+                refs["last_val"] = val if isinstance(val, (int, float)) else last_val
                 value_lbl.configure(text=vs)
                 changed += 1
         except Exception:
@@ -415,18 +854,32 @@ def tick_update() -> int:
             except Exception:
                 pass
 
-        # Spark series
+        # Spark series — default line com area fill (TradingView-vibe).
+        # Pra forcar candles num tile especifico, setar spark_style='candles'
+        # no registry.
         spark_cv = refs.get("spark")
         if spark_cv is not None:
             try:
                 if spark_cv.winfo_exists():
                     vals = [r["value"] for r in s[-30:]]
                     w = spark_cv.winfo_width() or 80
-                    _draw_spark(spark_cv, vals,
-                                 color=refs.get("spark_color", AMBER),
-                                 w=w, h=14)
+                    h = spark_cv.winfo_height() or 18
+                    style = refs.get("spark_style", "line")
+                    if style == "candles":
+                        _draw_spark_candles(spark_cv, vals, w=w, h=h)
+                    else:
+                        _draw_spark(
+                            spark_cv, vals,
+                            color=refs.get("spark_color", AMBER),
+                            w=w, h=h, fill_area=True,
+                        )
             except Exception:
                 pass
+
+    _TICK_STATS["count"] = _TICK_STATS.get("count", 0) + 1
+    _TICK_STATS["last_changed"] = changed
+    _TICK_STATS["last_tick_at"] = datetime.utcnow()
+    _statusbar_tick(changed)
     return changed
 
 
@@ -497,15 +950,27 @@ def _desk_banner(parent, metrics: dict, specs: list[tuple[str, str, str]]) -> No
                 change_color = GREEN if pct > 0 else (RED if pct < 0 else DIM)
 
         tile = tk.Frame(row, bg=BG2,
-                        highlightbackground=BORDER, highlightthickness=1)
+                        highlightbackground=BORDER, highlightthickness=1,
+                        cursor="hand2")
         tile.pack(side="left", fill="both", expand=True, padx=1)
         _attach_hover(tile)
-        tk.Label(tile, text=label, font=(FONT, 6, "bold"), fg=DIM2, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(4, 0))
-        tk.Label(tile, text=value_txt, font=(FONT, 10, "bold"), fg=WHITE, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6)
-        tk.Label(tile, text=change_txt, font=(FONT, 7, "bold"), fg=change_color, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(0, 4))
+        lbl_w = tk.Label(tile, text=label, font=(FONT, 6, "bold"),
+                         fg=DIM2, bg=BG2, anchor="w", cursor="hand2")
+        lbl_w.pack(fill="x", padx=6, pady=(4, 0))
+        val_w = tk.Label(tile, text=value_txt, font=(FONT, 10, "bold"),
+                         fg=WHITE, bg=BG2, anchor="w", cursor="hand2")
+        val_w.pack(fill="x", padx=6)
+        chg_w = tk.Label(tile, text=change_txt, font=(FONT, 7, "bold"),
+                         fg=change_color, bg=BG2, anchor="w",
+                         cursor="hand2")
+        chg_w.pack(fill="x", padx=6, pady=(0, 4))
+
+        # Click-to-expand — padrao 10Y: click no tile abre chart popup.
+        _mk, _lbl_txt, _fmt = metric, label, fmt
+        def _click(_e=None, m=_mk, l=_lbl_txt, fm=_fmt):
+            _open_tile_detail(m, l, fm)
+        for w in (tile, lbl_w, val_w, chg_w):
+            w.bind("<Button-1>", _click)
 
 
 def _bind_scroll_canvas(canvas: tk.Canvas, window_id: int, pad_x: int = 0) -> None:
@@ -518,26 +983,13 @@ def _bind_scroll_canvas(canvas: tk.Canvas, window_id: int, pad_x: int = 0) -> No
 
 
 def _wire_scroll_wheel(canvas: tk.Canvas, targets: list[tk.Widget] | None = None) -> None:
-    def _on_wheel(event):
-        try:
-            canvas.yview_scroll(-1 * (event.delta // 120), "units")
-        except Exception:
-            pass
+    """Delegate pro helper compartilhado em core.ui.scroll.
 
-    def _enter(_event=None):
-        canvas.bind_all("<MouseWheel>", _on_wheel)
-
-    def _leave(_event=None):
-        try:
-            canvas.unbind_all("<MouseWheel>")
-        except Exception:
-            pass
-
-    canvas.bind("<Enter>", _enter)
-    canvas.bind("<Leave>", _leave)
-    for target in targets or []:
-        target.bind("<Enter>", _enter)
-        target.bind("<Leave>", _leave)
+    targets mantido na assinatura pra back-compat (ancestry check cobre).
+    """
+    del targets
+    from core.ui.scroll import bind_mousewheel
+    bind_mousewheel(canvas)
 
 
 def _render_bot_slots(parent, network: str,
@@ -587,7 +1039,7 @@ def _cot_matrix(parent, rows: list[tuple]):
     Each metric may be None. Latest value is pulled from macro_data;
     green/red tint based on sign, dim when missing.
     """
-    from macro_brain.persistence.store import latest_macro, latest_macro_many
+    from macro_brain.persistence.store import latest_macro_many
 
     metrics = [m for _label, nc, sw, mm in rows for m in (nc, sw, mm) if m]
     latest_map = latest_macro_many(metrics, n=1)
@@ -622,35 +1074,41 @@ def _cot_matrix(parent, rows: list[tuple]):
 
     for label, nc, sw, mm in rows:
         metrics = [m for m in (nc, sw, mm) if m]
-        def _open_cot_detail(row_label=label, metric_names=metrics):
-            lines = [row_label]
-            for metric_name in metric_names:
-                lat = latest_macro(metric_name, n=5)
-                if not lat:
-                    lines.append(f"{metric_name}: no data")
-                    continue
-                values = ", ".join(f"{float(r['value']):+,.0f}" for r in lat[:3])
-                lines.append(f"{metric_name}: {values}")
-            try:
-                from tkinter import messagebox
-                messagebox.showinfo("COT detail", "\n".join(lines))
-            except Exception:
-                pass
+        primary = metrics[0] if metrics else None
 
-        row = _clickable_bg_row(shell, open_fn=_open_cot_detail if metrics else None)
+        # Row-level click: abre chart do metric primario (NC NET) — padrao 10Y.
+        row_open = None
+        if primary:
+            def row_open(pm=primary, pl=label):
+                _open_tile_detail(pm, pl, "{:+,.0f}")
+        row = _clickable_bg_row(shell, open_fn=row_open)
         row.pack(fill="x", padx=2, pady=1)
 
         tk.Label(row, text=label, font=(FONT, 8, "bold"),
                  fg=WHITE, bg=row.cget("bg"), width=14, anchor="w",
                  padx=4).pack(side="left")
-        for metric, w in [(nc, 13), (sw, 14), (mm, 14)]:
+        # Cada celula clicavel individualmente — click no ticker abre
+        # chart daquele metric especifico.
+        for metric, col_label, w in [
+            (nc, "NC NET",       13),
+            (sw, "SWAP · BANKS", 14),
+            (mm, "MM · FUNDS",   14),
+        ]:
             s, c = _val(metric)
-            tk.Label(row, text=s, font=(FONT, 8),
-                     fg=c, bg=row.cget("bg"), width=w, anchor="e",
-                     padx=4).pack(side="left")
+            cell = tk.Label(row, text=s, font=(FONT, 8),
+                            fg=c, bg=row.cget("bg"), width=w, anchor="e",
+                            padx=4,
+                            cursor=("hand2" if metric else "arrow"))
+            cell.pack(side="left")
+            if metric:
+                _mk, _cl = metric, f"{label} · {col_label}"
+                cell.bind("<Button-1>",
+                          lambda _e, m=_mk, l=_cl: _open_tile_detail(
+                              m, l, "{:+,.0f}"))
         if metrics:
             tk.Label(row, text="OPEN", font=(FONT, 6, "bold"),
-                     fg=AMBER, bg=row.cget("bg"), width=8, anchor="e").pack(side="right", padx=4)
+                     fg=AMBER, bg=row.cget("bg"), width=8,
+                     anchor="e").pack(side="right", padx=4)
 
 
 def _render_calendar_list(parent, title: str, only_us: bool = False):
@@ -798,340 +1256,6 @@ def _render_institutional_flows(parent, title: str):
 
 # ── TAB RENDERERS ────────────────────────────────────────────
 
-def _render_markets_tab(parent):
-    """USA desk — rates, equities, macro, COT, institutions and US news."""
-    _section(parent, "US DESK · MARKET NOW", pady_top=(0, 0))
-    left, right = _two_col(parent)
-    rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
-                         "YIELD_SPREAD_10_2", "FED_RATE"])
-    _section(left, "RATES · CURVE", pady_top=(0, 0))
-    _grid(left, rates, [
-        ("US13W",             "13W",     "{:.3f}%"),
-        ("US5Y",              "5Y",      "{:.3f}%"),
-        ("US10Y",             "10Y",     "{:.3f}%"),
-        ("US30Y",             "30Y",     "{:.3f}%"),
-        ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
-        ("FED_RATE",          "FED",     "{:.2f}%"),
-    ])
-
-    fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
-                      "DXY_BROAD"])
-    _section(right, "DOLLAR · FX", pady_top=(0, 0))
-    _grid(right, fx, [
-        ("DXY",       "DXY",     "{:.2f}"),
-        ("EUR_USD",   "EUR/USD", "{:.4f}"),
-        ("USD_JPY",   "USD/JPY", "{:.2f}"),
-        ("GBP_USD",   "GBP/USD", "{:.4f}"),
-        ("USD_CNY",   "USD/CNY", "{:.4f}"),
-        ("DXY_BROAD", "BROAD",   "{:.2f}"),
-    ])
-
-    left2, right2 = _two_col(parent)
-    eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
-                     "GOLD", "WTI_OIL", "COPPER"])
-    _section(left2, "EQUITIES · RISK", pady_top=(0, 0))
-    _grid(left2, eq, [
-        ("SP500",  "S&P 500", "{:,.0f}"),
-        ("NASDAQ", "NASDAQ",  "{:,.0f}"),
-        ("VIX",    "VIX",     "{:.2f}"),
-        ("GOLD",   "GOLD",    "${:,.0f}"),
-        ("WTI_OIL","WTI",     "${:.2f}"),
-        ("COPPER", "COPPER",  "${:.3f}"),
-    ])
-    _grid(left2, eq, [
-        ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
-    ])
-
-    econ = _macro_map([
-        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
-        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
-        "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
-    ], n=30)
-    _section(right2, "MACRO SNAPSHOT · FRED", pady_top=(0, 0))
-    _grid(right2, econ, [
-        ("CPI_US",             "CPI",          "{:.2f}"),
-        ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
-        ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
-        ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
-        ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
-        ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
-        ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
-        ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
-    ])
-    _grid(right2, econ, [
-        ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
-        ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
-    ])
-
-    _section(parent, "US DESK · POSITIONING")
-    _cot_matrix(parent, [
-        ("DXY",       "DXY_NET_LONGS",       None,               None),
-        ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
-        ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
-        ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
-        ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
-        ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
-        ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
-        ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
-        ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
-    ])
-
-    _render_institutional_flows(parent, "INSTITUTIONAL FLOW")
-    _render_calendar_list(parent, "CALENDAR · FED · LABOR · INFLATION", only_us=True)
-
-    _render_news_list(parent, "US NEWSFLOW · FED · TREASURY · BANKS · STREET",
-                      allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
-                      us_only=True)
-def _render_markets_tab_v2(parent):
-    """USA desk reorganized into visual shells without changing data scope."""
-    overview = _panel_shell(parent, pady=(0, 6))
-    _section(overview, "US DESK · SNAPSHOT", pady_top=(0, 0))
-    snapshot = _macro_map([
-        "SP500", "US10Y", "DXY", "FED_RATE", "VIX", "CPI_US",
-    ])
-    _desk_banner(overview, snapshot, [
-        ("SP500",    "S&P 500", "{:,.0f}"),
-        ("US10Y",    "US10Y",   "{:.3f}%"),
-        ("DXY",      "DXY",     "{:.2f}"),
-        ("FED_RATE", "FED",     "{:.2f}%"),
-        ("VIX",      "VIX",     "{:.2f}"),
-        ("CPI_US",   "CPI",     "{:.2f}"),
-    ])
-    tk.Label(overview,
-             text="  Price first, then curve and macro, then positioning, then institutional flow and news.",
-             font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w").pack(fill="x", padx=2, pady=(0, 2))
-
-    _section(parent, "US DESK · MARKET NOW", pady_top=(0, 0))
-    market_shell = _panel_shell(parent, pady=(0, 6))
-    left, right = _two_col(market_shell)
-    rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
-                        "YIELD_SPREAD_10_2", "FED_RATE"])
-    _section(left, "RATES · CURVE", pady_top=(0, 0))
-    _grid(left, rates, [
-        ("US13W",             "13W",     "{:.3f}%"),
-        ("US5Y",              "5Y",      "{:.3f}%"),
-        ("US10Y",             "10Y",     "{:.3f}%"),
-        ("US30Y",             "30Y",     "{:.3f}%"),
-        ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
-        ("FED_RATE",          "FED",     "{:.2f}%"),
-    ])
-
-    fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
-                     "DXY_BROAD"])
-    _section(right, "DOLLAR · FX", pady_top=(0, 0))
-    _grid(right, fx, [
-        ("DXY",       "DXY",     "{:.2f}"),
-        ("EUR_USD",   "EUR/USD", "{:.4f}"),
-        ("USD_JPY",   "USD/JPY", "{:.2f}"),
-        ("GBP_USD",   "GBP/USD", "{:.4f}"),
-        ("USD_CNY",   "USD/CNY", "{:.4f}"),
-        ("DXY_BROAD", "BROAD",   "{:.2f}"),
-    ])
-
-    left2, right2 = _two_col(market_shell)
-    eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
-                     "GOLD", "WTI_OIL", "COPPER"])
-    _section(left2, "EQUITIES · RISK", pady_top=(0, 0))
-    _grid(left2, eq, [
-        ("SP500",  "S&P 500", "{:,.0f}"),
-        ("NASDAQ", "NASDAQ",  "{:,.0f}"),
-        ("VIX",    "VIX",     "{:.2f}"),
-        ("GOLD",   "GOLD",    "${:,.0f}"),
-        ("WTI_OIL","WTI",     "${:.2f}"),
-        ("COPPER", "COPPER",  "${:.3f}"),
-    ])
-    _grid(left2, eq, [
-        ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
-    ])
-
-    econ = _macro_map([
-        "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
-        "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
-        "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
-    ], n=30)
-    _section(right2, "MACRO SNAPSHOT · FRED", pady_top=(0, 0))
-    _grid(right2, econ, [
-        ("CPI_US",             "CPI",          "{:.2f}"),
-        ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
-        ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
-        ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
-        ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
-        ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
-        ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
-        ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
-    ])
-    _grid(right2, econ, [
-        ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
-        ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
-    ])
-
-    _section(parent, "US DESK · POSITIONING")
-    positioning_shell = _panel_shell(parent, pady=(0, 6))
-    tk.Label(positioning_shell,
-             text="  CFTC futures positioning for dollar, rates, index futures and key US-linked macro trades.",
-             font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w").pack(fill="x", padx=2, pady=(0, 2))
-    _cot_matrix(positioning_shell, [
-        ("DXY",       "DXY_NET_LONGS",       None,               None),
-        ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
-        ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
-        ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
-        ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
-        ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
-        ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
-        ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
-        ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
-    ])
-
-    flow_shell = _panel_shell(parent, pady=(0, 6))
-    _section(flow_shell, "US DESK · FLOW WATCH", pady_top=(0, 0))
-    flow_left, flow_right = _two_col(flow_shell)
-    _render_institutional_flows(flow_left, "INSTITUTIONAL FLOW")
-    _render_calendar_list(flow_right, "CALENDAR · FED · LABOR · INFLATION", only_us=True)
-
-    news_shell = _panel_shell(parent, pady=(0, 0))
-    _render_news_list(news_shell, "US NEWSFLOW · FED · TREASURY · BANKS · STREET",
-                      allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
-                      us_only=True)
-
-
-def _render_markets_tab_v3(parent):
-    """USA desk rendered in batches to reduce time-to-content stalls."""
-    _cancel_chunk_jobs(parent)
-
-    def _render_overview() -> None:
-        overview = _panel_shell(parent, pady=(0, 6))
-        _section(overview, "US DESK Â· SNAPSHOT", pady_top=(0, 0))
-        snapshot = _macro_map([
-            "SP500", "US10Y", "DXY", "FED_RATE", "VIX", "CPI_US",
-        ])
-        _desk_banner(overview, snapshot, [
-            ("SP500",    "S&P 500", "{:,.0f}"),
-            ("US10Y",    "US10Y",   "{:.3f}%"),
-            ("DXY",      "DXY",     "{:.2f}"),
-            ("FED_RATE", "FED",     "{:.2f}%"),
-            ("VIX",      "VIX",     "{:.2f}"),
-            ("CPI_US",   "CPI",     "{:.2f}"),
-        ])
-        tk.Label(
-            overview,
-            text="  Price first, then curve and macro, then positioning, then institutional flow and news.",
-            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
-        ).pack(fill="x", padx=2, pady=(0, 2))
-
-    def _render_market_now() -> None:
-        _section(parent, "US DESK Â· MARKET NOW", pady_top=(0, 0))
-        market_shell = _panel_shell(parent, pady=(0, 6))
-        left, right = _two_col(market_shell)
-        rates = _macro_map(["US13W", "US5Y", "US10Y", "US30Y",
-                            "YIELD_SPREAD_10_2", "FED_RATE"])
-        _section(left, "RATES Â· CURVE", pady_top=(0, 0))
-        _grid(left, rates, [
-            ("US13W",             "13W",     "{:.3f}%"),
-            ("US5Y",              "5Y",      "{:.3f}%"),
-            ("US10Y",             "10Y",     "{:.3f}%"),
-            ("US30Y",             "30Y",     "{:.3f}%"),
-            ("YIELD_SPREAD_10_2", "10Y-2Y",  "{:.3f}"),
-            ("FED_RATE",          "FED",     "{:.2f}%"),
-        ])
-
-        fx = _macro_map(["DXY", "EUR_USD", "USD_JPY", "GBP_USD", "USD_CNY",
-                         "DXY_BROAD"])
-        _section(right, "DOLLAR Â· FX", pady_top=(0, 0))
-        _grid(right, fx, [
-            ("DXY",       "DXY",     "{:.2f}"),
-            ("EUR_USD",   "EUR/USD", "{:.4f}"),
-            ("USD_JPY",   "USD/JPY", "{:.2f}"),
-            ("GBP_USD",   "GBP/USD", "{:.4f}"),
-            ("USD_CNY",   "USD/CNY", "{:.4f}"),
-            ("DXY_BROAD", "BROAD",   "{:.2f}"),
-        ])
-
-        left2, right2 = _two_col(market_shell)
-        eq = _macro_map(["SP500", "NASDAQ", "VIX", "RUSSELL_RTY_NET_LONGS",
-                         "GOLD", "WTI_OIL", "COPPER"])
-        _section(left2, "EQUITIES Â· RISK", pady_top=(0, 0))
-        _grid(left2, eq, [
-            ("SP500",  "S&P 500", "{:,.0f}"),
-            ("NASDAQ", "NASDAQ",  "{:,.0f}"),
-            ("VIX",    "VIX",     "{:.2f}"),
-            ("GOLD",   "GOLD",    "${:,.0f}"),
-            ("WTI_OIL","WTI",     "${:.2f}"),
-            ("COPPER", "COPPER",  "${:.3f}"),
-        ])
-        _grid(left2, eq, [
-            ("RUSSELL_RTY_NET_LONGS", "RTY COT", "{:+,.0f}"),
-        ])
-
-        econ = _macro_map([
-            "CPI_US", "CORE_CPI_US", "UNEMPLOYMENT_US", "NONFARM_PAYROLLS",
-            "JOBLESS_CLAIMS", "MICHIGAN_SENTIMENT", "FED_BALANCE_SHEET",
-            "HOUSING_STARTS", "INDUSTRIAL_PRODUCTION", "M2_MONEY_SUPPLY",
-        ], n=30)
-        _section(right2, "MACRO SNAPSHOT Â· FRED", pady_top=(0, 0))
-        _grid(right2, econ, [
-            ("CPI_US",             "CPI",          "{:.2f}"),
-            ("CORE_CPI_US",        "CORE CPI",     "{:.2f}"),
-            ("UNEMPLOYMENT_US",    "UNEMPLOY",     "{:.2f}%"),
-            ("NONFARM_PAYROLLS",   "NFP",          "{:,.0f}"),
-            ("JOBLESS_CLAIMS",     "JOBLESS",      "{:,.0f}"),
-            ("MICHIGAN_SENTIMENT", "MICHIGAN",     "{:.1f}"),
-            ("FED_BALANCE_SHEET",  "FED BAL",      "{:,.0f}"),
-            ("M2_MONEY_SUPPLY",    "M2",           "{:,.0f}"),
-        ])
-        _grid(right2, econ, [
-            ("HOUSING_STARTS",        "HOUSING",    "{:,.0f}"),
-            ("INDUSTRIAL_PRODUCTION", "IND PROD",   "{:.2f}"),
-        ])
-
-    def _render_positioning() -> None:
-        _section(parent, "US DESK Â· POSITIONING")
-        positioning_shell = _panel_shell(parent, pady=(0, 6))
-        tk.Label(
-            positioning_shell,
-            text="  CFTC futures positioning for dollar, rates, index futures and key US-linked macro trades.",
-            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
-        ).pack(fill="x", padx=2, pady=(0, 2))
-        _cot_matrix(positioning_shell, [
-            ("DXY",       "DXY_NET_LONGS",       None,               None),
-            ("UST 10Y",   "UST_10Y_NET_LONGS",   None,               None),
-            ("UST 2Y",    "UST_2Y_NET_LONGS",    None,               None),
-            ("SP500 ES",  "SP500_ES_NET_LONGS",  None,               None),
-            ("NASDAQ NQ", "NASDAQ_NQ_NET_LONGS", None,               None),
-            ("RTY",       "RUSSELL_RTY_NET_LONGS", None,             None),
-            ("BTC CME",   "BTC_CME_NET_LONGS",   "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
-            ("GOLD",      "GOLD_NET_LONGS",      "GOLD_SWAP_NET",    "GOLD_MM_NET"),
-            ("WTI",       "WTI_NET_LONGS",       "WTI_SWAP_NET",     "WTI_MM_NET"),
-        ])
-
-    def _render_flow_watch() -> None:
-        flow_shell = _panel_shell(parent, pady=(0, 6))
-        _section(flow_shell, "US DESK Â· FLOW WATCH", pady_top=(0, 0))
-        flow_left, flow_right = _two_col(flow_shell)
-        _render_institutional_flows(flow_left, "INSTITUTIONAL FLOW")
-        _render_calendar_list(flow_right, "CALENDAR Â· FED Â· LABOR Â· INFLATION", only_us=True)
-
-    def _render_news() -> None:
-        news_shell = _panel_shell(parent, pady=(0, 0))
-        _render_news_list(
-            news_shell,
-            "US NEWSFLOW Â· FED Â· TREASURY Â· BANKS Â· STREET",
-            allowed_categories=("news", "monetary", "macro", "institutional", "geopolitics"),
-            us_only=True,
-        )
-
-    _run_chunked(
-        parent,
-        [
-            _render_overview,
-            _render_market_now,
-            _render_positioning,
-            _render_flow_watch,
-            _render_news,
-        ],
-        metric_name="content.macro_brain.EUA.full",
-    )
-
-
 def _render_markets_tab_v4(parent):
     """USA desk rendered in finer batches to shorten time-to-content."""
     _cancel_chunk_jobs(parent)
@@ -1277,178 +1401,241 @@ def _render_markets_tab_v4(parent):
 
 
 def _render_br_tab(parent):
-    """Brazilian equities + BRL forex."""
-    br_indices = _macro_map([
-        "IBOVESPA", "BR_SMALL_CAPS", "BR_REAL_ESTATE",
-        "USD_BRL", "EUR_BRL",
-    ], n=30)
-    _section(parent, "BR INDICES · FOREX", pady_top=(0, 0))
-    _grid(parent, br_indices, [
-        ("IBOVESPA",       "IBOV",       "{:,.0f}"),
-        ("BR_SMALL_CAPS",  "SMALL CAPS", "{:,.2f}"),
-        ("BR_REAL_ESTATE", "IFIX",       "{:,.2f}"),
-        ("USD_BRL",        "USD/BRL",    "{:.4f}"),
-        ("EUR_BRL",        "EUR/BRL",    "{:.4f}"),
-    ])
+    """BR desk — IBOV, forex, stocks, ADRs. Banner + chunked sections."""
+    _cancel_chunk_jobs(parent)
 
-    stocks1 = _macro_map([
-        "PETR4_PETROBRAS", "VALE3_VALE", "ITUB4_ITAU", "BBDC4_BRADESCO",
-        "BBAS3_BB", "ABEV3_AMBEV", "B3SA3_B3", "WEGE3_WEG",
-    ], n=30)
-    _section(parent, "B3 TOP STOCKS · BANCOS · PETRO · MINERADORAS")
-    _grid(parent, stocks1, [
-        ("PETR4_PETROBRAS", "PETR4", "R${:.2f}"),
-        ("VALE3_VALE",      "VALE3", "R${:.2f}"),
-        ("ITUB4_ITAU",      "ITUB4", "R${:.2f}"),
-        ("BBDC4_BRADESCO",  "BBDC4", "R${:.2f}"),
-        ("BBAS3_BB",        "BBAS3", "R${:.2f}"),
-        ("ABEV3_AMBEV",     "ABEV3", "R${:.2f}"),
-        ("B3SA3_B3",        "B3SA3", "R${:.2f}"),
-        ("WEGE3_WEG",       "WEGE3", "R${:.2f}"),
-    ])
+    def _render_overview() -> None:
+        overview = _panel_shell(parent, pady=(0, 6))
+        _section(overview, "BR SNAPSHOT", pady_top=(0, 0))
+        snap = _macro_map([
+            "IBOVESPA", "USD_BRL", "EUR_BRL",
+            "BR_SMALL_CAPS", "BR_REAL_ESTATE",
+            "PETR4_PETROBRAS",
+        ])
+        _desk_banner(overview, snap, [
+            ("IBOVESPA",        "IBOV",    "{:,.0f}"),
+            ("USD_BRL",         "USD/BRL", "{:.4f}"),
+            ("EUR_BRL",         "EUR/BRL", "{:.4f}"),
+            ("BR_SMALL_CAPS",   "SMALL",   "{:,.2f}"),
+            ("BR_REAL_ESTATE",  "IFIX",    "{:,.2f}"),
+            ("PETR4_PETROBRAS", "PETR4",   "R${:.2f}"),
+        ])
+        tk.Label(
+            overview,
+            text="  Indice e forex primeiro, depois B3 blue chips, mid/small caps e ADRs listados em NY.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
 
-    stocks2 = _macro_map([
-        "RENT3_LOCALIZA", "PRIO3_PRIO", "BRAP4_BRADESPAR",
-        "SUZB3_SUZANO", "JBSS3_JBS", "KLBN11_KLABIN",
-        "ELET3_ELETROBRAS", "MGLU3_MAGALU",
-    ], n=30)
-    _grid(parent, stocks2, [
-        ("RENT3_LOCALIZA",   "RENT3",  "R${:.2f}"),
-        ("PRIO3_PRIO",       "PRIO3",  "R${:.2f}"),
-        ("BRAP4_BRADESPAR",  "BRAP4",  "R${:.2f}"),
-        ("SUZB3_SUZANO",     "SUZB3",  "R${:.2f}"),
-        ("JBSS3_JBS",        "JBSS3",  "R${:.2f}"),
-        ("KLBN11_KLABIN",    "KLBN11", "R${:.2f}"),
-        ("ELET3_ELETROBRAS", "ELET3",  "R${:.2f}"),
-        ("MGLU3_MAGALU",     "MGLU3",  "R${:.2f}"),
-    ])
+    def _render_stocks() -> None:
+        _section(parent, "B3 BLUE CHIPS · MID CAPS")
+        stocks_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(stocks_shell)
 
-    adrs = _macro_map(["VALE_ADR", "ITUB_ADR", "PBR_ADR", "BBD_ADR"], n=30)
-    _section(parent, "BRAZILIAN ADRs · US-LISTED")
-    _grid(parent, adrs, [
-        ("VALE_ADR", "VALE NYSE", "${:.2f}"),
-        ("ITUB_ADR", "ITUB NYSE", "${:.2f}"),
-        ("PBR_ADR",  "PBR NYSE",  "${:.2f}"),
-        ("BBD_ADR",  "BBD NYSE",  "${:.2f}"),
-    ])
+        stocks1 = _macro_map([
+            "PETR4_PETROBRAS", "VALE3_VALE", "ITUB4_ITAU", "BBDC4_BRADESCO",
+            "BBAS3_BB", "ABEV3_AMBEV", "B3SA3_B3", "WEGE3_WEG",
+        ], n=30)
+        _section(left, "TOP 8 BOVESPA", pady_top=(0, 0))
+        _grid(left, stocks1, [
+            ("PETR4_PETROBRAS", "PETR4", "R${:.2f}"),
+            ("VALE3_VALE",      "VALE3", "R${:.2f}"),
+            ("ITUB4_ITAU",      "ITUB4", "R${:.2f}"),
+            ("BBDC4_BRADESCO",  "BBDC4", "R${:.2f}"),
+        ])
+        _grid(left, stocks1, [
+            ("BBAS3_BB",    "BBAS3", "R${:.2f}"),
+            ("ABEV3_AMBEV", "ABEV3", "R${:.2f}"),
+            ("B3SA3_B3",    "B3SA3", "R${:.2f}"),
+            ("WEGE3_WEG",   "WEGE3", "R${:.2f}"),
+        ])
+
+        stocks2 = _macro_map([
+            "RENT3_LOCALIZA", "PRIO3_PRIO", "BRAP4_BRADESPAR",
+            "SUZB3_SUZANO", "JBSS3_JBS", "KLBN11_KLABIN",
+            "ELET3_ELETROBRAS", "MGLU3_MAGALU",
+        ], n=30)
+        _section(right, "MID + SMALL CAPS", pady_top=(0, 0))
+        _grid(right, stocks2, [
+            ("RENT3_LOCALIZA",   "RENT3",  "R${:.2f}"),
+            ("PRIO3_PRIO",       "PRIO3",  "R${:.2f}"),
+            ("BRAP4_BRADESPAR",  "BRAP4",  "R${:.2f}"),
+            ("SUZB3_SUZANO",     "SUZB3",  "R${:.2f}"),
+        ])
+        _grid(right, stocks2, [
+            ("JBSS3_JBS",        "JBSS3",  "R${:.2f}"),
+            ("KLBN11_KLABIN",    "KLBN11", "R${:.2f}"),
+            ("ELET3_ELETROBRAS", "ELET3",  "R${:.2f}"),
+            ("MGLU3_MAGALU",     "MGLU3",  "R${:.2f}"),
+        ])
+
+    def _render_adrs() -> None:
+        _section(parent, "BRAZILIAN ADRs · US-LISTED")
+        adr_shell = _panel_shell(parent, pady=(0, 0))
+        adrs = _macro_map(["VALE_ADR", "ITUB_ADR", "PBR_ADR", "BBD_ADR"], n=30)
+        _grid(adr_shell, adrs, [
+            ("VALE_ADR", "VALE NYSE", "${:.2f}"),
+            ("ITUB_ADR", "ITUB NYSE", "${:.2f}"),
+            ("PBR_ADR",  "PBR NYSE",  "${:.2f}"),
+            ("BBD_ADR",  "BBD NYSE",  "${:.2f}"),
+        ])
+
+    _run_chunked(
+        parent,
+        [_render_overview, _render_stocks, _render_adrs],
+        metric_name="content.macro_brain.BRASIL.full",
+    )
 
 
 def _render_crypto_tab(parent):
-    """Crypto deep — organizado por rede."""
-    _section(parent, "BTC · NETWORK · ON-CHAIN · POSITIONING",
-             pady_top=(0, 0))
-    btc = _macro_map([
-        "BTC_SPOT", "BTC_DOMINANCE", "BTC_HASH_RATE", "BTC_DIFFICULTY",
-        "BTC_BLOCK_HEIGHT", "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
-        "BTC_24H_TX_COUNT",
-    ], n=30)
-    _grid(parent, btc, [
-        ("BTC_SPOT",              "PRICE",      "${:,.0f}"),
-        ("BTC_DOMINANCE",         "DOMINANCE",  "{:.2f}%"),
-        ("BTC_HASH_RATE",         "HASHRATE",   "{:,.0f}"),
-        ("BTC_DIFFICULTY",        "DIFFICULTY", "{:,.0f}"),
-        ("BTC_BLOCK_HEIGHT",      "BLOCK",      "{:,.0f}"),
-        ("BTC_MEMPOOL_COUNT",     "MEMPOOL",    "{:,.0f}"),
-        ("BTC_FEE_FASTEST_SATVB", "FEE sat/vB", "{:.0f}"),
-        ("BTC_24H_TX_COUNT",      "24H TX",     "{:,.0f}"),
-    ])
-    btc_extra = _macro_map([
-        "BTC_CME_NET_LONGS", "BTC_CME_SWAP_NET", "BTC_CME_MM_NET",
-    ], n=12)
-    _grid(parent, btc_extra, [
-        ("BTC_CME_NET_LONGS", "BTC CME NC NET", "{:+,.0f}"),
-        ("BTC_CME_SWAP_NET",  "BTC CME BANKS",  "{:+,.0f}"),
-        ("BTC_CME_MM_NET",    "BTC CME FUNDS",  "{:+,.0f}"),
-    ])
+    """Crypto desk — BTC + alts + DeFi. Banner + chunked sections.
 
-    _section(parent, "ETH · ETHEREUM · DEFI DOMINANT")
-    eth = _macro_map(["ETH_SPOT", "DEFI_ETHEREUM_TVL"], n=30)
-    _grid(parent, eth, [
-        ("ETH_SPOT",          "ETH PRICE",    "${:,.1f}"),
-        ("DEFI_ETHEREUM_TVL", "ETH DEFI TVL", "${:,.0f}"),
-    ])
+    Absorve conteudo do antigo REDE tab (advanced BTC fees + block time)
+    pra deixar tudo que e on-chain/crypto num lugar so.
+    """
+    _cancel_chunk_jobs(parent)
 
-    _section(parent, "SOL · SOLANA · HIGH THROUGHPUT")
-    sol = _macro_map(["SOL_SPOT", "DEFI_SOLANA_TVL"], n=30)
-    _grid(parent, sol, [
-        ("SOL_SPOT",        "SOL PRICE",    "${:.2f}"),
-        ("DEFI_SOLANA_TVL", "SOL DEFI TVL", "${:,.0f}"),
-    ])
-    _render_bot_slots(parent, network="SOL")
+    def _render_overview() -> None:
+        overview = _panel_shell(parent, pady=(0, 6))
+        _section(overview, "CRYPTO SNAPSHOT", pady_top=(0, 0))
+        snap = _macro_map([
+            "BTC_SPOT", "ETH_SPOT", "SOL_SPOT",
+            "BTC_DOMINANCE", "TOTAL_CRYPTO_MCAP", "CRYPTO_FEAR_GREED",
+        ])
+        _desk_banner(overview, snap, [
+            ("BTC_SPOT",          "BTC",    "${:,.0f}"),
+            ("ETH_SPOT",          "ETH",    "${:,.1f}"),
+            ("SOL_SPOT",          "SOL",    "${:.2f}"),
+            ("BTC_DOMINANCE",     "BTC.D",  "{:.2f}%"),
+            ("TOTAL_CRYPTO_MCAP", "MCAP",   "${:,.0f}"),
+            ("CRYPTO_FEAR_GREED", "F&G",    "{:.0f}/100"),
+        ])
+        tk.Label(
+            overview,
+            text="  Spot primeiro, depois BTC network e positioning, altcoins, HL perps e cross-chain DeFi.",
+            font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", padx=2, pady=(0, 2))
 
-    _section(parent, "HYPE · HYPERLIQUID · PERPS")
-    hl = _macro_map([
-        "HL_TOTAL_OI", "HL_BTC_PRICE", "HL_BTC_OI_USD", "HL_BTC_FUNDING",
-        "HL_ETH_OI_USD", "HL_ETH_FUNDING", "HL_HYPE_PRICE",
-        "HL_HYPE_OI_USD",
-    ], n=12)
-    _grid(parent, hl, [
-        ("HL_TOTAL_OI",    "TOTAL OI",    "${:,.0f}"),
-        ("HL_BTC_PRICE",   "BTC PERP",    "${:,.0f}"),
-        ("HL_BTC_OI_USD",  "BTC OI",      "${:,.0f}"),
-        ("HL_BTC_FUNDING", "BTC FUNDING", "{:+.4f}%"),
-        ("HL_ETH_OI_USD",  "ETH OI",      "${:,.0f}"),
-        ("HL_ETH_FUNDING", "ETH FUNDING", "{:+.4f}%"),
-        ("HL_HYPE_PRICE",  "HYPE TOKEN",  "${:.2f}"),
-        ("HL_HYPE_OI_USD", "HYPE OI",     "${:,.0f}"),
-    ])
-    _render_bot_slots(parent, network="HYPE")
+    def _render_btc_network() -> None:
+        _section(parent, "BTC NETWORK · ON-CHAIN")
+        net_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(net_shell)
 
-    _section(parent, "CROSS-CHAIN DEFI · TVL PER NETWORK")
-    defi = _macro_map([
-        "DEFI_TOTAL_TVL", "DEFI_ETHEREUM_TVL", "DEFI_SOLANA_TVL",
-        "DEFI_BSC_TVL", "DEFI_BASE_TVL", "DEFI_ARBITRUM_TVL",
-        "DEFI_TRON_TVL", "DEFI_HYPERLIQUID_TVL",
-    ], n=30)
-    _grid(parent, defi, [
-        ("DEFI_TOTAL_TVL",       "TOTAL",    "${:,.0f}"),
-        ("DEFI_ETHEREUM_TVL",    "ETH",      "${:,.0f}"),
-        ("DEFI_SOLANA_TVL",      "SOL",      "${:,.0f}"),
-        ("DEFI_BSC_TVL",         "BSC",      "${:,.0f}"),
-        ("DEFI_BASE_TVL",        "BASE",     "${:,.0f}"),
-        ("DEFI_ARBITRUM_TVL",    "ARB",      "${:,.0f}"),
-        ("DEFI_TRON_TVL",        "TRON",     "${:,.0f}"),
-        ("DEFI_HYPERLIQUID_TVL", "HYPE L1",  "${:,.0f}"),
-    ])
+        onchain = _macro_map([
+            "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
+            "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
+            "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
+            "BTC_24H_TRADE_VOLUME_USD",
+        ], n=30)
+        _section(left, "NETWORK STATE", pady_top=(0, 0))
+        _grid(left, onchain, [
+            ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
+            ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
+            ("BTC_BLOCK_HEIGHT",          "BLOCK",      "{:,.0f}"),
+            ("BTC_MEMPOOL_COUNT",         "MEMPOOL",    "{:,.0f}"),
+        ])
+        _grid(left, onchain, [
+            ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB", "{:.0f}"),
+            ("BTC_24H_TX_COUNT",          "24H TX",     "{:,.0f}"),
+            ("BTC_24H_MINER_REVENUE_USD", "MINER REV",  "${:,.0f}"),
+            ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
+        ])
 
+        adv = _macro_map([
+            "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
+            "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
+            "BTC_24H_FEES_BTC", "BTC_24H_MINED",
+        ], n=30)
+        _section(right, "FEES + BLOCK TIME", pady_top=(0, 0))
+        _grid(right, adv, [
+            ("BTC_FEE_30MIN_SATVB",    "30MIN FEE",  "{:.0f}"),
+            ("BTC_FEE_1H_SATVB",       "1H FEE",     "{:.0f}"),
+            ("BTC_FEE_ECONOMY_SATVB",  "ECON FEE",   "{:.0f}"),
+            ("BTC_MEMPOOL_VSIZE",      "MP VSIZE",   "{:,.0f}"),
+        ])
+        _grid(right, adv, [
+            ("BTC_AVG_BLOCK_TIME_MIN", "BLOCK TIME", "{:.1f}"),
+            ("BTC_24H_FEES_BTC",       "24H FEES",   "{:.2f}"),
+            ("BTC_24H_MINED",          "24H MINED",  "{:.0f}"),
+        ])
 
-def _render_insights_tab(parent):
-    """Derived cross-asset analytics only — no raw US desk feeds here."""
+    def _render_btc_positioning() -> None:
+        _section(parent, "BTC POSITIONING · CFTC")
+        pos_shell = _panel_shell(parent, pady=(0, 6))
+        _cot_matrix(pos_shell, [
+            ("BTC CME", "BTC_CME_NET_LONGS",
+             "BTC_CME_SWAP_NET", "BTC_CME_MM_NET"),
+        ])
 
-    try:
-        from macro_brain.ml_engine.analytics import compute_all
-        insights = compute_all()
-    except Exception:
-        insights = []
-    if insights:
-        _section(parent, "MACRO ANALYTICS · DERIVED INSIGHTS",
-                 pady_top=(0, 0))
-        sig_c = {"bullish": GREEN, "bearish": RED,
-                 "warning": AMBER, "neutral": DIM2}
-        row = tk.Frame(parent, bg=BG); row.pack(fill="x", pady=PAD_ROW // 2)
-        for ins in insights:
-            sc = sig_c.get(ins.signal, WHITE)
-            card = tk.Frame(row, bg=PANEL,
-                            highlightbackground=BORDER, highlightthickness=1)
-            card.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-            _attach_hover(card)
-            tk.Label(card, text=ins.name.upper(), font=(FONT, 6, "bold"),
-                     fg=DIM, bg=PANEL, anchor="w").pack(
-                         fill="x", padx=PAD_TILE_INNER, pady=(2, 0))
-            tk.Label(card, text=str(ins.value), font=(FONT, 9, "bold"),
-                     fg=WHITE, bg=PANEL, anchor="w").pack(
-                         fill="x", padx=PAD_TILE_INNER)
-            tk.Label(card, text=ins.signal.upper(), font=(FONT, 7, "bold"),
-                     fg=sc, bg=PANEL, anchor="w").pack(
-                         fill="x", padx=PAD_TILE_INNER)
-            tk.Label(card, text=ins.detail[:60], font=(FONT, 7),
-                     fg=DIM2, bg=PANEL, anchor="w", wraplength=180,
-                     justify="left").pack(
-                         fill="x", padx=PAD_TILE_INNER, pady=(0, 2))
-    _section(parent, "ANALYTICS SCOPE")
-    tk.Label(parent,
-             text="  Raw US calendar, news, COT and institutional flow moved to [1] EUA.",
-             font=(FONT, 8), fg=DIM2, bg=BG, anchor="w").pack(fill="x", padx=6)
+    def _render_alts() -> None:
+        _section(parent, "ALTCOINS · HYPERLIQUID PERPS")
+        alt_shell = _panel_shell(parent, pady=(0, 6))
+        left, right = _two_col(alt_shell)
+
+        alt_spot = _macro_map([
+            "ETH_SPOT", "DEFI_ETHEREUM_TVL",
+            "SOL_SPOT", "DEFI_SOLANA_TVL",
+        ], n=30)
+        _section(left, "ETH · SOL SPOT + TVL", pady_top=(0, 0))
+        _grid(left, alt_spot, [
+            ("ETH_SPOT",          "ETH",      "${:,.1f}"),
+            ("DEFI_ETHEREUM_TVL", "ETH TVL",  "${:,.0f}"),
+            ("SOL_SPOT",          "SOL",      "${:.2f}"),
+            ("DEFI_SOLANA_TVL",   "SOL TVL",  "${:,.0f}"),
+        ])
+        _render_bot_slots(left, network="SOL")
+
+        hl = _macro_map([
+            "HL_TOTAL_OI", "HL_BTC_PRICE", "HL_BTC_OI_USD", "HL_BTC_FUNDING",
+            "HL_ETH_OI_USD", "HL_ETH_FUNDING", "HL_HYPE_PRICE",
+            "HL_HYPE_OI_USD",
+        ], n=12)
+        _section(right, "HYPERLIQUID PERPS", pady_top=(0, 0))
+        _grid(right, hl, [
+            ("HL_TOTAL_OI",    "TOTAL OI",    "${:,.0f}"),
+            ("HL_BTC_PRICE",   "BTC PERP",    "${:,.0f}"),
+            ("HL_BTC_OI_USD",  "BTC OI",      "${:,.0f}"),
+            ("HL_BTC_FUNDING", "BTC FUND",    "{:+.4f}%"),
+        ])
+        _grid(right, hl, [
+            ("HL_ETH_OI_USD",  "ETH OI",      "${:,.0f}"),
+            ("HL_ETH_FUNDING", "ETH FUND",    "{:+.4f}%"),
+            ("HL_HYPE_PRICE",  "HYPE TOKEN",  "${:.2f}"),
+            ("HL_HYPE_OI_USD", "HYPE OI",     "${:,.0f}"),
+        ])
+        _render_bot_slots(right, network="HYPE")
+
+    def _render_defi() -> None:
+        _section(parent, "CROSS-CHAIN DEFI · TVL PER NETWORK")
+        defi_shell = _panel_shell(parent, pady=(0, 0))
+        defi = _macro_map([
+            "DEFI_TOTAL_TVL", "DEFI_ETHEREUM_TVL", "DEFI_SOLANA_TVL",
+            "DEFI_BSC_TVL", "DEFI_BASE_TVL", "DEFI_ARBITRUM_TVL",
+            "DEFI_TRON_TVL", "DEFI_HYPERLIQUID_TVL",
+        ], n=30)
+        _grid(defi_shell, defi, [
+            ("DEFI_TOTAL_TVL",       "TOTAL",    "${:,.0f}"),
+            ("DEFI_ETHEREUM_TVL",    "ETH",      "${:,.0f}"),
+            ("DEFI_SOLANA_TVL",      "SOL",      "${:,.0f}"),
+            ("DEFI_BSC_TVL",         "BSC",      "${:,.0f}"),
+        ])
+        _grid(defi_shell, defi, [
+            ("DEFI_BASE_TVL",        "BASE",     "${:,.0f}"),
+            ("DEFI_ARBITRUM_TVL",    "ARB",      "${:,.0f}"),
+            ("DEFI_TRON_TVL",        "TRON",     "${:,.0f}"),
+            ("DEFI_HYPERLIQUID_TVL", "HYPE L1",  "${:,.0f}"),
+        ])
+
+    _run_chunked(
+        parent,
+        [
+            _render_overview,
+            _render_btc_network,
+            _render_btc_positioning,
+            _render_alts,
+            _render_defi,
+        ],
+        metric_name="content.macro_brain.CRIPTO.full",
+    )
 
 
 def _render_analysis_tab(parent):
@@ -1506,419 +1693,6 @@ def _render_analysis_tab(parent):
         ("ETH CME",   None,                 "ETH_CME_SWAP_NET", "ETH_CME_MM_NET"),
     ])
 
-
-def _render_network_tab(parent):
-    """BTC on-chain — Portal | VPS — Processes."""
-    onchain = _macro_map([
-        "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
-        "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
-        "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
-        "BTC_24H_TRADE_VOLUME_USD",
-    ], n=30)
-    _section(parent, "BTC ON-CHAIN · NETWORK STATE", pady_top=(0, 0))
-    _grid(parent, onchain, [
-        ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
-        ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
-        ("BTC_BLOCK_HEIGHT",          "BLOCK",      "{:,.0f}"),
-        ("BTC_MEMPOOL_COUNT",         "MEMPOOL",    "{:,.0f}"),
-        ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB", "{:.0f}"),
-        ("BTC_24H_TX_COUNT",          "24H TX",     "{:,.0f}"),
-        ("BTC_24H_MINER_REVENUE_USD", "MINER REV",  "${:,.0f}"),
-        ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
-    ])
-
-    adv = _macro_map([
-        "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
-        "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
-        "BTC_24H_FEES_BTC", "BTC_24H_MINED",
-    ], n=30)
-    _section(parent, "BTC ADVANCED · FEES · BLOCK TIME")
-    _grid(parent, adv, [
-        ("BTC_FEE_30MIN_SATVB",    "30MIN FEE",  "{:.0f}"),
-        ("BTC_FEE_1H_SATVB",       "1H FEE",     "{:.0f}"),
-        ("BTC_FEE_ECONOMY_SATVB",  "ECON FEE",   "{:.0f}"),
-        ("BTC_MEMPOOL_VSIZE",      "MP VSIZE",   "{:,.0f}"),
-        ("BTC_AVG_BLOCK_TIME_MIN", "BLOCK TIME", "{:.1f}"),
-        ("BTC_24H_FEES_BTC",       "24H FEES",   "{:.2f}"),
-        ("BTC_24H_MINED",          "24H MINED",  "{:.0f}"),
-    ])
-
-    left, right = _two_col(parent)
-
-    _section(left, "ENGINES PORTAL · PROCESS MONITOR")
-    try:
-        from core.ops.proc import list_procs
-        procs = list_procs()
-    except Exception:
-        procs = []
-    running = [p for p in procs if p.get("alive") or
-               p.get("status") == "running"]
-    finished = [p for p in procs if not p.get("alive") and
-                p.get("status") == "finished"]
-
-    stat_row = tk.Frame(left, bg=BG); stat_row.pack(fill="x",
-                                                    pady=PAD_ROW // 2)
-    for label, val in [
-        ("ACTIVE",   f"{len(running)}"),
-        ("FINISHED", f"{len(finished)}"),
-        ("TOTAL",    f"{len(procs)}"),
-    ]:
-        box = tk.Frame(stat_row, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1,
-                       padx=10, pady=4)
-        box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-        _attach_hover(box)
-        tk.Label(box, text=label, font=(FONT, 6, "bold"),
-                 fg=DIM, bg=PANEL).pack()
-        tk.Label(box, text=val, font=(FONT, 14, "bold"),
-                 fg=WHITE, bg=PANEL).pack()
-
-    vps_online, vps_detail = _read_vps_status()
-
-    _section(right, "VPS STATUS")
-    vps_c = GREEN if vps_online else RED
-    vps_box = tk.Frame(right, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1,
-                       padx=12, pady=10)
-    vps_box.pack(fill="x", padx=2, pady=2)
-    _attach_hover(vps_box)
-    vps_status_lbl = tk.Label(vps_box, text="● ONLINE" if vps_online else "○ OFFLINE",
-                              font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL)
-    vps_status_lbl.pack(anchor="w")
-    vps_detail_lbl = tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
-                              fg=WHITE, bg=PANEL)
-    vps_detail_lbl.pack(anchor="w")
-    tk.Label(vps_box, text="SSH connect test · port 22",
-             font=(FONT, 6), fg=DIM, bg=PANEL).pack(anchor="w",
-                                                     pady=(2, 0))
-    if vps_detail == "checking...":
-        def _refresh_vps_box() -> None:
-            try:
-                if not vps_box.winfo_exists():
-                    return
-            except Exception:
-                return
-            latest_online, latest_detail = _read_vps_status()
-            if latest_detail == "checking...":
-                vps_box.after(250, _refresh_vps_box)
-                return
-            latest_color = GREEN if latest_online else RED
-            vps_status_lbl.configure(
-                text="● ONLINE" if latest_online else "○ OFFLINE",
-                fg=latest_color,
-            )
-            vps_detail_lbl.configure(text=latest_detail)
-
-        vps_box.after(250, _refresh_vps_box)
-
-    if procs:
-        _section(parent, "PROCESSES · ACTIVE + RECENT")
-        hdr = tk.Frame(parent, bg=BG); hdr.pack(fill="x", pady=(0, 1))
-        for txt, w in [("", 3), ("ENGINE", 16), ("PID", 12),
-                       ("STATUS", 10), ("STARTED", 15)]:
-            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM,
-                     bg=BG, width=w, anchor="w").pack(side="left")
-
-        for p in procs[:15]:
-            engine = (p.get("engine") or "?").upper()
-            pid = p.get("pid") or "?"
-            status = p.get("status", "?")
-            alive = p.get("alive", False)
-            sc = GREEN if alive else DIM
-            row = tk.Frame(parent, bg=BG); row.pack(fill="x")
-            tk.Label(row, text=f" {'●' if alive else '○'}",
-                     font=(FONT, 8, "bold"), fg=sc, bg=BG,
-                     width=3).pack(side="left")
-            tk.Label(row, text=f"{engine:<14}", font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG, width=16,
-                     anchor="w").pack(side="left")
-            tk.Label(row, text=f"{pid}", font=(FONT, 7),
-                     fg=DIM, bg=BG, width=12,
-                     anchor="w").pack(side="left")
-            tk.Label(row, text=status.upper(), font=(FONT, 7, "bold"),
-                     fg=sc, bg=BG, width=10,
-                     anchor="w").pack(side="left")
-            started = p.get("started", "")
-            tk.Label(row,
-                     text=f"{_fmt_age(started)} ago" if started else "",
-                     font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(
-                         side="left", fill="x", expand=True)
-
-
-
-def _render_network_tab_v2(parent):
-    """BTC on-chain and ops tab rendered in batches."""
-    _cancel_chunk_jobs(parent)
-
-    def _render_onchain() -> None:
-        onchain = _macro_map([
-            "BTC_HASH_RATE", "BTC_DIFFICULTY", "BTC_BLOCK_HEIGHT",
-            "BTC_MEMPOOL_COUNT", "BTC_FEE_FASTEST_SATVB",
-            "BTC_24H_TX_COUNT", "BTC_24H_MINER_REVENUE_USD",
-            "BTC_24H_TRADE_VOLUME_USD",
-        ], n=30)
-        _section(parent, "BTC ON-CHAIN Â· NETWORK STATE", pady_top=(0, 0))
-        _grid(parent, onchain, [
-            ("BTC_HASH_RATE",             "HASHRATE",   "{:,.0f}"),
-            ("BTC_DIFFICULTY",            "DIFF",       "{:,.0f}"),
-            ("BTC_BLOCK_HEIGHT",          "BLOCK",      "{:,.0f}"),
-            ("BTC_MEMPOOL_COUNT",         "MEMPOOL",    "{:,.0f}"),
-            ("BTC_FEE_FASTEST_SATVB",     "FEE sat/vB", "{:.0f}"),
-            ("BTC_24H_TX_COUNT",          "24H TX",     "{:,.0f}"),
-            ("BTC_24H_MINER_REVENUE_USD", "MINER REV",  "${:,.0f}"),
-            ("BTC_24H_TRADE_VOLUME_USD",  "VOL USD",    "${:,.0f}"),
-        ])
-
-    def _render_advanced() -> None:
-        adv = _macro_map([
-            "BTC_FEE_30MIN_SATVB", "BTC_FEE_1H_SATVB", "BTC_FEE_ECONOMY_SATVB",
-            "BTC_MEMPOOL_VSIZE", "BTC_AVG_BLOCK_TIME_MIN",
-            "BTC_24H_FEES_BTC", "BTC_24H_MINED",
-        ], n=30)
-        _section(parent, "BTC ADVANCED Â· FEES Â· BLOCK TIME")
-        _grid(parent, adv, [
-            ("BTC_FEE_30MIN_SATVB",    "30MIN FEE",  "{:.0f}"),
-            ("BTC_FEE_1H_SATVB",       "1H FEE",     "{:.0f}"),
-            ("BTC_FEE_ECONOMY_SATVB",  "ECON FEE",   "{:.0f}"),
-            ("BTC_MEMPOOL_VSIZE",      "MP VSIZE",   "{:,.0f}"),
-            ("BTC_AVG_BLOCK_TIME_MIN", "BLOCK TIME", "{:.1f}"),
-            ("BTC_24H_FEES_BTC",       "24H FEES",   "{:.2f}"),
-            ("BTC_24H_MINED",          "24H MINED",  "{:.0f}"),
-        ])
-
-    def _render_ops_summary() -> None:
-        left, right = _two_col(parent)
-
-        _section(left, "ENGINES PORTAL Â· PROCESS MONITOR")
-        try:
-            from core.ops.proc import list_procs
-            procs = list_procs()
-        except Exception:
-            procs = []
-        parent._macro_network_procs = procs
-        running = [p for p in procs if p.get("alive") or p.get("status") == "running"]
-        finished = [p for p in procs if not p.get("alive") and p.get("status") == "finished"]
-
-        stat_row = tk.Frame(left, bg=BG)
-        stat_row.pack(fill="x", pady=PAD_ROW // 2)
-        for label, val in [
-            ("ACTIVE",   f"{len(running)}"),
-            ("FINISHED", f"{len(finished)}"),
-            ("TOTAL",    f"{len(procs)}"),
-        ]:
-            box = tk.Frame(stat_row, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1,
-                           padx=10, pady=4)
-            box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-            _attach_hover(box)
-            tk.Label(box, text=label, font=(FONT, 6, "bold"),
-                     fg=DIM, bg=PANEL).pack()
-            tk.Label(box, text=val, font=(FONT, 14, "bold"),
-                     fg=WHITE, bg=PANEL).pack()
-
-        vps_online, vps_detail = _read_vps_status()
-        _section(right, "VPS STATUS")
-        vps_c = GREEN if vps_online else RED
-        vps_box = tk.Frame(right, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1,
-                           padx=12, pady=10)
-        vps_box.pack(fill="x", padx=2, pady=2)
-        _attach_hover(vps_box)
-        vps_status_lbl = tk.Label(vps_box, text="â— ONLINE" if vps_online else "â—‹ OFFLINE",
-                                  font=(FONT, 14, "bold"), fg=vps_c, bg=PANEL)
-        vps_status_lbl.pack(anchor="w")
-        vps_detail_lbl = tk.Label(vps_box, text=vps_detail, font=(FONT, 8),
-                                  fg=WHITE, bg=PANEL)
-        vps_detail_lbl.pack(anchor="w")
-        tk.Label(vps_box, text="SSH connect test Â· port 22",
-                 font=(FONT, 6), fg=DIM, bg=PANEL).pack(anchor="w", pady=(2, 0))
-        if vps_detail == "checking...":
-            def _refresh_vps_box() -> None:
-                try:
-                    if not vps_box.winfo_exists():
-                        return
-                except Exception:
-                    return
-                latest_online, latest_detail = _read_vps_status()
-                if latest_detail == "checking...":
-                    vps_box.after(250, _refresh_vps_box)
-                    return
-                latest_color = GREEN if latest_online else RED
-                vps_status_lbl.configure(
-                    text="â— ONLINE" if latest_online else "â—‹ OFFLINE",
-                    fg=latest_color,
-                )
-                vps_detail_lbl.configure(text=latest_detail)
-
-            vps_box.after(250, _refresh_vps_box)
-
-    def _render_processes() -> None:
-        procs = list(getattr(parent, "_macro_network_procs", []) or [])
-        if not procs:
-            return
-        _section(parent, "PROCESSES Â· ACTIVE + RECENT")
-        hdr = tk.Frame(parent, bg=BG)
-        hdr.pack(fill="x", pady=(0, 1))
-        for txt, w in [("", 3), ("ENGINE", 16), ("PID", 12), ("STATUS", 10), ("STARTED", 15)]:
-            tk.Label(hdr, text=txt, font=(FONT, 6, "bold"), fg=DIM,
-                     bg=BG, width=w, anchor="w").pack(side="left")
-
-        for p in procs[:15]:
-            engine = (p.get("engine") or "?").upper()
-            pid = p.get("pid") or "?"
-            status = p.get("status", "?")
-            alive = p.get("alive", False)
-            sc = GREEN if alive else DIM
-            row = tk.Frame(parent, bg=BG)
-            row.pack(fill="x")
-            tk.Label(row, text=f" {'â—' if alive else 'â—‹'}",
-                     font=(FONT, 8, "bold"), fg=sc, bg=BG, width=3).pack(side="left")
-            tk.Label(row, text=f"{engine:<14}", font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG, width=16, anchor="w").pack(side="left")
-            tk.Label(row, text=f"{pid}", font=(FONT, 7),
-                     fg=DIM, bg=BG, width=12, anchor="w").pack(side="left")
-            tk.Label(row, text=status.upper(), font=(FONT, 7, "bold"),
-                     fg=sc, bg=BG, width=10, anchor="w").pack(side="left")
-            started = p.get("started", "")
-            tk.Label(row,
-                     text=f"{_fmt_age(started)} ago" if started else "",
-                     font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(
-                         side="left", fill="x", expand=True)
-
-    _run_chunked(
-        parent,
-        [
-            _render_onchain,
-            _render_advanced,
-            _render_ops_summary,
-            _render_processes,
-        ],
-        metric_name="content.macro_brain.REDE.full",
-    )
-
-
-def _render_book_tab(parent):
-    """Macro paper P&L header · Theses | Positions · Regime details."""
-    from macro_brain.persistence.store import (
-        active_theses, latest_regime, open_positions, pnl_summary,
-    )
-
-    pnl = pnl_summary()
-    total = pnl.get("total_pnl", 0) or 0
-    equity = pnl.get("equity", 0) or 0
-    initial = pnl.get("initial", 0) or 0
-    dd_pct = ((initial - equity) / initial * 100) if initial else 0
-    theses = active_theses()
-    positions = open_positions()
-
-    _section(parent, "MACRO BOOK · PAPER", pady_top=(0, 0))
-    pnl_row = tk.Frame(parent, bg=BG); pnl_row.pack(fill="x",
-                                                    pady=PAD_ROW // 2)
-    for label, val, color in [
-        ("EQUITY",    f"${equity:,.0f}",                       WHITE),
-        ("TOTAL P&L", f"${total:+,.0f}",
-                      GREEN if total >= 0 else RED),
-        ("INITIAL",   f"${initial:,.0f}",                      DIM2),
-        ("DRAWDOWN",
-         f"{-dd_pct:+.2f}%" if dd_pct > 0 else "0.00%",
-         RED if dd_pct > 0 else GREEN),
-        ("THESES",    f"{len(theses)}",                        AMBER),
-        ("POSITIONS", f"{len(positions)}",                     AMBER),
-    ]:
-        box = tk.Frame(pnl_row, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1,
-                       padx=12, pady=6)
-        box.pack(side="left", padx=PAD_TILE_X, fill="both", expand=True)
-        _attach_hover(box)
-        tk.Label(box, text=val, font=(FONT, 13, "bold"),
-                 fg=color, bg=PANEL).pack()
-        tk.Label(box, text=label, font=(FONT, 7, "bold"),
-                 fg=DIM, bg=PANEL).pack()
-
-    left, right = _two_col(parent)
-
-    _section(left, "ACTIVE THESES")
-    if theses:
-        for t in theses:
-            card = tk.Frame(left, bg=PANEL,
-                            highlightbackground=BORDER,
-                            highlightthickness=1)
-            card.pack(fill="x", pady=2, padx=2)
-            _attach_hover(card)
-            hdr_c = tk.Frame(card, bg=PANEL)
-            hdr_c.pack(fill="x", padx=6, pady=(4, 2))
-            sc = GREEN if t["direction"] == "long" else RED
-            tk.Label(hdr_c, text=t["direction"].upper(),
-                     font=(FONT, 8, "bold"), fg=sc, bg=PANEL).pack(side="left")
-            tk.Label(hdr_c, text=f"  {t['asset']}",
-                     font=(FONT, 10, "bold"),
-                     fg=WHITE, bg=PANEL).pack(side="left")
-            tk.Label(hdr_c, text=f"conf {t['confidence']:.0%}",
-                     font=(FONT, 8), fg=AMBER,
-                     bg=PANEL).pack(side="right", padx=4)
-            tk.Label(hdr_c, text=f"{t.get('target_horizon_days', '?')}d",
-                     font=(FONT, 8), fg=DIM,
-                     bg=PANEL).pack(side="right", padx=4)
-            rationale = t.get("rationale", "") or ""
-            tk.Label(card, text=rationale[:250], font=(FONT, 8), fg=DIM2,
-                     bg=PANEL, wraplength=500, justify="left",
-                     anchor="w").pack(fill="x", padx=6, pady=(0, 4))
-    else:
-        tk.Label(left, text="  (no active theses)", font=(FONT, 9),
-                 fg=DIM, bg=BG).pack(pady=6)
-
-    _section(right, "OPEN POSITIONS")
-    if positions:
-        for p in positions:
-            sc = GREEN if p["side"] == "long" else RED
-            card = tk.Frame(right, bg=PANEL,
-                            highlightbackground=BORDER,
-                            highlightthickness=1)
-            card.pack(fill="x", pady=2, padx=2)
-            _attach_hover(card)
-            tk.Label(card,
-                     text=f"  {p['side'].upper()}  {p['asset']}",
-                     font=(FONT, 10, "bold"),
-                     fg=sc, bg=PANEL).pack(anchor="w", padx=6,
-                                           pady=(4, 0))
-            detail = (
-                f"  size ${p['size_usd']:,.0f}  @  "
-                f"{p['entry_price']:,.2f}"
-            )
-            tk.Label(card, text=detail, font=(FONT, 8),
-                     fg=WHITE, bg=PANEL).pack(anchor="w", padx=6,
-                                               pady=(0, 4))
-    else:
-        tk.Label(right, text="  (no open positions)", font=(FONT, 9),
-                 fg=DIM, bg=BG).pack(pady=6)
-
-    _section(parent, "CURRENT REGIME · DETAILS")
-    regime = latest_regime()
-    if regime:
-        reg_name = (regime.get("regime") or "?").upper()
-        conf = regime.get("confidence") or 0.0
-        reg_color = {"RISK_ON": GREEN, "RISK_OFF": RED,
-                     "TRANSITION": AMBER, "UNCERTAINTY": DIM2}.get(
-                         reg_name, WHITE)
-        reg_row = tk.Frame(parent, bg=BG); reg_row.pack(fill="x",
-                                                        pady=PAD_ROW // 2)
-        tk.Label(reg_row, text=reg_name, font=(FONT, 20, "bold"),
-                 fg=reg_color, bg=BG).pack(side="left", padx=(8, 20))
-        col = tk.Frame(reg_row, bg=BG); col.pack(side="left")
-        tk.Label(col, text=f"confidence {conf:.0%}",
-                 font=(FONT, 10), fg=WHITE, bg=BG).pack(anchor="w")
-        tk.Label(col,
-                 text=f"snapshot age {_fmt_age(regime.get('ts', ''))}",
-                 font=(FONT, 8), fg=DIM, bg=BG).pack(anchor="w")
-        reason = regime.get("reason") or ""
-        if reason:
-            tk.Label(parent, text=f"  {reason}", font=(FONT, 8),
-                     fg=DIM2, bg=BG, anchor="w",
-                     wraplength=1000, justify="left").pack(
-                         fill="x", padx=6, pady=(2, 0))
-    else:
-        tk.Label(parent, text="  (no regime snapshot yet)",
-                 font=(FONT, 9), fg=DIM, bg=BG).pack(pady=6)
 
 
 # ── TAB BAR / MAIN RENDER ────────────────────────────────────
@@ -2052,70 +1826,17 @@ def _render_book_tab_v2(parent):
     )
 
 
-def _render_engines_tab_impl(parent):
-    """iPod-classic engine picker — shared component."""
-    try:
-        from config.engines import ENGINES
-        from core import engine_picker as ep
-    except Exception as e:
-        tk.Label(parent, text=f"picker unavailable: {e}",
-                 font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
-        return
-    tracks = ep.build_tracks_from_registry(ENGINES)
-    ep.render(parent, tracks)
 
-
-def _render_engines_tab(parent):
-    """Stage the engine picker so the tab responds before full mount."""
-    _cancel_chunk_jobs(parent)
-    shell = _panel_shell(parent, pady=(0, 0))
-    _section(shell, "ENGINES DESK", pady_top=(0, 0))
-    tk.Label(
-        shell,
-        text="  Loading engine picker, tracks and detail panel...",
-        font=(FONT, 8),
-        fg=DIM,
-        bg=PANEL,
-        anchor="w",
-    ).pack(fill="x", padx=4, pady=(2, 6))
-    started = time.perf_counter()
-
-    def _mount_picker() -> None:
-        try:
-            for child in shell.winfo_children():
-                try:
-                    child.destroy()
-                except Exception:
-                    pass
-            _render_engines_tab_impl(shell)
-        finally:
-            try:
-                from launcher_support.screens._metrics import emit_timing_metric
-
-                emit_timing_metric(
-                    "content.macro_brain.MOTORES.full",
-                    ms=(time.perf_counter() - started) * 1000.0,
-                )
-            except Exception:
-                pass
-
-    job = parent.after_idle(_mount_picker)
-    _track_chunk_job(parent, job)
-
-
-# Tabs in three functional groups — a thin divider is drawn between
-# groups in the tab bar so EUA / BRASIL / CRIPTO (mercados) is visually
-# separate from SINAIS / MACRO (análise), and from REDE / LIVRO /
-# MOTORES (operação). Labels are PT-BR / Valve-ish short.
+# Tabs em dois grupos — divider fino entre mercados (EUA/BRASIL/CRIPTO)
+# e analise+book (MACRO/LIVRO). SINAIS foi dobrado em MACRO; REDE foi
+# absorvido em CRIPTO (BTC on-chain + fees); MOTORES saiu (redundante
+# com Live Cockpit do launcher principal).
 _TABS = [
-    ("EUA",      "1", _render_markets_tab_v4,  "mkt"),
-    ("BRASIL",   "2", _render_br_tab,       "mkt"),
-    ("CRIPTO",   "3", _render_crypto_tab,   "mkt"),
-    ("SINAIS",   "4", _render_insights_tab, "anl"),
-    ("MACRO",    "5", _render_analysis_tab, "anl"),
-    ("REDE",     "6", _render_network_tab_v2,  "ops"),
-    ("LIVRO",    "7", _render_book_tab_v2,  "ops"),
-    ("MOTORES",  "8", _render_engines_tab,  "ops"),
+    ("EUA",     "1", _render_markets_tab_v4, "mkt"),
+    ("BRASIL",  "2", _render_br_tab,         "mkt"),
+    ("CRIPTO",  "3", _render_crypto_tab,     "mkt"),
+    ("MACRO",   "4", _render_analysis_tab,   "anl"),
+    ("LIVRO",   "5", _render_book_tab_v2,    "anl"),
 ]
 
 
@@ -2195,6 +1916,22 @@ def render(parent: tk.Widget, app=None) -> None:
              font=(FONT, 7), fg=DIM, bg=BG).pack(side="right", padx=8)
 
     tk.Frame(outer, bg=AMBER, height=1).pack(fill="x", pady=(2, 0))
+
+    # ── NORTH-STAR WATCHLIST (fixed header) ────────────
+    # 5 tiles XL (BTC · ETH · S&P · DXY · BTC.D) sempre visiveis, tick
+    # update via _TILE_REGISTRY como qualquer outro tile.
+    try:
+        _render_northstar(outer)
+    except Exception as exc:
+        log.warning("render northstar failed: %s", exc)
+
+    # ── STATUS BAR (fixed bottom — packed BEFORE content expands) ──
+    # Pack side=bottom agora pra reservar espaco antes de content_wrap
+    # tomar o resto com expand=True.
+    try:
+        _render_statusbar(outer)
+    except Exception as exc:
+        log.warning("render statusbar failed: %s", exc)
 
     # ── TAB BAR ────────────────────────────────────────
     tab_bar = tk.Frame(outer, bg=BG)

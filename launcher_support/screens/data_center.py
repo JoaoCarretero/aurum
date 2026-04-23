@@ -64,10 +64,11 @@ class DataCenterScreen(Screen):
             (
                 "PRIMARY ROUTES",
                 [
-                    ("H", "RUNS HISTORY", "unified cockpit: local + VPS runs, results, trades, logs", "runs", app._data_runs_history),
-                    ("L", "LIVE RUNS", "historico de runs live/paper/shadow/demo/testnet", "live", app._data_live_runs),
                     ("B", "BACKTESTS", "validated runs, metrics and run-level inspection", "backtests", app._data_backtests),
-                    ("E", "ENGINE LOGS", "running and recent engines with live tail", "engines", app._data_engines),
+                    # Unificado: HISTORY + LIVE + LOGS viraram uma so
+                    # tela /engines com chip bar, mesma organizacao
+                    # visual do /backtests.
+                    ("E", "ENGINES", "runs history, live sessions e engine logs unificados", "engines", app._data_engines),
                 ],
             ),
             (
@@ -118,7 +119,7 @@ class DataCenterScreen(Screen):
         app.h_path.configure(text="> DATA")
         app.h_stat.configure(text="CENTER", fg=AMBER_D)
         app.f_lbl.configure(
-            text="ESC voltar  |  L live runs  |  B backtests  |  E engines  |  R reports  |  P lake  |  X export"
+            text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P lake  |  X export"
         )
         app._kb("<Escape>", lambda: app._menu("main"))
         app._kb("<Key-0>", lambda: app._menu("main"))
@@ -139,10 +140,10 @@ class DataCenterScreen(Screen):
             )
 
         stats = {
-            "runs": "banco de dados",
-            "live": f"{live_count} runs on db",
             "backtests": f"{bt_count} runs on disk",
-            "engines": f"{eng_running} running | {eng_total} total",
+            # ENGINES unifica HISTORY + LIVE + LOGS — mostra os 3
+            # contadores juntos no status tag pra informatividade.
+            "engines": f"{live_count} live  |  {eng_running}/{eng_total} running",
             "cache": cache_tag,
             "reports": f"{rep_count} files indexed",
             "export": "< 2 MB JSON",
@@ -153,8 +154,6 @@ class DataCenterScreen(Screen):
                 lbl.configure(text=f" {value} ")
 
         for key_label, cmd in {
-            "h": app._data_runs_history,
-            "l": app._data_live_runs,
             "b": app._data_backtests,
             "e": app._data_engines,
             "p": app._data_lake,

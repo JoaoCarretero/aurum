@@ -1980,21 +1980,26 @@ def render(
         cv = bar_host["canvas"]
         if cv is None or not cv.winfo_exists():
             return
-        cv.delete("all")
-        cv.update_idletasks()
+        # Redraw com tag "bar" em vez de delete("all") + update_idletasks.
+        # O update_idletasks anterior forcava layout no meio da pintura,
+        # deixando a tela ver 1 frame com canvas vazio antes do preenchido
+        # — o flicker que o usuario reporta. Usando tag especifica, o
+        # highlight frame (outline do canvas) fica intacto e so as barras
+        # sao redesenhadas por cima do fill BG2 (sem flash).
+        cv.delete("bar")
         w = cv.winfo_width() or 300
         h = cv.winfo_height() or 10
         pad = 1
         fw = int((w - pad * 2) * (state["prog_pct"] / 100))
         if fw > 0:
             cv.create_rectangle(pad, pad, pad + fw, h - pad,
-                                outline="", fill=AMBER)
+                                outline="", fill=AMBER, tags="bar")
             if state["running"]:
                 state["pulse"] = (state["pulse"] + 4) % max(fw, 20)
                 sx = pad + state["pulse"]
                 cv.create_rectangle(max(pad, sx - 4), pad,
                                     min(pad + fw, sx + 4), h - pad,
-                                    outline="", fill=AMBER_H)
+                                    outline="", fill=AMBER_H, tags="bar")
         if bar_host["pct_lbl"] and bar_host["pct_lbl"].winfo_exists():
             bar_host["pct_lbl"].configure(
                 text=f"{int(state['prog_pct'])}%")
@@ -2089,14 +2094,28 @@ def render(
 
     def _set_progress(slug: str, pct: float,
                       tail: str = "", running: bool = True):
-        """External hook — caller tells picker: 'engine `slug` is at `pct`%'."""
+        """External hook — caller tells picker: 'engine `slug` is at `pct`%'.
+
+        Throttle pesado pra evitar trava de UI em engines que logam muito
+        (MILLENNIUM ~100+ linhas/s durante WF/MC). _paint_sel + _paint_modules
+        destroem e reconstroem widgets — caros. So rodam em transicoes de
+        running (start/stop) ou a cada ~800ms quando rodando. _repaint_bar
+        continua rodando todo tick (barato, so delete("bar") + 2 rects).
+        """
+        prev = state["prog_by_slug"].get(slug, {})
+        prev_running = bool(prev.get("running", False))
         state["prog_by_slug"][slug] = {
             "pct": max(0.0, min(100.0, float(pct))),
             "tail": (tail or "")[:240],
             "running": bool(running),
         }
-        _paint_sel()
-        _paint_modules(modules)
+        now = time.monotonic()
+        last_sidebar = state.get("_last_sidebar_paint", 0.0)
+        is_transition = bool(running) != prev_running
+        if is_transition or (now - last_sidebar) >= 0.8:
+            state["_last_sidebar_paint"] = now
+            _paint_sel()
+            _paint_modules(modules)
         cur = tracks[state["sel"]] if tracks else None
         if not cur or cur.slug != slug:
             return

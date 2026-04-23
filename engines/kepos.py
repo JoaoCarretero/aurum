@@ -582,6 +582,38 @@ def _pnl_with_costs(direction: int, entry: float, exit_p: float, size: float,
 # Backtest orchestrator
 # ════════════════════════════════════════════════════════════════════
 
+def _summarize_symbol_trades(trades: list[dict]) -> dict:
+    wins = sum(1 for t in trades if t["result"] == "WIN")
+    return {
+        "n_trades": len(trades),
+        "wins": wins,
+        "losses": len(trades) - wins,
+        "pnl": round(sum(t["pnl"] for t in trades), 2),
+    }
+
+
+def run_backtest_on_features(
+    all_features: dict[str, pd.DataFrame],
+    params: Optional[KeposParams] = None,
+    initial_equity: float = ACCOUNT_SIZE,
+) -> tuple[list, dict, dict]:
+    """Run KEPOS on pre-computed features for closed-grid batteries."""
+    params = params or KeposParams()
+    all_trades: list[dict] = []
+    all_vetos: dict[str, int] = defaultdict(int)
+    per_sym: dict[str, dict] = {}
+
+    for sym, df_feat in all_features.items():
+        log.info("scanning %s (%d bars) [precomputed]", sym, len(df_feat))
+        trades, vetos = scan_symbol(df_feat, sym, params, initial_equity)
+        all_trades.extend(trades)
+        for k, v in vetos.items():
+            all_vetos[k] += v
+        per_sym[sym] = _summarize_symbol_trades(trades)
+
+    return all_trades, dict(all_vetos), per_sym
+
+
 def run_backtest(
     all_dfs: dict[str, pd.DataFrame],
     params: Optional[KeposParams] = None,
@@ -600,13 +632,7 @@ def run_backtest(
         all_trades.extend(trades)
         for k, v in vetos.items():
             all_vetos[k] += v
-        wins = sum(1 for t in trades if t["result"] == "WIN")
-        per_sym[sym] = {
-            "n_trades": len(trades),
-            "wins": wins,
-            "losses": len(trades) - wins,
-            "pnl": round(sum(t["pnl"] for t in trades), 2),
-        }
+        per_sym[sym] = _summarize_symbol_trades(trades)
 
     return all_trades, dict(all_vetos), per_sym
 

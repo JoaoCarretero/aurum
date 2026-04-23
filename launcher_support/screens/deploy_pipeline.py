@@ -5,6 +5,7 @@ import time
 import tkinter as tk
 from typing import Any
 
+from core.ui.scroll import bind_mousewheel
 from core.ui.ui_palette import AMBER, AMBER_D, BG, BG2, BG3, BORDER, DIM, DIM2, FONT, PANEL, WHITE
 from launcher_support import deploy_pipeline
 from launcher_support.screens.base import Screen
@@ -110,14 +111,7 @@ class DeployPipelineScreen(Screen):
         list_sb.pack(side="right", fill="y")
         self._list_canvas = list_canvas
 
-        def _list_wheel(event: tk.Event) -> None:
-            try:
-                list_canvas.yview_scroll(-1 * (event.delta // 120), "units")
-            except Exception:
-                pass
-
-        self._bind(list_canvas, "<Enter>", lambda _e: list_canvas.bind_all("<MouseWheel>", _list_wheel))
-        self._bind(list_canvas, "<Leave>", lambda _e: list_canvas.unbind_all("<MouseWheel>"))
+        bind_mousewheel(list_canvas)
 
         right = tk.Frame(split, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
         right.grid(row=0, column=1, sticky="nsew")

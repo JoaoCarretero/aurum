@@ -56,15 +56,17 @@ class MainMenuScreen(Screen):
         if canvas is None:
             return
 
-        # Tiles grandes (320x170) — preenchem a tela com o espaco que
-        # abriu dos paineis DESK OVERVIEW / ACTIVE CONTEXT. Centers em
-        # x=200/720 deixam 40px de gap com a borda do frame e 48px com
-        # o CD ao centro.
+        # Tiles grandes (340x200) — preenchem o frame na largura (edges
+        # a ~32/888) e abrem gap vertical de 40px entre top e bottom
+        # row pra eliminar o overlap que existia com 170h. Centers
+        # ficam em x=202/718 (~18px de folga ate o CD) e y=150/390
+        # (CD ao centro em y=270). _render_main_menu sobrescreve estes
+        # slots com os valores escalados; mantidos aqui pra fallback.
         app._active_tile_slots = [
-            ("nw", 200, 170),
-            ("ne", 720, 170),
-            ("sw", 200, 370),
-            ("se", 720, 370),
+            ("nw", 202, 150),
+            ("ne", 718, 150),
+            ("sw", 202, 390),
+            ("se", 718, 390),
         ]
         app._active_cd_center = (460, 270)
         app._menu_render_scale = 1.0

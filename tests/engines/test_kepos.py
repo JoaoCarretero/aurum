@@ -20,6 +20,7 @@ from engines.kepos import (
     decide_direction,
     kepos_size,
     run_backtest,
+    run_backtest_on_features,
     scan_symbol,
 )
 
@@ -419,6 +420,26 @@ def test_run_backtest_returns_summary_shape():
         "final_equity", "max_dd_pct", "sharpe", "sortino",
     }
     assert summary["n_trades"] == len(trades)
+
+
+def test_run_backtest_on_features_matches_regular_path():
+    df = _make_ohlcv(3500, seed=41)
+    params = KeposParams(
+        hawkes_window_bars=1000, hawkes_refit_every=200,
+        hawkes_min_events=15, hawkes_vol_lookback=80,
+    )
+    features = compute_features(df, params)
+
+    direct_trades, direct_vetos, direct_per_sym = run_backtest(
+        {"SYNTH": df}, params=params, initial_equity=ACCOUNT_SIZE,
+    )
+    cached_trades, cached_vetos, cached_per_sym = run_backtest_on_features(
+        {"SYNTH": features}, params=params, initial_equity=ACCOUNT_SIZE,
+    )
+
+    assert cached_trades == direct_trades
+    assert cached_vetos == direct_vetos
+    assert cached_per_sym == direct_per_sym
 
 
 def test_run_backtest_size_respects_risk_cap():

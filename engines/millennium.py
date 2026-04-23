@@ -1942,6 +1942,12 @@ def _menu():
     print(f"\n  {'─'*W}")
     print(f"  MILLENNIUM  ·  Multistrategy Backtest")
     print(f"  {'─'*W}")
+    # Guard anti-infinite-loop: quando spawnado pelo launcher, stdin recebe
+    # alguns inputs auto-respondidos e depois fecha. safe_input() captura
+    # EOFError e retorna "" — sem este contador, o loop imprimia
+    # "opcao invalida" a milhoes de iter/s (742MB de log em 7 min no
+    # incidente de 2026-04-22). 12 tentativas inuteis = aborta.
+    _empty_streak = 0
     while True:
         print()
         print(f"  [1]  CORE OPERATIONAL (CITADEL + RENAISSANCE + JUMP)")
@@ -1957,11 +1963,55 @@ def _menu():
         op = safe_input("  > ").strip()
         if op == "0": sys.exit(0)
         if op in ("1","2","3","4","5","6","7","8"): return op
+        if op == "":
+            _empty_streak += 1
+            if _empty_streak >= 12:
+                print("  stdin fechou sem opcao valida — abortando pra nao loopar infinitamente")
+                sys.exit(2)
+        else:
+            _empty_streak = 0
         print("  opcao invalida")
+
+
+def _parse_cli_args():
+    """CLI args pro launcher — --no-menu pula o _menu interativo e usa
+    argumentos em vez de stdin. Ver CITADEL / JUMP pro padrao. Defaults:
+    CORE OPERATIONAL (op=1), days=SCAN_DAYS, leverage=1.
+    """
+    import argparse
+    ap = argparse.ArgumentParser(description="MILLENNIUM — multistrategy backtest")
+    ap.add_argument("--no-menu", action="store_true",
+                    help="Pula menu interativo, usa defaults ou flags")
+    ap.add_argument("--op", type=str, default="1",
+                    choices=["1","2","3","4","5","6","7","8"],
+                    help="1=CORE OPERATIONAL default")
+    ap.add_argument("--days", type=int, default=None)
+    ap.add_argument("--basket", type=str, default=None)
+    ap.add_argument("--leverage", type=float, default=None)
+    ap.add_argument("--plots", action="store_true")
+    return ap.parse_known_args()[0]
+
 
 if __name__ == "__main__":
     setup_multistrategy()
-    op = _menu()
+    _cli_args = _parse_cli_args()
+    if _cli_args.no_menu:
+        op = _cli_args.op
+        # Apply --days / --basket / --leverage to globals the backtest
+        # reads later. Mirrors the effect of _ask_periodo / _ask_config.
+        if _cli_args.days and 7 <= _cli_args.days <= 1500:
+            from engines import citadel as _bt
+            d = _cli_args.days
+            _bt.SCAN_DAYS = d; _bt.N_CANDLES = d*24*4
+            _bt.HTF_N_CANDLES_MAP = {"1h":d*24+200,"4h":d*6+100,"1d":d+100}
+            SCAN_DAYS = d; N_CANDLES = d*24*4
+            HTF_N_CANDLES_MAP = {"1h":d*24+200,"4h":d*6+100,"1d":d+100}
+        if _cli_args.leverage and 0.1 <= _cli_args.leverage <= 20:
+            from engines import citadel as _bt
+            _bt.LEVERAGE = float(_cli_args.leverage)
+            LEVERAGE = _bt.LEVERAGE
+    else:
+        op = _menu()
     LABELS = {
         "1":"CORE OPERATIONAL", "2":"CITADEL", "3":"RENAISSANCE",
         "4":"DE SHAW", "5":"JUMP", "6":"BRIDGEWATER",

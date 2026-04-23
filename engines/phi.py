@@ -1278,6 +1278,25 @@ def save_run(run_dir: Path, trades: list[dict], summary: dict,
     atomic_write(run_dir / "config.json",
                  json.dumps(asdict(params), indent=2))
 
+    # Registra o run em data/index.json pra aparecer em DATA > BACKTEST
+    # RUNS e no engine picker LAST RUNS (mesmo caminho de KEPOS/MEDALLION).
+    # Sem isto, a run fica "fantasma" — summary existe no disco mas nenhuma
+    # UI que le o index sabe que ela aconteceu.
+    try:
+        from core.ops.run_manager import append_to_index, snapshot_config
+        cfg_snap = snapshot_config()
+        cfg_snap["PHI_PARAMS"] = asdict(params)
+        append_to_index(run_dir, {
+            **summary,
+            "engine": "PHI",
+            "basket": meta.get("basket") or "default",
+            "interval": getattr(params, "interval", None) or "15m",
+            "period_days": meta.get("days") or meta.get("scan_days"),
+            "n_symbols": len(per_sym),
+        }, cfg_snap, overfit_results=None)
+    except Exception as e:  # pragma: no cover
+        logging.getLogger("PHI").warning("append_to_index failed: %s", e)
+
 
 def _setup_logging(run_dir: Path) -> None:
     fh = logging.FileHandler(run_dir / "log.txt", encoding="utf-8")

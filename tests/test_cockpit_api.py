@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import asyncio
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -21,8 +22,26 @@ def api_app(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(api_app):
-    with TestClient(api_app) as client:
-        yield client
+    transport = httpx.ASGITransport(app=api_app)
+
+    class SyncASGIClient:
+        def request(self, method: str, url: str, **kwargs):
+            async def _send():
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.request(method, url, **kwargs)
+
+            return asyncio.run(_send())
+
+        def get(self, url: str, **kwargs):
+            return self.request("GET", url, **kwargs)
+
+        def post(self, url: str, **kwargs):
+            return self.request("POST", url, **kwargs)
+
+    return SyncASGIClient()
 
 
 def _make_run(data_root: Path, engine_subdir: str, run_id: str,

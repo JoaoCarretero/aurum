@@ -285,10 +285,20 @@ def spawn(engine: str, stdin_lines: list[str] | None = None,
     env["PYTHONPATH"] = str(Path.cwd())
 
     try:
+        if sys.platform == "win32":
+            # CREATE_NO_WINDOW evita que python.exe abra um console
+            # flashando na tela quando o launcher spawna engines a partir
+            # da UI. CREATE_NEW_PROCESS_GROUP preserva o isolamento de
+            # sinais (Ctrl+C no pai nao derruba o filho).
+            _creationflags = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            )
+        else:
+            _creationflags = 0
         proc = subprocess.Popen(
             cmd, stdin=stdin_pipe, stdout=log_fh, stderr=subprocess.STDOUT,
             cwd=str(Path.cwd()), env=env,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+            creationflags=_creationflags,
         )
         if stdin_data:
             try:
@@ -423,6 +433,7 @@ def stop_proc(pid: int, expected: dict | None = None) -> bool:
                 ["taskkill", "/F", "/PID", str(pid)],
                 capture_output=True,
                 timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             if result.returncode != 0:
                 return False

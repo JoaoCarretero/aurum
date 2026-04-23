@@ -1,0 +1,36 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Data outputs (grandes, nao versionar)
+data/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keys & credentials — NUNCA versionar
+config/keys.json
+config/vps.json
+config/vpn.json
+
+# Egg / editable install
+*.egg-info/
+
+# Node
+node_modules/
+.env
+
+# PyInstaller
+build/
+dist/
+*.spec

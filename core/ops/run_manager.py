@@ -322,12 +322,14 @@ def append_to_index(run_dir, summary, config, overfit_results=None, entry_overri
         "MILLENNIUM": "millennium", "TWO SIGMA": "twosigma",
         "AQR": "aqr", "JANE STREET": "janestreet",
         "KEPOS": "kepos", "GRAHAM": "graham", "MEDALLION": "medallion",
+        "PHI": "phi", "ORNSTEIN": "ornstein",
     }
     _PARENT_TO_SLUG = {
         "bridgewater": "bridgewater", "jump": "jump", "deshaw": "deshaw",
         "renaissance": "renaissance", "millennium": "millennium",
         "twosigma": "twosigma", "aqr": "aqr", "janestreet": "janestreet",
         "kepos": "kepos", "graham": "graham", "medallion": "medallion",
+        "phi": "phi", "ornstein": "ornstein",
         "runs": "citadel",
     }
     engine_slug = (
@@ -348,13 +350,16 @@ def append_to_index(run_dir, summary, config, overfit_results=None, entry_overri
         "basket":       s.get("basket") or config.get("BASKET_EFFECTIVE") or "default",
         "n_symbols":    s.get("n_symbols"),
         "n_candles":    s.get("n_candles") or config.get("N_CANDLES"),
-        "n_trades":     s.get("n_trades"),
+        # Fallbacks cobrem variacao de schema entre engines:
+        # PHI/ORNSTEIN chamam 'total_trades' / 'max_drawdown' / 'total_pnl'
+        # enquanto CITADEL/KEPOS usam 'n_trades' / 'max_dd_pct' / 'pnl'.
+        "n_trades":     s.get("n_trades") or s.get("total_trades"),
         "win_rate":     s.get("win_rate"),
         "pnl":          s.get("pnl") or s.get("total_pnl"),
         "roi_pct":      s.get("roi_pct") or s.get("roi"),
         "sharpe":       s.get("sharpe"),
         "sortino":      s.get("sortino"),
-        "max_dd_pct":   s.get("max_dd_pct") or s.get("max_dd"),
+        "max_dd_pct":   s.get("max_dd_pct") or s.get("max_dd") or s.get("max_drawdown"),
         "overfit_pass": None,
         "overfit_warn": None,
         "config_hash":  config_hash,
