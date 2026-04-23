@@ -1900,39 +1900,12 @@ def _render_log_panel(parent, column, state, launcher, proc, snap):
     _schedule_log_tail(state, launcher, proc)
 
 
-_COCKPIT_CLIENT_SINGLETON: object | None = None
-
-
 def _get_cockpit_client():
-    """Lazy singleton. Returns None se config ausente ou invalida.
-
-    Config vem do runtime key store bloco 'cockpit_api'. Só cacheia
-    resultado POSITIVO — tentativas que falham voltam None mas deixam
-    o singleton em None pra retry na próxima chamada. Durante o boot
-    o keys.json pode estar sendo lido concorrentemente (backup hook,
-    worktree sync) e uma falha transitória travaria o cockpit pelo
-    resto da sessão se fosse cached.
+    """Backward-compat alias. New code should import from
+    launcher_support.engines_live.data.cockpit:get_client directly.
     """
-    global _COCKPIT_CLIENT_SINGLETON
-    if _COCKPIT_CLIENT_SINGLETON is not None:
-        return _COCKPIT_CLIENT_SINGLETON
-    try:
-        data = load_runtime_keys()
-        block = data.get("cockpit_api")
-        if not block or not block.get("base_url") or not block.get("read_token"):
-            return None
-        from launcher_support.cockpit_client import CockpitClient, CockpitConfig
-        cfg = CockpitConfig(
-            base_url=block["base_url"],
-            read_token=block["read_token"],
-            admin_token=block.get("admin_token"),
-            timeout_sec=float(block.get("timeout_sec", 5.0)),
-        )
-        _COCKPIT_CLIENT_SINGLETON = CockpitClient(
-            cfg, cache_dir=Path("data/.cockpit_cache"))
-        return _COCKPIT_CLIENT_SINGLETON
-    except (KeyStoreError, ValueError, TypeError):
-        return None
+    from launcher_support.engines_live.data.cockpit import get_client
+    return get_client()
 
 
 def _is_remote_run(run_dir: Path) -> bool:
