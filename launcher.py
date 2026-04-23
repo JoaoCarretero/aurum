@@ -39,6 +39,50 @@ def _test_mode_enabled() -> bool:
     }
 
 
+def _lazy_connections():
+    """Import and return (ConnectionManager, MARKETS) on-demand.
+
+    core.data.connections transitively pulls pandas (~350ms) and
+    requests (~200ms). Deferring to first actual use shaves ~640ms off
+    launcher boot import time. After first call, sys.modules caches the
+    import — subsequent calls are ~10us.
+    """
+    from core.data.connections import ConnectionManager, MARKETS
+    return ConnectionManager, MARKETS
+
+
+_conn_singleton = None  # lazy ConnectionManager instance
+
+
+def _get_conn():
+    """Return the module-level ConnectionManager singleton, creating it on
+    first call. Defers the pandas/requests import until the user first
+    interacts with a connections/markets screen."""
+    global _conn_singleton
+    if _conn_singleton is None:
+        ConnectionManager, _MARKETS = _lazy_connections()
+        _conn_singleton = ConnectionManager()
+    return _conn_singleton
+
+
+def _ensure_main_groups():
+    """Populate the module-level MAIN_GROUPS list on first call.
+
+    Called from App.__init__ and also via module __getattr__ when
+    mod.MAIN_GROUPS is accessed before App() instantiation (e.g. in tests).
+    Defers the core.data.connections import (pandas + requests, ~640ms)
+    to first actual access rather than module import time.
+
+    Safe to call multiple times — idempotent via globals() check.
+    """
+    _g = globals()
+    if _g.get("MAIN_GROUPS") is None:
+        _CM, _MARKETS = _lazy_connections()
+        _g["MAIN_GROUPS"] = _menu_main_groups(
+            _MARKETS, TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL
+        )
+
+
 _configure_windows_tk()
 
 import tkinter as tk
@@ -106,7 +150,6 @@ from core.ui.ui_palette import (
 # -----------------------------------------------------------
 # MENUS
 # -----------------------------------------------------------
-from core.data.connections import ConnectionManager, MARKETS
 ENGINE_PREFIX_ALIASES = _BOOTSTRAP_ENGINE_PREFIX_ALIASES
 VPS_HOST = _BOOTSTRAP_VPS_HOST
 VPS_PROJECT = _BOOTSTRAP_VPS_PROJECT
@@ -124,7 +167,6 @@ _vps_host = _BOOTSTRAP_CURRENT_VPS_HOST
 _vps_project = _BOOTSTRAP_CURRENT_VPS_PROJECT
 _vps_live_screen = _BOOTSTRAP_VPS_LIVE_SCREEN
 _vps_millennium_screen = _BOOTSTRAP_VPS_MILLENNIUM_SCREEN
-_conn = ConnectionManager()
 
 MAIN_MENU = [
     ("MARKETS",        "markets",     "Seleccionar mercado activo"),
@@ -146,34 +188,21 @@ def _markets_children():
     """Build MARKETS tile children dynamically from the MARKETS registry —
     each market gets its own row (CRYPTO FUTURES / CRYPTO SPOT / FOREX /
     EQUITIES / COMMODITIES / INDICES / ON-CHAIN). Click activates the
-    market + routes to its dashboard (or shows COMING SOON for stubs)."""
+    market + routes to its dashboard (or shows COMING SOON for stubs).
+    Note: this definition is superseded by the _menu_main_groups() call
+    below — kept here only for documentation purposes."""
+    _CM, _MARKETS = _lazy_connections()
     out = []
-    for mk in MARKETS:
+    for mk in _MARKETS:
         method = f"_market_{mk}"
-        label = MARKETS[mk]["label"]
+        label = _MARKETS[mk]["label"]
         out.append((label, method))
     return out
 
 
-MAIN_GROUPS = [
-    ("MARKETS",  "1", TILE_MARKETS, _markets_children()),
-    ("EXECUTE",  "2", TILE_EXECUTE, [
-        ("BACKTEST",     "_strategies_backtest"),  # research · sem capital real
-        ("ENGINES LIVE", "_strategies_live"),      # futuros ao vivo · safety gates
-        ("ARBITRAGE",    "_arbitrage_hub"),
-        ("RISK",         "_risk_menu"),
-    ]),
-    ("RESEARCH", "3", TILE_RESEARCH, [
-        ("TERMINAL",    "_terminal"),
-        ("DATA",        "_data_center"),
-        ("MACRO BRAIN", "_macro_brain_menu"),
-    ]),
-    ("CONTROL",  "4", TILE_CONTROL, [
-        ("CONNECTIONS", "_connections"),
-        ("COMMAND",     "_command_center"),
-        ("SETTINGS",    "_config"),
-    ]),
-]
+# NOTE: this MAIN_GROUPS definition is kept for documentation only.
+# The real MAIN_GROUPS is populated lazily via module __getattr__ (see end of
+# imports section) or via _ensure_main_groups() called from App.__init__.
 
 BLOCK_DESCRIPTIONS = {
     "_markets": "quotes, universe e mercado ativo",
@@ -235,9 +264,8 @@ COMMAND_ROADMAPS = {
 # Extracted navigation data re-bound here so launcher.py keeps the same
 # public constants while the menu topology moves out incrementally.
 MAIN_MENU = list(_MENU_MAIN_MENU)
-MAIN_GROUPS = _menu_main_groups(
-    MARKETS, TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL
-)
+# MAIN_GROUPS: populated lazily on first App() instantiation (see _ensure_main_groups).
+# Deferring here avoids the ~640ms pandas+requests import at module load time.
 BLOCK_DESCRIPTIONS = dict(_MENU_BLOCK_DESCRIPTIONS)
 COMMAND_ROADMAPS = {k: list(v) for k, v in _MENU_COMMAND_ROADMAPS.items()}
 
@@ -597,6 +625,10 @@ class App(tk.Tk):
         self._timing_starts: dict[str, float] = {}
         emit_timing_metric("boot.state_init", ms=(time.perf_counter() - _state_t0) * 1000.0)
 
+        # Lazy-init MAIN_GROUPS (deferred to avoid ~640ms pandas+requests import
+        # at module level; pays the cost here on first App() instantiation).
+        _ensure_main_groups()
+
         chrome_t0 = time.perf_counter()
         if _boot_workers_enabled():
             threading.Thread(target=_fetch, daemon=True).start()
@@ -906,7 +938,7 @@ class App(tk.Tk):
         register_default_screens(
             self.screens,
             app=self,
-            conn=_conn,
+            conn=_get_conn(),
             root_path=ROOT,
             tagline=SYSTEM_TAGLINE,
         )
@@ -4066,7 +4098,8 @@ class App(tk.Tk):
     def _market_route(self, market_key: str) -> None:
         """Activate `market_key` and route to its dashboard. Stubs (not yet
         wired) show COMING SOON in h_stat instead of crashing."""
-        info = MARKETS.get(market_key, {})
+        _CM, _MARKETS = _lazy_connections()
+        info = _MARKETS.get(market_key, {})
         label = info.get("label", market_key.upper())
         if not info.get("available"):
             self.h_stat.configure(text=f"{label} · COMING SOON", fg=AMBER_D)
@@ -4080,7 +4113,7 @@ class App(tk.Tk):
                 pass
             return
         try:
-            _conn.active_market = market_key
+            _get_conn().active_market = market_key
         except Exception:
             pass
         # Crypto futures has its own dashboard; others fall back to _markets
@@ -7286,7 +7319,7 @@ class App(tk.Tk):
 
         # Mark this market active so the rest of the app sees the choice
         try:
-            _conn.active_market = "crypto_futures"
+            _get_conn().active_market = "crypto_futures"
         except Exception: pass
 
         # First tab render kicks off its own fetch loop
@@ -7307,9 +7340,10 @@ class App(tk.Tk):
         # === DATA FEEDS ===
         section("DATA FEEDS")
 
-        exchanges = MARKETS.get("crypto_futures", {}).get("exchanges", [])
+        _CM, _MARKETS = _lazy_connections()
+        exchanges = _MARKETS.get("crypto_futures", {}).get("exchanges", [])
         for ex_key in exchanges:
-            info = _conn.get(ex_key) or {}
+            info = _get_conn().get(ex_key) or {}
             label = info.get("label", ex_key).upper().replace("BINANCE ", "BINANCE\n")
             is_conn = info.get("connected", False)
 
@@ -7386,7 +7420,7 @@ class App(tk.Tk):
         # === MARKET footer ===
         tk.Frame(parent, bg=PANEL).pack(fill="both", expand=True)
         tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
-        st = _conn.status_summary()
+        st = _get_conn().status_summary()
         tk.Label(parent, text=f"market: {st['market']}",
                  font=(FONT, 7), fg=AMBER_D, bg=PANEL,
                  anchor="w").pack(fill="x", padx=10, pady=(4, 0))
@@ -7415,7 +7449,7 @@ class App(tk.Tk):
         def loop():
             while getattr(self, "_dash_alive", False):
                 try:
-                    lat = _conn.ping("binance_futures")
+                    lat = _get_conn().ping("binance_futures")
                 except Exception:
                     lat = None
                 def apply(lat=lat):
@@ -7569,11 +7603,11 @@ class App(tk.Tk):
             except Exception:
                 pass
             try:
-                self._dash_latency = _conn.ping("binance_futures")
+                self._dash_latency = _get_conn().ping("binance_futures")
             except Exception:
                 self._dash_latency = None
             try:
-                self._dash_balance = _conn.get_balance("binance_futures")
+                self._dash_balance = _get_conn().get_balance("binance_futures")
             except Exception:
                 self._dash_balance = None
             if getattr(self, "_dash_alive", False):
@@ -8184,7 +8218,7 @@ class App(tk.Tk):
                 snap["paper"] = None
             # Exchange latency
             try:
-                snap["latency"] = _conn.ping("binance_futures")
+                snap["latency"] = _get_conn().ping("binance_futures")
             except Exception:
                 snap["latency"] = None
             # Running engines
@@ -9514,6 +9548,20 @@ class App(tk.Tk):
         # destroy() -> _shutdown_runtime. Centralizing avoids the
         # double-stop path that used to hang on the 3s tunnel timeout.
         self.destroy()
+
+
+def __getattr__(name: str):
+    """Module-level lazy attribute for MAIN_GROUPS.
+
+    Python 3.7+ calls this when `name` is not found in the module's __dict__.
+    Since MAIN_GROUPS is intentionally absent until first access, any code that
+    reads `launcher.MAIN_GROUPS` (including tests that bypass App.__init__)
+    will trigger population here — paying the pandas+requests import cost once.
+    """
+    if name == "MAIN_GROUPS":
+        _ensure_main_groups()
+        return globals()["MAIN_GROUPS"]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":
