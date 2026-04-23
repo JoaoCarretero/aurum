@@ -68,6 +68,11 @@ from launcher_support.research_desk.paperclip_process import (
     default_paperclip_cmd,
 )
 from launcher_support.research_desk.pipeline_panel import PipelinePanel
+from launcher_support.research_desk.ticket_form import (
+    NewTicketModal,
+    TicketDraft,
+    draft_to_api_payload,
+)
 from launcher_support.screens.base import Screen
 
 # Polling rhythm — spec says 5s. Health check separately uses shorter
@@ -155,6 +160,14 @@ class ResearchDeskScreen(Screen):
         self._action_btn.pack(side="left", padx=(8, 0))
         self._action_btn.bind("<Button-1>", lambda _e: self._toggle_paperclip())
 
+        new_ticket_btn = tk.Label(
+            pill, text=f"  {s.BTN_NEW_TICKET}  ",
+            font=(FONT, 7, "bold"),
+            fg=BG, bg=AMBER, cursor="hand2", padx=4, pady=2,
+        )
+        new_ticket_btn.pack(side="left", padx=(8, 0))
+        new_ticket_btn.bind("<Button-1>", lambda _e: self._open_new_ticket())
+
         tk.Frame(parent, bg=BG2, height=6).pack(fill="x")
         tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
@@ -193,9 +206,13 @@ class ResearchDeskScreen(Screen):
     def _stub_action(self, action: str) -> Any:
         """Retorna handler generico que mostra msg no h_stat.
 
-        Tasks 1.6, 3.2, 3.4 substituem por handlers reais (ticket form,
-        AGENTS.md editor, history view).
+        Tasks 3.2 e 3.4 substituem configure/history por handlers reais
+        (AGENTS.md editor + history view). Assign ja foi ligado ao
+        NewTicketModal abaixo.
         """
+        if action == "assign":
+            return self._open_new_ticket_for_agent
+
         def handler(agent: AgentIdentity) -> None:
             try:
                 self.app.h_stat.configure(
@@ -208,6 +225,36 @@ class ResearchDeskScreen(Screen):
             except Exception:
                 pass
         return handler
+
+    # ── Ticket flow ───────────────────────────────────────────────
+
+    def _open_new_ticket(self) -> None:
+        NewTicketModal(
+            self.container,
+            submit_callback=self._submit_ticket,
+            default_assignee=AGENTS[0],
+        )
+
+    def _open_new_ticket_for_agent(self, agent: AgentIdentity) -> None:
+        NewTicketModal(
+            self.container,
+            submit_callback=self._submit_ticket,
+            default_assignee=agent,
+        )
+
+    def _submit_ticket(self, draft: TicketDraft) -> tuple[bool, str]:
+        """POST /api/companies/:id/issues. Retorna (ok, msg) pro modal."""
+        if not self._client.is_online():
+            return False, "paperclip offline"
+        payload = draft_to_api_payload(draft)
+        try:
+            result = self._client.create_issue(COMPANY_ID, payload)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"api: {exc}"
+        issue_id = result.get("id") if isinstance(result, dict) else None
+        # Refresca pipeline imediatamente pra mostrar o novo ticket
+        self._after(50, self._poll_state)
+        return True, f"id={issue_id or '?'}"
 
     def _build_pipeline_panel(self, parent: tk.Frame) -> None:
         frame = tk.Frame(
@@ -280,6 +327,12 @@ class ResearchDeskScreen(Screen):
 
         app._kb("<Escape>", self._back)
         app._kb("<Key-0>", self._back)
+        app._kb("<Key-n>", self._open_new_ticket)
+        app._kb("<Key-N>", self._open_new_ticket)
+        app._kb("<Key-r>", self._poll_state)
+        app._kb("<Key-R>", self._poll_state)
+        app._kb("<Key-s>", self._toggle_paperclip)
+        app._kb("<Key-S>", self._toggle_paperclip)
         app._bind_global_nav()
 
         # Primeiro tick imediato pra evitar mostrar OFFLINE por 5s
