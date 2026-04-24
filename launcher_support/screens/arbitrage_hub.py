@@ -35,7 +35,7 @@ def render(app, tab: str = "cex-cex"):
     app.history.append("main")
     app.h_path.configure(text=f"> ARBITRAGE > {tab.upper()}")
     app.h_stat.configure(text="DESK", fg=AMBER_D)
-    app.f_lbl.configure(text="1-3 switch tab  |  R refresh  |  ESC back")
+    app.f_lbl.configure(text="1-8 switch tab  |  R refresh  |  ESC back")
     app._kb("<Escape>", lambda: app._menu("main"))
     app._bind_global_nav()
 
@@ -99,65 +99,88 @@ def render(app, tab: str = "cex-cex"):
     except Exception:
         pass
 
-    # -- Tab strip --
-    # Phase 1 redesign (2026-04-22): 3 tabs in a single row, no groups.
-    # Simpler info architecture: OPPS (all opportunities, unified) /
-    # POSITIONS (paper engine live) / HISTORY (closed trades).
-    # Keys 1-3 only.
-    grouped_tabs: list[tuple[str, list[tuple[str, str, str]]]] = [
-        ("", [(key, tid, label) for key, tid, label, _ in app._ARB_TAB_DEFS])
-    ]
-
+    # -- Tab strip (v2 density 2026-04-23: 8 tabs, type category + meta category)
+    # Layout:  [1 CEX-CEX] [2 DEX-DEX] ... [6 BASIS]  |  [7 POSITIONS] [8 HISTORY]
+    # The `|` separator lives between type tabs (6) and meta tabs (2).
     tabs_frame = tk.Frame(outer, bg=BG)
     tabs_frame.pack(fill="x", padx=16, pady=(0, 0))
     app._arb_tab = tab
     app._arb_tab_labels = {}
 
-    first_group = True
-    for group_name, group_items in grouped_tabs:
-        if not first_group:
-            tk.Frame(tabs_frame, bg=BORDER, width=1).pack(
-                side="left", fill="y", padx=8, pady=(16, 2))
-        first_group = False
+    # Partition into type and meta groups for the separator.
+    type_items: list[tuple[str, str, str, str]] = []
+    meta_items: list[tuple[str, str, str, str]] = []
+    for key, tid, label, color in app._ARB_TAB_DEFS:
+        cat = app._ARB_TAB_CATEGORIES.get(tid, "type")
+        (type_items if cat == "type" else meta_items).append(
+            (key, tid, label, color))
 
-        g_box = tk.Frame(tabs_frame, bg=BG)
-        g_box.pack(side="left", padx=(0, 2))
-        if group_name:
-            tk.Label(
-                g_box, text=group_name,
-                font=(FONT, 6, "bold"), fg=AMBER, bg=BG,
-                anchor="w", padx=4,
-            ).pack(fill="x", pady=(0, 2))
+    # Compaction level chosen on first render; subsequent re-renders bump
+    # up if the strip overflows. Counters default to 0 until a scan lands.
+    counts = {tid: 0 for _, tid, _, _ in app._ARB_TAB_DEFS}
+    level = getattr(app, "_arb_tab_compact_level", 0)
 
-        g_row = tk.Frame(g_box, bg=BG)
-        g_row.pack(fill="x")
+    from core.arb.tab_matrix import compact_labels
 
-        for key, tid, label in group_items:
-            is_active = (tid == tab)
-            if is_active:
-                fg, bg = BG, AMBER
-            else:
-                fg, bg = DIM, BG
-            lbl = tk.Label(
-                g_row,
-                text=f"  [{key}]  {label}  ",
-                font=(FONT, 9, "bold"),
-                fg=fg, bg=bg, cursor="hand2",
-                padx=10, pady=4, bd=0, highlightthickness=0,
-            )
-            lbl.pack(side="left", padx=(0, 1))
-            lbl.bind("<Button-1>",
-                     lambda _e, _t=tid: app._arbitrage_hub(_t))
-            if not is_active:
-                lbl.bind(
-                    "<Enter>",
-                    lambda _e, w=lbl: w.config(bg=BG3, fg=WHITE),
+    def _render_strip(_level: int):
+        for w in tabs_frame.winfo_children():
+            w.destroy()
+        app._arb_tab_labels = {}
+
+        for grp_idx, grp in enumerate((type_items, meta_items)):
+            if grp_idx == 1 and type_items and meta_items:
+                tk.Frame(tabs_frame, bg=BORDER, width=1).pack(
+                    side="left", fill="y", padx=8, pady=(4, 2))
+            labelled = compact_labels(grp, counts=counts, level=_level)
+            for key, tid, display_label, color in labelled:
+                is_active = (tid == tab)
+                if is_active:
+                    fg, bg = BG, AMBER
+                else:
+                    fg, bg = DIM, BG
+                lbl = tk.Label(
+                    tabs_frame,
+                    text=f"  {display_label}  ",
+                    font=(FONT, 9, "bold"),
+                    fg=fg, bg=bg, cursor="hand2",
+                    padx=8, pady=4, bd=0, highlightthickness=0,
                 )
-                lbl.bind(
-                    "<Leave>",
-                    lambda _e, w=lbl: w.config(bg=BG, fg=DIM),
-                )
-            app._arb_tab_labels[tid] = lbl
+                lbl.pack(side="left", padx=(0, 1))
+                lbl.bind("<Button-1>",
+                         lambda _e, _t=tid: app._arbitrage_hub(_t))
+                if not is_active:
+                    lbl.bind(
+                        "<Enter>",
+                        lambda _e, w=lbl: w.config(bg=BG3, fg=WHITE),
+                    )
+                    lbl.bind(
+                        "<Leave>",
+                        lambda _e, w=lbl: w.config(bg=BG, fg=DIM),
+                    )
+                app._arb_tab_labels[tid] = lbl
+
+    _render_strip(level)
+
+    # After first layout pass, check for overflow. If the strip is wider than
+    # the outer frame, bump the compact level up to 3 and re-render once.
+    def _maybe_compact():
+        try:
+            outer.update_idletasks()
+            strip_w = tabs_frame.winfo_reqwidth()
+            avail_w = outer.winfo_width() - 32  # minus padx
+            if avail_w <= 0:
+                return
+            lv = level
+            while strip_w > avail_w and lv < 3:
+                lv += 1
+                _render_strip(lv)
+                tabs_frame.update_idletasks()
+                strip_w = tabs_frame.winfo_reqwidth()
+            app._arb_tab_compact_level = lv
+        except Exception:
+            pass
+
+    app.main.after_idle(_maybe_compact)
 
     tk.Frame(outer, bg=BORDER, height=1).pack(
         fill="x", padx=16, pady=(2, 3))
@@ -174,14 +197,20 @@ def render(app, tab: str = "cex-cex"):
     app._kb("<Key-r>",
             lambda: app._arbitrage_hub(app._arb_tab))
 
-    # Route to the tab renderer (Phase 1 redesign: 3-tab layout)
-    render_map = {
-        "opps":      app._arb_render_opps,
-        "positions": app._arb_render_positions,
-        "history":   app._arb_render_history,
-    }
-    render_fn = render_map.get(tab, app._arb_render_opps)
-    render_fn(content)
+    # Route to the tab renderer. Type tabs (6) all share the generic filtered
+    # renderer — filtering by tab_id is applied in paint_opps (Task 9). For
+    # Task 7+8, stash the active type tab on the app and dispatch to the
+    # existing opps renderer; full filter logic lands in Task 9.
+    if tab in ("cex-cex", "dex-dex", "cex-dex",
+               "perp-perp", "spot-spot", "basis"):
+        app._arb_render_tab_filtered(content, tab)
+    elif tab == "positions":
+        app._arb_render_positions(content)
+    elif tab == "history":
+        app._arb_render_history(content)
+    else:
+        # Defensive fallback: unknown tab → CEX-CEX (the default first tab).
+        app._arb_render_tab_filtered(content, "cex-cex")
 
     # If we have cached scan data from the previous tab visit, repaint
     # immediately instead of waiting ~2s for the next scan to finish.
@@ -2337,4 +2366,21 @@ def refresh_viab_toolbar(app) -> None:
                 fg=AMBER if on else DIM, bg=BG)
         except Exception:
             pass
+
+
+# ─── Generic filtered tab renderer (v2 density 2026-04-23) ────────────
+
+def render_tab_filtered(app, parent, tab_id: str):
+    """Render one of the 6 type tabs.
+
+    Identical surface to ``render_opps`` (legend + filter bar + opps table +
+    detail pane). The only difference is that the active type tab id is
+    stashed on the app so ``paint_opps`` can apply the matches_type
+    predicate when Task 9 wires it. For Task 7+8, the painter ignores the
+    tab id and shows the full opps list.
+    """
+    app._arb_active_type_tab = tab_id
+    # Delegate to the existing unified opps renderer — filtering is added
+    # in Task 9 inside paint_opps by keying off app._arb_active_type_tab.
+    render_opps(app, parent)
 

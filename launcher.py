@@ -4226,11 +4226,21 @@ class App(tk.Tk):
     # --------------------------------------------------------------
 
     _ARB_TAB_DEFS = [
-        # (key, tab_id, label, color) — collapsed 6→3 tabs in Phase 1
-        # redesign (2026-04-22). All legacy tab ids route into these.
-        ("1", "opps",      "OPPS",       "#ffd700"),
-        ("2", "positions", "POSITIONS",  "#00ff80"),
-        ("3", "history",   "HISTORY",    "#c084fc"),
+        # (key, tab_id, label_full, color)
+        # Type tabs (category="type") — filtered views over the same unified
+        # opp set emitted by the scanner. Overlap is expected and documented
+        # (ex. binance-perp↔bybit-perp BTC appears in both CEX-CEX and PERP-PERP).
+        ("1", "cex-cex",   "1 CEX-CEX",   "#ffd700"),
+        ("2", "dex-dex",   "2 DEX-DEX",   "#8ae6a2"),
+        ("3", "cex-dex",   "3 CEX-DEX",   "#c084fc"),
+        ("4", "perp-perp", "4 PERP-PERP", "#60a5fa"),
+        ("5", "spot-spot", "5 SPOT-SPOT", "#fb923c"),
+        ("6", "basis",     "6 BASIS",     "#f472b6"),
+        # Meta tabs (category="meta") — render from SimpleArbEngine, not
+        # the scanner. Separator `|` is inserted between 6 and 7 by the
+        # render function.
+        ("7", "positions", "7 POSITIONS", "#00ff80"),
+        ("8", "history",   "8 HISTORY",   "#c084fc"),
     ]
 
     # Which tab_ids are "type" (scanner-driven) vs. "meta" (engine-driven).
@@ -4245,13 +4255,15 @@ class App(tk.Tk):
         "perp-perp": "type", "spot-spot": "type", "basis": "type",
     }
 
-    # Legacy tab ids routed into the Phase-1 3-tab layout (chore/repo-cleanup
-    # state). Task 7 will FLIP this to route the other direction (legacy v1
-    # names → v2 density tab ids) atomically with the _ARB_TAB_DEFS swap.
+    # Legacy tab ids kept for backward-compat. Callers elsewhere in launcher.py
+    # pass "engine" (3 callers), "basis" (1 caller), "spot" (1 caller), and
+    # "opps" can come from the URL history. Map each to the v2 tab id that
+    # serves the same role. "basis", "cex-cex", "dex-dex", "cex-dex" are v2
+    # tab ids themselves — no entry needed (passthrough).
     _ARB_LEGACY_TAB_MAP = {
-        "cex-cex": "opps", "dex-dex": "opps", "cex-dex": "opps",
-        "basis": "opps", "spot": "opps",
+        "opps":   "cex-cex",
         "engine": "positions",
+        "spot":   "spot-spot",
     }
 
     # Column layout for the v2 density opps table (Task 9 will wire it into
@@ -4280,7 +4292,7 @@ class App(tk.Tk):
             self._arb_lifetime_tracker_cached = LifetimeTracker()
         return self._arb_lifetime_tracker_cached
 
-    def _arbitrage_hub(self, tab: str = "opps"):
+    def _arbitrage_hub(self, tab: str = "cex-cex"):
         from launcher_support.screens.arbitrage_hub import render_hub
         return render_hub(self, tab)
 
@@ -4474,6 +4486,9 @@ class App(tk.Tk):
     def _arb_render_history(self, parent):
         from launcher_support.screens.arbitrage_hub import render_history
         return render_history(self, parent)
+    def _arb_render_tab_filtered(self, parent, tab_id: str):
+        from launcher_support.screens.arbitrage_hub import render_tab_filtered
+        return render_tab_filtered(self, parent, tab_id)
     def _arb_paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot):
         from launcher_support.screens.arbitrage_hub import paint_opps
         return paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot)
