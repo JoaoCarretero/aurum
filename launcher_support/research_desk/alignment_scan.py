@@ -52,6 +52,24 @@ _BOLD_IGNORE: frozenset[str] = frozenset({
 # Used as primary signal to find engine references in canon.
 _BOLD_TOKEN_PATTERN = re.compile(r"\*\*([A-Z][A-Z0-9_ ]{2,}?)\*\*")
 
+# Backtick-quoted relative path with file extension.
+#   - Must start with an alphanumeric (excludes absolute /path, ~home, C:\path)
+#   - Must contain at least one / or \ (excludes bare filenames / dotted
+#     Python module refs like `json.load` or `config.params`)
+#   - Must end with .ext (1-6 chars)
+#   - Disallow http(s):// URLs (lookahead)
+_PATH_REF_PATTERN = re.compile(
+    r"`(?!https?://)([a-zA-Z0-9_][a-zA-Z0-9_.-]*[/\\][a-zA-Z0-9_./\\~-]*\.[a-zA-Z0-9]{1,6})`"
+)
+
+# Placeholder markers that indicate a TEMPLATE path, not a concrete one.
+# Templates like `docs/sessions/YYYY-MM-DD_HHMM.md` should not be flagged.
+_PATH_PLACEHOLDERS: tuple[str, ...] = (
+    "YYYY", "HHMM", "...",
+    "{engine}", "<engine>", "{name}", "<name>", "<slug>", "{slug}",
+    "{cid}", "{aid}", "{id}",
+)
+
 
 @dataclass
 class CheckResult:
@@ -116,6 +134,49 @@ def check_engine_roster(
     return CheckResult(
         status="red",
         summary=f"{len(ghosts)} engine ref(s) bold fantasma — nao estao em config/engines.py.",
+        details=details,
+    )
+
+
+# ── Check 2: path existence ──────────────────────────────────────
+def check_path_existence(
+    canon_files: Iterable[Path],
+    *,
+    repo_root: Path,
+) -> CheckResult:
+    """Scan canon for backtick-quoted relative paths and verify they exist.
+
+    Absolute paths and URLs are out of scope (not flagged). Paths are resolved
+    relative to repo_root.
+    """
+    missing: dict[str, list[str]] = {}
+    for f in canon_files:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for match in _PATH_REF_PATTERN.finditer(text):
+            rel = match.group(1).replace("\\", "/")
+            # Skip template paths (contain placeholder markers).
+            if any(ph in rel for ph in _PATH_PLACEHOLDERS):
+                continue
+            candidate = repo_root / rel
+            if not candidate.exists():
+                missing.setdefault(rel, []).append(f.name)
+
+    if not missing:
+        return CheckResult(
+            status="green",
+            summary="Todos os paths referenciados existem no repo.",
+            details=[],
+        )
+    details = [
+        {"path": p, "cited_in": sorted(set(files))}
+        for p, files in sorted(missing.items())
+    ]
+    return CheckResult(
+        status="red",
+        summary=f"{len(missing)} path(s) referenciado(s) inexistente(s) no filesystem.",
         details=details,
     )
 
@@ -194,8 +255,13 @@ def run_alignment_scan(*, repo_root: Path) -> AlignmentReport:
         agent_uuids=[a.uuid for a in _AGENTS],
     )
 
+    # Path existence check: scope to full canon (root + personas + WORKFLOWS).
+    # Broken paths in CLAUDE.md etc ARE drift, unlike archived engine names.
+    canon = _collect_canon_files(repo_root)
+
     checks: dict[str, CheckResult] = {
         "engine_roster": check_engine_roster(agent_facing, registered_display_names=registered),
+        "path_existence": check_path_existence(canon, repo_root=repo_root),
     }
 
     return AlignmentReport(
