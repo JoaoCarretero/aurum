@@ -1256,8 +1256,14 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
 
     Extracted from launcher.App._arb_paint_opps in Fase 3 refactor.
     """
+    from launcher_support._test_mode import arb_debug
+    arb_debug(f"paint_opps: entry cc={len(arb_cc or [])} dd={len(arb_dd or [])} "
+              f"cd={len(arb_cd or [])} basis={len(basis or [])} spot={len(spot or [])} "
+              f"active_tab={getattr(app, '_arb_active_type_tab', None)!r}")
     repaint = getattr(app, "_arb_opps_repaint", None)
     if repaint is None:
+        arb_debug("paint_opps: EARLY EXIT — _arb_opps_repaint is None "
+                  "(render_opps never registered callback; UI not ready?)")
         return
 
     # Tag each type
@@ -1302,7 +1308,11 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
     if active_tab in ("cex-cex", "dex-dex", "cex-dex",
                        "perp-perp", "spot-spot", "basis"):
         from core.arb.tab_matrix import matches_type
+        before = len(tagged)
         tagged = [p for p in tagged if matches_type(p, active_tab)]
+        arb_debug(f"paint_opps: matches_type({active_tab!r}) kept {len(tagged)}/{before}")
+    else:
+        arb_debug(f"paint_opps: no tab filter applied (active_tab={active_tab!r})")
 
     # v2 density: observe pairs so the LIFE column shows persistence.
     import time as _time
@@ -1314,11 +1324,13 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
         if getattr(app, "_arb_lifetime_gc_counter", 0) % 100 == 0:
             tracker.cleanup(now=_now, max_age=24 * 3600)
         app._arb_lifetime_gc_counter = getattr(app, "_arb_lifetime_gc_counter", 0) + 1
-    except Exception:
+    except Exception as e:
+        arb_debug(f"paint_opps: lifetime tracker failed: {e}")
         tracker = None
 
     # Apply filter+score (with cache) and render cap
     filtered = app._arb_filter_and_score(tagged)[:50]
+    arb_debug(f"paint_opps: filter_and_score returned {len(filtered)} pairs; painting rows")
     app._arb_opps_selected = [p for p, _ in filtered]
 
     # Pre-compute stable keys once per row so LIFE lookups are O(1).
@@ -1399,6 +1411,7 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
             (be_txt, be_fg),
             (depth_txt, depth_fg),
         ])
+    arb_debug(f"paint_opps: calling repaint with {len(rows)} rows")
     repaint(rows)
 
 
@@ -1746,8 +1759,10 @@ def hub_scan_async(app):
     data via whichever ``_arb_*_repaint`` callback is registered.
     """
     import threading
-    from launcher_support._test_mode import test_mode_enabled
+    from launcher_support._test_mode import test_mode_enabled, arb_debug
+    arb_debug("hub_scan_async: entry")
     if test_mode_enabled():
+        arb_debug("hub_scan_async: TEST_MODE active, short-circuiting to empty")
         app._ui_call_soon(lambda: app._arb_hub_telem_update(
             {"dex_online": 0, "cex_online": 0, "total": 0},
             None, [], [], [], [], [], []))
@@ -1755,6 +1770,7 @@ def hub_scan_async(app):
     try:
         from core.ui.funding_scanner import FundingScanner
     except Exception as e:
+        arb_debug(f"hub_scan_async: FundingScanner import failed: {e}")
         app._arb_set_status_error(f"scanner unavailable: {str(e)[:40]}")
         return
     scanner = getattr(app, "_funding_scanner", None)
@@ -1763,9 +1779,12 @@ def hub_scan_async(app):
         app._funding_scanner = scanner
 
     def _worker():
+        arb_debug("hub_scan_async._worker: thread started")
         try:
             opps = scanner.scan()
             stats = scanner.stats()
+            arb_debug(f"hub_scan_async._worker: scan OK — {len(opps)} opps, "
+                      f"venues_online={stats.get('venues_online')}")
             # Lower min_spread_apr from 5% to 1% — the UI filter handles
             # tighter thresholds now; we want the scanner to hand us as
             # many candidates as possible so the post-filter has options
@@ -1773,22 +1792,29 @@ def hub_scan_async(app):
             arb_cc = scanner.arb_pairs(mode="cex-cex", min_spread_apr=1.0)
             arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=1.0)
             arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=1.0)
+            arb_debug(f"hub_scan_async._worker: arb_cc={len(arb_cc)} "
+                      f"arb_dd={len(arb_dd)} arb_cd={len(arb_cd)}")
             basis = []
             spot = []
             try:
                 scanner.scan_spot()
                 basis = scanner.basis_pairs(min_basis_bps=5)[:20]
                 spot = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
-            except Exception:
-                pass
+                arb_debug(f"hub_scan_async._worker: basis={len(basis)} spot={len(spot)}")
+            except Exception as e:
+                arb_debug(f"hub_scan_async._worker: scan_spot/basis failed: {e}")
             top = opps[0] if opps else None
+            arb_debug("hub_scan_async._worker: scheduling telem_update on UI thread")
             try:
                 app._ui_call_soon(lambda: app._arb_hub_telem_update(
                     stats, top, opps, arb_cc, arb_dd, arb_cd, basis, spot))
-            except (RuntimeError, tk.TclError):
-                # Tk root gone (test teardown / app shutdown) — drop update
+            except (RuntimeError, tk.TclError) as e:
+                arb_debug(f"hub_scan_async._worker: Tk gone, dropping update: {e}")
                 pass
         except Exception as e:
+            import traceback
+            arb_debug(f"hub_scan_async._worker: EXCEPTION: {type(e).__name__}: {e}")
+            arb_debug("hub_scan_async._worker: traceback:\n" + traceback.format_exc())
             try:
                 app._ui_call_soon(lambda: app._arb_set_status_error(
                     f"scan failed: {str(e)[:40]}"))

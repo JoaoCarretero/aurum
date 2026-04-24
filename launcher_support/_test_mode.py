@@ -15,3 +15,23 @@ def test_mode_enabled() -> bool:
     return os.getenv("AURUM_TEST_MODE", "").strip().lower() in {
         "1", "true", "yes", "on",
     }
+
+
+def arb_debug_enabled() -> bool:
+    """True if AURUM_ARB_DEBUG env var is set to a truthy value.
+
+    When true, the arbitrage hub prints diagnostic traces at key stages
+    (scan start/end, filter input/output, paint opps in/out). Use to
+    trace why a production hub shows no data: exceptions in critical
+    paths normally get swallowed by `try: except Exception: pass` blocks.
+    """
+    return os.getenv("AURUM_ARB_DEBUG", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def arb_debug(msg: str) -> None:
+    """Print a debug message to stderr when arb_debug_enabled()."""
+    if arb_debug_enabled():
+        import sys
+        print(f"[ARB_DEBUG] {msg}", file=sys.stderr, flush=True)
