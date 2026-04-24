@@ -33,10 +33,7 @@ def _boot_workers_enabled() -> bool:
     }
 
 
-def _test_mode_enabled() -> bool:
-    return os.getenv("AURUM_TEST_MODE", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+from launcher_support._test_mode import test_mode_enabled as _test_mode_enabled
 
 
 def _lazy_connections():
@@ -947,10 +944,13 @@ class App(tk.Tk):
             root_path=ROOT,
             tagline=SYSTEM_TAGLINE,
         )
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
-
-        # Footer
-        ft = tk.Frame(self, bg=BG2, height=20); ft.pack(fill="x"); ft.pack_propagate(False)
+        # Footer + separator — pinned to the bottom via side="bottom" so
+        # they stay at the window edge even when screens_container is
+        # pack_forget'd and re-packed (pack_forget + pack appends the
+        # widget to the end of the pack list, which would otherwise push
+        # a side="top" footer above the screen content area).
+        ft = tk.Frame(self, bg=BG2, height=20); ft.pack(side="bottom", fill="x"); ft.pack_propagate(False)
+        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x")
         fc = tk.Frame(ft, bg=BG2); fc.pack(fill="both", expand=True, padx=10)
         self.f_lbl = tk.Label(fc, text="", font=(FONT, 7), fg=DIM, bg=BG2); self.f_lbl.pack(side="right")
         tk.Label(fc, text="v2.0", font=(FONT, 7), fg=DIM2, bg=BG2).pack(side="left")
