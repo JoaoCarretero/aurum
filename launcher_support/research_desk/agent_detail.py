@@ -53,6 +53,12 @@ from launcher_support.research_desk.live_runs import (
     RunView,
     shape_runs,
 )
+from launcher_support.research_desk.artifact_linking import (
+    LinkedChain,
+    backtest_command_for,
+    chains_for_agent,
+    link_artifacts,
+)
 from launcher_support.research_desk.markdown_editor import (
     open_markdown_editor,
     persona_path,
@@ -103,6 +109,7 @@ def open_agent_detail(
     issues_agent = filter_issues_for(agent, issues_raw)
     agent_dict = agent_dict_for(agent, agents_raw)
     is_paused = bool(agent_dict and agent_dict.get("paused"))
+    chains = chains_for_agent(link_artifacts(artifacts_all), agent.key)
 
     stats = shape_stats(
         agent=agent,
@@ -126,6 +133,7 @@ def open_agent_detail(
         root_path=root_path,
         is_paused=is_paused,
         ratios=ratios,
+        chains=chains,
         on_assign=on_assign,
         on_toggle_pause=on_toggle_pause,
         fetch_runs=fetch_runs,
@@ -143,6 +151,7 @@ class AgentDetailModal:
         root_path: Path,
         is_paused: bool = False,
         ratios: RatiosView | None = None,
+        chains: list[LinkedChain] | None = None,
         on_assign: Callable[[AgentIdentity], None] | None,
         on_toggle_pause: Callable[[AgentIdentity, bool], None] | None = None,
         fetch_runs: Callable[[AgentIdentity], list[dict]] | None = None,
@@ -152,6 +161,7 @@ class AgentDetailModal:
         self.root_path = root_path
         self._is_paused = is_paused
         self._ratios = ratios
+        self._chains = chains or []
         self._on_assign = on_assign
         self._on_toggle_pause = on_toggle_pause
         self._fetch_runs = fetch_runs
@@ -201,10 +211,92 @@ class AgentDetailModal:
             self._build_ratios(wrap, self._ratios)
         tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
         self._build_recent_work(wrap, artifacts)
+        if self._chains:
+            tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
+            self._build_linked_work(wrap, self._chains)
         if self._fetch_runs is not None:
             tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
             self._build_live_runs(wrap)
         self._build_actions(wrap)
+
+    def _build_linked_work(
+        self, parent: tk.Frame, chains: list[LinkedChain],
+    ) -> None:
+        """Lista cadeias spec/review/branch/audit com dots pra fases
+        presentes + COPY CMD pra lanca backtest (se branch presente)."""
+        section = tk.Frame(parent, bg=BG)
+        section.pack(fill="x", pady=(10, 0))
+
+        tk.Label(
+            section, text="LINKED WORK",
+            font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w",
+        ).pack(anchor="w")
+
+        for chain in chains[:8]:  # max 8 pra nao estourar modal
+            self._render_chain_row(section, chain)
+
+    def _render_chain_row(
+        self, parent: tk.Frame, chain: LinkedChain,
+    ) -> None:
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", pady=2)
+
+        # Dots pra 4 fases (spec, review, branch, audit)
+        phases = [
+            ("S", chain.spec is not None),
+            ("R", chain.review is not None),
+            ("B", chain.branch is not None),
+            ("A", chain.audit is not None),
+        ]
+        for letter, present in phases:
+            color = self.palette.primary if present else DIM2
+            tk.Label(
+                row, text=letter,
+                font=(FONT, 8, "bold"), fg=color, bg=BG, width=2, anchor="center",
+            ).pack(side="left")
+
+        # Stem + engine tag
+        engine_tag = f" [{chain.engine}]" if chain.engine else ""
+        tk.Label(
+            row, text=f" {chain.stem}{engine_tag}",
+            font=(FONT, 8), fg=WHITE, bg=BG, anchor="w",
+        ).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        # COPY CMD button — so se houver branch (candidato a backtest)
+        if chain.branch is not None and chain.engine is not None:
+            copy_btn = tk.Label(
+                row, text=" COPY CMD ",
+                font=(FONT, 7, "bold"), fg=BG, bg=self.palette.primary,
+                cursor="hand2", padx=4, pady=1,
+            )
+            copy_btn.pack(side="right", padx=(4, 0))
+            copy_btn.bind(
+                "<Button-1>",
+                lambda _e, c=chain: self._copy_backtest_cmd(c),
+            )
+
+    def _copy_backtest_cmd(self, chain: LinkedChain) -> None:
+        cmd = backtest_command_for(chain)
+        try:
+            self.top.clipboard_clear()
+            self.top.clipboard_append(cmd)
+        except Exception:
+            pass
+        # Feedback visual breve no titulo
+        try:
+            original = self.top.title()
+            self.top.title(f"comando copiado  ·  {chain.stem}")
+            self.top.after(
+                1500, lambda: self._restore_title_safe(original),
+            )
+        except Exception:
+            pass
+
+    def _restore_title_safe(self, title: str) -> None:
+        try:
+            self.top.title(title)
+        except Exception:
+            pass
 
     def _build_ratios(self, parent: tk.Frame, ratios: RatiosView) -> None:
         """Stacked horizontal bar: ship (green) · iterate (amber) · kill (red).
