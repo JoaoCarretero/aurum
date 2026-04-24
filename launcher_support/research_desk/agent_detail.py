@@ -569,9 +569,22 @@ class AgentDetailModal:
             self._on_toggle_pause(self.agent, was_paused)
 
     def _open_persona_editor(self) -> None:
-        """Abre markdown_editor sobre docs/agents/{key}.md (ou AGENTS.md)."""
+        """Abre markdown_editor sobre docs/agents/{key}.md (ou AGENTS.md).
+
+        Guarda contra double-click / reentrancy — editor ja aberto sobe
+        pro foreground ao inves de abrir segunda janela (evita que dois
+        editores sobrescrevam o arquivo alternadamente no save)."""
+        existing = getattr(self, "_persona_editor", None)
+        if existing is not None:
+            try:
+                if existing.top.winfo_exists():
+                    existing.top.lift()
+                    existing.top.focus_set()
+                    return
+            except Exception:
+                pass  # widget destruido — segue pra abrir novo
         target = persona_path(self.agent.key, self.root_path)
-        open_markdown_editor(
+        self._persona_editor = open_markdown_editor(
             self.top, path=target,
             title_hint=f"{self.agent.key} persona · {target.name}",
         )
@@ -637,8 +650,13 @@ class AgentDetailModal:
     def _apply_runs(self, views: list[RunView]) -> None:
         if self._runs_closed or self._runs_body is None:
             return
-        for child in self._runs_body.winfo_children():
-            child.destroy()
+        # Wrap winfo_children — se a janela foi destruida entre a check
+        # de _runs_closed e aqui (race com after(0,...)), Tk levanta TclError.
+        try:
+            for child in self._runs_body.winfo_children():
+                child.destroy()
+        except Exception:
+            return
 
         if self._runs_counter is not None:
             try:

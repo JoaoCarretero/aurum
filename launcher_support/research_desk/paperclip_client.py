@@ -34,6 +34,7 @@ Sprints 2-3 adicionam os demais.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -62,6 +63,9 @@ class PaperclipClient:
     _half_open_probe: bool = False
     _BREAKER_THRESHOLD: int = 3
     _BREAKER_TIMEOUT_SEC: float = 300.0
+    # Lock protege breaker state — reads/writes podem vir de threads
+    # paralelas (poll_state + fetch_runs do modal + cost_dashboard refresh).
+    _breaker_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         try:
@@ -182,31 +186,34 @@ class PaperclipClient:
     # ── Circuit breaker ───────────────────────────────────────────
 
     def _check_breaker(self) -> None:
-        now = time.time()
-        if self._breaker_open_until > now:
-            raise CircuitOpen(
-                f"breaker open for {self._breaker_open_until - now:.0f}s more"
-            )
-        if self._breaker_open_until != 0.0 and self._breaker_open_until <= now:
-            # open -> half-open: libera um probe
-            self._consecutive_failures = 0
-            self._breaker_open_until = 0.0
-            self._half_open_probe = True
+        with self._breaker_lock:
+            now = time.time()
+            if self._breaker_open_until > now:
+                raise CircuitOpen(
+                    f"breaker open for {self._breaker_open_until - now:.0f}s more"
+                )
+            if self._breaker_open_until != 0.0 and self._breaker_open_until <= now:
+                # open -> half-open: libera um probe
+                self._consecutive_failures = 0
+                self._breaker_open_until = 0.0
+                self._half_open_probe = True
 
     def _record_failure(self) -> None:
-        if self._half_open_probe:
-            self._half_open_probe = False
-            self._consecutive_failures = self._BREAKER_THRESHOLD
-            self._breaker_open_until = time.time() + self._BREAKER_TIMEOUT_SEC
-            return
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= self._BREAKER_THRESHOLD:
-            self._breaker_open_until = time.time() + self._BREAKER_TIMEOUT_SEC
+        with self._breaker_lock:
+            if self._half_open_probe:
+                self._half_open_probe = False
+                self._consecutive_failures = self._BREAKER_THRESHOLD
+                self._breaker_open_until = time.time() + self._BREAKER_TIMEOUT_SEC
+                return
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self._BREAKER_THRESHOLD:
+                self._breaker_open_until = time.time() + self._BREAKER_TIMEOUT_SEC
 
     def _record_success(self) -> None:
-        self._consecutive_failures = 0
-        self._breaker_open_until = 0.0
-        self._half_open_probe = False
+        with self._breaker_lock:
+            self._consecutive_failures = 0
+            self._breaker_open_until = 0.0
+            self._half_open_probe = False
 
     # ── Transport ─────────────────────────────────────────────────
 

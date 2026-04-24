@@ -49,6 +49,15 @@ def test_normalize_stem_idempotent() -> None:
     assert once == twice == "phi-fib-v2"
 
 
+def test_normalize_stem_strips_brackets_and_punct() -> None:
+    # Titulos livres com brackets precisam virar stem limpo senao
+    # detect_engine nao acha o prefixo
+    assert normalize_stem("[PHI] fib_v2") == "phi-fib-v2"
+    assert normalize_stem("(renaissance) v3!") == "renaissance-v3"
+    # Engine detection funciona apos normalize
+    assert detect_engine(normalize_stem("[PHI] fib")) == "PHI"
+
+
 # ── detect_engine ─────────────────────────────────────────────────
 
 

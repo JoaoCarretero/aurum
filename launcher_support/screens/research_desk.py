@@ -294,16 +294,29 @@ class ResearchDeskScreen(Screen):
             fetch_ratios=self._fetch_ratios_for,
         )
 
+    def _ensure_stats_db(self):
+        """Abre lazy a connection do stats DB. Retorna None se falhar.
+
+        Consolida o padrao de abrir em 3 callers (ratios/cost/snapshots) —
+        todos compartilham a mesma conn (main thread) e todos tratam
+        ImportError (config.paths ausente) + OSError + sqlite.Error igual.
+        """
+        if self._stats_db_conn is not None:
+            return self._stats_db_conn
+        try:
+            from config.paths import AURUM_DB_PATH
+            self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
+        except Exception:
+            self._stats_db_conn = None
+        return self._stats_db_conn
+
     def _fetch_ratios_for(self, agent: AgentIdentity):
         """Query SQLite pra ratios ship/iterate/kill em 30d. None se DB vazio."""
-        if self._stats_db_conn is None:
-            try:
-                from config.paths import AURUM_DB_PATH
-                self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
-            except Exception:
-                return None
+        conn = self._ensure_stats_db()
+        if conn is None:
+            return None
         try:
-            rows = stats_db.list_days(self._stats_db_conn, agent.key, days=30)
+            rows = stats_db.list_days(conn, agent.key, days=30)
             return stats_db.compute_ratios(rows)
         except Exception:
             return None
@@ -311,17 +324,12 @@ class ResearchDeskScreen(Screen):
     def _fetch_cost_summary(self):
         """Constroi CostSummary a partir do snapshot atual + historico SQLite."""
         history: dict[str, list] = {}
-        if self._stats_db_conn is None:
-            try:
-                from config.paths import AURUM_DB_PATH
-                self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
-            except Exception:
-                self._stats_db_conn = None
-        if self._stats_db_conn is not None:
+        conn = self._ensure_stats_db()
+        if conn is not None:
             for agent in AGENTS:
                 try:
                     history[agent.key] = stats_db.list_days(
-                        self._stats_db_conn, agent.key, days=30,
+                        conn, agent.key, days=30,
                     )
                 except Exception:
                     history[agent.key] = []
@@ -623,9 +631,9 @@ class ResearchDeskScreen(Screen):
         today = stats_db.today_utc()
         if today == self._last_snapshot_date:
             return  # ja gravou hoje neste processo
-        if self._stats_db_conn is None:
-            from config.paths import AURUM_DB_PATH
-            self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
+        conn = self._ensure_stats_db()
+        if conn is None:
+            return  # DB indisponivel — snapshot nao grava, nao trava UI
 
         # Indexa por UUID pra resolver agent_dict.paused/spent
         by_uuid = {a.get("id"): a for a in agents_raw if a.get("id")}
@@ -637,7 +645,7 @@ class ResearchDeskScreen(Screen):
             done, active = _count_tickets_for(agent.uuid, issues_raw)
             arts = sum(1 for a in artifacts if a.agent_key == agent.key)
             stats_db.record_snapshot(
-                self._stats_db_conn,
+                conn,
                 agent_key=agent.key,
                 date=today,
                 tickets_done=done,

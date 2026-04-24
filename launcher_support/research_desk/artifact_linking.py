@@ -59,9 +59,14 @@ class LinkedChain:
 
 
 def normalize_stem(raw: str) -> str:
-    """'PHI FiB_v2' -> 'phi-fib-v2'. Idempotente."""
+    """'PHI FiB_v2' -> 'phi-fib-v2'. Idempotente.
+
+    Titulos livres podem ter brackets/pontuacao ('[PHI] fib_v2') —
+    strip non-alphanum (exceto hyphen) antes de colapsar, senao o
+    prefix match de detect_engine passa batido.
+    """
     stem = raw.strip().lower()
-    stem = re.sub(r"[_\s]+", "-", stem)
+    stem = re.sub(r"[^a-z0-9\-]+", "-", stem)
     stem = re.sub(r"-+", "-", stem)
     return stem.strip("-")
 
