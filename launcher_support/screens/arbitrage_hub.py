@@ -1936,9 +1936,13 @@ def hub_telem_update(app, stats, top, opps, arb_cc, arb_dd, arb_cd,
         pass
 
     # Route to the repaint callback for the active tab.
-    # Phase 1 redesign: unified OPPS table consolidates 5 old tabs.
-    tab = getattr(app, "_arb_tab", "opps")
-    if tab == "opps":
+    # v2 density (2026-04-24): 6 type tabs all share paint_opps, which
+    # filters by app._arb_active_type_tab via matches_type. "opps" is
+    # kept for Phase-1 legacy compat.
+    tab = getattr(app, "_arb_tab", "cex-cex")
+    _TYPE_TABS = ("cex-cex", "dex-dex", "cex-dex",
+                  "perp-perp", "spot-spot", "basis", "opps")
+    if tab in _TYPE_TABS:
         app._arb_paint_opps(arb_cc, arb_dd, arb_cd, basis, spot)
     # positions + history tabs don't consume scanner data directly —
     # they read from _arb_simple_engine via their render fn.
