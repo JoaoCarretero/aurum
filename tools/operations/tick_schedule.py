@@ -31,6 +31,17 @@ def seconds_until_next_tick_boundary(
 
     Returns a strictly positive float.
     """
+    if tick_sec <= 0:
+        raise ValueError(f"tick_sec must be > 0, got {tick_sec!r}")
+    if post_close_delay < 0:
+        raise ValueError(
+            f"post_close_delay must be >= 0, got {post_close_delay!r}"
+        )
+    if post_close_delay >= tick_sec:
+        raise ValueError(
+            f"post_close_delay ({post_close_delay}) must be < tick_sec "
+            f"({tick_sec}) so sleep stays bounded by one cycle"
+        )
     boundary = math.floor(now_ts / tick_sec) * tick_sec
     target = boundary + post_close_delay
     if target <= now_ts:
