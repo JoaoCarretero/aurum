@@ -125,4 +125,152 @@ def format_trade_row(trade: dict, *, tf_sec: int) -> dict[str, str]:
     }
 
 
-# render() is defined in Task 3 below — not in this initial commit.
+# ─── Tk render ───────────────────────────────────────────────────
+
+def render(
+    parent,
+    trades: list[dict],
+    *,
+    on_click: Callable[[dict], None],
+    colors: dict[str, str],
+    font_name: str,
+    tf_sec: int,
+    title: str = "TRADE HISTORY",
+    max_rows: int = 20,
+) -> None:
+    """Render a clickable trade history list into `parent`.
+
+    `trades` newest-first. Click fires `on_click(trade_dict)`. Colors
+    follows the engines_live_view palette convention (BG, PANEL, AMBER,
+    GREEN, RED, WHITE, DIM, DIM2, BORDER, BG2).
+    """
+    import tkinter as tk
+
+    AMBER = colors["AMBER"]
+    PANEL = colors["PANEL"]
+    BG = colors["BG"]
+    BG2 = colors["BG2"]
+    GREEN = colors["GREEN"]
+    RED = colors["RED"]
+    WHITE = colors["WHITE"]
+    DIM = colors["DIM"]
+    DIM2 = colors["DIM2"]
+    BORDER = colors["BORDER"]
+    AMBER_D = colors.get("AMBER_D", AMBER)
+
+    # Header bar (matches other blocks in engines_live_view)
+    box = tk.Frame(
+        parent, bg=PANEL,
+        highlightbackground=BORDER, highlightthickness=1,
+    )
+    box.pack(fill="x", pady=(0, 6))
+    count = len(trades) if trades else 0
+    tk.Label(
+        box, text=f" {title} ({count}) ",
+        font=(font_name, 7, "bold"),
+        fg=BG, bg=AMBER,
+    ).pack(side="top", anchor="nw", padx=8, pady=4)
+
+    inner = tk.Frame(box, bg=PANEL)
+    inner.pack(fill="x", padx=8, pady=(0, 8))
+
+    if not trades:
+        tk.Label(
+            inner, text="  — no trades yet —",
+            font=(font_name, 8),
+            fg=DIM, bg=PANEL, anchor="w",
+        ).pack(fill="x", pady=4)
+        return
+
+    shown = trades[:max_rows]
+    for trade in shown:
+        row_fields = format_trade_row(trade, tf_sec=tf_sec)
+        row = tk.Frame(inner, bg=PANEL, cursor="hand2")
+        row.pack(fill="x", pady=1)
+
+        direction = row_fields["direction"]
+        arrow_color = GREEN if direction == "LONG" else (
+            RED if direction == "SHORT" else DIM)
+
+        # Column specs: (text, color, width, font_size, bold?)
+        cols = [
+            (row_fields["dir_arrow"], arrow_color, 2, 9, True),
+            (row_fields["symbol"], WHITE, 12, 8, True),
+            (row_fields["engine"], DIM, 10, 8, False),
+            (direction, arrow_color, 7, 8, True),
+            (row_fields["levels"], WHITE, 18, 8, False),
+            (_color_for_r(row_fields["r_mult"], GREEN, RED, AMBER_D, DIM),
+             None, 8, 8, True),
+        ]
+        for text, color, width, fsize, bold in cols:
+            # Two-tuple override: when color=None, text is actually a tuple
+            if isinstance(text, tuple):
+                text, color = text
+            weight = "bold" if bold else "normal"
+            tk.Label(
+                row, text=str(text), fg=color or WHITE, bg=PANEL,
+                font=(font_name, fsize, weight),
+                width=width, anchor="w",
+            ).pack(side="left", padx=(2, 0))
+
+        pnl_text = row_fields["pnl"]
+        pnl_color = GREEN if pnl_text.startswith("+$") else (
+            RED if pnl_text.startswith("-$") else DIM)
+        tk.Label(
+            row, text=pnl_text, fg=pnl_color, bg=PANEL,
+            font=(font_name, 8, "bold"), width=10, anchor="w",
+        ).pack(side="left", padx=(2, 0))
+        tk.Label(
+            row, text=row_fields["duration"], fg=DIM, bg=PANEL,
+            font=(font_name, 8), width=8, anchor="w",
+        ).pack(side="left", padx=(2, 0))
+        tk.Label(
+            row, text=row_fields["exit_marker"], fg=DIM2, bg=PANEL,
+            font=(font_name, 7), width=8, anchor="w",
+        ).pack(side="left", padx=(2, 0))
+
+        def _hover_in(_e, r=row):
+            r.configure(bg=BG2)
+            for child in r.winfo_children():
+                try:
+                    child.configure(bg=BG2)
+                except Exception:
+                    pass
+
+        def _hover_out(_e, r=row):
+            r.configure(bg=PANEL)
+            for child in r.winfo_children():
+                try:
+                    child.configure(bg=PANEL)
+                except Exception:
+                    pass
+
+        def _click(_e, t=trade):
+            try:
+                on_click(t)
+            except Exception:
+                pass
+
+        for widget in (row,) + tuple(row.winfo_children()):
+            widget.bind("<Enter>", _hover_in)
+            widget.bind("<Leave>", _hover_out)
+            widget.bind("<Button-1>", _click)
+
+    if count > max_rows:
+        tk.Label(
+            inner,
+            text=f"  … +{count - max_rows} more (truncated)",
+            font=(font_name, 7, "italic"),
+            fg=DIM2, bg=PANEL, anchor="w",
+        ).pack(fill="x", pady=(2, 0))
+
+
+def _color_for_r(r_text: str, green: str, red: str, amber: str, dim: str) -> tuple[str, str]:
+    """Return (text, color) for r_multiple column based on sign/state."""
+    if r_text == "LIVE":
+        return (r_text, amber)
+    if r_text.startswith("+"):
+        return (r_text, green)
+    if r_text.startswith("-"):
+        return (r_text, red)
+    return (r_text, dim)
