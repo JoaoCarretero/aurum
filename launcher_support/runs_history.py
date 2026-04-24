@@ -1028,12 +1028,20 @@ def _load_detail(r: RunSummary, state: dict) -> None:
     body = tk.Frame(host, bg=PANEL)
     body.pack(fill="both", expand=True, padx=10, pady=(4, 0))
 
+    # RUNTIME — what the engine is doing right now.
+    _render_block_header(body, "RUNTIME")
     _render_detail_telemetry(body, r)
     _render_detail_scan(body, r)
     _render_detail_health(body, r)
     _render_detail_probe(body, r)
+
+    # PERFORMANCE — how it's doing.
+    _render_block_header(body, "PERFORMANCE")
     _render_detail_equity_metrics(body, r)
     _render_detail_trades(body, r)
+
+    # LOG — raw engine output.
+    _render_block_header(body, "LOG")
     _render_detail_log_tail(body, r)
 
 
@@ -1223,6 +1231,22 @@ def _render_detail_probe(parent: tk.Widget, r: RunSummary) -> None:
          AMBER_D if n_60 > 0 else DIM2),
     ]
     _detail_section(parent, "PROBE DIAGNOSTIC", rows)
+
+
+def _render_block_header(parent: tk.Widget, label: str) -> None:
+    """Block header separating RUNTIME / PERFORMANCE / LOG in the right pane.
+
+    H2 (8pt bold DIM) label followed by a 1px BORDER line that fills
+    the remaining width. Same size as section titles inside the block,
+    but DIM (not AMBER_D) to distinguish structural container from
+    content title.
+    """
+    row = tk.Frame(parent, bg=PANEL)
+    row.pack(fill="x", pady=(14, 2))
+    tk.Label(row, text=label, font=(FONT, 8, "bold"),
+             fg=DIM, bg=PANEL, anchor="w").pack(side="left", padx=(0, 6))
+    tk.Frame(row, bg=BORDER, height=1).pack(
+        side="left", fill="x", expand=True, pady=(6, 0))
 
 
 def _render_detail_header(parent: tk.Widget, r: RunSummary) -> None:

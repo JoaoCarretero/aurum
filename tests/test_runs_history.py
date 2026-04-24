@@ -797,3 +797,15 @@ def test_render_detail_header_mode_colors(gui_root, mode):
     )
     _render_detail_header(frame, r)
     assert frame.winfo_children()
+
+
+def test_render_block_header_smoke(gui_root):
+    import tkinter as tk
+    from launcher_support.runs_history import _render_block_header
+    frame = tk.Frame(gui_root)
+    _render_block_header(frame, "RUNTIME")
+    # The helper should create one row frame with 2 children (label + divider).
+    outer = frame.winfo_children()
+    assert len(outer) == 1
+    row = outer[0]
+    assert len(row.winfo_children()) == 2
