@@ -138,3 +138,101 @@ def test_matches_unknown_kind_returns_false():
     # Missing _type → predicates that depend on kind return False
     assert matches_type({"short_venue": "binance", "long_venue": "bybit"},
                         "perp-perp") is False
+
+
+# ─── opps_sort_key ──────────────────────────────────────────────────
+
+from types import SimpleNamespace
+
+from core.arb_tab_matrix import compact_labels, opps_sort_key
+
+
+def _sr(grade="GO", bkevn=10.0, profit=5.0, score=80.0):
+    return SimpleNamespace(
+        grade=grade, viab=grade, breakeven_h=bkevn,
+        profit_usd_per_1k_24h=profit, score=score,
+    )
+
+
+def test_sort_go_before_wait_before_skip():
+    opps = [
+        ({"id": 1}, _sr(grade="SKIP")),
+        ({"id": 2}, _sr(grade="GO")),
+        ({"id": 3}, _sr(grade="MAYBE")),
+    ]
+    opps.sort(key=opps_sort_key)
+    assert [o["id"] for o, _ in opps] == [2, 3, 1]
+
+
+def test_sort_bkevn_ascending_within_grade():
+    opps = [
+        ({"id": 1}, _sr(grade="GO", bkevn=50.0)),
+        ({"id": 2}, _sr(grade="GO", bkevn=5.0)),
+        ({"id": 3}, _sr(grade="GO", bkevn=20.0)),
+    ]
+    opps.sort(key=opps_sort_key)
+    assert [o["id"] for o, _ in opps] == [2, 3, 1]
+
+
+def test_sort_profit_descending_as_tiebreaker():
+    opps = [
+        ({"id": 1}, _sr(grade="GO", bkevn=10.0, profit=1.0)),
+        ({"id": 2}, _sr(grade="GO", bkevn=10.0, profit=7.0)),
+        ({"id": 3}, _sr(grade="GO", bkevn=10.0, profit=3.0)),
+    ]
+    opps.sort(key=opps_sort_key)
+    assert [o["id"] for o, _ in opps] == [2, 3, 1]
+
+
+def test_sort_handles_none_bkevn_and_profit():
+    opps = [
+        ({"id": 1}, _sr(grade="GO", bkevn=None, profit=None)),
+        ({"id": 2}, _sr(grade="GO", bkevn=5.0, profit=2.0)),
+    ]
+    opps.sort(key=opps_sort_key)
+    # id 2 beats id 1: has bkevn
+    assert opps[0][0]["id"] == 2
+
+
+# ─── compact_labels ────────────────────────────────────────────────
+
+_FULL_LABELS = [
+    ("1", "cex-cex",   "1 CEX-CEX",   ("1 CC", "CEX-CEX")),
+    ("2", "dex-dex",   "1 DEX-DEX",   ("2 DD", "DEX-DEX")),
+    ("3", "cex-dex",   "1 CEX-DEX",   ("3 CD", "CEX-DEX")),
+    ("4", "perp-perp", "4 PERP-PERP", ("4 PP", "PERP-PERP")),
+    ("5", "spot-spot", "5 SPOT-SPOT", ("5 SS", "SPOT-SPOT")),
+    ("6", "basis",     "6 BASIS",     ("6 BAS", "BASIS")),
+    ("7", "positions", "7 POS",       ("7 POS", "POSITIONS")),
+    ("8", "history",   "8 HIST",      ("8 HIS", "HISTORY")),
+]
+
+
+def test_compact_labels_level_0_full():
+    # Level 0 = full, with counters
+    counts = {tid: 5 for _, tid, _, _ in _FULL_LABELS}
+    out = compact_labels(_FULL_LABELS, counts=counts, level=0)
+    assert out[0][2] == "1 CEX-CEX (5)"
+    assert out[6][2] == "7 POS (5)"
+
+
+def test_compact_labels_level_1_drops_counters():
+    counts = {tid: 5 for _, tid, _, _ in _FULL_LABELS}
+    out = compact_labels(_FULL_LABELS, counts=counts, level=1)
+    assert out[0][2] == "1 CEX-CEX"
+    assert "(" not in out[0][2]
+
+
+def test_compact_labels_level_2_slash():
+    counts = {tid: 0 for _, tid, _, _ in _FULL_LABELS}
+    out = compact_labels(_FULL_LABELS, counts=counts, level=2)
+    assert out[0][2] == "1 CEX/CEX"
+    assert out[3][2] == "4 PERP/PERP"
+
+
+def test_compact_labels_level_3_abbrev():
+    counts = {tid: 0 for _, tid, _, _ in _FULL_LABELS}
+    out = compact_labels(_FULL_LABELS, counts=counts, level=3)
+    assert out[0][2] == "1 CC"
+    assert out[5][2] == "6 BAS"
+    assert out[6][2] == "7 POS"

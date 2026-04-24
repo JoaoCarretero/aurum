@@ -118,3 +118,81 @@ def matches_type(pair: dict, tab_id: str) -> bool:
                 and kind_a != kind_b)
 
     return False
+
+
+# ─── Sort comparator ────────────────────────────────────────────────
+
+_GRADE_RANK: dict[str, int] = {"GO": 0, "MAYBE": 1, "WAIT": 1, "SKIP": 2}
+
+
+def opps_sort_key(entry: tuple[dict, object]) -> tuple[int, float, float]:
+    """Sort key: (grade asc, bkevn asc, -profit_usd_per_1k_24h).
+
+    ``entry`` is a ``(pair_dict, ScoreResult)`` tuple as produced by
+    ``_arb_filter_and_score``. GO rows sort first; ties broken by
+    shortest breakeven, then by highest 24h profit per $1k.
+
+    Missing bkevn/profit fall to worst (9999 / 0) so they sort last
+    within their grade bucket.
+    """
+    _pair, sr = entry
+    grade = getattr(sr, "grade", "SKIP")
+    rank = _GRADE_RANK.get(grade, 2)
+
+    bkevn = getattr(sr, "breakeven_h", None)
+    be = float(bkevn) if bkevn is not None else 9999.0
+
+    profit = getattr(sr, "profit_usd_per_1k_24h", None)
+    pf = float(profit) if profit is not None else 0.0
+
+    return (rank, be, -pf)
+
+
+# ─── Label compaction ───────────────────────────────────────────────
+
+# Abbreviation map used at compaction level 3.
+_ABBREV: dict[str, str] = {
+    "cex-cex":   "CC",
+    "dex-dex":   "DD",
+    "cex-dex":   "CD",
+    "perp-perp": "PP",
+    "spot-spot": "SS",
+    "basis":     "BAS",
+    "positions": "POS",
+    "history":   "HIS",
+}
+
+
+def compact_labels(
+    tab_defs: list[tuple[str, str, str, str]],
+    *,
+    counts: dict[str, int],
+    level: int,
+) -> list[tuple[str, str, str, str]]:
+    """Produce display labels for the tab strip at a given compaction level.
+
+    Args:
+        tab_defs: list of (key, tab_id, label_full, color) tuples.
+        counts:   per-tab opp count (after filters) keyed by tab_id.
+        level:    0=full with counters, 1=drop counters, 2=slash, 3=abbrev.
+
+    Returns:
+        New list of (key, tab_id, display_label, color) tuples. Input
+        tuples are not mutated.
+    """
+    out: list[tuple[str, str, str, str]] = []
+    for key, tid, label_full, color in tab_defs:
+        if level == 0:
+            n = counts.get(tid, 0)
+            display = f"{label_full} ({n})"
+        elif level == 1:
+            display = label_full
+        elif level == 2:
+            display = label_full.replace("-", "/")
+        elif level == 3:
+            abbrev = _ABBREV.get(tid, tid.upper()[:3])
+            display = f"{key} {abbrev}"
+        else:
+            display = label_full
+        out.append((key, tid, display, color))
+    return out
