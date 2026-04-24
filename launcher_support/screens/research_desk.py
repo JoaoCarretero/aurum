@@ -203,6 +203,14 @@ class ResearchDeskScreen(Screen):
         new_ticket_btn.pack(side="left", padx=(8, 0))
         new_ticket_btn.bind("<Button-1>", lambda _e: self._open_new_ticket())
 
+        alignment_btn = tk.Label(
+            pill, text="  ALIGNMENT  ",
+            font=(FONT, 7, "bold"),
+            fg=BG, bg=GREEN, cursor="hand2", padx=4, pady=2,
+        )
+        alignment_btn.pack(side="left", padx=(8, 0))
+        alignment_btn.bind("<Button-1>", lambda _e: self._open_alignment())
+
         tk.Frame(parent, bg=BG2, height=6).pack(fill="x")
         tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
@@ -340,6 +348,14 @@ class ResearchDeskScreen(Screen):
             self.container,
             fetch_summary=self._fetch_cost_summary,
         )
+
+    def _open_alignment(self) -> None:
+        """Open the alignment drift modal. Scan is fast (<100ms), runs
+        synchronously in the modal constructor."""
+        from launcher_support.research_desk.alignment_panel import (
+            open_alignment_modal,
+        )
+        open_alignment_modal(self.container, root_path=self.root_path)
 
     def _fetch_runs_for(self, agent: AgentIdentity) -> list[dict]:
         """Fetch heartbeat runs pra um agente. Chamado em thread daemon
@@ -516,6 +532,8 @@ class ResearchDeskScreen(Screen):
         app._kb("<Key-S>", self._toggle_paperclip)
         app._kb("<Key-c>", self._open_cost_dashboard)
         app._kb("<Key-C>", self._open_cost_dashboard)
+        app._kb("<Key-a>", self._open_alignment)
+        app._kb("<Key-A>", self._open_alignment)
         app._bind_global_nav()
 
         # Primeiro tick imediato pra evitar mostrar OFFLINE por 5s
