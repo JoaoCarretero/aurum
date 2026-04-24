@@ -4156,11 +4156,17 @@ def _render_detail_live(parent, slug, meta, state, launcher):
     tk.Label(right, text=f" {mode_key.upper()} ",
              fg=BG, bg=mode_color, font=(FONT, 7, "bold"),
              padx=4, pady=1).pack(side="left", padx=(4, 0))
-    started = proc.get("started")
+    # Same UTC-normalization as _uptime_seconds — naive `started` is
+    # treated as UTC so Brazil-local clock doesn't drift short durations
+    # (bug 2026-04-24). Prefers `started_at` from VPS API when available.
+    started = proc.get("started_at") or proc.get("started")
     if started:
         try:
-            from datetime import datetime as _dt
-            secs = (_dt.now() - _dt.fromisoformat(started)).total_seconds()
+            from datetime import datetime as _dt, timezone as _tz
+            parsed = _dt.fromisoformat(str(started).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=_tz.utc)
+            secs = (_dt.now(_tz.utc) - parsed).total_seconds()
             tk.Label(right, text=f" · {format_uptime(seconds=secs)}",
                      fg=DIM, bg=PANEL, font=(FONT, 8)).pack(side="left")
         except Exception:

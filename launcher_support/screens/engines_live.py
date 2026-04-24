@@ -166,11 +166,16 @@ def engines_now_playing(app, host, tracks, running_map) -> None:
             continue
         name = tracks[idx].name
         up_lbl = "—"
+        # UTC-normalize — naive `started` treated as UTC; now() is also
+        # tz-aware UTC to avoid Brazil-local drift (bug 2026-04-24).
         try:
-            started = proc.get("started")
+            from datetime import timezone as _tz
+            started = proc.get("started_at") or proc.get("started")
             if started:
-                t0 = _dt.fromisoformat(started)
-                secs = (_dt.now() - t0).total_seconds()
+                t0 = _dt.fromisoformat(str(started).replace("Z", "+00:00"))
+                if t0.tzinfo is None:
+                    t0 = t0.replace(tzinfo=_tz.utc)
+                secs = (_dt.now(_tz.utc) - t0).total_seconds()
                 h, rem = divmod(int(secs), 3600)
                 m, _ = divmod(rem, 60)
                 up_lbl = f"{h}h{m:02d}m" if h else f"{m}m"
