@@ -245,13 +245,16 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
     peak_equity=account; consecutive_losses=0
     cooldown_until=-1; sym_cooldown_until={}
     # Pattern-detection upper bound: backtest needs H_FORWARD forward bars
-    # to label WIN/LOSS; live scans only the recent live_tail_bars slice.
+    # to label WIN/LOSS. Live extends to len-1 so the tail is scannable,
+    # but pattern detection still starts at min_idx in BOTH modes so the
+    # Bayesian prior warms up with full history before the emission loop
+    # hits the tail. Without warm-up, live score diverges from backtest
+    # by the accumulated Bayes weight.
     _d_max = len(df) - 1 if live_mode else len(df) - H_FORWARD - 2
-    _d_min_live = (len(df) - live_tail_bars - 1) if live_mode else min_idx
     patterns_at=defaultdict(list)
     for k in range(len(alt)-4):
         X,A,B,C,D=alt[k],alt[k+1],alt[k+2],alt[k+3],alt[k+4]
-        if D["i"]<_d_min_live or D["i"]>=_d_max: continue
+        if D["i"]<min_idx or D["i"]>=_d_max: continue
         pat,ratios=_h_check(X,A,B,C,D)
         if not pat: continue
         direction="BEARISH" if D["type"]=="H" else "BULLISH"
@@ -261,14 +264,17 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
         if rr<H_MIN_RR: continue
         patterns_at[D["i"]].append({"pattern":pat,"direction":direction,
             "X":X,"A":A,"D":D,"target":target,"stop":stop,"rr":round(rr,2),"ratios":ratios})
-    # Loop range: backtest covers labelable region, live scans only the
-    # recent live_tail_bars slice (default 4 = ~60min at 15m tf).
+    # Loop range: live_mode processes the FULL history for Bayes warm-up,
+    # and emits trades only from the tail window. Backtest unchanged.
     if live_mode:
-        _loop_start = max(min_idx, len(df) - live_tail_bars - 1)
+        _loop_start = min_idx
         _loop_end = len(df) - 1
+        # Emission window — only bars in this range write to `trades[]`
+        _emit_start = len(df) - live_tail_bars - 1
     else:
         _loop_start = min_idx
         _loop_end = len(df) - H_FORWARD - 2
+        _emit_start = min_idx
     for idx in range(_loop_start, _loop_end):
         if idx not in patterns_at: continue
         open_pos=[(ei,s,sz,en) for ei,s,sz,en in open_pos if ei>idx]
@@ -330,14 +336,46 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
             entry=round(entry,8)
             if direction=="BULLISH" and (stop>=entry or target<=entry): vetos["hermes_niveis"]+=1; continue
             if direction=="BEARISH" and (stop<=entry or target>=entry): vetos["hermes_niveis"]+=1; continue
+            # Compute the label for every bar that has H_FORWARD forward
+            # candles — both modes need it: backtest to compute pnl and
+            # update bayes, live to warm up bayes before the emission tail.
+            can_label = (idx + 1 + H_FORWARD + 2 <= len(df))
+            if can_label:
+                label_result, duration, exit_p, exit_reason = label_trade(
+                    df, idx + 1, direction, entry, stop, target
+                )
+                if label_result == "OPEN":
+                    # Shouldn't happen with enough forward bars; treat as
+                    # unlabeled (skip emit+update).
+                    if not live_mode: continue
+                    label_result = None
+            else:
+                label_result = None
+                duration = 0
+                exit_p = entry
+                exit_reason = "live"
+
+            # Bayes update uses historical labels in BOTH modes — this is
+            # what makes live_mode score match backtest score at the tail.
+            if label_result in ("WIN", "LOSS"):
+                bayes.update(pat, label_result, rr)
+
+            # Emission gate: live_mode only emits bars in the tail window.
+            # Warm-up bars (label_trade done, bayes updated) are NOT emitted.
+            if live_mode and idx < _emit_start:
+                continue
+
+            # Resolve the emitted `result`: backtest reports real outcome,
+            # live tags "LIVE" so runtime handles the real exit.
             if live_mode:
                 result = "LIVE"
                 duration = 0
                 exit_p = entry
                 exit_reason = "live"
             else:
-                result,duration,exit_p,exit_reason=label_trade(df,idx+1,direction,entry,stop,target)
-                if result=="OPEN": continue
+                result = label_result
+                if result is None:
+                    continue
             size=position_size(account,entry,stop,max(score,SCORE_THRESHOLD),macro_b,direction,vol_r,dd_scale,False,peak_equity=peak_equity)
             size=round(size*corr_size_mult*trans_mult*fractal_score,4)
             # [L6] Aggregate notional cap across concurrently open positions.
@@ -367,7 +405,9 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                 # inflating sharpe / maxDD / final equity. Mirror of the fix
                 # already applied in mercurio/newton/thoth/backtest.
                 account=account+pnl
-                bayes.update(pat,result,rr)
+                # Bayes already updated at the `can_label` branch above —
+                # moved earlier so live_mode warm-up picks up the same
+                # updates before the emission tail.
                 if result=="LOSS":
                     consecutive_losses+=1
                     for n_l in sorted(STREAK_COOLDOWN.keys(),reverse=True):
