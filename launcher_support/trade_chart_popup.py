@@ -357,6 +357,18 @@ class TradeChartPopup:
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         import mplfinance as mpf
 
+        # Release prior Figure explicitly — matplotlib doesn't auto-GC
+        # Figure() instances built without pyplot. On a live-refreshing
+        # chart that's ~720 rebuilds/hour; accumulates without this.
+        prior_fig = getattr(self, "_fig", None)
+        if prior_fig is not None:
+            try:
+                prior_fig.clear()
+            except Exception:
+                pass
+            self._fig = None
+        self._canvas = None
+
         for widget in self._chart_frame.winfo_children():
             try:
                 widget.destroy()
@@ -440,6 +452,10 @@ class TradeChartPopup:
             pass
 
     def _live_tick(self):
+        # Null the stale after-id first: Tk already consumed it by firing
+        # this callback; keeping it would mislead destroy() into cancelling
+        # a non-existent timer (harmless, but invariant worth holding).
+        self._after_id = None
         if self._destroyed or not self.top.winfo_exists():
             return
         try:
@@ -460,6 +476,17 @@ class TradeChartPopup:
                 self.top.after_cancel(self._after_id)
             except Exception:
                 pass
+            self._after_id = None
+        # Release matplotlib Figure so the Axes/lines/patches graph is
+        # eligible for GC. Without this each popup leaks its final Figure.
+        fig = getattr(self, "_fig", None)
+        if fig is not None:
+            try:
+                fig.clear()
+            except Exception:
+                pass
+            self._fig = None
+        self._canvas = None
         try:
             self.top.destroy()
         except Exception:
