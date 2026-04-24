@@ -175,3 +175,32 @@ def test_status_icon_for_each_status() -> None:
     assert len({running.status_icon,
                 success.status_icon,
                 error.status_icon}) == 3
+
+
+def test_classify_stale_when_started_long_ago_no_end() -> None:
+    """AUR-12 failure mode: agent setou started mas nunca escreveu ended."""
+    from launcher_support.research_desk.live_runs import STATUS_STALE
+    view = shape_run({
+        "id": "r1",
+        "started_at": _iso_minus(1000),  # 16min atrás (>15min)
+    })
+    assert view.status == STATUS_STALE
+
+
+def test_classify_running_when_started_recent_no_end() -> None:
+    """Regressão: started recente ainda é RUNNING, não STALE."""
+    view = shape_run({
+        "id": "r1",
+        "started_at": _iso_minus(300),  # 5min atrás (<15min)
+    })
+    assert view.status == STATUS_RUNNING
+
+
+def test_classify_explicit_running_overrides_stale_heuristic() -> None:
+    """status explícito 'running' vence heurística de timeout."""
+    view = shape_run({
+        "id": "r1",
+        "status": "running",
+        "started_at": _iso_minus(2000),
+    })
+    assert view.status == STATUS_RUNNING

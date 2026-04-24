@@ -16,13 +16,17 @@ from dataclasses import dataclass
 STATUS_RUNNING = "running"
 STATUS_SUCCESS = "success"
 STATUS_ERROR = "error"
+STATUS_STALE = "stale"
 STATUS_UNKNOWN = "unknown"
+
+STALE_THRESHOLD_SEC = 900  # 15 min — started sem ended = stale
 
 # Unicode dots com hue distinto; UI mapeia pra cor real
 _STATUS_ICON: dict[str, str] = {
     STATUS_RUNNING: "◐",
     STATUS_SUCCESS: "●",
     STATUS_ERROR: "✕",
+    STATUS_STALE: "⏸",
     STATUS_UNKNOWN: "○",
 }
 
@@ -78,8 +82,8 @@ def shape_run(raw: dict) -> RunView:
 
 
 def _classify_status(raw: dict) -> str:
-    """running se ended_at vazio + started; success se exit_code==0;
-    error se exit_code!=0 ou status=='error'; senao unknown."""
+    """running/stale/success/error/unknown. Stale = started+sem ended
+    com timeout; AUR-12 failure mode."""
     explicit = (_str(raw, "status", "state") or "").lower()
     if explicit in ("running", "in_progress"):
         return STATUS_RUNNING
@@ -91,6 +95,11 @@ def _classify_status(raw: dict) -> str:
     ended = _str(raw, "ended_at", "finished_at", "completed_at")
     started = _str(raw, "started_at", "created_at")
     if started and not ended:
+        started_epoch = _parse_iso(started)
+        if started_epoch > 0:
+            import time
+            if time.time() - started_epoch > STALE_THRESHOLD_SEC:
+                return STATUS_STALE
         return STATUS_RUNNING
 
     exit_code = raw.get("exit_code")
