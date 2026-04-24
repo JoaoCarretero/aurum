@@ -47,6 +47,8 @@ from launcher_support.research_desk.activity_events import (
 from launcher_support.research_desk.activity_feed import ActivityFeed
 from launcher_support.research_desk.agent_card import AgentCard
 from launcher_support.research_desk.agent_detail import open_agent_detail
+from launcher_support.research_desk.cost_dashboard import open_cost_dashboard
+from launcher_support.research_desk.cost_summary import shape_cost_summary
 from launcher_support.research_desk.agent_view import (
     offline_view,
     shape_agents_by_uuid,
@@ -306,6 +308,31 @@ class ResearchDeskScreen(Screen):
         except Exception:
             return None
 
+    def _fetch_cost_summary(self):
+        """Constroi CostSummary a partir do snapshot atual + historico SQLite."""
+        history: dict[str, list] = {}
+        if self._stats_db_conn is None:
+            try:
+                from config.paths import AURUM_DB_PATH
+                self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
+            except Exception:
+                self._stats_db_conn = None
+        if self._stats_db_conn is not None:
+            for agent in AGENTS:
+                try:
+                    history[agent.key] = stats_db.list_days(
+                        self._stats_db_conn, agent.key, days=30,
+                    )
+                except Exception:
+                    history[agent.key] = []
+        return shape_cost_summary(self._last_agents_raw, history)
+
+    def _open_cost_dashboard(self) -> None:
+        open_cost_dashboard(
+            self.container,
+            fetch_summary=self._fetch_cost_summary,
+        )
+
     def _fetch_runs_for(self, agent: AgentIdentity) -> list[dict]:
         """Fetch heartbeat runs pra um agente. Chamado em thread daemon
         pelo modal — nao bloqueia main loop do launcher."""
@@ -479,6 +506,8 @@ class ResearchDeskScreen(Screen):
         app._kb("<Key-R>", self._poll_state)
         app._kb("<Key-s>", self._toggle_paperclip)
         app._kb("<Key-S>", self._toggle_paperclip)
+        app._kb("<Key-c>", self._open_cost_dashboard)
+        app._kb("<Key-C>", self._open_cost_dashboard)
         app._bind_global_nav()
 
         # Primeiro tick imediato pra evitar mostrar OFFLINE por 5s
