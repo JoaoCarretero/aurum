@@ -15,7 +15,7 @@ from launcher_support.research_desk.artifact_scanner import ArtifactEntry
 
 
 def _art(
-    agent: str = "SCRYER",
+    agent: str = "RESEARCH",
     kind: str = "spec",
     title: str = "phi-fib",
     mtime: float | None = None,
@@ -84,8 +84,8 @@ def test_detect_engine_multi_word() -> None:
 
 def test_link_spec_and_review_makes_chain() -> None:
     artifacts = [
-        _art(agent="SCRYER", kind="spec", title="phi-fib"),
-        _art(agent="ARBITER", kind="review", title="phi-fib"),
+        _art(agent="RESEARCH", kind="spec", title="phi-fib"),
+        _art(agent="REVIEW", kind="review", title="phi-fib"),
     ]
     chains = link_artifacts(artifacts)
     assert len(chains) == 1
@@ -99,9 +99,9 @@ def test_link_spec_and_review_makes_chain() -> None:
 
 def test_full_chain_spec_review_branch() -> None:
     artifacts = [
-        _art(agent="SCRYER", kind="spec", title="phi-fib"),
-        _art(agent="ARBITER", kind="review", title="phi-fib"),
-        _art(agent="ARTIFEX", kind="branch", title="phi-fib"),
+        _art(agent="RESEARCH", kind="spec", title="phi-fib"),
+        _art(agent="REVIEW", kind="review", title="phi-fib"),
+        _art(agent="BUILD", kind="branch", title="phi-fib"),
     ]
     chains = link_artifacts(artifacts)
     assert len(chains) == 1
@@ -168,9 +168,9 @@ def test_chains_for_agent_filters_by_kind() -> None:
     ]
     chains = link_artifacts(artifacts)
 
-    scryer_chains = chains_for_agent(chains, "SCRYER")  # spec
-    artifex_chains = chains_for_agent(chains, "ARTIFEX")  # branch
-    arbiter_chains = chains_for_agent(chains, "ARBITER")  # review
+    scryer_chains = chains_for_agent(chains, "RESEARCH")  # spec
+    artifex_chains = chains_for_agent(chains, "BUILD")  # branch
+    arbiter_chains = chains_for_agent(chains, "REVIEW")  # review
 
     assert len(scryer_chains) == 1  # phi-fib tem spec
     assert len(artifex_chains) == 1  # citadel tem branch

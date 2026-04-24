@@ -17,12 +17,12 @@ from launcher_support.research_desk.activity_events import (
     action_label,
     merge_events,
 )
-from launcher_support.research_desk.agents import ARBITER, SCRYER
+from launcher_support.research_desk.agents import REVIEW, RESEARCH
 from launcher_support.research_desk.artifact_scanner import ArtifactEntry
 
 
 def _mk_artifact(
-    agent_key: str = "SCRYER",
+    agent_key: str = "RESEARCH",
     kind: str = "spec",
     mtime: float | None = None,
     title: str = "x",
@@ -77,15 +77,15 @@ def test_merge_from_artifacts_only() -> None:
     assert events[1].title == "old"
     for e in events:
         assert e.action == ACTION_SPEC
-        assert e.agent_key == "SCRYER"
+        assert e.agent_key == "RESEARCH"
 
 
 def test_merge_artifact_kind_to_action() -> None:
     artifacts = [
         _mk_artifact(kind="spec"),
-        _mk_artifact(kind="review", agent_key="ARBITER"),
-        _mk_artifact(kind="audit", agent_key="CURATOR"),
-        _mk_artifact(kind="branch", agent_key="ARTIFEX"),
+        _mk_artifact(kind="review", agent_key="REVIEW"),
+        _mk_artifact(kind="audit", agent_key="CURATE"),
+        _mk_artifact(kind="branch", agent_key="BUILD"),
     ]
     events = merge_events(issues=[], artifacts=artifacts)
     actions = {e.action for e in events}
@@ -98,13 +98,13 @@ def test_merge_issue_created_event() -> None:
         "title": "Spec X",
         "status": "todo",
         "priority": "high",
-        "assigned_agent_id": SCRYER.uuid,
+        "assigned_agent_id": RESEARCH.uuid,
         "created_at": _iso_minus(30),
     }]
     events = merge_events(issues=issues, artifacts=[])
     assert len(events) == 1
     assert events[0].action == ACTION_ISSUE_CREATED
-    assert events[0].agent_key == "SCRYER"
+    assert events[0].agent_key == "RESEARCH"
     assert "high" in events[0].detail
 
 
@@ -114,7 +114,7 @@ def test_merge_issue_closed_uses_closed_at() -> None:
         "title": "Done issue",
         "status": "done",
         "priority": "medium",
-        "assigned_agent_id": ARBITER.uuid,
+        "assigned_agent_id": REVIEW.uuid,
         "created_at": _iso_minus(120),
         "closed_at": _iso_minus(5),
     }]
@@ -128,7 +128,7 @@ def test_merge_issue_closed_uses_closed_at() -> None:
 def test_merge_issue_in_progress_after_create() -> None:
     issues = [{
         "id": "i1", "title": "Working", "status": "in_progress",
-        "assigned_agent_id": SCRYER.uuid,
+        "assigned_agent_id": RESEARCH.uuid,
         "created_at": _iso_minus(100),
         "updated_at": _iso_minus(10),
     }]
@@ -166,7 +166,7 @@ def test_merge_sorts_combined_sources_desc() -> None:
     issues = [{
         "id": "i1", "title": "recent_issue",
         "created_at": new_issue_ts,
-        "assigned_agent_id": SCRYER.uuid,
+        "assigned_agent_id": RESEARCH.uuid,
     }]
     events = merge_events(issues=issues, artifacts=[old_artifact])
     # Issue recente vem antes do artefato de 1h atras
@@ -182,7 +182,7 @@ def test_artifact_detail_shows_dir() -> None:
 
 def test_branch_detail_git_label() -> None:
     art = ArtifactEntry(
-        agent_key="ARTIFEX", kind="branch", title="phi-fib",
+        agent_key="BUILD", kind="branch", title="phi-fib",
         path="experiment/phi-fib", mtime_epoch=time.time(),
         is_markdown=False,
     )
@@ -192,7 +192,7 @@ def test_branch_detail_git_label() -> None:
 
 def test_activityevent_frozen() -> None:
     event = ActivityEvent(
-        agent_key="SCRYER", action=ACTION_SPEC, title="x",
+        agent_key="RESEARCH", action=ACTION_SPEC, title="x",
         when_epoch=0.0, detail="", payload=None,
     )
     try:

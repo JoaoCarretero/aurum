@@ -1,5 +1,5 @@
-"""Research Desk — subsistema do launcher pra gerenciar 4 operativos AI
-(SCRYER, ARBITER, ARTIFEX, CURATOR) via Paperclip API.
+"""Research Desk — subsistema do launcher pra gerenciar 5 operativos AI
+(RESEARCH, REVIEW, BUILD, CURATE, AUDIT) via Paperclip API.
 
 A Screen principal vive em `launcher_support/screens/research_desk.py`.
 Este pacote agrupa módulos de dominio: client HTTP, scanner de artefatos,

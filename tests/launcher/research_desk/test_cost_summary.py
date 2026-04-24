@@ -1,7 +1,7 @@
 """Tests do cost_summary — pure functions, sem Tk/DB."""
 from __future__ import annotations
 
-from launcher_support.research_desk.agents import AGENTS, SCRYER
+from launcher_support.research_desk.agents import AGENTS, RESEARCH
 from launcher_support.research_desk.cost_summary import (
     LEVEL_ALERT,
     LEVEL_CRIT,
@@ -18,7 +18,7 @@ from launcher_support.research_desk.stats_db import StatRow
 
 def _row(**kw) -> StatRow:
     defaults = {
-        "agent_key": "SCRYER",
+        "agent_key": "RESEARCH",
         "date": "2026-04-20",
         "tickets_done": 0,
         "tickets_active": 0,
@@ -60,12 +60,12 @@ def test_level_crit_90_plus() -> None:
 
 def test_shape_agent_cost_basic() -> None:
     agent_dict = {
-        "id": SCRYER.uuid,
+        "id": RESEARCH.uuid,
         "monthly_spent_cents": 500,
         "monthly_budget_cents": 1000,
     }
-    view = shape_agent_cost(SCRYER, agent_dict, [])
-    assert view.agent_key == "SCRYER"
+    view = shape_agent_cost(RESEARCH, agent_dict, [])
+    assert view.agent_key == "RESEARCH"
     assert view.spent_cents == 500
     assert view.cap_cents == 1000
     assert view.pct == 0.5
@@ -74,7 +74,7 @@ def test_shape_agent_cost_basic() -> None:
 
 
 def test_shape_agent_cost_no_dict() -> None:
-    view = shape_agent_cost(SCRYER, None, [])
+    view = shape_agent_cost(RESEARCH, None, [])
     assert view.spent_cents == 0
     assert view.cap_text == "—"
     assert view.level == LEVEL_GREEN
@@ -86,14 +86,14 @@ def test_shape_agent_cost_trend_from_history() -> None:
         _row(date="2026-04-20", spent_cents=300),
         _row(date="2026-04-19", spent_cents=200),
     ]
-    view = shape_agent_cost(SCRYER, None, rows)
+    view = shape_agent_cost(RESEARCH, None, rows)
     # ASC por data -> 100, 200, 300
     assert view.trend_cents == [100, 200, 300]
 
 
 def test_shape_agent_cost_alert_level() -> None:
     view = shape_agent_cost(
-        SCRYER,
+        RESEARCH,
         {"monthly_spent_cents": 850, "monthly_budget_cents": 1000},
         [],
     )
@@ -102,7 +102,7 @@ def test_shape_agent_cost_alert_level() -> None:
 
 def test_shape_agent_cost_crit_on_overrun() -> None:
     view = shape_agent_cost(
-        SCRYER,
+        RESEARCH,
         {"monthly_spent_cents": 1500, "monthly_budget_cents": 1000},
         [],
     )

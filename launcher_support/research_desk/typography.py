@@ -6,18 +6,20 @@ fallback gracioso pra FONT default (Consolas) se a preferida nao
 existir — launcher nao deve quebrar em Linux/macOS/Windows sem Georgia.
 
 Mapa:
-  SCRYER   — serif ornamentado (Georgia / Cambria / serif)
+  RESEARCH — serif ornamentado (Georgia / Cambria / serif)
              → sugere manuscrito, visao, contemplacao
-  ARBITER  — sans-serif rigoroso (Segoe UI / Arial / sans-serif)
+  REVIEW   — sans-serif rigoroso (Segoe UI / Arial / sans-serif)
              → judicial, limpo, sem decoracao
-  ARTIFEX  — monospace (Consolas / Courier New / monospace)
+  BUILD    — monospace (Consolas / Courier New / monospace)
              → engenheiro, codigo, grid
-  CURATOR  — sans-serif neutro (Tahoma / Verdana / sans-serif)
+  CURATE   — sans-serif neutro (Tahoma / Verdana / sans-serif)
              → calmo, eficiente, minimal
+  AUDIT    — serif classico grave (Georgia / Cambria / Times New Roman)
+             → peso de veredito final, oracular
 
 API:
     from launcher_support.research_desk.typography import agent_font
-    tk.Label(..., font=agent_font("SCRYER", size=14, weight="bold"))
+    tk.Label(..., font=agent_font("RESEARCH", size=14, weight="bold"))
 """
 from __future__ import annotations
 
@@ -28,10 +30,11 @@ from core.ui.ui_palette import FONT as DEFAULT_FONT
 
 
 _AGENT_FONT_PREFS: dict[str, tuple[str, ...]] = {
-    "SCRYER":  ("Georgia", "Cambria", "Times New Roman", DEFAULT_FONT),
-    "ARBITER": ("Segoe UI", "Inter", "Arial", DEFAULT_FONT),
-    "ARTIFEX": ("Consolas", "JetBrains Mono", "Courier New", DEFAULT_FONT),
-    "CURATOR": ("Tahoma", "Verdana", "Segoe UI", DEFAULT_FONT),
+    "RESEARCH": ("Georgia", "Cambria", "Times New Roman", DEFAULT_FONT),
+    "REVIEW":   ("Segoe UI", "Inter", "Arial", DEFAULT_FONT),
+    "BUILD":    ("Consolas", "JetBrains Mono", "Courier New", DEFAULT_FONT),
+    "CURATE":   ("Tahoma", "Verdana", "Segoe UI", DEFAULT_FONT),
+    "AUDIT":    ("Georgia", "Cambria", "Times New Roman", DEFAULT_FONT),
 }
 
 
@@ -64,7 +67,7 @@ def agent_font(
     """Constroi um font tuple (family, size, style) tipado pra Tk widget.
 
     Example:
-        tk.Label(..., font=agent_font("SCRYER", size=14, weight="bold"))
+        tk.Label(..., font=agent_font("RESEARCH", size=14, weight="bold"))
     """
     family = _resolve_family(agent_key)
     if weight == "bold" and slant == "italic":

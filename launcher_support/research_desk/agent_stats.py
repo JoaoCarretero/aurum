@@ -128,10 +128,11 @@ def _issue_assignee(issue: dict) -> str:
 
 def _artifact_kind_label(agent: AgentIdentity) -> str:
     return {
-        "SCRYER": "specs",
-        "ARBITER": "reviews",
-        "ARTIFEX": "branches",
-        "CURATOR": "audits",
+        "RESEARCH": "specs",
+        "REVIEW": "reviews",
+        "BUILD": "branches",
+        "CURATE": "audits",
+        "AUDIT": "audits",
     }.get(agent.key, "artifacts")
 
 

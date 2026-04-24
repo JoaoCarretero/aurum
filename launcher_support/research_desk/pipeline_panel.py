@@ -205,6 +205,6 @@ def _agent_accent(uuid: str) -> str:
 
 
 def _assignee_label(uuid: str) -> str:
-    """Retorna 'SCRYER' etc, ou '—' se nao atribuido."""
+    """Retorna 'RESEARCH' etc, ou '—' se nao atribuido."""
     identity = BY_UUID.get(uuid)
     return identity.key if identity is not None else "—"

@@ -14,7 +14,7 @@ def test_agents_package_loads() -> None:
 
     assert len(agents.AGENTS) == 5
     keys = [a.key for a in agents.AGENTS]
-    assert keys == ["SCRYER", "ARBITER", "ARTIFEX", "CURATOR", "ORACLE"]
+    assert keys == ["RESEARCH", "REVIEW", "BUILD", "CURATE", "AUDIT"]
 
     uuids = {a.uuid for a in agents.AGENTS}
     assert len(uuids) == 5, "UUIDs devem ser unicos"
@@ -25,17 +25,17 @@ def test_agents_package_loads() -> None:
         assert agents.BY_KEY[agent.key] is agent
 
 
-def test_oracle_registered() -> None:
-    """ORACLE eh o 5to operativo com UUID e role corretos."""
-    from launcher_support.research_desk.agents import AGENTS, BY_KEY, ORACLE
+def test_audit_registered() -> None:
+    """AUDIT eh o 5to operativo com UUID e role corretos (antes era ORACLE)."""
+    from launcher_support.research_desk.agents import AGENTS, BY_KEY, AUDIT
 
-    assert ORACLE.key == "ORACLE"
-    assert ORACLE.uuid == "2f790a10-55d1-4b4c-9a48-30db1e4cb73b"
-    assert ORACLE.role == "Integrity Auditor"
-    assert ORACLE.archetype == "The Oracle"
-    assert ORACLE.stone == "Gold"
-    assert ORACLE in AGENTS
-    assert BY_KEY["ORACLE"] is ORACLE
+    assert AUDIT.key == "AUDIT"
+    assert AUDIT.uuid == "2f790a10-55d1-4b4c-9a48-30db1e4cb73b"
+    assert AUDIT.role == "Integrity Auditor"
+    assert AUDIT.archetype == "The Oracle"  # archetype flavor preservado
+    assert AUDIT.stone == "Gold"
+    assert AUDIT in AGENTS
+    assert BY_KEY["AUDIT"] is AUDIT
 
 
 def test_palette_covers_every_agent() -> None:
@@ -147,7 +147,7 @@ def test_launcher_has_research_desk_shim() -> None:
     )
 
 
-@pytest.mark.parametrize("key", ["SCRYER", "ARBITER", "ARTIFEX", "CURATOR", "ORACLE"])
+@pytest.mark.parametrize("key", ["RESEARCH", "REVIEW", "BUILD", "CURATE", "AUDIT"])
 def test_agent_tagline_and_role_populated(key: str) -> None:
     """Cada identidade tem role + tagline + archetype nao vazios."""
     from launcher_support.research_desk.agents import BY_KEY

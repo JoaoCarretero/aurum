@@ -85,8 +85,8 @@ def test_format_detail_path() -> None:
 
 
 def test_format_detail_agent() -> None:
-    out = _format_detail({"agent": "SCRYER", "reason": "missing"})
-    assert "SCRYER" in out
+    out = _format_detail({"agent": "RESEARCH", "reason": "missing"})
+    assert "RESEARCH" in out
     assert "missing" in out
 
 

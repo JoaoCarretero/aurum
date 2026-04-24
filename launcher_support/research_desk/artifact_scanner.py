@@ -1,10 +1,11 @@
 """Scanner de artefatos produzidos pelos operativos.
 
-SCRYER   -> docs/specs/*.md
-ARBITER  -> docs/reviews/*.md
-ARTIFEX  -> branches experiment/* via git (refs locais; remote fica fora
+RESEARCH -> docs/specs/*.md
+REVIEW   -> docs/reviews/*.md
+BUILD    -> branches experiment/* via git (refs locais; remote fica fora
            do escopo do Sprint 1 pra nao depender de network)
-CURATOR  -> docs/audits/*.md
+CURATE   -> docs/audits/*.md
+AUDIT    -> docs/audits/engines/*.md
 
 scan_artifacts(root) retorna lista ArtifactEntry ordenada por mtime DESC.
 Nao abre os arquivos — so lista. markdown_viewer.py renderiza quando o
@@ -22,7 +23,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class ArtifactEntry:
     """Um artefato producido por um agente."""
-    agent_key: str               # "SCRYER" | "ARBITER" | "ARTIFEX" | "CURATOR"
+    agent_key: str               # "RESEARCH" | "REVIEW" | "BUILD" | "CURATE" | "AUDIT"
     kind: str                    # "spec" | "review" | "branch" | "audit"
     title: str                   # filename sem extensao / nome da branch
     path: str                    # caminho relativo ao root, ou refname do git
@@ -32,9 +33,9 @@ class ArtifactEntry:
 
 _AGENT_KINDS: list[tuple[str, str, str]] = [
     # (agent_key, kind, relative_dir)
-    ("SCRYER", "spec", "docs/specs"),
-    ("ARBITER", "review", "docs/reviews"),
-    ("CURATOR", "audit", "docs/audits"),
+    ("RESEARCH", "spec", "docs/specs"),
+    ("REVIEW", "review", "docs/reviews"),
+    ("CURATE", "audit", "docs/audits"),
 ]
 
 
@@ -110,7 +111,7 @@ def _scan_experiment_branches(root: Path) -> list[ArtifactEntry]:
         # Remove prefix pra title ficar limpo
         title = refname[len("experiment/"):] if refname.startswith("experiment/") else refname
         out.append(ArtifactEntry(
-            agent_key="ARTIFEX",
+            agent_key="BUILD",
             kind="branch",
             title=title or refname,
             path=refname,

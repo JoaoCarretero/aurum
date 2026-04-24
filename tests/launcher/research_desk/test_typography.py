@@ -25,7 +25,7 @@ def test_agent_font_returns_tuple_shape() -> None:
         "tkinter.font.families",
         return_value={"Georgia", "Consolas", "Tahoma", "Segoe UI", "Arial"},
     ):
-        result = agent_font("SCRYER", size=12, weight="bold")
+        result = agent_font("RESEARCH", size=12, weight="bold")
     assert isinstance(result, tuple)
     assert len(result) == 3
     family, size, style = result
@@ -39,7 +39,7 @@ def test_scryer_prefers_serif() -> None:
         "tkinter.font.families",
         return_value={"Georgia", "Consolas"},
     ):
-        family, _, _ = agent_font("SCRYER")
+        family, _, _ = agent_font("RESEARCH")
     assert family == "Georgia"
 
 
@@ -48,7 +48,7 @@ def test_arbiter_prefers_sans_rigorous() -> None:
         "tkinter.font.families",
         return_value={"Segoe UI", "Consolas"},
     ):
-        family, _, _ = agent_font("ARBITER")
+        family, _, _ = agent_font("REVIEW")
     assert family == "Segoe UI"
 
 
@@ -57,7 +57,7 @@ def test_artifex_prefers_mono() -> None:
         "tkinter.font.families",
         return_value={"Consolas", "Tahoma"},
     ):
-        family, _, _ = agent_font("ARTIFEX")
+        family, _, _ = agent_font("BUILD")
     assert family == "Consolas"
 
 
@@ -66,17 +66,17 @@ def test_curator_prefers_sans_neutral() -> None:
         "tkinter.font.families",
         return_value={"Tahoma", "Consolas"},
     ):
-        family, _, _ = agent_font("CURATOR")
+        family, _, _ = agent_font("CURATE")
     assert family == "Tahoma"
 
 
 def test_fallback_when_preferred_missing() -> None:
-    # So Consolas ta disponivel — SCRYER precisa cair pro default
+    # So Consolas ta disponivel — RESEARCH precisa cair pro default
     with patch(
         "tkinter.font.families",
         return_value={"Consolas"},
     ):
-        family, _, _ = agent_font("SCRYER")
+        family, _, _ = agent_font("RESEARCH")
     assert family == "Consolas"  # DEFAULT_FONT
 
 
@@ -94,19 +94,19 @@ def test_tk_unavailable_falls_back() -> None:
         "tkinter.font.families",
         side_effect=RuntimeError("Tk not initialized"),
     ):
-        family, _, _ = agent_font("SCRYER")
+        family, _, _ = agent_font("RESEARCH")
     assert family == "Consolas"
 
 
 def test_weight_styles() -> None:
     with patch("tkinter.font.families", return_value={"Consolas"}):
-        assert agent_font("ARBITER", weight="bold")[2] == "bold"
-        assert agent_font("ARBITER", weight="normal")[2] == "normal"
-        assert agent_font("ARBITER", slant="italic")[2] == "italic"
-        assert agent_font("ARBITER", weight="bold", slant="italic")[2] == "bold italic"
+        assert agent_font("REVIEW", weight="bold")[2] == "bold"
+        assert agent_font("REVIEW", weight="normal")[2] == "normal"
+        assert agent_font("REVIEW", slant="italic")[2] == "italic"
+        assert agent_font("REVIEW", weight="bold", slant="italic")[2] == "bold italic"
 
 
 def test_each_agent_has_prefs() -> None:
-    for key in ("SCRYER", "ARBITER", "ARTIFEX", "CURATOR"):
+    for key in ("RESEARCH", "REVIEW", "BUILD", "CURATE"):
         assert key in _AGENT_FONT_PREFS
         assert len(_AGENT_FONT_PREFS[key]) >= 2

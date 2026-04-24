@@ -25,9 +25,9 @@ from pathlib import Path
 from typing import Iterable
 
 
-# Operative names (not engines). Bolded in canon as **SCRYER** etc.
+# Operative names (not engines). Bolded in canon as **RESEARCH** etc.
 _OPERATIVE_NAMES: frozenset[str] = frozenset({
-    "SCRYER", "ARBITER", "ARTIFEX", "CURATOR", "ORACLE",
+    "RESEARCH", "REVIEW", "BUILD", "CURATE", "AUDIT",
 })
 
 # Tokens that legitimately appear bolded in prose but are NOT engine refs.
@@ -261,7 +261,7 @@ def check_paperclip_sync(
             issues.append({"agent": key, "reason": "unreadable", "path": str(f)})
             continue
         first = text.splitlines()[0] if text else ""
-        # Also strip leading whitespace so "  # ORACLE" would still match.
+        # Also strip leading whitespace so "  # AUDIT" would still match.
         if not first.lstrip().startswith(f"# {key}"):
             issues.append({
                 "agent": key,

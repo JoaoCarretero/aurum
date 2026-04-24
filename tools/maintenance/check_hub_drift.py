@@ -169,11 +169,11 @@ def check_personas() -> list[str]:
         agents_md,
     )
     # Filtra keys conhecidas de operativos (upper -> lower para file match)
-    known = {"SCRYER", "ARBITER", "ARTIFEX", "CURATOR", "ORACLE"}
+    known = {"RESEARCH", "REVIEW", "BUILD", "CURATE", "AUDIT"}
     required_keys = [op.lower() for op in table_ops if op in known]
     if not required_keys:
-        # fallback — pelo menos os 4 originais
-        required_keys = ["scryer", "arbiter", "artifex", "curator"]
+        # fallback — pelo menos os 5 atuais
+        required_keys = ["research", "review", "build", "curate", "audit"]
 
     for key in required_keys:
         file = f"{key}.md"

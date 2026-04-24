@@ -26,14 +26,14 @@ def tk_root():
 def test_sigil_creates_canvas_with_items(tk_root) -> None:
     from launcher_support.research_desk.sigils import SigilCanvas
 
-    sigil = SigilCanvas(tk_root, "SCRYER", size=96)
+    sigil = SigilCanvas(tk_root, "RESEARCH", size=96)
     # Canvas deve ter itens drawn (frame + glyph)
     items = sigil.canvas.find_all()
-    assert len(items) > 0, "sigil SCRYER nao desenhou nada"
+    assert len(items) > 0, "sigil RESEARCH nao desenhou nada"
 
 
 @pytest.mark.gui
-@pytest.mark.parametrize("key", ["SCRYER", "ARBITER", "ARTIFEX", "CURATOR"])
+@pytest.mark.parametrize("key", ["RESEARCH", "REVIEW", "BUILD", "CURATE", "AUDIT"])
 def test_all_agent_sigils_draw(tk_root, key: str) -> None:
     from launcher_support.research_desk.sigils import SigilCanvas
 
@@ -57,7 +57,7 @@ def test_unknown_agent_still_renders_frame(tk_root) -> None:
 def test_size_param_respected(tk_root) -> None:
     from launcher_support.research_desk.sigils import SigilCanvas
 
-    sigil = SigilCanvas(tk_root, "SCRYER", size=32)
+    sigil = SigilCanvas(tk_root, "RESEARCH", size=32)
     assert sigil.canvas["width"] == "32"
     assert sigil.canvas["height"] == "32"
 
@@ -67,7 +67,7 @@ def test_canvas_supports_layout_passthrough(tk_root) -> None:
     from launcher_support.research_desk.sigils import SigilCanvas
 
     frame = tk.Frame(tk_root)
-    sigil = SigilCanvas(frame, "ARBITER", size=40)
+    sigil = SigilCanvas(frame, "REVIEW", size=40)
     # Sem explosao nos passthroughs
     sigil.pack(side="left")
     assert sigil.canvas.winfo_manager() == "pack"

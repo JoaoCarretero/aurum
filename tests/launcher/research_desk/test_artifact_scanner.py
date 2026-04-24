@@ -22,7 +22,7 @@ def _write(path: Path, content: str = "# x\n") -> None:
 def test_scan_markdown_dir_missing_returns_empty(tmp_path: Path) -> None:
     assert _scan_markdown_dir(
         root=tmp_path, rel_dir="docs/nonexistent",
-        agent_key="SCRYER", kind="spec",
+        agent_key="RESEARCH", kind="spec",
     ) == []
 
 
@@ -34,12 +34,12 @@ def test_scan_markdown_dir_lists_nested(tmp_path: Path) -> None:
 
     out = _scan_markdown_dir(
         root=tmp_path, rel_dir="docs/specs",
-        agent_key="SCRYER", kind="spec",
+        agent_key="RESEARCH", kind="spec",
     )
     titles = {e.title for e in out}
     assert titles == {"a", "b"}
     for e in out:
-        assert e.agent_key == "SCRYER"
+        assert e.agent_key == "RESEARCH"
         assert e.kind == "spec"
         assert e.is_markdown is True
         assert e.path.startswith("docs/specs/")
@@ -57,7 +57,7 @@ def test_scan_artifacts_aggregates_all_agents(tmp_path: Path) -> None:
 
     keys = {e.agent_key for e in entries}
     kinds = {e.kind for e in entries}
-    assert keys == {"SCRYER", "ARBITER", "CURATOR"}
+    assert keys == {"RESEARCH", "REVIEW", "CURATE"}
     assert kinds == {"spec", "review", "audit"}
 
 
@@ -104,7 +104,7 @@ def test_experiment_branches_parse_output(tmp_path: Path) -> None:
     titles = [e.title for e in out]
     assert titles == ["phi-fib", "kepos-hawkes"]
     for e in out:
-        assert e.agent_key == "ARTIFEX"
+        assert e.agent_key == "BUILD"
         assert e.kind == "branch"
         assert e.is_markdown is False
 
@@ -128,7 +128,7 @@ def test_experiment_branches_handles_nonzero_exit(tmp_path: Path) -> None:
 
 def test_relative_age_fresh() -> None:
     entry = ArtifactEntry(
-        agent_key="SCRYER", kind="spec", title="x", path="x.md",
+        agent_key="RESEARCH", kind="spec", title="x", path="x.md",
         mtime_epoch=time.time() - 120, is_markdown=True,
     )
     age = relative_age(entry)
@@ -137,7 +137,7 @@ def test_relative_age_fresh() -> None:
 
 def test_relative_age_zero_returns_dash() -> None:
     entry = ArtifactEntry(
-        agent_key="SCRYER", kind="spec", title="x", path="x.md",
+        agent_key="RESEARCH", kind="spec", title="x", path="x.md",
         mtime_epoch=0, is_markdown=True,
     )
     assert relative_age(entry) == "—"
@@ -145,7 +145,7 @@ def test_relative_age_zero_returns_dash() -> None:
 
 def test_relative_age_days() -> None:
     entry = ArtifactEntry(
-        agent_key="SCRYER", kind="spec", title="x", path="x.md",
+        agent_key="RESEARCH", kind="spec", title="x", path="x.md",
         mtime_epoch=time.time() - 3 * 86400, is_markdown=True,
     )
     assert relative_age(entry).endswith("d atras")

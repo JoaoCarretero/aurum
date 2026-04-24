@@ -39,10 +39,10 @@ def test_connect_creates_parent_dir(tmp_path: Path) -> None:
 def test_record_snapshot_inserts(tmp_path: Path) -> None:
     conn = connect(tmp_path / "stats.db")
     record_snapshot(
-        conn, agent_key="SCRYER", date="2026-04-20",
+        conn, agent_key="RESEARCH", date="2026-04-20",
         tickets_done=5, artifacts_total=12, spent_cents=1234,
     )
-    rows = list_days(conn, "SCRYER")
+    rows = list_days(conn, "RESEARCH")
     assert len(rows) == 1
     assert rows[0].tickets_done == 5
     assert rows[0].spent_cents == 1234
@@ -51,15 +51,15 @@ def test_record_snapshot_inserts(tmp_path: Path) -> None:
 def test_record_snapshot_upserts_same_day(tmp_path: Path) -> None:
     conn = connect(tmp_path / "stats.db")
     record_snapshot(
-        conn, agent_key="SCRYER", date="2026-04-20",
+        conn, agent_key="RESEARCH", date="2026-04-20",
         tickets_done=5, artifacts_total=12,
     )
     # Mesmo dia, valores atualizados
     record_snapshot(
-        conn, agent_key="SCRYER", date="2026-04-20",
+        conn, agent_key="RESEARCH", date="2026-04-20",
         tickets_done=7, artifacts_total=15,
     )
-    rows = list_days(conn, "SCRYER")
+    rows = list_days(conn, "RESEARCH")
     assert len(rows) == 1
     assert rows[0].tickets_done == 7
     assert rows[0].artifacts_total == 15
@@ -68,8 +68,8 @@ def test_record_snapshot_upserts_same_day(tmp_path: Path) -> None:
 def test_list_days_orders_desc_by_date(tmp_path: Path) -> None:
     conn = connect(tmp_path / "stats.db")
     for date in ("2026-04-18", "2026-04-20", "2026-04-19"):
-        record_snapshot(conn, agent_key="SCRYER", date=date)
-    rows = list_days(conn, "SCRYER")
+        record_snapshot(conn, agent_key="RESEARCH", date=date)
+    rows = list_days(conn, "RESEARCH")
     assert [r.date for r in rows] == ["2026-04-20", "2026-04-19", "2026-04-18"]
 
 
@@ -77,23 +77,23 @@ def test_list_days_respects_limit(tmp_path: Path) -> None:
     conn = connect(tmp_path / "stats.db")
     for i in range(20):
         record_snapshot(
-            conn, agent_key="SCRYER",
+            conn, agent_key="RESEARCH",
             date=f"2026-04-{i + 1:02d}",
         )
-    rows = list_days(conn, "SCRYER", days=5)
+    rows = list_days(conn, "RESEARCH", days=5)
     assert len(rows) == 5
 
 
 def test_list_days_filters_by_agent(tmp_path: Path) -> None:
     conn = connect(tmp_path / "stats.db")
-    record_snapshot(conn, agent_key="SCRYER", date="2026-04-20")
-    record_snapshot(conn, agent_key="ARBITER", date="2026-04-20")
-    scryer_rows = list_days(conn, "SCRYER")
-    arbiter_rows = list_days(conn, "ARBITER")
+    record_snapshot(conn, agent_key="RESEARCH", date="2026-04-20")
+    record_snapshot(conn, agent_key="REVIEW", date="2026-04-20")
+    scryer_rows = list_days(conn, "RESEARCH")
+    arbiter_rows = list_days(conn, "REVIEW")
     assert len(scryer_rows) == 1
-    assert scryer_rows[0].agent_key == "SCRYER"
+    assert scryer_rows[0].agent_key == "RESEARCH"
     assert len(arbiter_rows) == 1
-    assert arbiter_rows[0].agent_key == "ARBITER"
+    assert arbiter_rows[0].agent_key == "REVIEW"
 
 
 # ── Pure compute_ratios ───────────────────────────────────────────
@@ -101,7 +101,7 @@ def test_list_days_filters_by_agent(tmp_path: Path) -> None:
 
 def _row(**kw) -> StatRow:
     defaults = {
-        "agent_key": "SCRYER",
+        "agent_key": "RESEARCH",
         "date": "2026-04-20",
         "tickets_done": 0,
         "tickets_active": 0,

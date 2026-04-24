@@ -3,9 +3,9 @@
 Dado um conjunto de ArtifactEntry, agrupa por "stem" (nome base) em
 cadeias:
 
-  SCRYER spec      docs/specs/phi-fib.md
-  ARBITER review   docs/reviews/phi-fib.md
-  ARTIFEX branch   experiment/phi-fib
+  RESEARCH spec    docs/specs/phi-fib.md
+  REVIEW review    docs/reviews/phi-fib.md
+  BUILD branch     experiment/phi-fib
   backtest run     data/phi/2026-04-23_1403/
 
 Heuristica: mesma stem (normalizada: lowercase, espacos/hifens/
@@ -119,10 +119,11 @@ def chains_for_agent(
     """Filtra chains que envolvem o agente dado (i.e., tem artefato de que
     agente produz)."""
     agent_kind_map = {
-        "SCRYER": "spec",
-        "ARBITER": "review",
-        "ARTIFEX": "branch",
-        "CURATOR": "audit",
+        "RESEARCH": "spec",
+        "REVIEW": "review",
+        "BUILD": "branch",
+        "CURATE": "audit",
+        "AUDIT": "audit",
     }
     needed = agent_kind_map.get(agent_key)
     if needed is None:

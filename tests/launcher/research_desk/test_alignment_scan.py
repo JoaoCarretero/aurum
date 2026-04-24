@@ -65,10 +65,10 @@ def test_check_engine_roster_ignores_non_bold_uppercase(tmp_path: Path) -> None:
 
 
 def test_check_engine_roster_ignores_operatives(tmp_path: Path) -> None:
-    """Operative names (SCRYER/ARBITER/...) in bold are not engine refs."""
+    """Operative names (RESEARCH/REVIEW/...) in bold are not engine refs."""
     canon = tmp_path / "AGENTS.md"
     canon.write_text(
-        "**SCRYER** produces specs; **ARBITER** reviews them; **ARTIFEX** codes."
+        "**RESEARCH** produces specs; **REVIEW** reviews them; **BUILD** codes."
     )
     result = check_engine_roster([canon], registered_display_names={"CITADEL"})
     assert result.status == "green"
@@ -200,8 +200,8 @@ def test_check_paperclip_sync_green_when_all_present(tmp_path: Path) -> None:
     company = "c2ccbb97-bda1-45db-ab53-5b2bb63962ee"
     base = tmp_path / ".paperclip" / "instances" / "default" / "companies" / company / "agents"
     agents_map = {
-        "SCRYER": "c28d2218-9941-4c44-a318-6d9d2df129d2",
-        "ORACLE": "2f790a10-55d1-4b4c-9a48-30db1e4cb73b",
+        "RESEARCH": "c28d2218-9941-4c44-a318-6d9d2df129d2",
+        "AUDIT": "2f790a10-55d1-4b4c-9a48-30db1e4cb73b",
     }
     for name, uid in agents_map.items():
         inst = base / uid / "instructions"
@@ -220,13 +220,13 @@ def test_check_paperclip_sync_handles_utf8_bom_from_paperclip(tmp_path: Path) ->
     """
     company = "c2ccbb97-bda1-45db-ab53-5b2bb63962ee"
     base = tmp_path / ".paperclip" / "instances" / "default" / "companies" / company / "agents"
-    agents_map = {"ORACLE": "2f790a10-9941-4c44-a318-6d9d2df129d2"}
+    agents_map = {"AUDIT": "2f790a10-9941-4c44-a318-6d9d2df129d2"}
     inst = base / "2f790a10-9941-4c44-a318-6d9d2df129d2" / "instructions"
     inst.mkdir(parents=True)
     # Write file WITH UTF-8 BOM prepended (simulates Electron/Node output)
     import codecs
     (inst / "AGENTS.md").write_bytes(
-        codecs.BOM_UTF8 + b"# ORACLE - Integrity Auditor\n\nBody."
+        codecs.BOM_UTF8 + b"# AUDIT - Integrity Auditor\n\nBody."
     )
     result = check_paperclip_sync(
         agents=agents_map, paperclip_home=tmp_path / ".paperclip", company_id=company,
@@ -238,8 +238,8 @@ def test_check_paperclip_sync_red_when_missing_or_header_mismatch(tmp_path: Path
     company = "c2ccbb97-bda1-45db-ab53-5b2bb63962ee"
     base = tmp_path / ".paperclip" / "instances" / "default" / "companies" / company / "agents"
     agents_map = {
-        "SCRYER": "aaa",  # file absent
-        "ORACLE": "bbb",  # file present but wrong header
+        "RESEARCH": "aaa",  # file absent
+        "AUDIT": "bbb",  # file present but wrong header
     }
     inst = base / "bbb" / "instructions"
     inst.mkdir(parents=True)
@@ -249,8 +249,8 @@ def test_check_paperclip_sync_red_when_missing_or_header_mismatch(tmp_path: Path
     )
     assert result.status == "red"
     issues = {d["agent"]: d for d in result.details}
-    assert issues["SCRYER"]["reason"] == "missing"
-    assert issues["ORACLE"]["reason"] == "header_mismatch"
+    assert issues["RESEARCH"]["reason"] == "missing"
+    assert issues["AUDIT"]["reason"] == "header_mismatch"
 
 
 # ── check_protected_files ────────────────────────────────────────

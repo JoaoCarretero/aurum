@@ -14,7 +14,7 @@ def test_validate_ok_canonical() -> None:
     result, draft = validate_draft(
         title="Implement Kepos hawkes",
         description="Explore invert flag",
-        assignee_key="SCRYER",
+        assignee_key="RESEARCH",
         priority="high",
     )
     assert result.ok is True
@@ -22,14 +22,14 @@ def test_validate_ok_canonical() -> None:
     assert draft is not None
     assert draft.title == "Implement Kepos hawkes"
     assert draft.priority == "high"
-    assert draft.assignee.key == "SCRYER"
+    assert draft.assignee.key == "RESEARCH"
 
 
 def test_validate_trims_title() -> None:
     _, draft = validate_draft(
         title="   Implementar KEPOS   ",
         description="",
-        assignee_key="SCRYER",
+        assignee_key="RESEARCH",
         priority="medium",
     )
     assert draft is not None
@@ -40,7 +40,7 @@ def test_validate_rejects_short_title() -> None:
     result, draft = validate_draft(
         title="ab",
         description="",
-        assignee_key="SCRYER",
+        assignee_key="RESEARCH",
         priority="low",
     )
     assert result.ok is False
@@ -52,7 +52,7 @@ def test_validate_rejects_long_title() -> None:
     result, _ = validate_draft(
         title="x" * 200,
         description="",
-        assignee_key="ARBITER",
+        assignee_key="REVIEW",
         priority="medium",
     )
     assert result.ok is False
@@ -63,7 +63,7 @@ def test_validate_rejects_unknown_priority() -> None:
     result, _ = validate_draft(
         title="title ok",
         description="",
-        assignee_key="SCRYER",
+        assignee_key="RESEARCH",
         priority="urgent",
     )
     assert result.ok is False
@@ -85,18 +85,18 @@ def test_validate_case_insensitive_assignee() -> None:
     _, draft = validate_draft(
         title="title ok",
         description="",
-        assignee_key="scryer",
+        assignee_key="research",
         priority="low",
     )
     assert draft is not None
-    assert draft.assignee.key == "SCRYER"
+    assert draft.assignee.key == "RESEARCH"
 
 
 def test_validate_case_insensitive_priority() -> None:
     _, draft = validate_draft(
         title="title ok",
         description="",
-        assignee_key="SCRYER",
+        assignee_key="RESEARCH",
         priority="HIGH",
     )
     assert draft is not None
@@ -118,7 +118,7 @@ def test_payload_shape_matches_paperclip_api() -> None:
     _, draft = validate_draft(
         title="Implement X",
         description="line1\nline2",
-        assignee_key="ARTIFEX",
+        assignee_key="BUILD",
         priority="high",
     )
     assert draft is not None
@@ -135,7 +135,7 @@ def test_payload_shape_matches_paperclip_api() -> None:
 def test_payload_assignee_uuid_is_real_paperclip_id() -> None:
     _, draft = validate_draft(
         title="ok ok ok", description="",
-        assignee_key="CURATOR", priority="low",
+        assignee_key="CURATE", priority="low",
     )
     assert draft is not None
     payload = draft_to_api_payload(draft)
@@ -147,7 +147,7 @@ def test_validate_empty_description_ok() -> None:
     result, draft = validate_draft(
         title="title mininmo",
         description="",
-        assignee_key="SCRYER",
+        assignee_key="RESEARCH",
         priority="medium",
     )
     assert result.ok is True

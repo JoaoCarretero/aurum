@@ -1,15 +1,16 @@
 """Sigils alquimicos desenhados programaticamente em tk.Canvas.
 
-4 sigils — um por operativo — compartilhando linguagem visual:
+5 sigils — um por operativo — compartilhando linguagem visual:
   - circulo de conteimento externo
   - glyph central em linha fina (stroke ~2px)
   - ornamento sutil (pequenas marks no frame)
   - cor primaria do agente pro glyph; dim pro frame
 
-SCRYER   (The Seer)      — olho dentro do circulo + raios
-ARBITER  (The Judge)     — balanca + gladius
-ARTIFEX  (The Forger)    — martelo + bigorna
-CURATOR  (The Keeper)    — vassoura + ampulheta
+RESEARCH  (The Seer)      — olho dentro do circulo + raios
+REVIEW    (The Judge)     — balanca + gladius
+BUILD     (The Forger)    — martelo + bigorna
+CURATE    (The Keeper)    — vassoura + ampulheta
+AUDIT     (The Oracle)    — calice com triangulo de veredito + gotas
 
 Por que Canvas e nao SVG: Tkinter nao tem parser SVG stdlib. Adicionar
 tksvg/cairosvg/Pillow so pros sigils seria overkill. Canvas desenha
@@ -113,7 +114,7 @@ def _draw_frame(canvas: tk.Canvas, size: int, color: str) -> None:
         canvas.create_line(x1, y1, x2, y2, fill=color, width=_STROKE_FRAME)
 
 
-def _draw_scryer(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
+def _draw_research(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
     """Olho almondine + 8 raios."""
     cx, cy = size / 2, size / 2
     # Almond eye shape (2 arcs meeting)
@@ -164,7 +165,7 @@ def _draw_scryer(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
         canvas.create_line(x1, y1, x2, y2, fill=dim, width=_STROKE_FRAME)
 
 
-def _draw_arbiter(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
+def _draw_review(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
     """Gladius vertical + balance beam + 2 pans."""
     cx, cy = size / 2, size / 2
     # Gladius blade (vertical line)
@@ -213,7 +214,7 @@ def _draw_arbiter(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
         )
 
 
-def _draw_artifex(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
+def _draw_build(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
     """Bigorna (trapezoid + horn) + martelo atravessando em 45deg."""
     cx, cy = size / 2, size / 2
 
@@ -278,7 +279,7 @@ def _draw_artifex(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
         )
 
 
-def _draw_curator(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
+def _draw_curate(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
     """Ampulheta no centro + vassoura atras em diagonal."""
     cx, cy = size / 2, size / 2
 
@@ -349,9 +350,70 @@ def _draw_curator(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
     )
 
 
+def _draw_audit(canvas: tk.Canvas, size: int, primary: str, dim: str) -> None:
+    """Calice (chalice) com triangulo de veredito + 3 gotas.
+
+    AUDIT emite vereditos numericos/finais — o calice ritual acima do
+    triangulo (representacao alquimica de fogo/sublimacao) evoca
+    destilacao e julgamento final. Tres gotas abaixo = PASS/FAIL/
+    CONDITIONAL.
+    """
+    cx, cy = size / 2, size / 2
+
+    # Triangulo de veredito (fogo alquimico — apex para cima) no topo
+    tri_half_w = size * 0.18
+    tri_top_y = cy - size * 0.32
+    tri_base_y = cy - size * 0.08
+    canvas.create_polygon(
+        cx, tri_top_y,
+        cx - tri_half_w, tri_base_y,
+        cx + tri_half_w, tri_base_y,
+        outline=primary, width=_STROKE_MAIN, fill="",
+    )
+    # Linha horizontal dividindo o triangulo — marca de "perfeicao"
+    line_y = tri_top_y + (tri_base_y - tri_top_y) * 0.65
+    line_half = tri_half_w * 0.55
+    canvas.create_line(
+        cx - line_half, line_y, cx + line_half, line_y,
+        fill=primary, width=_STROKE_FRAME,
+    )
+
+    # Calice (chalice) central — stem + bowl
+    stem_top_y = tri_base_y + size * 0.04
+    stem_bot_y = stem_top_y + size * 0.12
+    canvas.create_line(
+        cx, stem_top_y, cx, stem_bot_y,
+        fill=primary, width=_STROKE_MAIN,
+    )
+    bowl_half_w = size * 0.16
+    bowl_bot_y = stem_bot_y + size * 0.10
+    canvas.create_arc(
+        cx - bowl_half_w, stem_bot_y - size * 0.02,
+        cx + bowl_half_w, bowl_bot_y,
+        start=180, extent=180, style="arc",
+        outline=primary, width=_STROKE_MAIN,
+    )
+    base_half = bowl_half_w * 0.75
+    canvas.create_line(
+        cx - base_half, bowl_bot_y, cx + base_half, bowl_bot_y,
+        fill=primary, width=_STROKE_MAIN,
+    )
+
+    # 3 gotas caindo abaixo (decorativas, dim) — PASS/FAIL/CONDITIONAL
+    drop_r = size * 0.022
+    drop_y = bowl_bot_y + size * 0.10
+    for offset in (-size * 0.09, 0, size * 0.09):
+        canvas.create_oval(
+            cx + offset - drop_r, drop_y - drop_r,
+            cx + offset + drop_r, drop_y + drop_r,
+            fill=dim, outline=dim,
+        )
+
+
 _GLYPH_DISPATCH = {
-    "SCRYER": _draw_scryer,
-    "ARBITER": _draw_arbiter,
-    "ARTIFEX": _draw_artifex,
-    "CURATOR": _draw_curator,
+    "RESEARCH": _draw_research,
+    "REVIEW": _draw_review,
+    "BUILD": _draw_build,
+    "CURATE": _draw_curate,
+    "AUDIT": _draw_audit,
 }
