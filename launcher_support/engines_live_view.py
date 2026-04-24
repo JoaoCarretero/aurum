@@ -454,10 +454,10 @@ def render(launcher, parent, *, on_escape) -> dict:
     body = tk.Frame(root, bg=BG)
     body.pack(fill="both", expand=True, padx=14, pady=(8, 0))
 
-    # Split 18/82 master/detail — bucket-list compacto, detail pane
-    # ganha a maior parte do terminal pra renderizar cards + drill-down.
-    body.grid_columnconfigure(0, weight=18, uniform="body")
-    body.grid_columnconfigure(1, weight=82, uniform="body")
+    # Split 24/76 master/detail. The master list is the operator's
+    # primary navigation, so it needs enough width for status + context.
+    body.grid_columnconfigure(0, weight=24, uniform="body")
+    body.grid_columnconfigure(1, weight=76, uniform="body")
     body.grid_rowconfigure(0, weight=1)
 
     state["master_host"] = tk.Frame(body, bg=BG)
@@ -763,6 +763,19 @@ def _load_shadow_snapshot_sync(engine: str = "millennium") -> tuple[Path | None,
     return run_dir, hb, trades
 
 
+def _call_load_shadow_snapshot_sync(engine: str) -> tuple[Path | None, dict | None, list[dict]]:
+    """Call shadow snapshot loader while tolerating legacy zero-arg shims."""
+    import inspect
+
+    try:
+        params = inspect.signature(_load_shadow_snapshot_sync).parameters
+    except (TypeError, ValueError):
+        params = {"engine": object()}
+    if len(params) == 0:
+        return _load_shadow_snapshot_sync()  # type: ignore[call-arg]
+    return _load_shadow_snapshot_sync(engine)
+
+
 def _load_shadow_snapshot_cached(*, launcher=None, state=None,
                                  allow_sync: bool = False,
                                  engine: str = "millennium") -> tuple[Path | None, dict | None, list[dict]]:
@@ -785,7 +798,7 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
 
             def _worker() -> None:
                 global _SHADOW_SNAPSHOT_LOADING
-                payload = _load_shadow_snapshot_sync(engine)
+                payload = _call_load_shadow_snapshot_sync(engine)
                 with _SHADOW_SNAPSHOT_LOCK:
                     _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
                     _SHADOW_SNAPSHOT_LOADING = False
@@ -797,7 +810,7 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
                 daemon=True,
             ).start()
             return cached[1] if cached is not None else (None, None, [])
-    payload = _load_shadow_snapshot_sync(engine)
+    payload = _call_load_shadow_snapshot_sync(engine)
     with _SHADOW_SNAPSHOT_LOCK:
         _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
         _SHADOW_SNAPSHOT_LOADING = False
@@ -1182,24 +1195,26 @@ def _render_bucket(parent, title, items, state):
     collapsible = title in _COLLAPSIBLE_BUCKETS
     collapsed = collapsible and _is_bucket_collapsed(state, title)
 
-    header = tk.Frame(parent, bg=BG, cursor="hand2" if collapsible else "")
-    header.pack(fill="x", pady=(8, 2))
-    tk.Frame(header, bg=AMBER, width=3, height=14).pack(side="left", padx=(0, 6))
+    header = tk.Frame(parent, bg=BG2, cursor="hand2" if collapsible else "",
+                      highlightbackground=BORDER, highlightthickness=1)
+    header.pack(fill="x", pady=(8, 4), padx=(0, 2))
+    tk.Frame(header, bg=AMBER, width=3).pack(side="left", fill="y")
+    inner = tk.Frame(header, bg=BG2)
+    inner.pack(side="left", fill="x", expand=True, padx=8, pady=5)
     if collapsible:
         chevron = "▸" if collapsed else "▾"
-        tk.Label(header, text=chevron, font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG, cursor="hand2").pack(side="left", padx=(0, 4))
-    tk.Label(header, text=bucket_header_title(title), font=(FONT, 7, "bold"),
-             fg=AMBER, bg=BG, cursor="hand2" if collapsible else "").pack(side="left")
-    tk.Label(header, text=f"  · {len(items)}", font=(FONT, 7),
-             fg=DIM, bg=BG, cursor="hand2" if collapsible else "").pack(side="left")
+        tk.Label(inner, text=(">" if collapsed else "v"), font=(FONT, 7, "bold"),
+                 fg=AMBER, bg=BG2, cursor="hand2").pack(side="left", padx=(0, 5))
+    tk.Label(inner, text=bucket_header_title(title), font=(FONT, 7, "bold"),
+             fg=AMBER, bg=BG2, cursor="hand2" if collapsible else "").pack(side="left")
+    tk.Label(inner, text=str(len(items)), font=(FONT, 7, "bold"),
+             fg=BG, bg=AMBER if title == "LIVE" else DIM,
+             cursor="hand2" if collapsible else "", padx=5).pack(side="right")
     if collapsible:
         def _on_click(_e=None, _t=title, _s=state):
             _toggle_bucket(_s, _t)
-        for w in header.winfo_children():
+        for w in (header, inner) + tuple(inner.winfo_children()):
             w.bind("<Button-1>", _on_click)
-        header.bind("<Button-1>", _on_click)
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
 
     if collapsed:
         return
@@ -1361,11 +1376,14 @@ def _open_selected_backtest(state, launcher):
 
 
 def _row_base(parent, slug, state, is_selected):
-    bg = BG3 if is_selected else BG
-    row = tk.Frame(parent, bg=bg, cursor="hand2")
-    # left selection bar (3px amber when selected)
-    tk.Frame(row, bg=(AMBER_B if is_selected else BG), width=3).pack(side="left", fill="y")
-    row.pack(fill="x", pady=1)
+    bg = BG2 if is_selected else PANEL
+    row = tk.Frame(parent, bg=bg, cursor="hand2",
+                   highlightbackground=AMBER_B if is_selected else BORDER,
+                   highlightthickness=1)
+    tk.Frame(row, bg=(AMBER_B if is_selected else BORDER), width=4).grid(
+        row=0, column=0, rowspan=2, sticky="nsw")
+    row.grid_columnconfigure(2, weight=1)
+    row.pack(fill="x", pady=(0, 4), padx=(0, 2))
     return row
 
 
@@ -1450,6 +1468,154 @@ def _subtitle_for(slug, meta) -> str:
     """Tagline fallback — extended later to read DB / BRIEFINGS."""
     desc = meta.get("desc") or ""
     return desc[:32]
+
+
+def _bind_nav_row(row: tk.Widget, slug: str, bucket: str, state: dict) -> None:
+    def _click(_e, _s=slug, _b=bucket):
+        _select_slug(state, _s, _b)
+
+    for w in (row,) + tuple(row.winfo_children()):
+        try:
+            w.bind("<Button-1>", _click)
+        except Exception:
+            pass
+
+
+def _render_row_live(parent, slug, meta, proc, state):
+    sel = state.get("selected_slug") == slug
+    row = _row_base(parent, slug, state, is_selected=sel)
+    bg = row["bg"]
+    stage_label, _stage_color = _stage_badge(meta)
+    action_label, action_color = row_action_label("LIVE", meta)
+    tk.Label(row, text="RUN", fg=BG, bg=GREEN,
+             font=(FONT, 6, "bold"), padx=5, pady=1).grid(
+                 row=0, column=1, rowspan=2, padx=(9, 7), pady=7, sticky="n")
+    tk.Label(row, text=meta.get("display", slug.upper()),
+             fg=WHITE, bg=bg, font=(FONT, 9, "bold"),
+             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
+    tk.Label(row, text=action_label.upper(), fg=action_color, bg=bg,
+             font=(FONT, 6, "bold"), anchor="e").grid(
+                 row=0, column=3, padx=(6, 8), pady=(6, 0), sticky="e")
+    meta_line = []
+    mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
+    if mode_key in _MODE_ORDER:
+        meta_line.append(mode_key.upper())
+    started = proc.get("started")
+    if started:
+        try:
+            from datetime import datetime as _dt
+            secs = (_dt.now() - _dt.fromisoformat(started)).total_seconds()
+            meta_line.append(format_uptime(seconds=secs))
+        except Exception:
+            pass
+    meta_line.append(stage_label)
+    tk.Label(row, text="  /  ".join(meta_line),
+             fg=AMBER_B if sel else DIM2, bg=bg, font=(FONT, 7),
+             anchor="w").grid(row=1, column=2, sticky="ew", pady=(0, 6))
+    tk.Label(row, text=">", fg=DIM, bg=bg, font=(FONT, 8, "bold"),
+             anchor="e").grid(row=1, column=3, padx=(6, 8), pady=(0, 6), sticky="e")
+    _bind_nav_row(row, slug, "LIVE", state)
+
+
+def _render_row_ready(parent, slug, meta, state):
+    sel = state.get("selected_slug") == slug
+    row = _row_base(parent, slug, state, is_selected=sel)
+    bg = row["bg"]
+    stage_label, stage_color = _stage_badge(meta)
+    action_label, action_color = row_action_label("READY", meta)
+    tk.Label(row, text="RDY", fg=BG, bg=stage_color,
+             font=(FONT, 6, "bold"), padx=5, pady=1).grid(
+                 row=0, column=1, rowspan=2, padx=(9, 7), pady=7, sticky="n")
+    tk.Label(row, text=meta.get("display", slug.upper()),
+             fg=WHITE, bg=bg, font=(FONT, 8, "bold"),
+             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
+    tk.Label(row, text=action_label.upper(), fg=action_color, bg=bg,
+             font=(FONT, 6, "bold"), anchor="e").grid(
+                 row=0, column=3, padx=(6, 8), pady=(6, 0), sticky="e")
+    sub = _subtitle_for(slug, meta) or stage_label
+    tk.Label(row, text=sub, fg=AMBER_B if sel else DIM2, bg=bg,
+             font=(FONT, 7), anchor="w").grid(
+                 row=1, column=2, sticky="ew", pady=(0, 6))
+    tk.Label(row, text=">", fg=DIM, bg=bg, font=(FONT, 8, "bold"),
+             anchor="e").grid(row=1, column=3, padx=(6, 8), pady=(0, 6), sticky="e")
+    _bind_nav_row(row, slug, "READY", state)
+
+
+def _render_row_research(parent, slug, meta, state):
+    sel = state.get("selected_slug") == slug
+    row = _row_base(parent, slug, state, is_selected=sel)
+    bg = row["bg"]
+    stage_label, stage_color = _stage_badge(meta)
+    tk.Label(row, text="LAB", fg=BG, bg=stage_color,
+             font=(FONT, 6, "bold"), padx=5, pady=1).grid(
+                 row=0, column=1, rowspan=2, padx=(9, 7), pady=7, sticky="n")
+    tk.Label(row, text=meta.get("display", slug.upper()),
+             fg=WHITE if sel else DIM, bg=bg, font=(FONT, 8, "bold"),
+             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
+    tk.Label(row, text=stage_label, fg=DIM2, bg=bg,
+             font=(FONT, 6, "bold"), anchor="e").grid(
+                 row=0, column=3, padx=(6, 8), pady=(6, 0), sticky="e")
+    sub = _subtitle_for(slug, meta)
+    tk.Label(row, text=sub, fg=AMBER_B if sel else DIM2, bg=bg,
+             font=(FONT, 7), anchor="w").grid(
+                 row=1, column=2, columnspan=2, sticky="ew",
+                 padx=(0, 8), pady=(0, 6))
+    _bind_nav_row(row, slug, "RESEARCH", state)
+
+
+def _render_live_instance_subrows(parent, slug: str, state: dict) -> None:
+    current_mode = str(state.get("mode") or "").lower()
+    if current_mode not in ("paper", "shadow"):
+        return
+
+    instances = _active_engine_runs(
+        slug, launcher=None, state=state, mode=current_mode,
+    )
+    if not instances:
+        return
+
+    cur_rid = state.get(
+        "selected_paper_run_id" if current_mode == "paper"
+        else "selected_shadow_run_id"
+    )
+    active_rid = str(cur_rid) if cur_rid else None
+    mode_color = _MODE_COLORS.get(current_mode, DIM2)
+    tray = tk.Frame(parent, bg=BG)
+    tray.pack(fill="x", padx=(16, 2), pady=(0, 6))
+
+    for inst in instances:
+        rid = str(inst.get("run_id") or "")
+        label = str(inst.get("label") or "") or (
+            f"#{rid.split('_')[-1][:6]}" if rid else "?"
+        )
+        ticks = inst.get("ticks_ok") or 0
+        is_active = rid == active_rid
+        row_bg = BG2 if is_active else PANEL
+        item = tk.Frame(tray, bg=row_bg, cursor="hand2",
+                        highlightbackground=mode_color if is_active else BORDER,
+                        highlightthickness=1)
+        item.pack(fill="x", pady=(0, 2))
+        tk.Frame(item, bg=mode_color if is_active else BORDER, width=3).pack(
+            side="left", fill="y")
+        tk.Label(item, text=current_mode[:1].upper(), fg=BG, bg=mode_color,
+                 font=(FONT, 6, "bold"), width=2).pack(side="left", padx=(7, 5), pady=3)
+        tk.Label(item, text=label[:16], fg=WHITE if is_active else DIM,
+                 bg=row_bg, font=(FONT, 7, "bold" if is_active else "normal"),
+                 anchor="w").pack(side="left", fill="x", expand=True)
+        tk.Label(item, text=f"{ticks}t", fg=AMBER_B if is_active else DIM2,
+                 bg=row_bg, font=(FONT, 6, "bold")).pack(side="right", padx=(4, 7))
+
+        def _click(_e, _rid=rid, _mode=current_mode):
+            if _mode == "paper":
+                state["selected_paper_run_id"] = _rid
+            else:
+                state["selected_shadow_run_id"] = _rid
+            refresh = state.get("refresh")
+            if callable(refresh):
+                refresh()
+
+        for w in (item,) + tuple(item.winfo_children()):
+            w.bind("<Button-1>", _click)
 
 
 def _render_detail(state, launcher):
@@ -2335,6 +2501,15 @@ def _engine_registry_for_sidebar(state) -> list[dict]:
     com runs ao vivo no bucket LIVE.
     """
     by_bucket = state.get("engines_by_bucket") or {}
+    if state.get("mode") == "paper":
+        for bucket in ("READY", "LIVE"):
+            for item in by_bucket.get(bucket, []):
+                if item.get("slug") == "millennium":
+                    return [{
+                        "slug": "millennium",
+                        "display": item.get("display") or "MILLENNIUM",
+                    }]
+        return [{"slug": "millennium", "display": "MILLENNIUM"}]
     seen: set[str] = set()
     out: list[dict] = []
     for bucket in ("LIVE", "READY"):

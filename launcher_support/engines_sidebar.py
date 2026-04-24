@@ -190,6 +190,36 @@ _COLORS = {
 }
 
 
+def _engine_initials(display: str) -> str:
+    words = [w for w in str(display or "").replace("-", " ").split() if w]
+    if not words:
+        return "?"
+    if len(words) == 1:
+        return words[0][:2].upper()
+    return "".join(w[0] for w in words[:2]).upper()
+
+
+def _compact_count(value: int | None, suffix: str) -> str:
+    if value is None:
+        return "live"
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return "live"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k{suffix}"
+    return f"{n}{suffix}"
+
+
+def _bind_tree(widget: tk.Widget, handler) -> None:
+    try:
+        widget.bind("<Button-1>", handler)
+        for child in widget.winfo_children():
+            _bind_tree(child, handler)
+    except Exception:
+        pass
+
+
 def render_sidebar(
     parent: tk.Widget,
     engines: list[EngineRow],
@@ -203,6 +233,19 @@ def render_sidebar(
     on_select_instance: Callable[[str, str], None] | None = None,
     active_instance_key: tuple[str, str] | None = None,
 ) -> tk.Frame:
+    return _render_sidebar_v2(
+        parent,
+        engines,
+        selected_slug,
+        on_select,
+        collapsed=collapsed,
+        on_toggle=on_toggle,
+        on_new_instance=on_new_instance,
+        instances_for_selected=instances_for_selected,
+        on_select_instance=on_select_instance,
+        active_instance_key=active_instance_key,
+    )
+
     """Institutional engine sidebar — 150px rail left of detail pane.
 
     Each engine is a two-line row: marker + name on top, ticks/signals
@@ -328,6 +371,206 @@ def render_sidebar(
     return frame
 
 
+def _render_sidebar_v2(
+    parent: tk.Widget,
+    engines: list[EngineRow],
+    selected_slug: str | None,
+    on_select: Callable[[str], None],
+    *,
+    collapsed: bool = False,
+    on_toggle: Callable[[], None] | None = None,
+    on_new_instance: Callable[[], None] | None = None,
+    instances_for_selected: list[dict] | None = None,
+    on_select_instance: Callable[[str, str], None] | None = None,
+    active_instance_key: tuple[str, str] | None = None,
+) -> tk.Frame:
+    active_n = sum(1 for r in engines if r.active)
+    total_n = len(engines)
+
+    if collapsed:
+        frame = tk.Frame(parent, bg=PANEL, width=34,
+                         highlightbackground=BORDER, highlightthickness=0)
+        frame.pack(side="left", fill="y")
+        frame.pack_propagate(False)
+        chev = tk.Label(frame, text=">", fg=AMBER, bg=PANEL,
+                        font=(FONT, 9, "bold"), cursor="hand2")
+        chev.pack(pady=(10, 8))
+        badge = tk.Label(
+            frame,
+            text=str(active_n),
+            fg=BG if active_n else DIM2,
+            bg=GREEN if active_n else BG2,
+            font=(FONT, 7, "bold"),
+            width=3,
+            cursor="hand2",
+        )
+        badge.pack(pady=(0, 8))
+        for row in engines:
+            is_sel = row.slug == selected_slug
+            mini = tk.Label(
+                frame,
+                text=_engine_initials(row.display)[:2],
+                fg=BG if is_sel else (GREEN if row.active else DIM2),
+                bg=AMBER_B if is_sel else PANEL,
+                font=(FONT, 6, "bold"),
+                width=3,
+                cursor="hand2",
+            )
+            mini.pack(pady=(0, 2))
+            mini.bind("<Button-1>", lambda _e, _slug=row.slug: on_select(_slug))
+        if on_toggle is not None:
+            chev.bind("<Button-1>", lambda _e: on_toggle())
+            badge.bind("<Button-1>", lambda _e: on_toggle())
+        return frame
+
+    frame = tk.Frame(parent, bg=PANEL, width=188)
+    frame.pack(side="left", fill="y")
+    frame.pack_propagate(False)
+
+    header = tk.Frame(frame, bg=BG)
+    header.pack(fill="x")
+    title = tk.Frame(header, bg=BG)
+    title.pack(fill="x", padx=10, pady=(9, 3))
+    tk.Label(title, text="ENGINES", fg=AMBER, bg=BG,
+             font=(FONT, 8, "bold")).pack(side="left")
+    tk.Label(title, text=f"{active_n} LIVE / {total_n}", fg=GREEN if active_n else DIM2,
+             bg=BG, font=(FONT, 7, "bold")).pack(side="right")
+
+    actions = tk.Frame(header, bg=BG)
+    actions.pack(fill="x", padx=10, pady=(0, 8))
+    tk.Label(actions, text="select runner", fg=DIM2, bg=BG,
+             font=(FONT, 6)).pack(side="left")
+    if on_new_instance is not None:
+        plus = tk.Label(actions, text=" NEW ", fg=BG, bg=GREEN,
+                        font=(FONT, 6, "bold"), cursor="hand2",
+                        padx=4, pady=1)
+        plus.pack(side="right")
+        plus.bind("<Button-1>", lambda _e: on_new_instance())
+    if on_toggle is not None:
+        chev = tk.Label(actions, text=" < ", fg=DIM, bg=BG2,
+                        font=(FONT, 6, "bold"), cursor="hand2",
+                        padx=3, pady=1)
+        chev.pack(side="right", padx=(4, 0))
+        chev.bind("<Button-1>", lambda _e: on_toggle())
+
+    tk.Frame(frame, bg=BORDER, height=1).pack(fill="x")
+
+    sections = [
+        ("ACTIVE", [r for r in engines if r.active]),
+        ("STANDBY", [r for r in engines if not r.active]),
+    ]
+    for label, rows in sections:
+        if not rows:
+            continue
+        sec = tk.Frame(frame, bg=PANEL)
+        sec.pack(fill="x", padx=10, pady=(9 if label == "ACTIVE" else 7, 3))
+        tk.Label(sec, text=label, fg=AMBER if label == "ACTIVE" else DIM,
+                 bg=PANEL, font=(FONT, 6, "bold")).pack(side="left")
+        tk.Label(sec, text=str(len(rows)), fg=DIM2, bg=PANEL,
+                 font=(FONT, 6)).pack(side="right")
+        for row in rows:
+            _render_engine_nav_row(
+                frame,
+                row=row,
+                selected_slug=selected_slug,
+                on_select=on_select,
+                instances_for_selected=instances_for_selected,
+                on_select_instance=on_select_instance,
+                active_instance_key=active_instance_key,
+            )
+    return frame
+
+
+def _render_engine_nav_row(
+    parent: tk.Widget,
+    *,
+    row: EngineRow,
+    selected_slug: str | None,
+    on_select: Callable[[str], None],
+    instances_for_selected: list[dict] | None,
+    on_select_instance: Callable[[str, str], None] | None,
+    active_instance_key: tuple[str, str] | None,
+) -> None:
+    is_sel = row.slug == selected_slug
+    accent = AMBER_B if is_sel else (GREEN if row.active else BORDER)
+    bg = BG2 if is_sel else PANEL
+    name_fg = WHITE if row.active or is_sel else DIM
+    meta_fg = AMBER_B if row.active else DIM2
+
+    item = tk.Frame(parent, bg=bg, cursor="hand2")
+    item.pack(fill="x", padx=6, pady=(0, 2))
+    item.grid_columnconfigure(2, weight=1)
+
+    tk.Frame(item, bg=accent, width=3).grid(
+        row=0, column=0, rowspan=2, sticky="nsw")
+    tk.Label(
+        item,
+        text=_engine_initials(row.display),
+        fg=BG if row.active or is_sel else DIM2,
+        bg=accent if row.active or is_sel else BG2,
+        font=(FONT, 7, "bold"),
+        width=3,
+        anchor="center",
+    ).grid(row=0, column=1, rowspan=2, sticky="ns", padx=(7, 6), pady=5)
+
+    tk.Label(
+        item,
+        text=str(row.display).upper()[:18],
+        fg=name_fg,
+        bg=bg,
+        font=(FONT, 7, "bold"),
+        anchor="w",
+    ).grid(row=0, column=2, sticky="ew", pady=(5, 0))
+
+    if row.active and row.ticks is not None and row.signals is not None:
+        sub_text = (
+            f"{_compact_count(row.ticks, 't')}  "
+            f"{_compact_count(row.signals, 's')}"
+        )
+    elif row.active:
+        sub_text = "RUNNING"
+    else:
+        sub_text = "idle"
+
+    tk.Label(
+        item,
+        text=sub_text,
+        fg=meta_fg,
+        bg=bg,
+        font=(FONT, 6, "bold" if row.active else "normal"),
+        anchor="w",
+    ).grid(row=1, column=2, sticky="ew", pady=(0, 5))
+
+    tk.Label(
+        item,
+        text="LIVE" if row.active else "OFF",
+        fg=BG if row.active else DIM2,
+        bg=GREEN if row.active else BG2,
+        font=(FONT, 6, "bold"),
+        padx=4,
+    ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 7), pady=7)
+
+    def _handler(_e, _slug=row.slug):
+        on_select(_slug)
+
+    _bind_tree(item, _handler)
+
+    if (
+        is_sel
+        and instances_for_selected
+        and len(instances_for_selected) >= 2
+        and on_select_instance is not None
+    ):
+        tray = tk.Frame(parent, bg=PANEL)
+        tray.pack(fill="x", padx=(18, 6), pady=(0, 4))
+        for inst in instances_for_selected:
+            _render_sidebar_instance_row(
+                tray, inst, bg=bg,
+                active_key=active_instance_key,
+                on_select=on_select_instance,
+            )
+
+
 def _render_sidebar_instance_row(parent: tk.Widget, inst: dict, *, bg: str,
                                  active_key: tuple[str, str] | None,
                                  on_select: Callable[[str, str], None]) -> None:
@@ -341,27 +584,30 @@ def _render_sidebar_instance_row(parent: tk.Widget, inst: dict, *, bg: str,
     is_active = active_key is not None and (mode, rid) == active_key
 
     mode_color = {"paper": AMBER_B, "shadow": GREEN}.get(mode, DIM2)
-    row_bg = BG2 if is_active else bg
+    row_bg = BG if is_active else PANEL
     name_fg = WHITE if is_active else DIM
 
     sub = tk.Frame(parent, bg=row_bg, cursor="hand2")
-    sub.pack(fill="x", padx=0, pady=0)
+    sub.pack(fill="x", padx=0, pady=(0, 2))
+    sub.grid_columnconfigure(3, weight=1)
 
-    tk.Frame(sub, bg=row_bg, width=3).pack(side="left", fill="y")
+    tk.Frame(sub, bg=mode_color if is_active else BORDER, width=2).grid(
+        row=0, column=0, sticky="nsw")
     tk.Label(sub, text="└", fg=DIM2, bg=row_bg,
-             font=(FONT, 7)).pack(side="left", padx=(6, 2))
-    tk.Label(sub, text=mode[:6].upper(), fg=mode_color, bg=row_bg,
-             font=(FONT, 6, "bold")).pack(side="left", padx=(0, 4))
-    tk.Label(sub, text=label[:12], fg=name_fg, bg=row_bg,
-             font=(FONT, 7)).pack(side="left", padx=(0, 4))
-    tk.Label(sub, text=f"{ticks}t", fg=DIM2, bg=row_bg,
-             font=(FONT, 6)).pack(side="right", padx=(0, 6))
+             font=(FONT, 7)).grid(row=0, column=1, padx=(5, 2), pady=3)
+    tk.Label(sub, text=mode[:1].upper() or "?", fg=BG, bg=mode_color,
+             font=(FONT, 6, "bold"), width=2).grid(
+                 row=0, column=2, padx=(4, 5), pady=3)
+    tk.Label(sub, text=label[:14], fg=name_fg, bg=row_bg,
+             font=(FONT, 7, "bold" if is_active else "normal"),
+             anchor="w").grid(row=0, column=3, sticky="ew", pady=3)
+    tk.Label(sub, text=f"{ticks}t", fg=AMBER_B if is_active else DIM2,
+             bg=row_bg, font=(FONT, 6, "bold" if is_active else "normal"),
+             anchor="e").grid(row=0, column=4, padx=(4, 7), pady=3)
 
     def _click(_e, _rid=rid, _mode=mode):
         on_select(_rid, _mode)
-    sub.bind("<Button-1>", _click)
-    for child in sub.winfo_children():
-        child.bind("<Button-1>", _click)
+    _bind_tree(sub, _click)
 
 
 def render_detail(
