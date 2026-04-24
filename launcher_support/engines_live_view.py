@@ -3415,19 +3415,53 @@ def _refresh_paper_detail(launcher, state) -> None:
     _render_detail(state, launcher)
 
 
+# Canonical VPS services — one systemd unit per (engine, mode, instance).
+# Matches what ``deploy/install_paper_multi_vps.sh`` and friends install.
+# Keeping order stable so the control bar doesn't reorder on refresh.
+VPS_CANONICAL_SERVICES = (
+    "citadel_shadow@desk-a",
+    "citadel_paper@desk-a",
+    "jump_shadow@desk-a",
+    "jump_paper@desk-a",
+    "renaissance_shadow@desk-a",
+    "renaissance_paper@desk-a",
+    "millennium_shadow@desk-shadow-a",
+    "millennium_shadow@desk-shadow-b",
+    "millennium_paper@desk-paper-a",
+    "millennium_paper@desk-paper-b",
+)
+_VPS_MANAGED_ENGINES = {"citadel", "jump", "renaissance", "millennium"}
+
+
+def _vps_service_display_name(svc: str) -> str:
+    """``citadel_paper@desk-a`` → ``CITADEL PAPER A``.
+    ``millennium_shadow@desk-shadow-b`` → ``MILLENNIUM SHADOW B``."""
+    base, _, inst = svc.partition("@")
+    eng_mode = base.replace("_", " ").upper()
+    if not inst:
+        return eng_mode
+    # Last token after '-' disambiguates instance (desk-a → A, desk-paper-a → A).
+    tail = inst.rsplit("-", 1)[-1].upper()
+    return f"{eng_mode} {tail}"
+
+
 def _render_vps_control_bar(parent, launcher, state) -> None:
     """HL2/institutional VPS control rail pinned above the detail pane.
 
-    One labelled row per service (shadow, paper) rendered as a grid:
+    One labelled row per service rendered as a grid:
 
         ┌─ VPS · TUNNEL UP ─────────────────────────────────────┐
-        │ ●  MILLENNIUM SHADOW   RUNNING   [■STOP][↻RESTART]    │
-        │ ○  MILLENNIUM PAPER    STOPPED   [▶START]             │
+        │ ●  CITADEL PAPER A     RUNNING   [■STOP][↻RESTART]    │
+        │ ○  JUMP PAPER A        STOPPED   [▶START]             │
+        │ ●  MILLENNIUM SHADOW B RUNNING   [■STOP][↻RESTART]    │
         └──────────────────────────────────────────────────────┘
 
     Status inferred from /v1/runs (cheaper than systemctl is-active).
-    Tunnel state surfaces in the header so user sees "STOPPED" vs
-    "tunnel down" at a glance.
+    Runs use ``(engine, mode, label)`` to build the systemd unit name —
+    this matches the ``{engine}_{mode}@{label}.service`` units installed
+    by ``deploy/install_paper_multi_vps.sh``. Services discovered from
+    runs data are merged with ``VPS_CANONICAL_SERVICES`` so rows for
+    stopped engines still show a START chip instead of disappearing.
     """
     bar = tk.Frame(parent, bg=BG, highlightbackground=BORDER,
                    highlightthickness=1)
@@ -3446,24 +3480,32 @@ def _render_vps_control_bar(parent, launcher, state) -> None:
 
     tk.Frame(bar, bg=BORDER, height=1).pack(fill="x", padx=10)
 
-    # Resolve service states from cockpit
-    services_state = {"millennium_shadow": "unknown",
-                      "millennium_paper": "unknown"}
+    # Seed with canonical services (so stopped ones still render a row),
+    # then flip to "running" for each live run matching our managed set.
+    services_state: dict[str, str] = {
+        svc: "stopped" for svc in VPS_CANONICAL_SERVICES
+    }
     runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
     if runs:
         for r in runs:
+            engine = str(r.get("engine") or "").lower()
             mode = r.get("mode")
+            label = str(r.get("label") or "")
             status = r.get("status")
-            svc = f"millennium_{mode}" if mode in ("shadow", "paper") else None
-            if svc and status == "running":
+            if (engine not in _VPS_MANAGED_ENGINES
+                    or mode not in ("paper", "shadow")
+                    or not label):
+                continue
+            svc = f"{engine}_{mode}@{label}"
+            # Pick up runs on unexpected labels too (e.g. desk-b on citadel).
+            if status == "running":
                 services_state[svc] = "running"
-        for svc in list(services_state):
-            if services_state[svc] == "unknown":
+            elif svc not in services_state:
                 services_state[svc] = "stopped"
 
     # Rows — institutional grid (fixed-width columns so pair aligns)
     for svc, svc_state in services_state.items():
-        nice_name = svc.replace("millennium_", "MILLENNIUM ").upper()
+        nice_name = _vps_service_display_name(svc)
         row = tk.Frame(bar, bg=BG)
         row.pack(fill="x", padx=10, pady=2)
 

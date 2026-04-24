@@ -41,8 +41,13 @@ from tools.operations.millennium_signal_gate import is_live_signal  # noqa: E402
 
 VERSION = "1.0.0"
 STARTED_AT = datetime.now(timezone.utc)
+# Match {engine}_{mode}(@{instance})? — all engines with live runners.
+# Kept strict on engine prefix + mode to prevent shell injection via arbitrary
+# unit names. Instance suffix (desk-a, desk-paper-a, etc.) is templated via
+# systemd @-instance syntax — alphanumeric + hyphen only.
 _SERVICE_RE = re.compile(
-    r"^millennium_(paper|shadow)(?:@[a-z0-9][a-z0-9-]{0,39})?$"
+    r"^(?:citadel|jump|renaissance|millennium)_(paper|shadow)"
+    r"(?:@[a-z0-9][a-z0-9-]{0,39})?$"
 )
 
 
@@ -484,7 +489,7 @@ def build_app() -> FastAPI:
         _check_auth(request, admin=True)
         if not _is_allowed_service_name(service):
             raise HTTPException(status_code=400,
-                                detail="service must be millennium_{paper|shadow} or template instance")
+                                detail="service must be {citadel|jump|renaissance|millennium}_{paper|shadow} or template instance")
         import subprocess
         try:
             proc = subprocess.run(
@@ -515,7 +520,7 @@ def build_app() -> FastAPI:
                                 detail=f"action must be one of {sorted(ALLOWED_ACTIONS)}")
         if not _is_allowed_service_name(service):
             raise HTTPException(status_code=400,
-                                detail="service must be millennium_{paper|shadow} or template instance")
+                                detail="service must be {citadel|jump|renaissance|millennium}_{paper|shadow} or template instance")
         import subprocess
         try:
             proc = subprocess.run(

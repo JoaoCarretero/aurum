@@ -664,3 +664,63 @@ def test_systemctl_action_accepts_template_instance(monkeypatch, client):
     body = r.json()
     assert body["service"] == "millennium_shadow@desk-shadow-b.service"
     assert calls == [["systemctl", "status", "millennium_shadow@desk-shadow-b.service"]]
+
+
+@pytest.mark.parametrize("service", [
+    "citadel_paper@desk-a",
+    "citadel_shadow@desk-a",
+    "jump_paper@desk-a",
+    "jump_shadow@desk-a",
+    "renaissance_paper@desk-a",
+    "renaissance_shadow@desk-a",
+    "millennium_paper@desk-paper-a",
+    "millennium_shadow@desk-shadow-b",
+])
+def test_systemctl_action_accepts_all_engine_templates(monkeypatch, client, service):
+    """Post-2026-04-24: start/stop buttons operacionais pra todos os engines
+    rodando no VPS, não só MILLENNIUM. Pre-fix o whitelist só aceitava
+    ``millennium_(paper|shadow)`` e o cockpit retornava 400 pra qualquer
+    tentativa de parar citadel/jump/renaissance.
+    """
+    import subprocess
+    calls = []
+
+    class _Fake:
+        returncode = 0
+        stdout = "started"
+        stderr = ""
+
+    def _fake_run(args, **kwargs):
+        calls.append(args)
+        return _Fake()
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    r = client.post(
+        f"/v1/systemctl/start?service={service}",
+        headers={"Authorization": "Bearer ADMIN456"},
+    )
+    assert r.status_code == 200, r.text
+    assert calls == [["systemctl", "start", f"{service}.service"]]
+
+
+@pytest.mark.parametrize("bad", [
+    "docker",                 # not an engine
+    "citadel_live",           # live mode not supported
+    "paper_citadel",          # wrong order
+    "systemd-resolved",       # random system service
+    "millennium_paper;rm -rf",  # shell injection
+])
+def test_systemctl_action_rejects_non_whitelisted(monkeypatch, client, bad):
+    """Whitelist defesa em profundidade — o SHELL-safe regex já blocka
+    injection, mas ainda validamos que services legítimos do host
+    (nginx, docker, etc.) não podem ser tocados pela API."""
+    import subprocess
+    called = []
+    monkeypatch.setattr(subprocess, "run",
+                        lambda a, **kw: called.append(a) or None)
+    r = client.post(
+        f"/v1/systemctl/stop?service={bad}",
+        headers={"Authorization": "Bearer ADMIN456"},
+    )
+    assert r.status_code == 400
+    assert called == [], f"subprocess was called for blocked service: {called}"
