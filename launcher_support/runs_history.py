@@ -755,9 +755,9 @@ def _paint_rows(state: dict) -> None:
 
     if not rows:
         tk.Label(wrap,
-                 text="   — nenhum run visível (local ou VPS) —",
+                 text="— nenhum run visível (local ou VPS) —",
                  fg=DIM2, bg=BG,
-                 font=(FONT, 7, "italic")).pack(anchor="w", pady=8, padx=12)
+                 font=(FONT, 7, "italic")).pack(pady=16)
         return
 
     # Split: LIVE (status='running' com tick recente), STALE (status claims
