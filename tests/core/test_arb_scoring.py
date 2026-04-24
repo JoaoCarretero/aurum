@@ -9,6 +9,7 @@ from core.arb_scoring import (
     score_batch,
     _log_norm,
     _linear_clamp,
+    _apr_from_opp,
 )
 
 
@@ -259,3 +260,37 @@ def test_breakeven_nan_apr_returns_none():
         "_type": "CC", "net_apr": math.nan,
     })
     assert res.breakeven_h is None
+
+
+# ─── _apr_from_opp helper (2026-04-24): explicit-None fallthrough ────────────
+
+def test_apr_from_opp_all_none_returns_none():
+    assert _apr_from_opp({}) is None
+    assert _apr_from_opp({"net_apr": None, "apr": None, "basis_apr": None}) is None
+
+
+def test_apr_from_opp_explicit_zero_preserved():
+    # Key distinction vs `or`-chain: net_apr=0.0 must NOT fallthrough to apr.
+    assert _apr_from_opp({"net_apr": 0.0, "apr": 100.0}) == 0.0
+
+
+def test_apr_from_opp_priority_order():
+    # net_apr wins over apr; apr wins over basis_apr.
+    assert _apr_from_opp(
+        {"net_apr": 10.0, "apr": 5.0, "basis_apr": 1.0}
+    ) == 10.0
+    assert _apr_from_opp({"apr": 5.0, "basis_apr": 1.0}) == 5.0
+    assert _apr_from_opp({"basis_apr": 1.0}) == 1.0
+
+
+def test_apr_from_opp_returns_float():
+    # Accepts ints and returns float.
+    result = _apr_from_opp({"net_apr": 42})
+    assert result == 42.0
+    assert isinstance(result, float)
+
+
+def test_apr_from_opp_negative_preserved():
+    # Negative APR is legitimate (short funding paying you). Helper does NOT
+    # apply abs() — callers do that if they care about magnitude.
+    assert _apr_from_opp({"net_apr": -50.0}) == -50.0

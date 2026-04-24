@@ -1241,6 +1241,15 @@ def render_history(app, parent):
 
 # ─── extracted from launcher.App._arb_paint_opps (Fase 3) ───
 
+# LIFE column color thresholds (v2 density, 2026-04-24). Age in seconds
+# since pair was first seen in the scanner stream (via LifetimeTracker).
+# DIM below _LIFE_FRESH_SEC (fresh blip, less reliable), AMBER between
+# _LIFE_FRESH_SEC and _LIFE_TRUSTED_SEC (stabilizing), GREEN above
+# _LIFE_TRUSTED_SEC (trusted, likely a structural edge).
+_LIFE_FRESH_SEC = 300     # 5 minutes
+_LIFE_TRUSTED_SEC = 3600  # 1 hour
+
+
 def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
     """Unified OPPS painter — merges 5 opp types, applies filter+score,
     caps at 50 rows, paints with VIAB column.
@@ -1360,7 +1369,9 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
                 if age is not None:
                     life_txt = _fmt_duration(age)
                     # Color: fresh = dim, 5m+ = amber, 1h+ = green (more trust).
-                    life_fg = GREEN if age >= 3600 else (AMBER if age >= 300 else DIM)
+                    life_fg = (GREEN if age >= _LIFE_TRUSTED_SEC
+                               else AMBER if age >= _LIFE_FRESH_SEC
+                               else DIM)
             except Exception:
                 pass
 
@@ -1735,12 +1746,8 @@ def hub_scan_async(app):
     data via whichever ``_arb_*_repaint`` callback is registered.
     """
     import threading
-    import os
-    def _test_mode_enabled() -> bool:
-        return os.getenv("AURUM_TEST_MODE", "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-    if _test_mode_enabled():
+    from launcher_support._test_mode import test_mode_enabled
+    if test_mode_enabled():
         app._ui_call_soon(lambda: app._arb_hub_telem_update(
             {"dex_online": 0, "cex_online": 0, "total": 0},
             None, [], [], [], [], [], []))
