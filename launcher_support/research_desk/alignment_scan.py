@@ -181,6 +181,129 @@ def check_path_existence(
     )
 
 
+# ── Check 3: staleness ───────────────────────────────────────────
+def check_staleness(
+    *,
+    personas: Iterable[Path],
+    canon_files: Iterable[Path],
+    max_age_days: int = 14,
+) -> CheckResult:
+    """Flag personas whose mtime is older than the newest canon file by
+    more than max_age_days. Signal that a persona may be out of sync with
+    the authoritative docs it references.
+    """
+    canon_list = list(canon_files)
+    if not canon_list:
+        return CheckResult(
+            status="yellow", summary="Nenhum canon file encontrado.", details=[]
+        )
+    newest_canon_mtime = max(f.stat().st_mtime for f in canon_list)
+    threshold_s = max_age_days * 86400
+
+    stale: list[dict] = []
+    for p in personas:
+        try:
+            age_s = newest_canon_mtime - p.stat().st_mtime
+        except OSError:
+            continue
+        if age_s > threshold_s:
+            stale.append({
+                "persona": p.name,
+                "days_behind_canon": round(age_s / 86400, 1),
+            })
+
+    if not stale:
+        return CheckResult(
+            status="green",
+            summary=f"Personas frescas (todas <={max_age_days}d atras do canon).",
+            details=[],
+        )
+    return CheckResult(
+        status="yellow",
+        summary=f"{len(stale)} persona(s) mais antigas que canon por >{max_age_days}d.",
+        details=stale,
+    )
+
+
+# ── Check 4: paperclip sync ──────────────────────────────────────
+def check_paperclip_sync(
+    *,
+    agents: dict[str, str],  # agent_key -> uuid
+    paperclip_home: Path,
+    company_id: str,
+) -> CheckResult:
+    """Verify each agent has AGENTS.md in the Paperclip instance tree AND
+    its first line starts with `# {AGENT_KEY}`."""
+    base = paperclip_home / "instances" / "default" / "companies" / company_id / "agents"
+    issues: list[dict] = []
+    for key, uid in agents.items():
+        f = base / uid / "instructions" / "AGENTS.md"
+        if not f.exists():
+            issues.append({"agent": key, "reason": "missing", "path": str(f)})
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            issues.append({"agent": key, "reason": "unreadable", "path": str(f)})
+            continue
+        first = text.splitlines()[0] if text else ""
+        if not first.startswith(f"# {key}"):
+            issues.append({
+                "agent": key,
+                "reason": "header_mismatch",
+                "first_line": first[:80],
+            })
+
+    if not issues:
+        return CheckResult(
+            status="green",
+            summary=f"{len(agents)}/{len(agents)} Paperclip AGENTS.md sync ok.",
+            details=[],
+        )
+    return CheckResult(
+        status="red",
+        summary=f"{len(issues)} agent(s) com AGENTS.md missing ou header mismatch.",
+        details=issues,
+    )
+
+
+# ── Check 5: protected files ─────────────────────────────────────
+# Canonical list per MEMORY.md §1-2 (core/indicators, core/signals,
+# core/portfolio, config/params + config/keys.json + launcher.py).
+CANONICAL_PROTECTED: tuple[str, ...] = (
+    "core/indicators.py",
+    "core/signals.py",
+    "core/portfolio.py",
+    "config/params.py",
+    "config/keys.json",
+    "launcher.py",
+)
+
+
+def check_protected_files(
+    *,
+    canonical: Iterable[str],
+    repo_root: Path,
+) -> CheckResult:
+    """Verify each canonical protected file exists in the repo."""
+    missing: list[dict] = []
+    for rel in canonical:
+        if not (repo_root / rel).exists():
+            missing.append({"path": rel})
+
+    if not missing:
+        return CheckResult(
+            status="green",
+            summary="Todos os arquivos protegidos canonicos existem.",
+            details=[],
+        )
+    return CheckResult(
+        status="red",
+        summary=f"{len(missing)} arquivo(s) protegido(s) canonico(s) ausente(s).",
+        details=missing,
+    )
+
+
 # ── Orchestration ────────────────────────────────────────────────
 def _collect_canon_files(repo_root: Path) -> list[Path]:
     """Return the full canon set (root + personas + WORKFLOWS)."""
@@ -259,9 +382,23 @@ def run_alignment_scan(*, repo_root: Path) -> AlignmentReport:
     # Broken paths in CLAUDE.md etc ARE drift, unlike archived engine names.
     canon = _collect_canon_files(repo_root)
 
+    # Staleness: persona mtime vs newest canon mtime.
+    personas_dir = repo_root / "docs" / "agents"
+    personas = sorted(personas_dir.glob("*.md")) if personas_dir.exists() else []
+
+    # Paperclip sync.
+    agents_map = {a.key: a.uuid for a in _AGENTS}
+
     checks: dict[str, CheckResult] = {
         "engine_roster": check_engine_roster(agent_facing, registered_display_names=registered),
         "path_existence": check_path_existence(canon, repo_root=repo_root),
+        "staleness": check_staleness(personas=personas, canon_files=canon, max_age_days=14),
+        "paperclip_sync": check_paperclip_sync(
+            agents=agents_map, paperclip_home=paperclip_home, company_id=COMPANY_ID,
+        ),
+        "protected_files": check_protected_files(
+            canonical=CANONICAL_PROTECTED, repo_root=repo_root,
+        ),
     }
 
     return AlignmentReport(
