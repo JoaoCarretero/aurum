@@ -254,11 +254,14 @@ def _scan_new_signals(notify: bool = True) -> list[dict]:
 
 
 def _fetch_new_bars(symbol: str, since_iso: str | None) -> list[dict]:
-    """Fetch OHLCV bars newer than since_iso for symbol.
+    """Fetch OHLCV bars strictly newer than since_iso for symbol.
 
-    Uses core.data fetch helpers; returns list of bar dicts with keys
-    high/low/close/time. Returns empty list on failure (caller MTM safely
-    ignores a position until bars arrive).
+    since_iso may be tz-aware (wall-clock ``entry_at``) or tz-naive (a
+    prior bar's ``.isoformat()``). ``df["time"]`` is always tz-naive UTC
+    (Binance klines). Without normalisation, pandas raises TypeError on
+    the tz-naive/aware comparison, the old code swallowed it silently
+    and ALL 20 historical bars leaked into ``check_exits`` — closing
+    paper positions on past candles (bug 2026-04-24 ``exit_at < entry_at``).
     """
     try:
         from core.data import fetch as core_fetch
@@ -270,21 +273,19 @@ def _fetch_new_bars(symbol: str, since_iso: str | None) -> list[dict]:
         return []
     df = df.copy()
     if since_iso:
-        from datetime import datetime as dt
         try:
+            from datetime import datetime as dt
             since_dt = dt.fromisoformat(since_iso.replace("Z", "+00:00"))
-        except ValueError:
-            log.warning("fetch_new_bars %s: malformed since_iso %r — skipping filter",
-                        symbol, since_iso)
-            since_dt = None
-        if since_dt is not None:
-            # df["time"] is naive UTC (pd.to_datetime of Binance klines ms).
-            # An aware cursor used to TypeError the comparison; the old bare
-            # except swallowed it, the filter was skipped, and _walk_bars got
-            # ~5h of pre-open candles — ghost-exit bug (2026-04-23 ARBUSDT).
             if since_dt.tzinfo is not None:
                 since_dt = since_dt.astimezone(timezone.utc).replace(tzinfo=None)
             df = df[df["time"] > since_dt]
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "fetch_new_bars %s: since_iso=%r filter failed: %s — "
+                "returning empty to avoid walking historical bars",
+                symbol, since_iso, exc,
+            )
+            return []
     out: list[dict] = []
     for _, row in df.iterrows():
         out.append({
@@ -360,7 +361,7 @@ def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
         c = state.pos_mgr._close(pos, exit_px, reason, flatten_ts)
         state.account.apply_realized(c.pnl_after_fees)
         state.metrics.record_closed({
-            "primed": False, "pnl": c.pnl_after_fees,
+            "primed": state.primed, "pnl": c.pnl_after_fees,
             "strategy": c.engine, "symbol": c.symbol,
             "exit_reason": c.exit_reason,
         })
@@ -372,7 +373,7 @@ def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
             "exit_at": c.closed_at, "exit_reason": reason,
             "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
             "r_multiple": c.r_multiple, "bars_held": c.bars_held,
-            "primed": False,
+            "primed": state.primed,
         })
         _append_jsonl(FILLS_PATH, {
             "event": "close", "pos_id": c.id, "ts": c.closed_at,
@@ -412,7 +413,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
             c = closed[0]
             state.account.apply_realized(c.pnl_after_fees)
             state.metrics.record_closed({
-                "primed": False, "pnl": c.pnl_after_fees,
+                "primed": state.primed, "pnl": c.pnl_after_fees,
                 "strategy": c.engine, "symbol": c.symbol,
                 "exit_reason": c.exit_reason,
             })
@@ -424,7 +425,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "exit_at": c.closed_at, "exit_reason": c.exit_reason,
                 "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
                 "r_multiple": c.r_multiple, "bars_held": c.bars_held,
-                "primed": False,
+                "primed": state.primed,
             })
             _append_jsonl(FILLS_PATH, {
                 "event": "close", "pos_id": c.id, "ts": c.closed_at,
