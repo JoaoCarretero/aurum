@@ -706,7 +706,7 @@ class ResearchDeskScreen(Screen):
         # Scan unico por tick. Panel usa os 30 mais recentes; activity
         # feed recebe ate 200 (pagina internamente via LOAD MORE).
         try:
-            full_scan = scan_artifacts(self.root_path, limit=200)
+            full_scan = scan_artifacts(self.root_path, limit=200, issues=self._last_issues_raw)
         except Exception as e:
             full_scan = getattr(self, "_last_full_scan", [])
             _LOG.warning("scan_artifacts falhou: %s", e)

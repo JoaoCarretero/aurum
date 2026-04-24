@@ -49,6 +49,7 @@ from launcher_support.research_desk.artifacts_panel import open_markdown_viewer
 from launcher_support.research_desk.live_runs import (
     STATUS_ERROR,
     STATUS_RUNNING,
+    STATUS_STALE,
     STATUS_SUCCESS,
     RunView,
     shape_runs,
@@ -73,6 +74,7 @@ _RUN_STATUS_COLOR = {
     STATUS_RUNNING: AMBER,
     STATUS_SUCCESS: GREEN,
     STATUS_ERROR: HAZARD,
+    STATUS_STALE: HAZARD,
 }
 
 _RUNS_REFRESH_MS = 3000
