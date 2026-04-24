@@ -774,6 +774,68 @@ def test_fetch_paper_extras_sync_prefers_local_run_dir(monkeypatch, tmp_path):
     assert trades == []
 
 
+def test_dedupe_and_sort_trades_drops_duplicates_and_primed():
+    import launcher_support.engines_live_view as evv
+
+    raw = [
+        {"timestamp": "2026-04-24T13:48:00Z", "symbol": "OPUSDT",
+         "strategy": "millennium", "pnl": 0.58, "primed": False},
+        # duplicate (instance-b saw the same tick) — must be filtered out
+        {"timestamp": "2026-04-24T13:48:00Z", "symbol": "OPUSDT",
+         "strategy": "millennium", "pnl": 0.58, "primed": False},
+        # primed signal (not a real trade) — must be filtered out
+        {"timestamp": "2026-04-24T13:47:00Z", "symbol": "AVAXUSDT",
+         "strategy": "millennium", "pnl": 0.0, "primed": True},
+        # older real trade — must appear below the newer one
+        {"timestamp": "2026-04-24T13:30:00Z", "symbol": "SANDUSDT",
+         "strategy": "millennium", "pnl": -5.1, "primed": False},
+    ]
+
+    out = evv._dedupe_and_sort_trades(raw, limit=50)
+
+    assert [t["symbol"] for t in out] == ["OPUSDT", "SANDUSDT"]
+    assert all(not t.get("primed", False) for t in out)
+
+
+def test_fetch_paper_engine_trades_sync_aggregates_across_runs(monkeypatch):
+    import launcher_support.engines_live_view as evv
+
+    # Two runs of the same engine: one running, one stopped. Each returns
+    # a trade for the same signal tick — aggregator must dedupe to one.
+    cockpit_rows = [
+        {"run_id": "RUN_A", "engine": "millennium", "mode": "paper",
+         "status": "running", "started_at": "2026-04-24T17:40:00Z"},
+        {"run_id": "RUN_B", "engine": "millennium", "mode": "paper",
+         "status": "stopped", "started_at": "2026-04-24T13:48:00Z"},
+        # unrelated engine — must be ignored
+        {"run_id": "RUN_C", "engine": "citadel", "mode": "paper",
+         "status": "running", "started_at": "2026-04-24T18:00:00Z"},
+    ]
+    trades_by_run = {
+        "RUN_A": {"trades": []},
+        "RUN_B": {"trades": [
+            {"timestamp": "2026-04-24T13:48:00Z", "symbol": "OPUSDT",
+             "strategy": "millennium", "pnl": 0.58, "primed": False},
+        ]},
+    }
+
+    class _FakeClient:
+        def _get(self, path):
+            # expected shape: /v1/runs/{id}/trades?limit=50
+            rid = path.split("/")[3]
+            return trades_by_run.get(rid, {"trades": []})
+
+    monkeypatch.setattr(evv, "_get_cockpit_client", lambda: _FakeClient())
+    monkeypatch.setattr(evv, "_load_cockpit_runs_cached",
+                        lambda *args, **kwargs: list(cockpit_rows))
+
+    out = evv._fetch_paper_engine_trades_sync("millennium")
+
+    assert len(out) == 1
+    assert out[0]["symbol"] == "OPUSDT"
+    assert out[0]["_source_run_id"] == "RUN_B"
+
+
 def test_refresh_paper_detail_skips_rerender_when_signature_unchanged(monkeypatch):
     import launcher_support.engines_live_view as evv
 

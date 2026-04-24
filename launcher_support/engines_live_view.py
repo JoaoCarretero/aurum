@@ -84,6 +84,15 @@ _SHADOW_SNAPSHOT_LOCK = threading.Lock()
 _REMOTE_SHADOW_RUN_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
 _REMOTE_SHADOW_RUN_LOADING: set[str] = set()
 _REMOTE_SHADOW_RUN_LOCK = threading.Lock()
+# Cross-run paper trade history: per engine slug (lowercase), aggregates
+# the last N closed trades across ALL paper runs (running + stopped). The
+# operator expects TRADE HISTORY to cover the engine's whole paper activity
+# — a position that closed earlier today in a run that was since stopped
+# must still surface in the cockpit, not disappear with the run.
+_PAPER_ENGINE_TRADES_CACHE_TTL_S = 60.0
+_PAPER_ENGINE_TRADES_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_PAPER_ENGINE_TRADES_LOADING: set[str] = set()
+_PAPER_ENGINE_TRADES_LOCK = threading.Lock()
 
 
 def _show_new_instance_dialog(launcher, state) -> None:
@@ -427,6 +436,9 @@ def _clear_cockpit_view_caches() -> None:
     with _REMOTE_SHADOW_RUN_LOCK:
         _REMOTE_SHADOW_RUN_CACHE.clear()
         _REMOTE_SHADOW_RUN_LOADING.clear()
+    with _PAPER_ENGINE_TRADES_LOCK:
+        _PAPER_ENGINE_TRADES_CACHE.clear()
+        _PAPER_ENGINE_TRADES_LOADING.clear()
 
 
 def _cockpit_runs_loading() -> bool:
@@ -475,7 +487,14 @@ def render(launcher, parent, *, on_escape) -> dict:
     # switch to a fixed-width rail when state["master_collapsed"] is set.
     _apply_master_layout(body, collapsed=False)
 
-    state["master_host"] = tk.Frame(body, bg=BG)
+    # PANEL bg + 1px BORDER mirrors the detail pane's `card` framing so the
+    # two columns read as twin panels instead of "loose sidebar | framed
+    # detail". The handle bar inside (bg=BG) plays the same role as the
+    # detail's `_hl2_header` strip sitting on top of its card.
+    state["master_host"] = tk.Frame(
+        body, bg=PANEL,
+        highlightbackground=BORDER, highlightthickness=1,
+    )
     # Reduced right gutter 8 → 4 — the sidebar content wasn't reaching the
     # column edge; operator feedback "sidebar nao preenche pra direita"
     # (2026-04-24). Detail pane still gets breathing room via its own
@@ -1104,8 +1123,9 @@ def _render_master_rail(host: tk.Widget, state: dict, *,
     short code so the operator still knows what's on screen without
     expanding. Clicking any badge re-expands the pane.
     """
-    rail = tk.Frame(host, bg=PANEL,
-                    highlightbackground=BORDER, highlightthickness=1)
+    # No own border — master_host already provides the outer 1px BORDER
+    # frame. Doubling would draw a 2px hairline along the rail edges.
+    rail = tk.Frame(host, bg=PANEL)
     rail.pack(fill="both", expand=True, padx=(0, 2), pady=(0, 4))
 
     def _cell(label: str, n: int, tint: str) -> None:
@@ -1324,6 +1344,10 @@ def _render_summary_row(state, *, live_count: int, ready_count: int, research_co
         return
     for w in host.winfo_children():
         w.destroy()
+    # Compact, left-aligned strip — mirrors the mode-pill row above. With
+    # expand=True the 4 cards stretched edge-to-edge and the metric strip
+    # read like a bloated banner that overshot the pills' visual span
+    # (operator: "abre demais pra direita o caixote inteiro" 2026-04-24).
     for label, value, color in cockpit_summary(
         mode=state["mode"],
         live_count=live_count,
@@ -1331,7 +1355,7 @@ def _render_summary_row(state, *, live_count: int, ready_count: int, research_co
         research_count=research_count,
     ):
         card = tk.Frame(host, bg=BG2, highlightbackground=BORDER, highlightthickness=1)
-        card.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        card.pack(side="left", padx=(0, 6))
         tk.Label(card, text=label, fg=DIM2, bg=BG2,
                  font=(FONT, 6, "bold")).pack(anchor="w", padx=8, pady=(6, 1))
         tk.Label(card, text=value, fg=color, bg=BG2,
@@ -3516,14 +3540,146 @@ def _fetch_paper_extras(run_id: str, *, launcher=None, state=None,
     return payload
 
 
+def _dedupe_and_sort_trades(raw: list[dict], *, limit: int) -> list[dict]:
+    """Dedupe trade records on (timestamp, symbol, strategy) and sort
+    newest-first. Instance-a + instance-b of the same engine typically
+    detect the same signal tick, so without dedupe the same OPUSDT LONG
+    shows up twice in the aggregated history."""
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for t in raw:
+        if not isinstance(t, dict):
+            continue
+        if t.get("primed", False):
+            continue
+        key = (
+            str(t.get("timestamp") or ""),
+            str(t.get("symbol") or ""),
+            str(t.get("strategy") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(t)
+
+    def _sort_key(t: dict) -> str:
+        return str(
+            t.get("exit_time")
+            or t.get("timestamp")
+            or t.get("entry_time")
+            or ""
+        )
+    unique.sort(key=_sort_key, reverse=True)
+    return unique[:limit]
+
+
+def _fetch_paper_engine_trades_sync(engine_slug: str, *,
+                                    limit: int = 50,
+                                    per_run_limit: int = 50,
+                                    max_runs: int = 10) -> list[dict]:
+    """Aggregate closed trades across every paper run of ``engine_slug``.
+
+    Cockpit's per-run fetch only covers the *currently selected* run, so
+    trades that closed in a run since stopped (e.g. after a restart
+    earlier today) never surface. This helper walks the ``max_runs`` most
+    recent paper runs for the engine, fans their /v1/runs/{id}/trades
+    fetches out in parallel, then dedupes + sorts newest-first via
+    _dedupe_and_sort_trades.
+    """
+    client = _get_cockpit_client()
+    if client is None:
+        return []
+    rows = _load_cockpit_runs_cached()
+    paper_runs = [
+        r for r in rows
+        if str(r.get("engine") or "").lower() == engine_slug.lower()
+        and str(r.get("mode") or "").lower() == "paper"
+    ]
+    paper_runs.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+    paper_runs = paper_runs[:max_runs]
+    if not paper_runs:
+        return []
+
+    def _fetch(run_id: str) -> list[dict]:
+        try:
+            payload = client._get(f"/v1/runs/{run_id}/trades?limit={per_run_limit}")
+        except Exception:
+            return []
+        if not isinstance(payload, dict):
+            return []
+        tagged: list[dict] = []
+        for t in (payload.get("trades") or []):
+            if not isinstance(t, dict):
+                continue
+            tagged.append({**t, "_source_run_id": run_id})
+        return tagged
+
+    merged: list[dict] = []
+    with ThreadPoolExecutor(max_workers=min(len(paper_runs), 6)) as pool:
+        futures = [pool.submit(_fetch, str(r.get("run_id"))) for r in paper_runs]
+        for fut in as_completed(futures):
+            try:
+                merged.extend(fut.result())
+            except Exception:
+                continue
+    return _dedupe_and_sort_trades(merged, limit=limit)
+
+
+def _fetch_paper_engine_trades(engine_slug: str, *, launcher=None, state=None,
+                               allow_sync: bool = False) -> list[dict]:
+    """TTL-cached wrapper around _fetch_paper_engine_trades_sync.
+
+    Worker-mode (default): returns the last cached list immediately and
+    dispatches a background fetch; the next render picks up the fresh
+    list via _schedule_state_refresh. allow_sync=True blocks on the fan-
+    out, used during the first render so the operator doesn't see an
+    empty pane before the first worker completes.
+    """
+    now = time.monotonic()
+    key = engine_slug.lower()
+    with _PAPER_ENGINE_TRADES_LOCK:
+        cached = _PAPER_ENGINE_TRADES_CACHE.get(key)
+        if cached is not None and (now - cached[0]) <= _PAPER_ENGINE_TRADES_CACHE_TTL_S:
+            return list(cached[1])
+        if allow_sync:
+            _PAPER_ENGINE_TRADES_LOADING.add(key)
+        elif key in _PAPER_ENGINE_TRADES_LOADING:
+            return list(cached[1]) if cached is not None else []
+        else:
+            _PAPER_ENGINE_TRADES_LOADING.add(key)
+
+            def _worker() -> None:
+                payload = _fetch_paper_engine_trades_sync(engine_slug)
+                with _PAPER_ENGINE_TRADES_LOCK:
+                    _PAPER_ENGINE_TRADES_CACHE[key] = (time.monotonic(), payload)
+                    _PAPER_ENGINE_TRADES_LOADING.discard(key)
+                _schedule_state_refresh(launcher, state)
+
+            threading.Thread(
+                target=_worker,
+                name=f"paper-engine-trades-{key}",
+                daemon=True,
+            ).start()
+            return list(cached[1]) if cached is not None else []
+    payload = _fetch_paper_engine_trades_sync(engine_slug)
+    with _PAPER_ENGINE_TRADES_LOCK:
+        _PAPER_ENGINE_TRADES_CACHE[key] = (time.monotonic(), payload)
+        _PAPER_ENGINE_TRADES_LOADING.discard(key)
+    return payload
+
+
 def _paper_content_sig(state, launcher=None) -> tuple:
     run_id = _fetch_paper_run_id(launcher, state)
     if run_id is None:
         return ("no-run", bool(_cockpit_runs_loading()))
+    slug = str(state.get("selected_slug") or "millennium")
     hb, positions, series, account, trades = _fetch_paper_extras(
         run_id,
         launcher=launcher,
         state=state,
+    )
+    aggregate_trades = _fetch_paper_engine_trades(
+        slug, launcher=launcher, state=state,
     )
     if hb is None:
         return ("loading", run_id)
@@ -3554,6 +3710,11 @@ def _paper_content_sig(state, launcher=None) -> tuple:
         len(trades),
         trades[-1].get("timestamp") if trades else None,
     )
+    agg_sig = (
+        slug,
+        len(aggregate_trades),
+        aggregate_trades[0].get("timestamp") if aggregate_trades else None,
+    )
     return (
         run_id,
         hb_sig,
@@ -3562,6 +3723,7 @@ def _paper_content_sig(state, launcher=None) -> tuple:
         last_equity,
         account_sig,
         trades_sig,
+        agg_sig,
         state.get("selected_paper_run_id"),
     )
 
@@ -3625,11 +3787,23 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
         state.pop("paper_selected_trade", None)
         _render_detail(state, launcher)
 
+    # Cross-run trade history: the per-run `trades` fetched above only
+    # covers the currently-selected instance. A trade that closed earlier
+    # today on a run that was since stopped (e.g. OPUSDT LONG at 13:48
+    # in 2026-04-24_134817p_desk-paper-b) would vanish when the new run
+    # started. Aggregate over every paper run of this engine so the
+    # history reads as "what this engine traded in paper today", not
+    # "what this specific instance has in its tail window".
+    aggregate_trades = _fetch_paper_engine_trades(
+        slug, launcher=launcher, state=state,
+    )
+    display_trades = aggregate_trades if aggregate_trades else trades
+
     # Drop stale selection if the trade fell off the tail window.
     paper_selected = state.get("paper_selected_trade")
-    if paper_selected is not None and trades:
+    if paper_selected is not None and display_trades:
         sel_key = (paper_selected.get("symbol"), paper_selected.get("timestamp"))
-        known_keys = {(t.get("symbol"), t.get("timestamp")) for t in trades}
+        known_keys = {(t.get("symbol"), t.get("timestamp")) for t in display_trades}
         if sel_key not in known_keys:
             state.pop("paper_selected_trade", None)
             paper_selected = None
@@ -3640,7 +3814,7 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
         mode="paper",
         heartbeat=hb,
         manifest=None,
-        trades=trades,
+        trades=display_trades,
         on_row_click=_on_paper_row_click,
         status_badge_text=f"TUNNEL {tun_text}  ·  {status}  ·  run {run_id}",
         status_badge_color=status_color,
