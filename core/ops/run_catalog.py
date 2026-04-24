@@ -18,6 +18,70 @@ _VPS_RUNS_CACHE: dict[int, tuple[float, list["RunSummary"]]] = {}
 _DB_RUNS_CACHE: dict[str, tuple[float, list["RunSummary"]]] = {}
 _RUNS_CACHE_TTL_S = 2.0
 
+# Runs that claim status="running" but haven't emitted a heartbeat in
+# this many seconds are considered dead. Paper/shadow runners tick every
+# 15 minutes — 30 minutes = two missed ticks, unambiguously stale. The
+# VPS cockpit never downgrades stopped runs' status on disk, so without
+# this client-side check every dead-but-never-stopped run keeps showing
+# up as LIVE in /data and inflates the cockpit RUNNING counter.
+_RUN_STALE_THRESHOLD_S = 30 * 60
+
+
+def _parse_iso_timestamp(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def is_run_stale(
+    run: "RunSummary | dict",
+    *,
+    now: datetime | None = None,
+    threshold_s: float = _RUN_STALE_THRESHOLD_S,
+) -> bool:
+    """True when a run claims status='running' but last_tick_at is older
+    than ``threshold_s`` seconds. Accepts either a RunSummary or a raw
+    cockpit-API dict so callers on both sides of the collection pipeline
+    can share the check."""
+    if isinstance(run, dict):
+        status = str(run.get("status") or "").lower()
+        last_tick = run.get("last_tick_at")
+    else:
+        status = str(run.status or "").lower()
+        last_tick = run.last_tick_at
+    if status != "running":
+        return False
+    ts = _parse_iso_timestamp(last_tick)
+    if ts is None:
+        # No last_tick_at yet — treat as still-priming, not stale. The
+        # runner writes it on the first successful tick.
+        return False
+    reference = now or datetime.now(timezone.utc)
+    return (reference - ts).total_seconds() > threshold_s
+
+
+def resolve_status(raw_status, last_tick_at) -> str:
+    """Normalize the status string, downgrading stale 'running' to 'stale'.
+
+    Applied at collection time on local + VPS sources so every downstream
+    consumer (cockpit RUNNING counters, /data engines LIVE/FINISHED split,
+    anything filtering by status) sees a status that reflects reality."""
+    status = str(raw_status or "unknown")
+    if status.lower() != "running":
+        return status
+    ts = _parse_iso_timestamp(last_tick_at)
+    if ts is None:
+        return status
+    if (datetime.now(timezone.utc) - ts).total_seconds() > _RUN_STALE_THRESHOLD_S:
+        return "stale"
+    return status
+
 
 @dataclass
 class RunSummary:
@@ -684,7 +748,7 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str, hb: dict) -> RunS
         run_id=str(hb.get("run_id") or run_dir.name),
         engine=engine,
         mode=mode,
-        status=str(hb.get("status") or "unknown"),
+        status=resolve_status(hb.get("status"), hb.get("last_tick_at")),
         started_at=hb.get("started_at"),
         stopped_at=hb.get("stopped_at"),
         last_tick_at=hb.get("last_tick_at"),
@@ -734,14 +798,17 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
     novel = hb.get("novel_since_prime")
     if novel is None:
         novel = hb.get("novel_total", payload.get("novel_total"))
+    last_tick_at = payload.get("last_tick_at") or hb.get("last_tick_at")
     return RunSummary(
         run_id=rid,
         engine=str(payload.get("engine") or hb.get("engine") or "?").upper(),
         mode=str(payload.get("mode") or hb.get("mode") or "?"),
-        status=str(payload.get("status") or hb.get("status") or "unknown"),
+        status=resolve_status(
+            payload.get("status") or hb.get("status"), last_tick_at,
+        ),
         started_at=payload.get("started_at") or hb.get("started_at"),
         stopped_at=hb.get("stopped_at"),
-        last_tick_at=payload.get("last_tick_at") or hb.get("last_tick_at"),
+        last_tick_at=last_tick_at,
         ticks_ok=_as_int(hb.get("ticks_ok")),
         ticks_fail=_as_int(hb.get("ticks_fail")),
         novel=_as_int(novel),

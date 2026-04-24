@@ -756,11 +756,27 @@ def _paint_rows(state: dict) -> None:
                  font=(FONT, 7, "italic")).pack(anchor="w", pady=8, padx=12)
         return
 
-    # Separa LIVE (running) em cima de FINISHED (stopped/failed/unknown).
-    # Operador pediu "separe as live runs e as runs que ja rodaram,
-    # separado pra nao confundir". Cabecalhos dim + contadores.
-    running_rows = [r for r in rows if str(r.status).lower() == "running"]
-    finished_rows = [r for r in rows if str(r.status).lower() != "running"]
+    # Split: LIVE (status='running' com tick recente), STALE (status claims
+    # running mas last_tick > 30min — VPS/local nao atualiza o status em
+    # shutdown imperfeito), FINISHED (stopped/failed/unknown).
+    # Stale usa ``is_run_stale`` de core.ops.run_catalog — mesma regra que
+    # o cockpit usa pra filtrar contadores. Sem isso, /data mostrava 21
+    # live enquanto o VPS tinha 11 rodando de verdade.
+    from core.ops.run_catalog import is_run_stale as _is_stale
+    running_rows: list[RunSummary] = []
+    stale_rows: list[RunSummary] = []
+    finished_rows: list[RunSummary] = []
+    for r in rows:
+        status = str(r.status).lower()
+        if status == "running":
+            if _is_stale(r):
+                stale_rows.append(r)
+            else:
+                running_rows.append(r)
+        elif status == "stale":
+            stale_rows.append(r)
+        else:
+            finished_rows.append(r)
 
     if running_rows:
         _render_list_section_header(
@@ -769,8 +785,17 @@ def _paint_rows(state: dict) -> None:
         for r in running_rows[:20]:
             _render_run_row(wrap, r, state)
 
-    if finished_rows:
+    if stale_rows:
         if running_rows:
+            tk.Frame(wrap, bg=BG, height=6).pack(fill="x")
+        _render_list_section_header(
+            wrap, "◌ STALE", len(stale_rows), color=AMBER,
+        )
+        for r in stale_rows[:20]:
+            _render_run_row(wrap, r, state)
+
+    if finished_rows:
+        if running_rows or stale_rows:
             tk.Frame(wrap, bg=BG, height=6).pack(fill="x")
         _render_list_section_header(
             wrap, "○ FINISHED", len(finished_rows), color=DIM,

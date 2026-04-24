@@ -225,7 +225,13 @@ def _vps_running_slugs(*, mode: str, launcher=None, state=None,
     Shadow/paper modes dont run processes locally — the RUNNING counter
     must reflect VPS state. Returns empty set on cockpit failure (caller
     falls back to local-proc count, so no hard dependency on the VPS).
+
+    Runs with status='running' but whose last_tick_at is older than the
+    stale threshold (cockpit leaves them stuck after process death) are
+    filtered out via ``is_run_stale`` — otherwise zombie runs inflate the
+    RUNNING counter beyond what's actually live on the VPS.
     """
+    from core.ops.run_catalog import is_run_stale
     runs = _load_cockpit_runs_cached(
         launcher=launcher,
         state=state,
@@ -236,6 +242,8 @@ def _vps_running_slugs(*, mode: str, launcher=None, state=None,
         if r.get("status") != "running":
             continue
         if mode and r.get("mode") != mode:
+            continue
+        if is_run_stale(r):
             continue
         engine = r.get("engine")
         if engine:
@@ -255,13 +263,20 @@ def _vps_running_instance_count(
     has 2 paper + 2 shadow runs, that set has 1 entry. The RUNNING
     counter in the header should reflect the true number of live
     instances in the current mode (2 papers = 2, 2 shadows = 2).
+
+    Stale entries (status='running' but last_tick too old) are excluded
+    via ``is_run_stale`` so the counter tracks processes that are still
+    actually ticking.
     """
+    from core.ops.run_catalog import is_run_stale
     runs = _load_cockpit_runs_cached(launcher=launcher, state=state)
     count = 0
     for r in runs:
         if str(r.get("status") or "").lower() != "running":
             continue
         if mode and str(r.get("mode") or "").lower() != mode:
+            continue
+        if is_run_stale(r):
             continue
         count += 1
     return count
