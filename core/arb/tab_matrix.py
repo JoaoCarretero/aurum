@@ -1,4 +1,4 @@
-"""core/arb_tab_matrix.py
+"""core/arb/tab_matrix.py
 AURUM Finance — type-matrix helpers for the Arbitrage Hub v2.
 
 Pure module: no Tk, no I/O. Provides venue classification, tab predicate
@@ -6,7 +6,7 @@ dispatching, sort comparator, and label compaction logic consumed by
 launcher_support.screens.arbitrage_hub.
 
 CEX venue allowlist is hardcoded and derived from
-core.arb_scoring._DEFAULT_VENUE_RELIABILITY. Anything not on the list
+core.arb.arb_scoring._DEFAULT_VENUE_RELIABILITY. Anything not on the list
 is treated as DEX.
 """
 from __future__ import annotations

@@ -1,7 +1,7 @@
-"""Unit tests for core/arb_lifetime.py."""
+"""Unit tests for core/arb/lifetime.py."""
 import pytest
 
-from core.arb_lifetime import LifetimeTracker, fmt_duration, stable_key
+from core.arb.lifetime import LifetimeTracker, fmt_duration, stable_key
 
 
 def _pair(**kw):

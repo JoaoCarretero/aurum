@@ -1,4 +1,4 @@
-"""core/arb_lifetime.py
+"""core/arb/lifetime.py
 AURUM Finance — lifetime / persistence tracking for arb opps.
 
 Tracks when each (symbol, legs, kinds) tuple was first seen in the scanner

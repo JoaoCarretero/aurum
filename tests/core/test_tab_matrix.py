@@ -1,9 +1,9 @@
-"""Unit tests for core/arb_tab_matrix.py — venue/predicate/sort helpers.
+"""Unit tests for core/arb/tab_matrix.py — venue/predicate/sort helpers.
 TDD: tests written before implementation.
 """
 import pytest
 
-from core.arb_tab_matrix import CEX_VENUES, is_cex
+from core.arb.tab_matrix import CEX_VENUES, is_cex
 
 
 def test_is_cex_known_cex_venues():
@@ -34,7 +34,7 @@ def test_cex_venues_is_frozenset():
 
 # ─── pair_kinds / pair_venues helpers ────────────────────────────────
 
-from core.arb_tab_matrix import matches_type, pair_kinds, pair_venues
+from core.arb.tab_matrix import matches_type, pair_kinds, pair_venues
 
 
 def test_pair_kinds_from_type_cc():
@@ -144,7 +144,7 @@ def test_matches_unknown_kind_returns_false():
 
 from types import SimpleNamespace
 
-from core.arb_tab_matrix import compact_labels, opps_sort_key
+from core.arb.tab_matrix import compact_labels, opps_sort_key
 
 
 def _sr(grade="GO", bkevn=10.0, profit=5.0, score=80.0):
