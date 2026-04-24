@@ -4,13 +4,13 @@ CITADEL v3.6 — AURUM Finance Systematic Momentum Engine
 # CITADEL (formerly AZOTH) — Trend-following + fractal alignment
 Main scan loop, reporting, and execution entry point.
 """
-import os, sys, time, math, json, random, logging
+import sys, json, logging
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import numpy as np
 import pandas as pd
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path as _Path
 
 # ── Config ────────────────────────────────────────────────────
@@ -20,8 +20,8 @@ from config.params import _tf_params, _TF_MINUTES
 INTERVAL = ENGINE_INTERVALS.get("CITADEL", INTERVAL)
 
 # ── Core modules ──────────────────────────────────────────────
-from core.data import fetch, fetch_all, validate
-from core.fs import atomic_write
+from core.data import fetch_all, validate
+from core.ops.fs import atomic_write
 from core.indicators import indicators, swing_structure, omega
 from core.chronos import enrich_with_regime
 from analysis.stats import regime_analysis as _hmm_regime_analysis
@@ -38,20 +38,18 @@ from core.signals import (
     calc_levels, calc_levels_chop,
     label_trade, label_trade_chop,
 )
-from core.portfolio import (
+from core.risk.portfolio import (
     detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
-    position_size, _omega_risk_mult,
+    position_size,
 )
-from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
+from core.data.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
 
 # ── Analysis modules ──────────────────────────────────────────
 from analysis.stats import equity_stats, calc_ratios, conditional_backtest
 from analysis.montecarlo import monte_carlo
-from analysis.walkforward import walk_forward, walk_forward_by_regime, print_wf_by_regime
-from analysis.robustness import symbol_robustness, print_symbol_robustness
+from analysis.walkforward import walk_forward, walk_forward_by_regime
 from analysis.benchmark import (
-    bear_market_analysis, year_by_year_analysis,
-    print_year_by_year, print_bear_market_enhanced, print_benchmark,
+    bear_market_analysis, print_benchmark,
 )
 
 # ── Runtime setup (lazy — only runs when setup_run() is called) ──
@@ -69,11 +67,14 @@ def setup_run(engine_name: str = "citadel") -> tuple[str, _Path]:
     """Initialise RUN_DIR, logging, and file handlers. Call once at startup."""
     global RUN_DATE, RUN_TIME, RUN_ID, RUN_DIR
 
-    from core.run_manager import create_run_dir
+    from core.ops.run_manager import create_run_dir
 
     RUN_ID, RUN_DIR = create_run_dir(engine_name)
-    RUN_DATE = datetime.now().strftime("%Y-%m-%d")
-    RUN_TIME = datetime.now().strftime("%H%M")
+    # UTC so RUN_IDs generated on the Windows dev box and on the Linux VPS
+    # agree regardless of the host's local timezone.
+    _run_dt = datetime.now(timezone.utc)
+    RUN_DATE = _run_dt.strftime("%Y-%m-%d")
+    RUN_TIME = _run_dt.strftime("%H%M")
 
     # Logging: DEBUG to file, WARNING+ to terminal
     _fmt = logging.Formatter("%(asctime)s  %(levelname)s  %(message)s")
@@ -83,12 +84,24 @@ def setup_run(engine_name: str = "citadel") -> tuple[str, _Path]:
     _sh = logging.StreamHandler(sys.stdout)
     _sh.setLevel(logging.WARNING)
     _sh.setFormatter(_fmt)
-    logging.basicConfig(level=logging.DEBUG, handlers=[_fh, _sh])
+    logging.basicConfig(level=logging.DEBUG, handlers=[_fh, _sh], force=True)
 
+    for _h in list(_tl.handlers):
+        try:
+            _h.close()
+        except Exception:
+            pass
+    _tl.handlers.clear()
     _th = logging.FileHandler(RUN_DIR / "trades.log", encoding="utf-8")
     _th.setFormatter(logging.Formatter("%(message)s"))
     _tl.addHandler(_th); _tl.setLevel(logging.DEBUG); _tl.propagate = False
 
+    for _h in list(_vl.handlers):
+        try:
+            _h.close()
+        except Exception:
+            pass
+    _vl.handlers.clear()
     _vh = logging.FileHandler(RUN_DIR / "log.txt", mode="a", encoding="utf-8")
     _vh.setFormatter(logging.Formatter("%(message)s"))
     _vl.addHandler(_vh); _vl.setLevel(logging.DEBUG); _vl.propagate = False
@@ -102,7 +115,21 @@ SEP = "─" * 80
 # ══════════════════════════════════════════════════════════════
 def scan_symbol(df: pd.DataFrame, symbol: str,
                 macro_bias_series, corr: dict,
-                htf_stack_dfs: dict | None = None) -> tuple[list, dict]:
+                htf_stack_dfs: dict | None = None,
+                live_mode: bool = False,
+                live_tail_bars: int = 4) -> tuple[list, dict]:
+    """Scan CITADEL signals on ``df``.
+
+    ``live_mode`` controls the tail-bar handling. In backtest (default),
+    the loop stops at ``len(df)-MAX_HOLD-2`` because ``label_trade``
+    needs MAX_HOLD+ forward bars to resolve WIN/LOSS. In live mode the
+    loop spans only the previously-skipped tail (``len(df)-MAX_HOLD-2``
+    to ``len(df)-1``), and each hit emits ``result="LIVE"`` without
+    calling ``label_trade`` — paper/shadow runners handle labeling at
+    runtime. All vetoes and the decision gates (``decide_direction``,
+    ``score_omega``, ``calc_levels``) are preserved bit-identical so
+    signal generation stays in sync with backtest calibration.
+    """
     df = indicators(df)
     df = swing_structure(df)
     df = omega(df)
@@ -157,7 +184,20 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
     _tl.info(f"\n{'═'*72}\n  {symbol}  [{df['time'].iloc[0].date()} → {df['time'].iloc[-1].date()}]\n{'═'*72}")
 
-    for idx in range(min_idx, len(df)-MAX_HOLD-2):
+    # Loop range: backtest scans the labelable region (bars with MAX_HOLD
+    # forward for trade outcome); live scans only the recent tail
+    # (live_tail_bars bars back from len-1), not the full MAX_HOLD gap.
+    # Rationale: live scan runs every tick_sec; the tail only needs to
+    # cover N recent bars so a restarted runner catches up without
+    # re-absorbing every stale historical signal into the prime seen_keys
+    # dict. Default 4 bars = 60min of safety margin at 15m tf.
+    if live_mode:
+        _loop_start = max(min_idx, len(df) - live_tail_bars - 1)
+        _loop_end = len(df) - 1  # calc_levels needs idx+1 for entry ref
+    else:
+        _loop_start = min_idx
+        _loop_end = len(df) - MAX_HOLD - 2
+    for idx in range(_loop_start, _loop_end):
         # build row from pre-extracted arrays (no Series overhead)
         row = {"trend_struct":_str[idx],"struct_strength":_stre[idx],
                "slope21":_sl21[idx],"slope200":_sl200[idx],
@@ -297,21 +337,32 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
 
         entry, stop, target, rr = levels
 
-        if is_chop_trade:
-            result, duration, exit_p, exit_reason = label_trade_chop(
-                df, idx+1, direction, entry, stop, target)
+        if live_mode:
+            # Live: no forward bars to resolve outcome — runtime layer
+            # (paper_executor + position_manager) labels the trade as it
+            # plays out. Mirror a shape compatible with the trade dict
+            # assembled below.
+            result = "LIVE"
+            duration = 0
+            exit_p = entry
+            exit_reason = "live"
+            forced_mtm = False
         else:
-            result, duration, exit_p, exit_reason = label_trade(
-                df, idx+1, direction, entry, stop, target)
+            if is_chop_trade:
+                result, duration, exit_p, exit_reason = label_trade_chop(
+                    df, idx+1, direction, entry, stop, target)
+            else:
+                result, duration, exit_p, exit_reason = label_trade(
+                    df, idx+1, direction, entry, stop, target)
 
-        # Mark-to-market: force-close at last bar's close rather than
-        # silently discarding the trade. label_trade already returns the
-        # last-bar close as exit_p and MAX_HOLD as duration for OPEN.
-        forced_mtm = False
-        if result == "OPEN":
-            forced_mtm = True
-            raw_pnl = (float(exit_p) - entry) if direction == "BULLISH" else (entry - float(exit_p))
-            result   = "WIN" if raw_pnl > 0 else "LOSS"
+            # Mark-to-market: force-close at last bar's close rather than
+            # silently discarding the trade. label_trade already returns the
+            # last-bar close as exit_p and MAX_HOLD as duration for OPEN.
+            forced_mtm = False
+            if result == "OPEN":
+                forced_mtm = True
+                raw_pnl = (float(exit_p) - entry) if direction == "BULLISH" else (entry - float(exit_p))
+                result   = "WIN" if raw_pnl > 0 else "LOSS"
 
         vol_r = str(row.get("vol_regime", "NORMAL"))
         size  = position_size(account, entry, stop, score,
@@ -333,37 +384,43 @@ def scan_symbol(df: pd.DataFrame, symbol: str,
                 vetos[motivo_agg] += 1
                 continue
 
-        ep = float(exit_p)
-        slip_exit = SLIPPAGE + SPREAD          # C2: slippage na saída (market order)
-        _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
-        if direction == "BULLISH":
-            entry_cost = entry * (1 + COMMISSION)              # C1: comissão entrada
-            ep_net     = ep * (1 - COMMISSION - slip_exit)     # C2: comissão + slip saída
-            funding    = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
-            pnl        = size * (ep_net - entry_cost) + funding
+        if live_mode:
+            # Live: runtime layer tracks PnL as trade plays out. Emit
+            # placeholder pnl/account; skip cooldown + self-tracking of
+            # open_pos (runtime has its own portfolio).
+            pnl = 0.0
         else:
-            entry_cost = entry * (1 - COMMISSION)              # C1: comissão entrada
-            ep_net     = ep * (1 + COMMISSION + slip_exit)     # C2: comissão + slip saída
-            funding    = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
-            pnl        = size * (entry_cost - ep_net) + funding
-        pnl     = round(pnl * LEVERAGE, 2)          # alavancagem escala PnL linearmente
-        # [L7] Post-hoc 90%/95% clamp removed — liquidation is now enforced
-        # inside label_trade at the path level (see core.signals._liq_prices).
-        # The floor at 0 stays: account cannot go negative, but any genuine
-        # liquidation has already been reflected in `pnl` via the liq exit price.
-        account = max(account + pnl, 0.0)
+            ep = float(exit_p)
+            slip_exit = SLIPPAGE + SPREAD          # C2: slippage na saída (market order)
+            _funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(INTERVAL, 15)
+            if direction == "BULLISH":
+                entry_cost = entry * (1 + COMMISSION)              # C1: comissão entrada
+                ep_net     = ep * (1 - COMMISSION - slip_exit)     # C2: comissão + slip saída
+                funding    = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
+                pnl        = size * (ep_net - entry_cost) + funding
+            else:
+                entry_cost = entry * (1 - COMMISSION)              # C1: comissão entrada
+                ep_net     = ep * (1 + COMMISSION + slip_exit)     # C2: comissão + slip saída
+                funding    = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
+                pnl        = size * (entry_cost - ep_net) + funding
+            pnl     = round(pnl * LEVERAGE, 2)          # alavancagem escala PnL linearmente
+            # [L7] Post-hoc 90%/95% clamp removed — liquidation is now enforced
+            # inside label_trade at the path level (see core.signals._liq_prices).
+            # The floor at 0 stays: account cannot go negative, but any genuine
+            # liquidation has already been reflected in `pnl` via the liq exit price.
+            account = max(account + pnl, 0.0)
 
-        if result == "LOSS":
-            consecutive_losses += 1
-            for n_losses in sorted(STREAK_COOLDOWN.keys(), reverse=True):
-                if consecutive_losses >= n_losses:
-                    cooldown_until = idx + STREAK_COOLDOWN[n_losses]
-                    break
-            sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
-        else:
-            consecutive_losses = 0
+            if result == "LOSS":
+                consecutive_losses += 1
+                for n_losses in sorted(STREAK_COOLDOWN.keys(), reverse=True):
+                    if consecutive_losses >= n_losses:
+                        cooldown_until = idx + STREAK_COOLDOWN[n_losses]
+                        break
+                sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
+            else:
+                consecutive_losses = 0
 
-        open_pos.append((idx + 1 + duration, symbol, size, entry))
+            open_pos.append((idx + 1 + duration, symbol, size, entry))
 
         ts = df["time"].iloc[idx].strftime("%d/%m %Hh")
         trade_type = "CHOP-MR" if is_chop_trade else direction
@@ -525,10 +582,9 @@ def export_json(all_trades, eq, mc, cond, ratios, price_data=None):
             "max_open_positions": MAX_OPEN_POSITIONS, "corr_threshold": CORR_THRESHOLD,
             "corr_soft_threshold": CORR_SOFT_THRESHOLD, "corr_soft_mult": CORR_SOFT_MULT,
             "macro_symbol": MACRO_SYMBOL,
-            "omega_risk_table": OMEGA_RISK_TABLE,
             "chop_bb_period": CHOP_BB_PERIOD, "chop_bb_std": CHOP_BB_STD,
             "chop_rsi_long": CHOP_RSI_LONG, "chop_rsi_short": CHOP_RSI_SHORT,
-            "chop_rr": CHOP_RR, "chop_size_mult": CHOP_SIZE_MULT,
+            "chop_rr": CHOP_RR,
             "regime_trans_window":    REGIME_TRANS_WINDOW,
             "regime_trans_atr_jump":  REGIME_TRANS_ATR_JUMP,
             "regime_trans_size_mult": REGIME_TRANS_SIZE_MULT,
@@ -564,11 +620,16 @@ if __name__ == "__main__":
     _ap.add_argument("--leverage",    type=float, default=LEVERAGE,   help="Leverage multiplier")
     _ap.add_argument("--no-menu",     action="store_true",            help="Skip post-run interactive menu")
     _ap.add_argument("--holdout-pct", type=float, default=0.0,        help="Reserve last N%% of data as pure OOS holdout (0 = disabled, matches other engines)")
+    _ap.add_argument("--end",         type=str,   default=None,       help="End date YYYY-MM-DD for backtest window (pre-calibration OOS). Default: now.")
     _args, _ = _ap.parse_known_args()
 
     SCAN_DAYS = _args.days
     LEVERAGE = _args.leverage
     BASKET_NAME = _args.basket or ENGINE_BASKETS.get("CITADEL", "default")
+    END_TIME_MS = None
+    if _args.end:
+        import pandas as _pd_tmp
+        END_TIME_MS = int(_pd_tmp.Timestamp(_args.end).timestamp() * 1000)
     if BASKET_NAME in BASKETS:
         SYMBOLS = BASKETS[BASKET_NAME]
 
@@ -681,7 +742,7 @@ if __name__ == "__main__":
 
     print()
     all_dfs = fetch_all(_fetch_syms, n_candles=N_CANDLES, futures=True,
-                        on_progress=_fetch_progress)
+                        on_progress=_fetch_progress, end_time_ms=END_TIME_MS)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -701,7 +762,7 @@ if __name__ == "__main__":
     if MTF_ENABLED:
         for tf in HTF_STACK:
             nc = HTF_N_CANDLES_MAP.get(tf, 300)
-            tf_dfs = fetch_all(list(all_dfs.keys()), interval=tf, n_candles=nc)
+            tf_dfs = fetch_all(list(all_dfs.keys()), interval=tf, n_candles=nc, end_time_ms=END_TIME_MS)
             for sym, df_h in tf_dfs.items():
                 df_h = prepare_htf(df_h, htf_interval=tf)
                 htf_stack_by_sym.setdefault(sym, {})[tf] = df_h
@@ -987,14 +1048,15 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════
     #  PERSISTÊNCIA — tudo numa pasta por run
     # ══════════════════════════════════════════════════════════════
-    from core.run_manager import (
-        snapshot_config, save_run_artifacts, append_to_index, TeeLogger,
+    from core.ops.run_manager import (
+        snapshot_config, save_run_artifacts, append_to_index,
     )
 
     _config = snapshot_config()
     _config["BASKET_EFFECTIVE"] = BASKET_NAME
     _summary = {
         "engine": "CITADEL",
+        "run_id": RUN_ID,
         "basket": BASKET_NAME,
         "n_trades": len(closed),
         "win_rate": round(wr_total, 2),
@@ -1040,7 +1102,7 @@ if __name__ == "__main__":
 
     # ── Auto-persist to DB (backwards compat) ──
     try:
-        from core.db import save_run as _db_save
+        from core.ops.db import save_run as _db_save
         export_json(all_trades, eq, mc, cond, ratios)
         _json = str(RUN_DIR / f"citadel_{INTERVAL}_v36.json")
         if _Path(_json).exists():

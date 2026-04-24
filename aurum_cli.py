@@ -195,17 +195,19 @@ STRATEGIES = {
     "millennium": {
         "name": "MILLENNIUM",
         "tag": "MLN",
-        "desc": "Multi-strategy pod — ensemble orchestrator",
-        "methods": ["backtest"],
+        "desc": "Multi-strategy pod — meta portfolio orchestrator",
+        "methods": ["backtest","simulator","live"],
         "composite": True,
-        "components": ["citadel","renaissance","deshaw","jump","bridgewater"],
+        "meta_engine": True,
+        "components": ["citadel","renaissance","jump"],
         "info": [
-            "Orquestra todos os engines num unico portfolio.",
+            "Orquestrador multi-strategy sobre os engines validados.",
             "",
             "Aggregator      Signal-level merge",
             "Weighting       Sortino rolling + regime boost",
             "Kill-switch     Pausa se Sortino(20) < -0.5",
-            "TWO SIGMA       ML meta-ensemble (opcao 8)",
+            "Core            CITADEL + RENAISSANCE + JUMP",
+            "Bootstrap live  runner dedicado prepara preflight; execucao real segue bloqueada",
         ],
     },
     "kepos": {
@@ -236,15 +238,34 @@ STRATEGIES = {
             "Flag            --invert mean-reversion (H2-INV)",
         ],
     },
+    "medallion": {
+        "name": "MEDALLION",
+        "tag": "MED",
+        "desc": "Berlekamp-Laufer — 7-signal ensemble + Kelly sizing",
+        "methods": ["backtest"],
+        "info": [
+            "Filosofia Simons/Renaissance 1988-90 em codigo.",
+            "",
+            "Ensemble        7 sub-sinais (z-return, z-vol, ema-dev,",
+            "                autocorr, RSI, seasonality, HMM chop)",
+            "Gate            autocorr < 0 + HMM regime + ensemble>=th",
+            "Sizing          quarter-Kelly rolling empirical, cap 2%",
+            "Exit            tp/stop ATR + time-stop curto",
+            "Flag            --invert momentum (calibrado pra cripto)",
+        ],
+    },
     "twosigma": {
         "name": "TWO SIGMA",
         "tag": "TSG",
         "desc": "ML meta-ensemble — LightGBM walk-forward (requires prior runs)",
         "methods": ["backtest"],
+        "composite": True,
+        "meta_engine": True,
+        "components": ["citadel","renaissance","jump","bridgewater"],
         "info": [
             "Re-pondera trades de outros engines via LightGBM.",
             "",
-            "Requer          backtests previos de citadel/jump/bridgewater",
+            "Requer          backtests previos do universo meta-engine",
             "Features        regime HMM + Hurst + volatilidade + decay",
             "Output          feature importance + static vs ML PnL",
             "Standalone      imprime instrucoes se nao ha trades em disco",
@@ -280,14 +301,17 @@ def _resolve(strategy, method, config):
         if strategy == "millennium":  return "multi","engines/millennium.py",["1",days,"","","","","",plots,""]
         if strategy == "kepos":       return "kepos","engines/kepos.py",["--days",days,"--no-menu"]
         if strategy == "graham":      return "graham","engines/graham.py",["--days",days,"--no-menu"]
+        if strategy == "medallion":   return "medallion","engines/medallion.py",["--days",days,"--no-menu"]
         if strategy == "twosigma":    return "prometeu","engines/twosigma.py",[]
         if strategy == "aqr":         return "darwin","engines/aqr.py",[]
     if method == "simulator":
         if strategy == "citadel":    return "live","engines/live.py",[mode]
         if strategy == "janestreet": return "arb","engines/janestreet.py",[mode]
+        if strategy == "millennium": return "multi","engines/millennium_live.py",[mode]
     if method == "live":
         if strategy == "citadel":    return "live","engines/live.py",[mode]
         if strategy == "janestreet": return "arb","engines/janestreet.py",[mode]
+        if strategy == "millennium": return "multi","engines/millennium_live.py",[mode]
     return "","",[]
 
 from config.engines import PROC_NAMES as ENGINE_NAMES
@@ -325,7 +349,7 @@ def _banner():
 
 def _running_bar():
     try:
-        from core.proc import list_procs
+        from core.ops.proc import list_procs
         running = [p for p in list_procs() if p.get("alive")]
     except Exception:
         running = []
@@ -386,10 +410,10 @@ def _sel(title, items, hotkeys=None, sub="", hdr=""):
 # ══════════════════════════════════════════════════════════════
 
 def _launch(ek, sc, stdin, sname="", mname="", foreground=True):
-    from core.proc import spawn, _is_alive, get_log_path
+    from core.ops.proc import spawn, _is_alive
     # Hawkes engines parse argv via argparse instead of reading interactive
     # prompts from stdin, so route their payload through cli_args.
-    if ek in ("kepos", "graham"):
+    if ek in ("kepos", "graham", "medallion"):
         info = spawn(ek, cli_args=stdin)
     else:
         info = spawn(ek, stdin_lines=stdin)
@@ -499,7 +523,7 @@ def screen_main():
 def _quit():
     cls(); _banner()
     try:
-        from core.proc import list_procs, stop_proc
+        from core.ops.proc import list_procs, stop_proc
         running = [p for p in list_procs() if p.get("alive")]
         if running:
             print(f"\n  {Y}▲{Z} {B}{len(running)}{Z} engine(s) a correr:\n")
@@ -537,11 +561,17 @@ ML = {"backtest":"BACKTEST","simulator":"SIMULADOR","live":"LIVE"}
 
 def screen_method(method):
     label = ML[method]
-    base = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and not s.get("composite")]
-    comp = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and s.get("composite")]
-    avail = base + comp
+    directional = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and not s.get("meta_engine")]
+    meta = [(k,s) for k,s in STRATEGIES.items() if method in s["methods"] and s.get("meta_engine")]
+    avail = directional + meta
     if not avail:
         _head(label); print(f"\n  {D}Nenhuma estrategia disponivel.{Z}"); _wait(); return
+
+    section_rows = {}
+    if directional:
+        section_rows[0] = f"{B}{C}DIRECTIONAL / RESEARCH{Z}"
+    if meta:
+        section_rows[len(directional)] = f"{B}{M}META / ORCHESTRATION{Z}"
 
     cur = 0
     while True:
@@ -550,8 +580,10 @@ def screen_method(method):
 
         # Strategy list
         for i, (k, s) in enumerate(avail):
+            if i in section_rows:
+                print(f"  {section_rows[i]}")
             tag = f"{C}{s['tag']}{Z}"
-            star = f"{M}★{Z}" if s.get("composite") else " "
+            star = f"{M}★{Z}" if s.get("meta_engine") else " "
             if i == cur:
                 print(f"  {Y}❯{Z} {star} {tag}  {B}{W}{s['name']}{Z}  {s['desc']}")
             else:
@@ -635,7 +667,7 @@ def _screen_config(strategy, method):
 # ══════════════════════════════════════════════════════════════
 
 def screen_procs():
-    from core.proc import list_procs, stop_proc, delete_proc
+    from core.ops.proc import list_procs, stop_proc, delete_proc
 
     while True:
         procs = list_procs()
@@ -665,7 +697,7 @@ def screen_procs():
 
 
 def _screen_tail(pid):
-    from core.proc import _is_alive, get_log_path, _load_state
+    from core.ops.proc import _is_alive, get_log_path, _load_state
     log_file = get_log_path(pid)
     if not log_file: return
     info = _load_state()["procs"].get(str(pid), {})
@@ -704,7 +736,7 @@ def _screen_tail(pid):
 # ══════════════════════════════════════════════════════════════
 
 def screen_data():
-    from core.db import list_runs, delete_run
+    from core.ops.db import list_runs, delete_run
 
     while True:
         runs = list_runs(limit=30)
@@ -757,7 +789,7 @@ def _charts(run):
     return r
 
 def screen_run_detail(run):
-    from core.db import get_trades
+    from core.ops.db import get_trades
     trades = get_trades(run["run_id"])
     closed = [t for t in trades if t["result"] in ("WIN","LOSS")]
     ch = _charts(run)
@@ -863,8 +895,8 @@ def _open_folder(run):
 # ══════════════════════════════════════════════════════════════
 
 def screen_status(wait=True):
-    from core.db import stats_summary
-    from core.proc import list_procs
+    from core.ops.db import stats_summary
+    from core.ops.proc import list_procs
 
     _head("STATUS")
     procs = list_procs()
@@ -914,8 +946,8 @@ def main():
 
     # Real strategy names (must match keys in STRATEGIES dict and branches in _resolve).
     # backtest supports 6; simulator/live are limited to engines with a runtime mode.
-    BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium", "kepos", "graham", "twosigma", "aqr"]
-    LIVE_STRATS = ["citadel", "janestreet"]
+    BT_STRATS   = ["citadel", "renaissance", "deshaw", "jump", "bridgewater", "millennium", "kepos", "graham", "medallion", "twosigma", "aqr"]
+    LIVE_STRATS = ["citadel", "janestreet", "millennium"]
 
     p=sub.add_parser("backtest",aliases=["bt"]); p.add_argument("strategy",choices=BT_STRATS,nargs="?",default="citadel"); p.add_argument("--days",type=int,default=90); p.add_argument("--plots",action="store_true"); p.add_argument("--leverage",type=float,default=None)
     p=sub.add_parser("simulator",aliases=["sim"]); p.add_argument("strategy",choices=LIVE_STRATS,nargs="?",default="citadel"); p.add_argument("--mode",type=int,default=1)
@@ -954,12 +986,12 @@ def main():
     elif a.cmd == "ps":   screen_procs()
     elif a.cmd == "tail":  _screen_tail(a.pid)
     elif a.cmd == "stop":
-        from core.proc import stop_proc
+        from core.ops.proc import stop_proc
         print(f"  {'✓' if stop_proc(a.pid) else 'nao encontrado'}")
     elif a.cmd in ("data","logs"): screen_data()
     elif a.cmd == "status": screen_status(wait=False)
     elif a.cmd == "export":
-        from core.analysis_export import export_analysis
+        from core.analysis.analysis_export import export_analysis
         from datetime import datetime as _dt
         if a.output:
             out = Path(a.output)

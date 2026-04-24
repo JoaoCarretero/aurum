@@ -13,7 +13,6 @@ Target: qual engine teve melhor R-multiple nos próximos trades
 Fallback: se LightGBM não instalado, usa ensemble estático.
 """
 import sys
-import math
 import logging
 import numpy as np
 import pandas as pd
@@ -24,7 +23,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.params import *
-from analysis.stats import equity_stats, calc_ratios
 
 try:
     import lightgbm as lgb

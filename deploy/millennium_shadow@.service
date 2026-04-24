@@ -1,0 +1,34 @@
+[Unit]
+Description=AURUM · MILLENNIUM shadow runner (%i)
+Documentation=https://github.com/joao/aurum.finance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum
+WorkingDirectory=/srv/aurum.finance
+
+EnvironmentFile=-/etc/aurum/shadow-%i.env
+Environment=PYTHONUNBUFFERED=1
+Environment=AURUM_SHADOW_LABEL=%i
+ExecStart=/usr/bin/python3 tools/maintenance/millennium_shadow.py --tick-sec 900 --run-hours 0 --label %i
+
+MemoryMax=1G
+CPUQuota=150%
+
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=120
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/aurum.finance/data
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aurum-shadow-%i
+
+[Install]
+WantedBy=multi-user.target

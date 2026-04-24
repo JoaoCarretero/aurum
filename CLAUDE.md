@@ -173,9 +173,13 @@ aurum.finance/
 │   ├── aqr.py                 ← AQR evolutionary allocation
 │   └── renaissance.py         ← RENAISSANCE harmonic patterns
 ├── analysis/                   ← Analytics, walkforward, MC, plots
+├── api/                        ← REST server (auth, routes, risk_check, models)
 ├── bot/telegram.py            ← Telegram notifications + commands
-├── launcher.py                ← Bloomberg-terminal TkInter GUI
+├── launcher.py                ← Bloomberg-terminal TkInter GUI (~13k linhas)
+├── launcher_support/           ← Módulos consumidos pelo launcher (bootstrap, engines_live_view, execution, menu_data)
+├── macro_brain/                ← Macro brain cockpit standalone (brain, dashboard_view, bots/, ml_engine/, thesis/, position/)
 ├── aurum_cli.py               ← CLI interface
+├── deploy/                     ← Scripts de deploy VPS (install_shadow_vps.sh, millennium_shadow.service)
 ├── server/website/             ← React + Vite landing page
 ├── tests/                      ← pytest suite
 ├── tools/                      ← reconcile_runs.py and friends
@@ -185,18 +189,22 @@ aurum.finance/
 
 ### Engines — Nomes e Identidades
 
-| Logger        | Nome                | Inspiração     | Conceito |
-|---------------|---------------------|----------------|---|
-| `CITADEL`     | CITADEL v3.6        | Citadel LLC    | Systematic momentum, Ω fractal 5D |
-| `RENAISSANCE` | RENAISSANCE         | RenTech        | Harmonic Bayesian + entropy + Hurst |
-| `JANE_STREET` | JANE STREET v5.0    | Jane Street    | Delta-neutral cross-venue arb |
-| `DE_SHAW`     | DE SHAW             | D.E. Shaw      | Engle-Granger cointegration pairs |
-| `BRIDGEWATER` | BRIDGEWATER         | Bridgewater    | Macro sentiment contrarian |
-| `JUMP`        | JUMP                | Jump Trading   | CVD divergence, imbalance, liquidation |
-| `TWO_SIGMA`   | TWO SIGMA           | Two Sigma      | ML meta-ensemble LightGBM |
-| `AQR`         | AQR                 | AQR Capital    | Evolutionary fitness allocation |
-| `MILLENNIUM`  | MILLENNIUM          | Millennium Mgmt | Multi-strategy pod orchestrator |
-| `WINTON`      | WINTON              | Winton Group   | HMM + GARCH + Hurst + seasonality (meta) |
+| Logger        | Nome                | Inspiração     | Status OOS (2026-04-17) | Conceito |
+|---------------|---------------------|----------------|-------------------------|---|
+| `CITADEL`     | CITADEL v3.6        | Citadel LLC    | ✅ EDGE_DE_REGIME       | Systematic momentum, Ω fractal 5D |
+| `RENAISSANCE` | RENAISSANCE         | RenTech        | ⚠️ inflado 2×, real ~2.4 | Harmonic Bayesian + entropy + Hurst |
+| `JANE_STREET` | JANE STREET v5.0    | Jane Street    | ⚪ arb, não direcional  | Delta-neutral cross-venue arb |
+| `DE_SHAW`     | DE SHAW             | D.E. Shaw      | 🔴 NO_EDGE              | Engle-Granger cointegration pairs |
+| `BRIDGEWATER` | BRIDGEWATER         | Bridgewater    | 🔴 BUG_SUSPECT          | Macro sentiment contrarian |
+| `JUMP`        | JUMP                | Jump Trading   | ✅ EDGE_DE_REGIME       | CVD divergence, imbalance, liquidation |
+| `TWO_SIGMA`   | TWO SIGMA           | Two Sigma      | ⚪ fora da bateria OOS  | ML meta-ensemble LightGBM |
+| `AQR`         | AQR                 | AQR Capital    | ⚪ fora da bateria OOS  | Evolutionary fitness allocation |
+| `MILLENNIUM`  | MILLENNIUM          | Millennium Mgmt| orquestrador (meta)     | Multi-strategy pod orchestrator |
+| `WINTON`      | WINTON              | Winton Group   | orquestrador (meta)     | HMM + GARCH + Hurst + seasonality |
+| `PHI`         | PHI                 | —              | 🆕 em overfit_audit     | Fibonacci fractal, clusters multi-TF |
+| `KEPOS`       | KEPOS               | Kepos Capital  | 🔴 INSUFFICIENT_SAMPLE  | Hawkes-based intensity |
+| `MEDALLION`   | MEDALLION           | Medallion Fund | 🔴 NO_EDGE              | Berlekamp-Laufer 7-signal |
+| `GRAHAM`      | GRAHAM              | Benjamin Graham| 🗄️ ARQUIVADO            | 4h value — overfit honesto |
 
 ### Pipeline de Sinais (CITADEL)
 
@@ -229,6 +237,43 @@ Data (Binance OHLCV+tbb)
 
 ## Regras para Claude Code
 
+### ⚠️ PROTOCOLO ANTI-OVERFIT (criado 2026-04-16 após OOS audit)
+
+**Qualquer sweep, grid search, bateria, iteração de params DEVE seguir**
+`docs/methodology/anti_overfit_protocol.md`. Não é opcional.
+
+**Resumo dos 5 princípios:**
+
+1. **Mecanismo > Iteração.** Hipótese escrita em 1 parágrafo ANTES de
+   abrir código. Sem mecanismo defensável, arquiva antes de começar.
+2. **Split antes de código.** Datas train/test/holdout hardcoded no topo
+   do engine. Não mudam.
+3. **Grid fechado.** Lista de N configs pré-registrada em
+   `docs/engines/<engine>/grid.md`. Commit antes de rodar.
+4. **DSR obrigatório.** Sharpe reportado SEM haircut por `n_trials` é
+   mentira disfarçada. Todo sweep computa DSR.
+5. **Regra de parada honra.** Falhou numa etapa → **ARQUIVA**. Sem
+   "reformular universo", sem "mais um iter".
+
+**Anti-patterns a REJEITAR:**
+- Comentários `iter_N WINNER` em `config/params.py` (trocar por
+  `tuned_on=[...], oos_sharpe=X`)
+- "Reformular até achar edge" (é fishing expedition)
+- Mesmo histórico pra tune e report
+- Cherry-pick de symbol ou regime
+
+**Regra meta:** 3 engines consecutivos arquivados → **PAUSAR e revisar
+método**, não continuar batendo.
+
+**Status OOS 2026-04-16 (referência):**
+- ✅ CITADEL, JUMP — edge real confirmado
+- ⚠️ RENAISSANCE — inflado 2×, real ~2.4
+- ⚠️ BRIDGEWATER — bug-suspect
+- 🔴 DE SHAW, KEPOS, MEDALLION — colapsaram ou não-funcionais
+- Ver `docs/audits/2026-04-16_oos_verdict.md`
+
+---
+
 ### ⚠️ CORE DE TRADING PROTEGIDO (qualquer agente: Claude, Codex, outros)
 
 **Estes 4 arquivos NÃO podem ser modificados sem aprovação explícita do Joao:**
@@ -258,6 +303,52 @@ Incidente 2026-04-15: Codex tentou trocar RSI (EWM→rolling+tanh) e
 swing_structure (backward→centered pivots) pra fazer asserts de
 contract tests passarem. Claude detectou e reverteu. Pra nunca mais.
 
+---
+
+### 🔐 CONFIG/KEYS.JSON — INTOCÁVEL (qualquer agente)
+
+**NUNCA sobrescreva `config/keys.json`. NUNCA.** Este arquivo carrega
+todos os segredos operacionais — Binance demo/testnet/live, Telegram,
+cockpit API tokens, VPS SSH config. Se for resetado pra template, o
+cockpit para, o VPS cai, Telegram silencia, live trading quebra.
+
+**Regras operacionais:**
+1. **NUNCA** escreva/edite `config/keys.json` diretamente, nem por `Write`,
+   nem por `Edit`, nem por script (incluindo setup scripts que "restauram
+   o template"). Se precisa rodar setup, faça em `config/keys.json.tmpl`
+   ou similar e deixe pro usuário copiar manualmente.
+2. **NUNCA** commite `config/keys.json` (gitignored + hook pre-commit).
+3. Se abrir e ver placeholders `COLE_AQUI`, **pare e alerte o Joao
+   imediatamente** — é um incidente de wipe de secrets, não seu trabalho.
+4. Antes de QUALQUER operação que toque config/, rode:
+   `python tools/maintenance/verify_keys_intact.py`
+   Se retornar código 1, aborta tudo e notifica o Joao.
+5. Para ler valores, use `core.risk.key_store.load_runtime_keys` — nunca
+   `json.load(open("config/keys.json"))` em código novo (plaintext path
+   existe só pra compat).
+6. Backup local automático: `python tools/maintenance/backup_keys.py`
+   deixa snapshots em `~/.aurum-backups/keys/` (fora do OneDrive, fora
+   do repo, retém os 20 mais recentes). Rode após qualquer mudança
+   autorizada de keys.json pelo próprio Joao.
+
+**Recuperação se o wipe acontecer:**
+- OneDrive version history (File Explorer → right-click keys.json →
+  Version history → pick pre-wipe)
+- `~/.aurum-backups/keys/keys.json.<stamp>.bak` (backups locais)
+- VPS `/srv/aurum.finance/config/keys.json` tem telegram + connections
+- VPS `/etc/aurum/cockpit_api.env` tem os tokens read/admin
+- Password manager (Binance API keys, macro_brain FRED/NewsAPI)
+
+**Incidente 2026-04-19 (fundador deste protocolo):** durante sessão de
+work, `config/keys.json` foi resetado pra placeholders `COLE_AQUI_...`
+em todas as seções (Binance, Telegram, cockpit, VPS SSH). Culprit: um
+agente (Codex ou script de setup) executou algo tipo "criar keys.json
+do template" sem checar se já existia um populado. Resultado: cockpit
+sem dados, VPS unreachable, launcher todo bugado. Recuperação parcial
+via VPS (cockpit tokens + telegram) + conhecimento prévio (vps_ssh host
++ key_path). Binance e macro_brain ainda precisavam ser refeitos a mão.
+**Pra nunca mais.**
+
 ### NUNCA
 
 1. Reestruturar sem pedido explícito. O sistema funciona. Aprender primeiro.
@@ -268,6 +359,7 @@ contract tests passarem. Claude detectou e reverteu. Pra nunca mais.
 6. Ignorar o modelo de custos C1+C2. Backtest sem custos é mentira.
 7. **Tocar em código de live trading sem ler antes** (aprender > mexer).
 8. **Modificar código real pra fazer teste passar** (ver regra CORE acima).
+9. **Sobrescrever `config/keys.json`** — nunca, por razão nenhuma (ver regra INTOCÁVEL acima).
 
 ### SEMPRE
 
@@ -278,6 +370,7 @@ contract tests passarem. Claude detectou e reverteu. Pra nunca mais.
 5. DOCUMENTAR em português. Engines em inglês.
 6. MEDIR antes e depois em mudanças de sinais / indicadores / custos.
 7. **Gerar session log ao final** (ver regra permanente acima).
+8. **Rodar `python tools/maintenance/verify_keys_intact.py`** antes de mexer em qualquer coisa de config/. Se falhar (código 1), parar e alertar (ver regra INTOCÁVEL).
 
 ### Convenções
 

@@ -1,0 +1,199 @@
+"""DataCenterScreen for the DATA routing hub."""
+from __future__ import annotations
+
+import time
+import tkinter as tk
+from typing import Any
+
+from core.ui.ui_palette import AMBER, AMBER_D, BG, BG2, DIM, FONT
+from launcher_support.screens.base import Screen
+
+
+class DataCenterScreen(Screen):
+    # on_enter rglobs engine dirs + stats 200+ cache files — ~130ms on OneDrive.
+    # Cache the result so rapid reentry (user navigates submenu and comes back)
+    # stays sub-ms. Stale counts for a few seconds are fine.
+    _COUNTS_TTL_SEC = 10.0
+
+    def __init__(self, parent: tk.Misc, app: Any):
+        super().__init__(parent)
+        self.app = app
+        self._subtitle_label: tk.Label | None = None
+        self._stat_tags: dict[str, tk.Label] = {}
+        self._counts_cache: tuple[float, dict[str, Any]] | None = None
+
+    def build(self) -> None:
+        outer = tk.Frame(self.container, bg=BG)
+        outer.pack(fill="both", expand=True, padx=28, pady=18)
+
+        head = tk.Frame(outer, bg=BG)
+        head.pack(fill="x", pady=(0, 12))
+        strip = tk.Frame(head, bg=BG)
+        strip.pack(fill="x")
+        tk.Frame(strip, bg=AMBER, width=4, height=28).pack(side="left", padx=(0, 8))
+
+        title_wrap = tk.Frame(strip, bg=BG)
+        title_wrap.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            title_wrap,
+            text="DATA CENTER",
+            font=(FONT, 14, "bold"),
+            fg=AMBER,
+            bg=BG,
+            anchor="w",
+        ).pack(anchor="w")
+        self._subtitle_label = tk.Label(
+            title_wrap,
+            text="",
+            font=(FONT, 8),
+            fg=DIM,
+            bg=BG,
+            anchor="w",
+        )
+        self._subtitle_label.pack(anchor="w", pady=(3, 0))
+
+        tk.Frame(outer, bg=BG2, height=6).pack(fill="x")
+        tk.Frame(outer, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
+
+        content = tk.Frame(outer, bg=BG)
+        content.pack(fill="both", expand=True)
+
+        app = self.app
+        panel = app._ui_panel_frame(content, "DATA ROUTING")
+        sections = [
+            (
+                "PRIMARY ROUTES",
+                [
+                    ("B", "BACKTESTS", "validated runs, metrics and run-level inspection", "backtests", app._data_backtests),
+                    # Unificado: HISTORY + LIVE + LOGS viraram uma so
+                    # tela /engines com chip bar, mesma organizacao
+                    # visual do /backtests.
+                    ("E", "ENGINES", "runs history, live sessions e engine logs unificados", "engines", app._data_engines),
+                ],
+            ),
+            (
+                "HISTORICAL CACHE",
+                [
+                    ("P", "OHLCV LAKE", "inspeciona cache local e baixa novos dados", "cache", app._data_lake),
+                ],
+            ),
+            (
+                "ARTIFACTS",
+                [
+                    ("R", "REPORT INDEX", "raw JSON and persisted report artifact browser", "reports", app._data),
+                ],
+            ),
+            (
+                "EXTERNAL REVIEW",
+                [
+                    ("X", "EXPORT ANALYSIS", "single-file snapshot for external analysis workflows", "export", app._export_analysis),
+                ],
+            ),
+        ]
+
+        for section_name, items in sections:
+            sec = app._ui_section(panel, section_name)
+            for key_label, name, desc, stat_key, cmd in items:
+                row, name_lbl, desc_lbl = app._ui_action_row(
+                    sec,
+                    key_label,
+                    name,
+                    desc,
+                    command=cmd,
+                    title_width=20,
+                    tag="",
+                    tag_fg=AMBER_D,
+                    tag_bg=BG,
+                )
+                tag_lbl = row.winfo_children()[-1]
+                self._stat_tags[stat_key] = tag_lbl
+                for widget in (row, name_lbl, desc_lbl):
+                    widget.bind("<Enter>", lambda _e, n=name_lbl: n.configure(fg=AMBER))
+                    widget.bind("<Leave>", lambda _e, n=name_lbl: n.configure(fg="white"))
+
+        app._ui_back_row(panel, lambda: app._menu("main"))
+
+    def on_enter(self, **kwargs: Any) -> None:
+        del kwargs
+        app = self.app
+        app.h_path.configure(text="> DATA")
+        app.h_stat.configure(text="CENTER", fg=AMBER_D)
+        app.f_lbl.configure(
+            text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P lake  |  X export"
+        )
+        app._kb("<Escape>", lambda: app._menu("main"))
+        app._kb("<Key-0>", lambda: app._menu("main"))
+        app._bind_global_nav()
+
+        counts = self._get_counts()
+        bt_count = counts["bt_count"]
+        eng_running = counts["eng_running"]
+        eng_total = counts["eng_total"]
+        rep_count = counts["rep_count"]
+        cache_tag = counts["cache_tag"]
+        live_count = counts.get("live_count", 0)
+
+        if self._subtitle_label is not None:
+            self._subtitle_label.configure(
+                text=f"{bt_count} runs | {eng_running}/{eng_total} engines | "
+                f"{rep_count} files | cache {cache_tag}"
+            )
+
+        stats = {
+            "backtests": f"{bt_count} runs on disk",
+            # ENGINES unifica HISTORY + LIVE + LOGS — mostra os 3
+            # contadores juntos no status tag pra informatividade.
+            "engines": f"{live_count} live  |  {eng_running}/{eng_total} running",
+            "cache": cache_tag,
+            "reports": f"{rep_count} files indexed",
+            "export": "< 2 MB JSON",
+        }
+        for key, value in stats.items():
+            lbl = self._stat_tags.get(key)
+            if lbl is not None:
+                lbl.configure(text=f" {value} ")
+
+        for key_label, cmd in {
+            "b": app._data_backtests,
+            "e": app._data_engines,
+            "p": app._data_lake,
+            "r": app._data,
+            "x": app._export_analysis,
+        }.items():
+            app._kb(f"<Key-{key_label}>", cmd)
+
+    def _get_counts(self) -> dict[str, Any]:
+        now = time.monotonic()
+        cache = self._counts_cache
+        if cache is not None and (now - cache[0]) < self._COUNTS_TTL_SEC:
+            return cache[1]
+        app = self.app
+        eng_running, eng_total = app._data_count_procs()
+        data = {
+            "bt_count": app._data_count_backtests(),
+            "eng_running": eng_running,
+            "eng_total": eng_total,
+            "rep_count": app._data_count_reports(),
+            "cache_tag": self._cache_tag(),
+            "live_count": self._count_live_runs(),
+        }
+        self._counts_cache = (now, data)
+        return data
+
+    def _count_live_runs(self) -> int:
+        try:
+            from core import db_live_runs as _db
+            return len(_db.list_live_runs(limit=500))
+        except Exception:
+            return 0
+
+    def _cache_tag(self) -> str:
+        try:
+            from core import cache as cache_mod
+
+            info = cache_mod.info()
+            if info["n_files"]:
+                return f"{info['n_files']} files | {info['total_bytes']/1024/1024:.1f} MB"
+            return "vazio"
+        except Exception:
+            return "indisponivel"

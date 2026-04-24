@@ -34,12 +34,11 @@ Ficheiros de output:
     reports/session_{date}.json
 """
 
-import os, sys, json, time, asyncio, logging, signal, math, random, requests
-import numpy as np
+import os, sys, json, time, asyncio, logging, signal, random, requests
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timezone
-from collections import defaultdict, deque
+from collections import defaultdict
 from typing import Optional
 
 # ── PATH ──────────────────────────────────────────────────────
@@ -55,13 +54,13 @@ from core import (
     prepare_htf, merge_all_htf_to_ltf, fetch_all, validate,
     score_omega, score_chop,
 )
-from core.audit_trail import AuditTrail, OrderEvent
-from core.risk_gates import (
+from core.risk.audit_trail import AuditTrail, OrderEvent
+from core.risk.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates, load_gate_config,
     gate_single_position,
 )
-from core.fixture_capture import write_capture
-from core.fs import atomic_write
+from core.ops.fixture_capture import write_capture
+from core.ops.fs import atomic_write
 from bot.telegram import TelegramNotifier
 
 # Fase 4 — engine version stamped on every audit row. Bump when the
@@ -135,7 +134,7 @@ _REST_BASE = {
     "paper":   None,
     "testnet": "https://testnet.binancefuture.com",
     "demo":    "https://demo-fapi.binance.com",
-    "live":    None,
+    "live":    "https://fapi.binance.com",
 }
 PAPER_SLIPPAGE    = 0.0003         # slippage base no paper mode (saída usa variação aleatória)
 CANDLE_BUFFER_N   = 600
@@ -196,10 +195,10 @@ def _load_keys(mode: str) -> tuple[str, str, str]:
     Preference order, first hit wins:
 
       1. **Encrypted store** — if ``config/keys.json.enc`` exists, use
-         core.key_store.KeyStore(encrypted=True) and unlock with the
-         master password from the env var ``AURUM_KEY_PASSWORD``. If
-         the env var is absent, this path is skipped (no interactive
-         prompt from a background engine process).
+         core.risk.key_store.KeyStore(encrypted=True) and unlock with
+         the master password from the env var ``AURUM_KEY_PASSWORD``.
+         If the env var is absent, this path is skipped (no
+         interactive prompt from a background engine process).
 
       2. **Plaintext store** — the pre-Fase-4 behavior, reading
          ``config/keys.json`` directly. Still the default — nothing
@@ -208,7 +207,7 @@ def _load_keys(mode: str) -> tuple[str, str, str]:
     At every error path (missing file, decrypt fails, empty block)
     the function falls through to the next source and ultimately
     exits with a clear message. Once the Joao has created the
-    encrypted file via ``tools/encrypt_keys.py`` and set
+    encrypted file via ``tools/maintenance/encrypt_keys.py`` and set
     AURUM_KEY_PASSWORD, the live engine will automatically prefer
     it over the plaintext file.
     """
@@ -221,7 +220,7 @@ def _load_keys(mode: str) -> tuple[str, str, str]:
         pw = os.environ.get("AURUM_KEY_PASSWORD")
         if pw:
             try:
-                from core.key_store import KeyStore, KeyStoreCorruptError
+                from core.risk.key_store import KeyStore, KeyStoreCorruptError
                 ks = KeyStore(
                     encrypted=True,
                     plaintext_path=plaintext_path,
@@ -556,7 +555,11 @@ class OrderManager:
             else:  # live
                 api_key, api_secret, key_source = _load_keys("live")
                 self.client = Client(api_key, api_secret, testnet=False)
-                log.info("Binance client — LIVE (capital real)")
+                # Assert the production endpoint explicitly — do not rely on library defaults.
+                self.client.FUTURES_URL        = "https://fapi.binance.com/fapi/v1"
+                self.client.FUTURES_DATA_URL   = "https://fapi.binance.com/futures/data"
+                self.client.FUTURES_COIN_URL   = "https://dapi.binance.com/dapi/v1"
+                log.info("Binance client — LIVE (fapi.binance.com, capital real)")
 
             # Expose the key source so the audit trail can capture it on engine
             # init. "encrypted" vs "plaintext" distinguishes whether a fallback
@@ -588,23 +591,53 @@ class OrderManager:
             return {"fill_price": fill_price, "order_id": f"PAPER_{int(time.time())}",
                     "slippage": slip, "status": "FILLED"}
         else:
-            try:
-                # precision do símbolo (simplificado — idealmente via exchangeInfo)
-                qty = round(size, 3)
-                order = self.client.futures_create_order(
-                    symbol=symbol, side=side, type="MARKET", quantity=qty,
-                    reduceOnly=False
-                )
-                fill_price = float(order.get("avgPrice", signal_price))
-                real_slip  = abs(fill_price - signal_price) / signal_price
-                log.info(f"  LIVE {side} {symbol}  qty={qty}  fill={fill_price:.6f}  "
-                         f"slip={real_slip*100:.4f}%  order_id={order['orderId']}")
-                return {"fill_price": fill_price, "order_id": str(order["orderId"]),
-                        "slippage": real_slip, "status": order.get("status","?")}
-            except Exception as e:
-                log.error(f"  Order failed {symbol}: {e}")
-                return {"fill_price": signal_price, "order_id": "FAILED",
-                        "slippage": 0, "status": "FAILED"}
+            # precision do símbolo (simplificado — idealmente via exchangeInfo)
+            qty = round(size, 3)
+            # Run the sync python-binance call through an executor so a slow
+            # exchange cannot stall the event loop. ``asyncio.wait_for`` gives
+            # us an end-to-end timeout regardless of the library's internal
+            # connect/read limits; two retries with exponential backoff cover
+            # transient 5xx / connection resets without letting a real outage
+            # turn into a silently hanging order.
+            ORDER_TIMEOUT_S   = 10.0
+            ORDER_MAX_RETRIES = 2
+            last_err: Exception | None = None
+            loop = asyncio.get_event_loop()
+            for attempt in range(ORDER_MAX_RETRIES + 1):
+                try:
+                    order = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: self.client.futures_create_order(
+                                symbol=symbol, side=side, type="MARKET",
+                                quantity=qty, reduceOnly=False,
+                            ),
+                        ),
+                        timeout=ORDER_TIMEOUT_S,
+                    )
+                    fill_price = float(order.get("avgPrice", signal_price))
+                    real_slip  = abs(fill_price - signal_price) / signal_price
+                    log.info(f"  LIVE {side} {symbol}  qty={qty}  fill={fill_price:.6f}  "
+                             f"slip={real_slip*100:.4f}%  order_id={order['orderId']}"
+                             + (f"  (attempt={attempt+1})" if attempt else ""))
+                    return {"fill_price": fill_price, "order_id": str(order["orderId"]),
+                            "slippage": real_slip, "status": order.get("status","?")}
+                except asyncio.TimeoutError as e:
+                    last_err = e
+                    log.warning(
+                        f"  Order {symbol} timed out after {ORDER_TIMEOUT_S}s "
+                        f"(attempt {attempt+1}/{ORDER_MAX_RETRIES + 1})"
+                    )
+                except Exception as e:
+                    last_err = e
+                    log.error(
+                        f"  Order {symbol} failed (attempt {attempt+1}/{ORDER_MAX_RETRIES + 1}): {e}"
+                    )
+                if attempt < ORDER_MAX_RETRIES:
+                    await asyncio.sleep(0.5 * (2 ** attempt))
+            log.error(f"  Order {symbol} gave up after {ORDER_MAX_RETRIES + 1} attempts: {last_err}")
+            return {"fill_price": signal_price, "order_id": "FAILED",
+                    "slippage": 0, "status": "FAILED"}
 
     async def close_position(self, pos: "Position", exit_price: float) -> dict:
         """Fecha posição. Retorna fill_price real."""
@@ -1133,6 +1166,11 @@ class LiveEngine:
                     continue
 
                 # Build expected state from local
+                # Snapshot the positions list: _open_position / _close_position
+                # mutate self.positions from other asyncio tasks, so iterating
+                # the live list here can observe a mid-mutation shape. A local
+                # copy closes the race window for this dict build.
+                positions_snapshot = list(self.positions)
                 expected = {
                     "equity": self.account,
                     "positions": {
@@ -1140,7 +1178,7 @@ class LiveEngine:
                             "size":      p.size,
                             "direction": p.direction,
                             "entry":     p.entry,
-                        } for p in self.positions
+                        } for p in positions_snapshot
                     },
                 }
 
@@ -2193,7 +2231,15 @@ class LiveEngine:
             except Exception as e:
                 # [Item 3] Exponential backoff: 5s, 10s, 20s, … up to 300s
                 delay = min(5 * (2 ** _reconnect_attempts), 300)
-                log.warning(f"WS {symbol} erro: {e} — reconectando em {delay}s (tentativa {_reconnect_attempts + 1})")
+                # exc_info captures the full traceback so a silent crash in
+                # on_candle_close (indicator build, signal eval, order
+                # placement) leaves a stack behind instead of just the
+                # repr of the exception.
+                log.warning(
+                    f"WS {symbol} erro: {e} — reconectando em {delay}s "
+                    f"(tentativa {_reconnect_attempts + 1})",
+                    exc_info=True,
+                )
                 await asyncio.sleep(delay)
                 _reconnect_attempts += 1
 

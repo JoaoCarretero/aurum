@@ -14,7 +14,6 @@ Pipeline:
 """
 import argparse
 import sys
-import math
 import logging
 import numpy as np
 import pandas as pd
@@ -43,9 +42,9 @@ from core import (
 )
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
-from analysis.walkforward import walk_forward, walk_forward_by_regime
-from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
-from core.fs import atomic_write
+from analysis.walkforward import walk_forward
+from core.ops.run_manager import append_to_index, save_run_artifacts, snapshot_config
+from core.ops.fs import atomic_write
 
 log = logging.getLogger("JUMP")  # JUMP (formerly MERCURIO) — Order flow engine
 log.setLevel(logging.INFO)
@@ -73,10 +72,18 @@ log.addHandler(_fh)
 
 def scan_mercurio(df: pd.DataFrame, symbol: str,
                   macro_bias_series, corr: dict,
-                  htf_stack_dfs: dict | None = None) -> tuple[list, dict]:
+                  htf_stack_dfs: dict | None = None,
+                  live_mode: bool = False,
+                  live_tail_bars: int = 4) -> tuple[list, dict]:
     """
     Scan a symbol for order-flow based entries.
     Same interface as scan_symbol / scan_hermes.
+
+    ``live_mode`` extends the loop to the tail bars that backtest skips
+    (those that lack MAX_HOLD forward bars for outcome labeling). In live
+    mode each hit emits ``result="LIVE"`` without calling ``label_trade``
+    — runtime handles labeling. Decision gates stay bit-identical so live
+    matches backtest calibration.
     """
     # ── prepare indicators ──
     df = indicators(df)
@@ -130,7 +137,15 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
 
     log.info(f"\n{'─'*60}\n  {symbol}\n{'─'*60}")
 
-    for idx in range(min_idx, len(df) - MAX_HOLD - 2):
+    # See scan_symbol docstring: backtest range skips the tail, live scans
+    # only the recent live_tail_bars slice (default 4 = 60min at 15m tf).
+    if live_mode:
+        _loop_start = max(min_idx, len(df) - live_tail_bars - 1)
+        _loop_end = len(df) - 1
+    else:
+        _loop_start = min_idx
+        _loop_end = len(df) - MAX_HOLD - 2
+    for idx in range(_loop_start, _loop_end):
         open_pos = [(ei, s, sz, en) for ei, s, sz, en in open_pos if ei > idx]
         active_syms = [s for _, s, _, _ in open_pos]
 
@@ -247,9 +262,16 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
         entry, stop, target, rr = levels
 
         # ── LABEL TRADE ──
-        result, duration, exit_p, exit_reason = label_trade(df, idx + 1, direction, entry, stop, target)
-        if result == "OPEN":
-            continue
+        if live_mode:
+            # Runtime layer tracks outcome; emit placeholder shape.
+            result = "LIVE"
+            duration = 0
+            exit_p = entry
+            exit_reason = "live"
+        else:
+            result, duration, exit_p, exit_reason = label_trade(df, idx + 1, direction, entry, stop, target)
+            if result == "OPEN":
+                continue
 
         # ── POSITION SIZE ──
         size = position_size(account, entry, stop, max(score, 0.53),
@@ -267,37 +289,40 @@ def scan_mercurio(df: pd.DataFrame, symbol: str,
                 continue
 
         # ── PnL ──
-        ep = float(exit_p)
-        slip_exit = SLIPPAGE + SPREAD
-        if direction == "BULLISH":
-            entry_cost = entry * (1 + COMMISSION)
-            ep_net = ep * (1 - COMMISSION - slip_exit)
-            funding = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
-            pnl = size * (ep_net - entry_cost) + funding
+        if live_mode:
+            pnl = 0.0
         else:
-            entry_cost = entry * (1 - COMMISSION)
-            ep_net = ep * (1 + COMMISSION + slip_exit)
-            funding = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
-            pnl = size * (entry_cost - ep_net) + funding
-        pnl = round(pnl * LEVERAGE, 2)
-        # Apply real PnL. The previous `max(account + pnl, account * 0.5)`
-        # silently clamped per-trade losses at 50% of pre-trade account,
-        # inflating sharpe / maxDD / final equity in backtest reports.
-        # Liquidation simulation, if needed, should be modelled at
-        # position-open time against the real liquidation price.
-        account = account + pnl
+            ep = float(exit_p)
+            slip_exit = SLIPPAGE + SPREAD
+            if direction == "BULLISH":
+                entry_cost = entry * (1 + COMMISSION)
+                ep_net = ep * (1 - COMMISSION - slip_exit)
+                funding = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
+                pnl = size * (ep_net - entry_cost) + funding
+            else:
+                entry_cost = entry * (1 - COMMISSION)
+                ep_net = ep * (1 + COMMISSION + slip_exit)
+                funding = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
+                pnl = size * (entry_cost - ep_net) + funding
+            pnl = round(pnl * LEVERAGE, 2)
+            # Apply real PnL. The previous `max(account + pnl, account * 0.5)`
+            # silently clamped per-trade losses at 50% of pre-trade account,
+            # inflating sharpe / maxDD / final equity in backtest reports.
+            # Liquidation simulation, if needed, should be modelled at
+            # position-open time against the real liquidation price.
+            account = account + pnl
 
-        if result == "LOSS":
-            consecutive_losses += 1
-            for n_losses in sorted(STREAK_COOLDOWN.keys(), reverse=True):
-                if consecutive_losses >= n_losses:
-                    cooldown_until = idx + STREAK_COOLDOWN[n_losses]
-                    break
-            sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
-        else:
-            consecutive_losses = 0
+            if result == "LOSS":
+                consecutive_losses += 1
+                for n_losses in sorted(STREAK_COOLDOWN.keys(), reverse=True):
+                    if consecutive_losses >= n_losses:
+                        cooldown_until = idx + STREAK_COOLDOWN[n_losses]
+                        break
+                sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
+            else:
+                consecutive_losses = 0
 
-        open_pos.append((idx + 1 + duration, symbol, size, entry))
+            open_pos.append((idx + 1 + duration, symbol, size, entry))
 
         ts = df["time"].iloc[idx].strftime("%d/%m %Hh")
         t = {
@@ -468,7 +493,7 @@ def export_json(all_trades, eq, mc, ratios, summary, config, audit_results=None)
     append_to_index(RUN_DIR, summary, config, audit_results)
 
     try:
-        from core.db import register_run
+        from core.ops.db import register_run
         register_run(
             run_id=RUN_ID, engine="jump", json_path=str(out),
             roi=ratios["ret"], sharpe=ratios.get("sharpe"),
@@ -493,7 +518,13 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=str, default=None, help="TF override (e.g. 1h)")
     parser.add_argument("--leverage", type=float, default=None)
     parser.add_argument("--no-menu", action="store_true")
+    parser.add_argument("--end", type=str, default=None,
+                        help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
     args, _ = parser.parse_known_args()
+    END_TIME_MS = None
+    if args.end:
+        import pandas as _pd_tmp
+        END_TIME_MS = int(_pd_tmp.Timestamp(args.end).timestamp() * 1000)
     if args.interval:
         INTERVAL = args.interval
 
@@ -543,7 +574,7 @@ if __name__ == "__main__":
     _fetch_syms = list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms:
         _fetch_syms.insert(0, MACRO_SYMBOL)
-    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES)
+    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES, end_time_ms=END_TIME_MS)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:

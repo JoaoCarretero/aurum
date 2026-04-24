@@ -14,7 +14,7 @@ from config.params import *
 from core.indicators import indicators, swing_structure
 from core.signals import label_trade
 from core.portfolio import portfolio_allows, check_aggregate_notional, position_size
-from core.htf import prepare_htf, merge_all_htf_to_ltf, HTF_INTERVAL
+from core.htf import merge_all_htf_to_ltf
 from core.chronos import enrich_with_regime
 import pandas as _pd
 
@@ -153,7 +153,8 @@ class _BayesWR:
 
 
 def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
-                capital_weight=0.35, log=None):
+                capital_weight=0.35, log=None, live_mode: bool = False,
+                live_tail_bars: int = 4):
     """
     Scan a single symbol for harmonic patterns (Gartley, Bat, Butterfly, Crab).
 
@@ -163,6 +164,12 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
         Fraction of ACCOUNT_SIZE allocated to Hermes.
     log : logging.Logger or None
         Logger to use for output.
+    live_mode : bool
+        When ``True``, extends the pattern scan into the tail bars that
+        backtest skips (needs H_FORWARD forward bars for outcome labeling)
+        and emits ``result="LIVE"`` trades without ``label_trade``. Runtime
+        layer handles labeling. Decision gates stay bit-identical so live
+        matches backtest calibration.
     """
     import logging as _logging
     if log is None:
@@ -210,10 +217,14 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
     open_pos: list[tuple[int, str, float, float]] = []
     peak_equity=account; consecutive_losses=0
     cooldown_until=-1; sym_cooldown_until={}
+    # Pattern-detection upper bound: backtest needs H_FORWARD forward bars
+    # to label WIN/LOSS; live scans only the recent live_tail_bars slice.
+    _d_max = len(df) - 1 if live_mode else len(df) - H_FORWARD - 2
+    _d_min_live = (len(df) - live_tail_bars - 1) if live_mode else min_idx
     patterns_at=defaultdict(list)
     for k in range(len(alt)-4):
         X,A,B,C,D=alt[k],alt[k+1],alt[k+2],alt[k+3],alt[k+4]
-        if D["i"]<min_idx or D["i"]>=len(df)-H_FORWARD-2: continue
+        if D["i"]<_d_min_live or D["i"]>=_d_max: continue
         pat,ratios=_h_check(X,A,B,C,D)
         if not pat: continue
         direction="BEARISH" if D["type"]=="H" else "BULLISH"
@@ -223,7 +234,15 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
         if rr<H_MIN_RR: continue
         patterns_at[D["i"]].append({"pattern":pat,"direction":direction,
             "X":X,"A":A,"D":D,"target":target,"stop":stop,"rr":round(rr,2),"ratios":ratios})
-    for idx in range(min_idx, len(df)-H_FORWARD-2):
+    # Loop range: backtest covers labelable region, live scans only the
+    # recent live_tail_bars slice (default 4 = ~60min at 15m tf).
+    if live_mode:
+        _loop_start = max(min_idx, len(df) - live_tail_bars - 1)
+        _loop_end = len(df) - 1
+    else:
+        _loop_start = min_idx
+        _loop_end = len(df) - H_FORWARD - 2
+    for idx in range(_loop_start, _loop_end):
         if idx not in patterns_at: continue
         open_pos=[(ei,s,sz,en) for ei,s,sz,en in open_pos if ei>idx]
         active_syms=[s for _,s,_,_ in open_pos]
@@ -283,8 +302,14 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
             entry=round(entry,8)
             if direction=="BULLISH" and (stop>=entry or target<=entry): vetos["hermes_niveis"]+=1; continue
             if direction=="BEARISH" and (stop<=entry or target>=entry): vetos["hermes_niveis"]+=1; continue
-            result,duration,exit_p,exit_reason=label_trade(df,idx+1,direction,entry,stop,target)
-            if result=="OPEN": continue
+            if live_mode:
+                result = "LIVE"
+                duration = 0
+                exit_p = entry
+                exit_reason = "live"
+            else:
+                result,duration,exit_p,exit_reason=label_trade(df,idx+1,direction,entry,stop,target)
+                if result=="OPEN": continue
             size=position_size(account,entry,stop,max(score,SCORE_THRESHOLD),macro_b,direction,vol_r,dd_scale,False,peak_equity=peak_equity)
             size=round(size*corr_size_mult*trans_mult*fractal_score,4)
             # [L6] Aggregate notional cap across concurrently open positions.
@@ -294,30 +319,34 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                 if not ok_agg:
                     vetos[motivo_agg] += 1
                     continue
-            ep=float(exit_p)
-            slip_exit=SLIPPAGE+SPREAD
-            if direction=="BULLISH":
-                entry_cost=entry*(1+COMMISSION)
-                ep_net=ep*(1-COMMISSION-slip_exit)
-                pnl=size*(ep_net-entry_cost)-(size*entry*FUNDING_PER_8H*duration/_funding_periods_per_8h)
+            if live_mode:
+                pnl = 0.0
+                ep = float(exit_p)
             else:
-                entry_cost=entry*(1-COMMISSION)
-                ep_net=ep*(1+COMMISSION+slip_exit)
-                pnl=size*(entry_cost-ep_net)+(size*entry*FUNDING_PER_8H*duration/_funding_periods_per_8h)
-            pnl=round(pnl*LEVERAGE, 2)
-            # Apply real PnL. The previous `max(account+pnl, account*0.5)`
-            # silently clamped per-trade losses at 50% of pre-trade account,
-            # inflating sharpe / maxDD / final equity. Mirror of the fix
-            # already applied in mercurio/newton/thoth/backtest.
-            account=account+pnl
-            bayes.update(pat,result,rr)
-            if result=="LOSS":
-                consecutive_losses+=1
-                for n_l in sorted(STREAK_COOLDOWN.keys(),reverse=True):
-                    if consecutive_losses>=n_l: cooldown_until=idx+STREAK_COOLDOWN[n_l]; break
-                sym_cooldown_until[symbol]=idx+SYM_LOSS_COOLDOWN
-            else: consecutive_losses=0
-            open_pos.append((idx+1+duration,symbol,size,entry))
+                ep=float(exit_p)
+                slip_exit=SLIPPAGE+SPREAD
+                if direction=="BULLISH":
+                    entry_cost=entry*(1+COMMISSION)
+                    ep_net=ep*(1-COMMISSION-slip_exit)
+                    pnl=size*(ep_net-entry_cost)-(size*entry*FUNDING_PER_8H*duration/_funding_periods_per_8h)
+                else:
+                    entry_cost=entry*(1-COMMISSION)
+                    ep_net=ep*(1+COMMISSION+slip_exit)
+                    pnl=size*(entry_cost-ep_net)+(size*entry*FUNDING_PER_8H*duration/_funding_periods_per_8h)
+                pnl=round(pnl*LEVERAGE, 2)
+                # Apply real PnL. The previous `max(account+pnl, account*0.5)`
+                # silently clamped per-trade losses at 50% of pre-trade account,
+                # inflating sharpe / maxDD / final equity. Mirror of the fix
+                # already applied in mercurio/newton/thoth/backtest.
+                account=account+pnl
+                bayes.update(pat,result,rr)
+                if result=="LOSS":
+                    consecutive_losses+=1
+                    for n_l in sorted(STREAK_COOLDOWN.keys(),reverse=True):
+                        if consecutive_losses>=n_l: cooldown_until=idx+STREAK_COOLDOWN[n_l]; break
+                    sym_cooldown_until[symbol]=idx+SYM_LOSS_COOLDOWN
+                else: consecutive_losses=0
+                open_pos.append((idx+1+duration,symbol,size,entry))
             ts=df["time"].iloc[idx].strftime("%d/%m %Hh")
             trades.append({
                 "symbol":symbol,"time":ts,"timestamp":df["time"].iloc[idx],

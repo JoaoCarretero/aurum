@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, UTC
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+import sys
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from config.params import BASKETS, ENGINE_BASKETS
+from core.sentiment import (
+    fetch_funding_rate,
+    fetch_long_short_ratio,
+    fetch_open_interest,
+)
+
+
+def _resolve_symbols(engine: str | None, basket: str | None, symbols_raw: str | None) -> tuple[str, list[str]]:
+    if symbols_raw:
+        symbols = []
+        for raw in symbols_raw.split(","):
+            sym = raw.strip().upper()
+            if not sym:
+                continue
+            if not sym.endswith("USDT"):
+                sym += "USDT"
+            symbols.append(sym)
+        return "custom", symbols
+
+    if basket:
+        return basket, list(BASKETS.get(basket, []))
+
+    if engine:
+        basket_name = ENGINE_BASKETS.get(engine.upper())
+        if basket_name:
+            return basket_name, list(BASKETS.get(basket_name, []))
+
+    return "default", list(BASKETS["default"])
+
+
+def _coverage(df):
+    if df is None or df.empty:
+        return None
+    return {
+        "rows": int(len(df)),
+        "start": df["time"].min().isoformat(),
+        "end": df["time"].max().isoformat(),
+    }
+
+
+def _build_report(args: argparse.Namespace) -> dict[str, object]:
+    basket_name, symbols = _resolve_symbols(args.engine, args.basket, args.symbols)
+    if not symbols:
+        raise SystemExit(f"no symbols resolved for basket={basket_name!r}")
+
+    report: dict[str, object] = {
+        "engine": args.engine.upper() if args.engine else None,
+        "basket": basket_name,
+        "period": args.period,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "symbols": {},
+    }
+
+    def _prewarm_symbol(sym: str) -> tuple[str, dict]:
+        funding_df = fetch_funding_rate(sym, limit=args.funding_limit)
+        oi_df = fetch_open_interest(sym, period=args.period, limit=args.oi_limit)
+        ls_df = fetch_long_short_ratio(sym, period=args.period, limit=args.ls_limit)
+        return sym, {
+            "funding": _coverage(funding_df),
+            "open_interest": _coverage(oi_df),
+            "long_short_ratio": _coverage(ls_df),
+        }
+
+    # Network RTTs dominate — parallelize across symbols. core.sentiment's
+    # 150ms gap lock ensures we stay within Binance rate limits even with
+    # several worker threads overlapping.
+    with ThreadPoolExecutor(max_workers=min(4, len(symbols))) as pool:
+        for sym, payload in pool.map(_prewarm_symbol, symbols):
+            report["symbols"][sym] = payload
+    return report
+
+
+def _emit_report(report: dict[str, object], json_mode: bool) -> None:
+    basket_name = report["basket"]
+    if json_mode:
+        print(json.dumps(report, indent=2))
+    else:
+        print(
+            f"generated_at={report['generated_at']} "
+            f"engine={report['engine']} basket={basket_name} period={report['period']}"
+        )
+        for sym, payload in report["symbols"].items():
+            funding = payload["funding"]
+            oi = payload["open_interest"]
+            ls = payload["long_short_ratio"]
+            print(
+                f"{sym:12s} "
+                f"funding={funding['rows'] if funding else 0:>4} "
+                f"oi={oi['rows'] if oi else 0:>4} "
+                f"ls={ls['rows'] if ls else 0:>4}"
+            )
+
+
+def _write_heartbeat(path_raw: str | None, report: dict[str, object]) -> None:
+    if not path_raw:
+        return
+    path = Path(path_raw)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description="Prewarm local sentiment caches for BRIDGEWATER-style OI/LS/funding windows."
+    )
+    ap.add_argument("--engine", default="BRIDGEWATER", help="Engine preset for basket default.")
+    ap.add_argument("--basket", default=None, help="Basket name from config.params.BASKETS.")
+    ap.add_argument("--symbols", default=None, help="Comma-separated symbols override.")
+    ap.add_argument("--period", default="15m", help="OI/LS period.")
+    ap.add_argument("--funding-limit", type=int, default=1000)
+    ap.add_argument("--oi-limit", type=int, default=500)
+    ap.add_argument("--ls-limit", type=int, default=500)
+    ap.add_argument("--json", action="store_true", help="Emit machine-readable summary.")
+    ap.add_argument("--loop-minutes", type=float, default=0.0,
+                    help="Run continuously, sleeping N minutes between refreshes.")
+    ap.add_argument("--iterations", type=int, default=0,
+                    help="Optional cap for loop cycles. 0 means unlimited.")
+    ap.add_argument("--heartbeat-file", default=None,
+                    help="Optional JSON path updated after each completed refresh.")
+    return ap.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    cycles = 0
+    while True:
+        report = _build_report(args)
+        _emit_report(report, args.json)
+        _write_heartbeat(args.heartbeat_file, report)
+        cycles += 1
+
+        if args.loop_minutes <= 0:
+            break
+        if args.iterations > 0 and cycles >= args.iterations:
+            break
+        time.sleep(args.loop_minutes * 60.0)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

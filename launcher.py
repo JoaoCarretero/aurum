@@ -12,16 +12,98 @@ os.chdir(ROOT)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _configure_windows_tk() -> None:
+    """Prefer the Tcl/Tk bundled with the active Python installation."""
+    if sys.platform != "win32":
+        return
+    py_root = Path(sys.executable).resolve().parent
+    tcl_root = py_root / "tcl"
+    tcl_lib = tcl_root / "tcl8.6"
+    tk_lib = tcl_root / "tk8.6"
+    if (tcl_lib / "init.tcl").exists():
+        os.environ["TCL_LIBRARY"] = str(tcl_lib)
+    if (tk_lib / "tk.tcl").exists():
+        os.environ["TK_LIBRARY"] = str(tk_lib)
+
+
+def _boot_workers_enabled() -> bool:
+    return os.getenv("AURUM_DISABLE_BOOT_WORKERS", "").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _test_mode_enabled() -> bool:
+    return os.getenv("AURUM_TEST_MODE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _lazy_connections():
+    """Import and return (ConnectionManager, MARKETS) on-demand.
+
+    core.data.connections transitively pulls pandas (~350ms) and
+    requests (~200ms). Deferring to first actual use shaves ~640ms off
+    launcher boot import time. After first call, sys.modules caches the
+    import — subsequent calls are ~10us.
+    """
+    from core.data.connections import ConnectionManager, MARKETS
+    return ConnectionManager, MARKETS
+
+
+_conn_singleton = None  # lazy ConnectionManager instance
+
+
+def _get_conn():
+    """Return the module-level ConnectionManager singleton, creating it on
+    first call. Defers the pandas/requests import until the user first
+    interacts with a connections/markets screen."""
+    global _conn_singleton
+    if _conn_singleton is None:
+        ConnectionManager, _MARKETS = _lazy_connections()
+        _conn_singleton = ConnectionManager()
+    return _conn_singleton
+
+
+def _ensure_main_groups():
+    """Populate the module-level MAIN_GROUPS list on first call.
+
+    Called from App.__init__ and also via module __getattr__ when
+    mod.MAIN_GROUPS is accessed before App() instantiation (e.g. in tests).
+    Defers the core.data.connections import (pandas + requests, ~640ms)
+    to first actual access rather than module import time.
+
+    Safe to call multiple times — idempotent via globals() check.
+    """
+    _g = globals()
+    if _g.get("MAIN_GROUPS") is None:
+        _CM, _MARKETS = _lazy_connections()
+        _g["MAIN_GROUPS"] = _menu_main_groups(
+            _MARKETS, TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL
+        )
+
+
+_configure_windows_tk()
+
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox
 
-from code_viewer import CodeViewer
-from config.engines import ENGINE_NAMES, SCRIPT_TO_KEY
-from core.health import runtime_health
-from core.persistence import atomic_write_json
+from config.engines import SCRIPT_TO_KEY
+from core.ops.python_runtime import preferred_python_executable
+from core.ops.health import runtime_health
+from core.ops.persistence import atomic_write_json
 from launcher_support.bootstrap import (
     ENGINE_PREFIX_ALIASES as _BOOTSTRAP_ENGINE_PREFIX_ALIASES,
     NO_WINDOW as _BOOTSTRAP_NO_WINDOW,
+    build_vps_ssh_command as _BOOTSTRAP_BUILD_VPS_SSH_COMMAND,
+    build_vps_log_tail_command as _BOOTSTRAP_BUILD_VPS_LOG_TAIL_COMMAND,
+    build_vps_stop_command as _BOOTSTRAP_BUILD_VPS_STOP_COMMAND,
+    build_millennium_bootstrap_launch_command as _BOOTSTRAP_BUILD_MILLENNIUM_BOOTSTRAP_LAUNCH_COMMAND,
+    current_vps_host as _BOOTSTRAP_CURRENT_VPS_HOST,
+    current_vps_project as _BOOTSTRAP_CURRENT_VPS_PROJECT,
+    VPS_LIVE_SCREEN as _BOOTSTRAP_VPS_LIVE_SCREEN,
+    VPS_MILLENNIUM_SCREEN as _BOOTSTRAP_VPS_MILLENNIUM_SCREEN,
     VPS_HOST as _BOOTSTRAP_VPS_HOST,
     VPS_PROJECT as _BOOTSTRAP_VPS_PROJECT,
     canonical_engine_key as _bootstrap_canonical_engine_key,
@@ -35,6 +117,14 @@ from launcher_support.execution import (
     script_to_proc_key as _script_to_proc_key,
     strategies_progress_target as _strategies_progress_target_helper,
 )
+from launcher_support import cockpit_tab as cockpit_tab_mod
+from launcher_support import command_center as command_center_mod
+from launcher_support import dashboard_controls as dashboard_controls_mod
+from launcher_support.screens._metrics import emit_timing_metric, timed_legacy_switch
+from launcher_support.screens._persistence import (
+    configure_screen_logging as _configure_screen_logging,
+    dump_screen_metrics as _dump_screen_metrics,
+)
 from launcher_support.menu_data import (
     BLOCK_DESCRIPTIONS as _MENU_BLOCK_DESCRIPTIONS,
     COMMAND_ROADMAPS as _MENU_COMMAND_ROADMAPS,
@@ -42,122 +132,23 @@ from launcher_support.menu_data import (
     main_groups as _menu_main_groups,
 )
 
-# ═══════════════════════════════════════════════════════════
+# -----------------------------------------------------------
 # PALETTE — imported from core/ui_palette (SSOT)
-# ═══════════════════════════════════════════════════════════
-from core.ui_palette import (
-    BG, BG2, BG3, PANEL, BORDER, BORDER_H,
-    AMBER, AMBER_D, AMBER_B,
+# -----------------------------------------------------------
+from core.ui.ui_palette import (
+    BG, BG2, BG3, PANEL, BORDER, AMBER, AMBER_D, AMBER_B,
     WHITE, DIM, DIM2, GREEN, RED,
     FONT,
 )
 
-LEGACY_ENGINE_ALIASES = {
-    "backtest": "citadel",
-    "citadel": "citadel",
-    "thoth": "bridgewater",
-    "bridgewater": "bridgewater",
-    "mercurio": "jump",
-    "jump": "jump",
-    "newton": "deshaw",
-    "deshaw": "deshaw",
-    "de_shaw": "deshaw",
-    "prometeu": "twosigma",
-    "twosigma": "twosigma",
-    "two_sigma": "twosigma",
-    "darwin": "aqr",
-    "aqr": "aqr",
-    "multistrategy": "millennium",
-    "millennium": "millennium",
-    "harmonics": "renaissance",
-    "harmonics_backtest": "renaissance",
-    "renaissance": "renaissance",
-    "arbitrage": "janestreet",
-    "jane_street": "janestreet",
-    "janestreet": "janestreet",
-}
-
-ENGINE_PREFIX_ALIASES = (
-    "citadel_", "thoth_", "bridgewater_", "newton_", "deshaw_",
-    "mercurio_", "jump_", "multistrategy_", "millennium_",
-    "prometeu_", "twosigma_", "renaissance_", "harmonics_",
-)
-
-def canonical_engine_key(name) -> str:
-    raw = str(name or "").strip().lower().replace(" ", "_")
-    return LEGACY_ENGINE_ALIASES.get(raw, raw)
-
-def engine_display_name(name) -> str:
-    key = canonical_engine_key(name)
-    return ENGINE_NAMES.get(key, key.replace("_", " ").upper())
-
-# ─── 3D MENU — tile accents (SSOT: core/ui_palette) ────────
-from core.ui_palette import (
+# --- 3D MENU — tile accents (SSOT: core/ui_palette) --------
+from core.ui.ui_palette import (
     TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL, TILE_DIM_FACTOR,
 )
 
-# ═══════════════════════════════════════════════════════════
-# VPS — remote control over SSH (passwordless key auth)
-# ═══════════════════════════════════════════════════════════
-VPS_HOST    = "root@37.60.254.151"
-VPS_PROJECT = "~/aurum.finance"
-
-# Windows: suppress the console window that pops up on every subprocess call,
-# otherwise polling every 5s makes a CMD window flash open/closed constantly.
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-
-def _vps_cmd(cmd: str, timeout: int = 10) -> str | None:
-    """Run a command on the VPS over SSH, return stdout or None on failure.
-    Intended to be called from a worker thread — subprocess.run blocks."""
-    try:
-        r = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no",
-             "-o", "ConnectTimeout=5",
-             "-o", "BatchMode=yes",
-             VPS_HOST, cmd],
-            capture_output=True, text=True, timeout=timeout,
-            creationflags=_NO_WINDOW,
-        )
-        if r.returncode == 0:
-            return r.stdout
-        return None
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
-
-# ═══════════════════════════════════════════════════════════
-# TICKER (live prices)
-# ═══════════════════════════════════════════════════════════
-_TD = {}
-_TL = threading.Lock()
-def _fetch():
-    client = TransportClient()
-    while True:
-        try:
-            r = client.request(RequestSpec(
-                method="GET",
-                url="https://fapi.binance.com/fapi/v1/ticker/24hr",
-                timeout=8,
-            ))
-            if r.status_code == 200:
-                d = {t["symbol"]: t for t in r.json()}
-                with _TL:
-                    for s in ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"]:
-                        if s in d: _TD[s] = {"p": float(d[s]["lastPrice"]), "c": float(d[s]["priceChangePercent"])}
-        except Exception:
-            runtime_health.record("launcher.ticker_fetch_failure")
-        time.sleep(12)
-
-def _ticker_str():
-    with _TL:
-        if not _TD: return "connecting..."
-        return "   ".join(f"{s.replace('USDT','')} {_TD[s]['p']:,.2f} {'+'if _TD[s]['c']>=0 else ''}{_TD[s]['c']:.1f}%" for s in ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"] if s in _TD)
-
-# ═══════════════════════════════════════════════════════════
+# -----------------------------------------------------------
 # MENUS
-# ═══════════════════════════════════════════════════════════
-from core.connections import ConnectionManager, MARKETS
-from core.alchemy_state import AlchemyState
-from core import alchemy_ui
+# -----------------------------------------------------------
 ENGINE_PREFIX_ALIASES = _BOOTSTRAP_ENGINE_PREFIX_ALIASES
 VPS_HOST = _BOOTSTRAP_VPS_HOST
 VPS_PROJECT = _BOOTSTRAP_VPS_PROJECT
@@ -167,7 +158,14 @@ engine_display_name = _bootstrap_engine_display_name
 _vps_cmd = _bootstrap_run_vps_cmd
 _fetch = _bootstrap_fetch_ticker_loop
 _ticker_str = _bootstrap_ticker_str
-_conn = ConnectionManager()
+_build_vps_ssh_command = _BOOTSTRAP_BUILD_VPS_SSH_COMMAND
+_build_vps_log_tail_command = _BOOTSTRAP_BUILD_VPS_LOG_TAIL_COMMAND
+_build_vps_stop_command = _BOOTSTRAP_BUILD_VPS_STOP_COMMAND
+_build_millennium_bootstrap_launch_command = _BOOTSTRAP_BUILD_MILLENNIUM_BOOTSTRAP_LAUNCH_COMMAND
+_vps_host = _BOOTSTRAP_CURRENT_VPS_HOST
+_vps_project = _BOOTSTRAP_CURRENT_VPS_PROJECT
+_vps_live_screen = _BOOTSTRAP_VPS_LIVE_SCREEN
+_vps_millennium_screen = _BOOTSTRAP_VPS_MILLENNIUM_SCREEN
 
 MAIN_MENU = [
     ("MARKETS",        "markets",     "Seleccionar mercado activo"),
@@ -182,41 +180,28 @@ MAIN_MENU = [
     ("SETTINGS",       "settings",    "Config, keys, Telegram"),
 ]
 
-# ─── MAIN_GROUPS: 9 destinos agrupados em 4 tiles (Bloomberg 3D) ────
+# --- MAIN_GROUPS: 9 destinos agrupados em 4 tiles (Bloomberg 3D) ----
 # Format: (label, key_num, color, [(child_label, method_name), ...])
 # MAIN_MENU (above) kept for legacy Fibonacci fallback + descriptions.
 def _markets_children():
     """Build MARKETS tile children dynamically from the MARKETS registry —
     each market gets its own row (CRYPTO FUTURES / CRYPTO SPOT / FOREX /
     EQUITIES / COMMODITIES / INDICES / ON-CHAIN). Click activates the
-    market + routes to its dashboard (or shows COMING SOON for stubs)."""
+    market + routes to its dashboard (or shows COMING SOON for stubs).
+    Note: this definition is superseded by the _menu_main_groups() call
+    below — kept here only for documentation purposes."""
+    _CM, _MARKETS = _lazy_connections()
     out = []
-    for mk in MARKETS:
+    for mk in _MARKETS:
         method = f"_market_{mk}"
-        label = MARKETS[mk]["label"]
+        label = _MARKETS[mk]["label"]
         out.append((label, method))
     return out
 
 
-MAIN_GROUPS = [
-    ("MARKETS",  "1", TILE_MARKETS, _markets_children()),
-    ("EXECUTE",  "2", TILE_EXECUTE, [
-        ("BACKTEST",     "_strategies_backtest"),  # research · sem capital real
-        ("ENGINES LIVE", "_strategies_live"),      # futuros ao vivo · safety gates
-        ("ARBITRAGE",    "_arbitrage_hub"),
-        ("RISK",         "_risk_menu"),
-    ]),
-    ("RESEARCH", "3", TILE_RESEARCH, [
-        ("TERMINAL",    "_terminal"),
-        ("DATA",        "_data_center"),
-        ("MACRO BRAIN", "_macro_brain_menu"),
-    ]),
-    ("CONTROL",  "4", TILE_CONTROL, [
-        ("CONNECTIONS", "_connections"),
-        ("COMMAND",     "_command_center"),
-        ("SETTINGS",    "_config"),
-    ]),
-]
+# NOTE: this MAIN_GROUPS definition is kept for documentation only.
+# The real MAIN_GROUPS is populated lazily via module __getattr__ (see end of
+# imports section) or via _ensure_main_groups() called from App.__init__.
 
 BLOCK_DESCRIPTIONS = {
     "_markets": "quotes, universe e mercado ativo",
@@ -278,9 +263,8 @@ COMMAND_ROADMAPS = {
 # Extracted navigation data re-bound here so launcher.py keeps the same
 # public constants while the menu topology moves out incrementally.
 MAIN_MENU = list(_MENU_MAIN_MENU)
-MAIN_GROUPS = _menu_main_groups(
-    MARKETS, TILE_MARKETS, TILE_EXECUTE, TILE_RESEARCH, TILE_CONTROL
-)
+# MAIN_GROUPS: populated lazily on first App() instantiation (see _ensure_main_groups).
+# Deferring here avoids the ~640ms pandas+requests import at module load time.
 BLOCK_DESCRIPTIONS = dict(_MENU_BLOCK_DESCRIPTIONS)
 COMMAND_ROADMAPS = {k: list(v) for k, v in _MENU_COMMAND_ROADMAPS.items()}
 
@@ -289,11 +273,9 @@ SUB_MENUS = {
         ("CITADEL",      "engines/citadel.py",      "Systematic momentum — trend-following + fractal alignment"),
         ("JUMP",         "engines/jump.py",       "Order flow — CVD divergence + volume imbalance"),
         ("BRIDGEWATER",  "engines/bridgewater.py",          "Macro sentiment — funding + OI + LS ratio contrarian"),
-        ("DE SHAW",      "engines/deshaw.py",         "Statistical arb — pairs cointegration + mean reversion"),
         ("MILLENNIUM",   "engines/millennium.py",  "Multi-strategy pod — ensemble orchestrator"),
         ("TWO SIGMA",    "engines/twosigma.py",       "ML meta-ensemble — LightGBM walk-forward"),
         ("RENAISSANCE",  "engines/renaissance.py", "Harmonic patterns — Bayesian + entropy + Hurst"),
-        ("KEPOS",        "engines/kepos.py",       "Critical endogeneity fade — Hawkes η reversal plays"),
         ("GRAHAM",       "engines/graham.py",      "Endogenous momentum — trend + Hawkes ENDO regime gate"),
     ],
     "live": [
@@ -311,17 +293,17 @@ SUB_MENUS = {
 }
 
 BANNER = """\
- █████╗ ██╗   ██╗██████╗ ██╗   ██╗███╗   ███╗
-██╔══██╗██║   ██║██╔══██╗██║   ██║████╗ ████║
-███████║██║   ██║██████╔╝██║   ██║██╔████╔██║
-██╔══██║██║   ██║██╔══██╗██║   ██║██║╚██╔╝██║
-██║  ██║╚██████╔╝██║  ██║╚██████╔╝██║ ╚═╝ ██║
-╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝\
+ ¦¦¦¦¦+ ¦¦+   ¦¦+¦¦¦¦¦¦+ ¦¦+   ¦¦+¦¦¦+   ¦¦¦+
+¦¦+--¦¦+¦¦¦   ¦¦¦¦¦+--¦¦+¦¦¦   ¦¦¦¦¦¦¦+ ¦¦¦¦¦
+¦¦¦¦¦¦¦¦¦¦¦   ¦¦¦¦¦¦¦¦¦++¦¦¦   ¦¦¦¦¦+¦¦¦¦+¦¦¦
+¦¦+--¦¦¦¦¦¦   ¦¦¦¦¦+--¦¦+¦¦¦   ¦¦¦¦¦¦+¦¦++¦¦¦
+¦¦¦  ¦¦¦+¦¦¦¦¦¦++¦¦¦  ¦¦¦+¦¦¦¦¦¦++¦¦¦ +-+ ¦¦¦
++-+  +-+ +-----+ +-+  +-+ +-----+ +-+     +-+\
 """
 
-# ═══════════════════════════════════════════════════════════
+# -----------------------------------------------------------
 # STRATEGY BRIEFINGS — philosophy + logic before execution
-# ═══════════════════════════════════════════════════════════
+# -----------------------------------------------------------
 BANNER_PREMIUM = """\
 A U R U M
 F I N A N C E
@@ -329,557 +311,7 @@ F I N A N C E
 
 SYSTEM_TAGLINE = "INSTITUTIONAL QUANT TERMINAL"
 
-BRIEFINGS = {
-    "CITADEL": {
-        "philosophy": "Mercados são fractais — auto-similares em todas as escalas, como a geometria de Mandelbrot. O mesmo padrão que se forma no 15m ecoa no 4h e no diário. CITADEL lê esta invariância de escala, detectando estrutura de tendência em múltiplos timeframes e entrando apenas quando a confluência matemática converge. É a segunda lei da termodinâmica aplicada: momentum tende a persistir até que uma força contrária (regime change) dissipe a energia.",
-        "logic": [
-            "Detectar regime macro via slope EMA200 do BTC (BULL / BEAR / CHOP)",
-            "Identificar fractais de swing structure em múltiplos timeframes",
-            "Pontuar sinais com Omega 5D: struct + flow + cascade + momentum + pullback",
-            "Dimensionar posições com Kelly fracional + escala de drawdown",
-            "Modo CHOP: mean-reversion via Bollinger + RSI quando mercado lateral",
-        ],
-        "edge": "Trend-following com confirmação fractal. Lucrativo em mercados direcionais.",
-        "risk": "Subperforma em chop prolongado. Max drawdown histórico ~5%.",
-        "best_config": {
-            "TF":         "15m",
-            "Período":    "180 dias (90d quase sempre negativo)",
-            "Basket":     "default",
-            "Risk":       "regime-adaptive (BULL=0.30, CHOP=0.50) já default",
-            "Sharpe val": "4.43 · 256 trades · ROI +31% · MC 99%",
-            "Status":     "✓ EDGE CONFIRMADO em 180d",
-        },
-    },
-    "JUMP": {
-        "philosophy": "O preço é a última coisa a se mover — como a onda de choque que chega depois do raio. Antes do preço romper, o volume se desloca. Pressão de taker buy/sell, delta cumulativo e imbalances de order flow revelam a intenção antes da vela fechar. É o princípio de conservação de momento: o fluxo de ordens carrega informação sobre a força resultante antes que o preço a reflita. JUMP escuta o que o mercado sussurra.",
-        "logic": [
-            "Calcular Cumulative Volume Delta (CVD) — taker buy menos taker sell",
-            "Detectar divergência CVD: preço faz novo high mas CVD não (distribuição)",
-            "Medir imbalance de volume: ratio taker buy sobre janela rolling",
-            "Identificar cascatas de liquidação via spikes de volume + ATR",
-            "Score composto: 30% div CVD + 25% imbalance + 30% estrutura + 15% tendência",
-        ],
-        "edge": "Enxerga fluxo institucional antes do varejo. Funciona em todos os regimes.",
-        "risk": "Sinais falsos em mercados de baixo volume. Requer pares líquidos.",
-        "best_config": {
-            "TF":         "15m (1h tem 1 trade só)",
-            "Período":    "90 dias",
-            "Basket":     "majors",
-            "Sharpe val": "-4.22 · 17 trades",
-            "Status":     "✗ SEM EDGE — research lab até ML meta-layer",
-        },
-    },
-    "BRIDGEWATER": {
-        "philosophy": "Quando todos estão gananciosos, tenha medo. Quando todos têm medo, seja ganancioso. BRIDGEWATER quantifica o sentimento da multidão — funding rates, variações de open interest e ratios long/short — para encontrar extremos contrários onde a maioria está errada. É a teoria dos jogos em ação: quando o posicionamento fica unilateral demais, o sistema se torna instável e reverte — como um pêndulo no ponto máximo de deslocamento, a energia potencial se converte em cinética na direção oposta.",
-        "logic": [
-            "Z-score de funding rate em 30 períodos de 8h — funding extremo = reversão",
-            "Delta Open Interest vs preço — OI subindo + preço caindo = venda forçada",
-            "Ratio Long/Short contrário — ratio > 2.0 = muitos comprados, fade neles",
-            "Composto: 40% funding + 30% OI + 30% LS ratio",
-            "Direção dos extremos de sentimento, confirmada por estrutura de preço",
-        ],
-        "edge": "Captura reversões em extremos de sentimento. Win rate alto.",
-        "risk": "Sentimento pode ficar extremo mais tempo que o esperado. Risco de timing.",
-        "best_config": {
-            "TF":         "1h (15m=Sharpe -1.95, 4h=poucos trades) já default",
-            "Período":    "90 dias (180 também ok)",
-            "Basket":     "bluechip (default também ok)",
-            "Sharpe val": "10.57 (bluechip 90d) · 7.34 (bluechip 180d)",
-            "OOS WF":     "IS 4.97 / OOS 1.78 — 99 trades",
-            "Status":     "✓ EDGE CONFIRMADO — winner do battery",
-        },
-    },
-    "DE SHAW": {
-        "philosophy": "Dois ativos conectados que divergem devem convergir — como a lei da gravitação universal. Cointegração não é correlação — é um vínculo matemático, um atrator estável. Quando o spread entre dois pares cointegrados estica além do normal, a 'gravidade estatística' o puxa de volta à média. É a reversão à média de Ornstein-Uhlenbeck: o spread se comporta como uma mola — quanto mais se afasta do equilíbrio, maior a força restauradora. DE SHAW opera esta gravidade.",
-        "logic": [
-            "Teste de cointegração Engle-Granger em todos os pares de símbolos",
-            "Calcular z-score do spread com estimativa rolling OLS de half-life",
-            "Entrada quando |z-score| > 2.0 — spread a 2 desvios padrão da média",
-            "Saída quando z-score cruza 0 — reversão à média completa",
-            "Stop quando |z-score| > 3.5 — cointegração pode ter quebrado",
-        ],
-        "edge": "Market-neutral. Lucra independente da direção do mercado.",
-        "risk": "Cointegração pode quebrar permanentemente. Requer seleção cuidadosa de pares.",
-        "best_config": {
-            "TF":         "4h (1h e 15m geram ruído cointegração)",
-            "Período":    "90 dias",
-            "Basket":     "default",
-            "Z-entry":    "2.0 · Z-stop 3.5",
-            "Sharpe val": "1.27 · 92 trades · MC 63%",
-            "Status":     "⚠ MARGINAL — universo altcoin atual sem pares cointegrados estáveis",
-        },
-    },
-    "MILLENNIUM": {
-        "philosophy": "Nenhuma estratégia única sobrevive a todas as condições de mercado — assim como nenhuma partícula isolada explica toda a matéria. Mas um portfolio de estratégias não-correlacionadas, cada uma forte em regimes diferentes, cria um edge que persiste. É o princípio da superposição: sinais independentes combinados reduzem o ruído por √N enquanto preservam o sinal. MILLENNIUM orquestra — combinando sinais, gerenciando correlação, alocando capital onde a matemática aponta.",
-        "logic": [
-            "Roda todos os engines simultaneamente nos mesmos dados",
-            "Agrega sinais no nível de trade — não no nível de previsão",
-            "Pesa por Sortino ratio rolling por engine por regime",
-            "Kill-switch: pausa qualquer engine com Sortino(20) < -0.5",
-            "Gestão de drawdown no nível do portfolio em todas as posições",
-        ],
-        "edge": "Curva de equity mais suave. Diversificado entre estratégias.",
-        "risk": "Se todas as estratégias correlacionam num crash, a diversificação falha.",
-    },
-    "TWO SIGMA": {
-        "philosophy": "Uma máquina pode aprender qual estratégia dominará a próxima fase do mercado? TWO SIGMA usa os trades de todos os engines como dados de treino, aprendendo padrões de quando cada estratégia performa melhor — e alocando antes que o regime mude. É aprendizado por reforço aplicado a meta-alocação: o modelo observa features do mercado (volatilidade, regime HMM, Hurst exponent) e prevê o melhor executor para as próximas N operações.",
-        "logic": [
-            "Coletar histórico de trades de todos os engines como features",
-            "Construir target: qual engine tem melhor R-múltiplo nas próximas N trades",
-            "Treinar modelo gradient-boosted em regime de mercado + features de performance",
-            "Prever alocação ótima por engine para condições atuais",
-            "Rebalancear pesos do portfolio baseado nas previsões ML",
-        ],
-        "edge": "Adapta alocação proativamente, não reativamente.",
-        "risk": "Overfitting de ML. Requer dados de treino diversos para generalizar.",
-    },
-}
-
-BRIEFINGS["RENAISSANCE"] = {
-    "philosophy": "Os mesmos padrões geométricos que governam a Natureza — proporções de Fibonacci, simetrias de Gartley, borboletas de Pesavento — repetem-se nos mercados. Não por misticismo, mas porque refletem a psicologia fractal de multidões: medo e ganância criam pontos de retração previsíveis. RENAISSANCE detecta estes padrões harmónicos com confirmação Bayesiana e mede a qualidade estatística via entropia de Shannon e expoente de Hurst. Padrões com alta simetria e baixa entropia têm maior probabilidade de completar.",
-    "logic": [
-        "Detectar swing pivots via threshold de ATR (zigzag adaptativo)",
-        "Classificar padrões harmónicos: Gartley, Butterfly, Bat, Crab, Cypher",
-        "Validar proporções de Fibonacci nos legs (XA, AB, BC, CD)",
-        "Pontuar qualidade: simetria geométrica + entropia + Hurst exponent",
-        "Entry na zona D (completion zone) com stop além do ponto X",
-    ],
-    "edge": "Reversões de alta precisão em pontos de completação harmónica. WR 85%+.",
-    "risk": "Poucos sinais por período. Depende de volatilidade para gerar padrões.",
-    "best_config": {
-        "TF":         "15m (1h/4h reduzem trade count drasticamente)",
-        "Período":    "180 dias (90d gera só ~13)",
-        "Basket":     "default",
-        "Sharpe val": "6.58 · 68 trades · WR 88% · MaxDD 0.4%",
-        "Audit":      "⚠ WR reportado 85% vs auditado 61% — verificar antes do live",
-        "Status":     "✓ EDGE CONFIRMADO (com flag de audit)",
-    },
-}
-
-BRIEFINGS["PAPER"] = BRIEFINGS["DEMO"] = BRIEFINGS["TESTNET"] = BRIEFINGS["LIVE"] = {
-    "philosophy": "O mercado é um sistema vivo — um processo estocástico com memória, não um gerador aleatório. Trading ao vivo é o teste final — onde algoritmos encontram a realidade da microestrutura. Cada tick é um voto, cada trade uma tese. Paper deixa observar sem risco. Demo valida execução. Live é onde convicção encontra capital.",
-    "logic": [
-        "Conectar à Binance Futures API (paper/demo/testnet/live)",
-        "Semear dados históricos para todos os símbolos — construir estado dos indicadores",
-        "Rodar ciclo de scan a cada vela de 15m — mesma lógica do backtest",
-        "Executar ordens via REST API com requests assinadas HMAC",
-        "Monitorar posições: trailing stops, funding, kill-switch",
-    ],
-    "edge": "Mesmo edge do backtest, validado na microestrutura do mercado ao vivo.",
-    "risk": "Slippage, latência de API, downtime da exchange. Comece com paper/demo.",
-}
-
-BRIEFINGS["JANE STREET"] = {
-    "philosophy": "Num mercado eficiente, o mesmo ativo deveria custar o mesmo em todo lugar — é a lei do preço único. Mas mercados não são eficientes — funding rates divergem, preços atrasam entre exchanges, e liquidez se fragmenta. É termodinâmica: calor flui do quente para o frio até o equilíbrio. JANE STREET captura estas ineficiências antes que o equilíbrio se restabeleça: delta-neutral, matemático, arbitragem pura.",
-    "logic": [
-        "Escanear 10+ venues simultâneamente: Binance, Bybit, OKX, Gate, Bitget + mais",
-        "Detectar 4 tipos: arb de funding rate, basis spot-perp, spread cross-venue, interno",
-        "Pontuar com Omega v2: edge × probabilidade de fill × desconto adversarial",
-        "Executar ordens split (5 partes) com profiling de latência por venue",
-        "Monitor de hedge garante delta-neutral o tempo todo",
-    ],
-    "edge": "Market-neutral. Lucra com ineficiência entre exchanges, não com direção.",
-    "risk": "Risco de execução, atrasos de saque entre venues, mudanças de funding rate.",
-}
-
-BRIEFINGS["AQR"] = {
-    "philosophy": "Seleção natural aplicada a estratégias de trading — evolução darwiniana literal. Cada engine é um organismo competindo por capital. Os mais aptos sobrevivem, os fracos são podados. Com o tempo, o portfolio evolui — adaptando-se ao mercado conforme ele muda. É a dinâmica de Lotka-Volterra: populações (estratégias) competem por recursos (capital) num ecossistema (mercado) que muda.",
-    "logic": [
-        "Avaliar fitness por engine: Sortino (40%) + Profit Factor (20%) + Win Rate (20%) + Estabilidade (20%)",
-        "Rankear engines e alocar capital: top performer 35%, acima da mediana 25%, abaixo 10%",
-        "Kill zone: 3 janelas negativas consecutivas → engine pausado em 5% mínimo",
-        "Mutação: a cada 100 trades, perturbar parâmetros ±10% e testar melhoria",
-        "Crossover: combinar DNA de dois engines de alta performance no mesmo regime",
-    ],
-    "edge": "Adapta alocação do portfolio automaticamente baseado em performance real.",
-    "risk": "Requer histórico de trades suficiente. Pode sobre-alocar em sequências de sorte.",
-}
-
-BRIEFINGS["NEXUS API"] = {
-    "philosophy": "Controle é liberdade. NEXUS abre a plataforma AURUM para o mundo — REST API, streaming WebSocket, autenticação JWT. Seu celular, seu dashboard, suas integrações. O terminal se expande além do terminal.",
-    "logic": [
-        "Servidor FastAPI na porta 8000 com docs Swagger em /docs",
-        "Autenticação JWT com hashing bcrypt de senhas",
-        "Endpoints: auth, conta, trading, analytics, WebSocket ao vivo",
-        "Banco SQLite para usuários, trades, depósitos, estado dos engines",
-        "Streaming em tempo real de status dos engines e eventos de trade",
-    ],
-    "edge": "Controle remoto. Acesso mobile. Integrações de terceiros.",
-    "risk": "Expor apenas em localhost ou atrás de VPN. Nunca na internet pública sem auth.",
-}
-
-BRIEFINGS["WINTON"] = {
-    "philosophy": "Indicadores tradicionais olham o que aconteceu. WINTON olha a estrutura invisível do tempo — regimes ocultos, clusters de volatilidade, decaimento de momentum, dimensões fractais. São os padrões que existem sob as velas — a mecânica quântica do mercado: estados superpostos (bull/bear/chop) com probabilidades contínuas que colapsam em regime quando observados.",
-    "logic": [
-        "Hidden Markov Model: P(bull), P(bear), P(chop) como probabilidades contínuas",
-        "GARCH(1,1): prever volatilidade para as próximas 4-8 velas proativamente",
-        "Decaimento de momentum: taxa de decaimento exponencial — detectar tendências enfraquecendo",
-        "Expoente de Hurst: H>0.5 trending, H<0.5 mean-reverting, H≈0.5 random walk",
-        "Sazonalidade: hora × dia-da-semana edge scoring de padrões históricos",
-    ],
-    "edge": "Enxerga transições de regime antes de completarem. Sizing proativo.",
-    "risk": "Dependências ML (hmmlearn, arch). Fallback gracioso se não instaladas.",
-}
-
-
-# ═══════════════════════════════════════════════════════════
-# BRIEFINGS_V2 — technical view (populated Fase 3.3, 2026-04-11)
-# ═══════════════════════════════════════════════════════════
-# Structured strategy briefing schema. Coexists with legacy BRIEFINGS;
-# _brief prefers V2 when a matching name exists, falls back to the
-# narrative dict otherwise. Every entry follows the same shape:
-#
-#   source_files: list of paths, first is the main file
-#   main_function: (file, function_name) — auto-scroll target for CodeViewer
-#   one_liner: one-sentence technical summary
-#   pseudocode: multi-line Python-like block of the decision flow
-#   params: list of dicts {name, default, range, unit, effect}
-#   formulas: list of Unicode math strings
-#   invariants: list of pre-conditions / assumptions
-BRIEFINGS_V2: dict[str, dict] = {
-    "CITADEL": {
-        "source_files": [
-            "engines/citadel.py",
-            "core/signals.py",
-            "core/portfolio.py",
-            "core/htf.py",
-        ],
-        "main_function": ("engines/citadel.py", "scan_symbol"),
-        "one_liner": "Omega 5D fractal trend-follower with MTF alignment "
-                     "and convex Kelly sizing.",
-        "pseudocode": """\
-for idx in range(min_idx, len(df) - MAX_HOLD - 2):
-    if in_cooldown(idx): continue
-    if not portfolio_allows(symbol, active_syms, corr): continue
-
-    direction, reason, fractal_score = decide_direction(row, macro)
-    if direction is None and reason == "chop":
-        direction, chop_score = score_chop(row)  # mean-reversion fallback
-
-    score, comps = score_omega(row, direction)  # 5D ensemble
-    if score < SCORE_THRESHOLD[macro]: continue
-
-    entry, stop, target, rr = calc_levels(df, idx, direction)
-    result, dur, exit_p = label_trade(df, idx+1, direction,
-                                      entry, stop, target)
-
-    size = position_size(account, entry, stop, score,
-                         macro, direction, vol_r, dd_scale,
-                         peak_equity=peak_equity)
-    if not check_aggregate_notional(size*entry, open_pos, account, LEVERAGE):
-        continue   # [L6]
-    commit_trade(...)""",
-        "params": [
-            {"name": "SCORE_THRESHOLD", "default": 0.53, "range": "0.45-0.65",
-             "unit": "—", "effect": "min omega score to fire"},
-            {"name": "KELLY_FRAC",      "default": 0.5,  "range": "0.25-1.0",
-             "unit": "—", "effect": "fractional Kelly multiplier on base risk"},
-            {"name": "TARGET_RR",       "default": 3.0,  "range": "1.5-3.5",
-             "unit": "R",  "effect": "target distance as multiple of stop"},
-            {"name": "STOP_ATR_M",      "default": 2.5,  "range": "1.2-2.5",
-             "unit": "ATR","effect": "stop distance floor in ATR units"},
-            {"name": "MAX_HOLD",        "default": 200,  "range": "100-400",
-             "unit": "bars","effect": "max bars a position can stay open"},
-            {"name": "MAX_OPEN_POSITIONS","default": 3,  "range": "2-5",
-             "unit": "—", "effect": "concurrency cap across symbols"},
-        ],
-        "formulas": [
-            "Ω = 0.30·struct + 0.20·flow + 0.20·cascade + 0.15·momentum + 0.15·pullback",
-            "risk = BASE_RISK + t · (min(kelly, MAX_RISK) - BASE_RISK)",
-            "kelly = max(0, (WR·RR - (1-WR)) / RR) · KELLY_FRAC",
-            "size = account · risk / |entry - stop|",
-            "liq_price = entry · (1 ∓ 1/LEVERAGE ± 0.005)",
-        ],
-        "invariants": [
-            "L1 no look-ahead: features read from [idx] only",
-            "L2 entry fills at open[idx+1] (label_trade)",
-            "L3/L4 fees + slippage applied on both legs",
-            "L6 aggregate notional cap enforced post-sizing",
-            "L7 liquidation check inside label_trade (path-dependent)",
-            "stop is always strictly below entry for long, above for short",
-        ],
-    },
-    "JUMP": {
-        "source_files": ["engines/jump.py", "core/indicators.py"],
-        "main_function": ("engines/jump.py", "scan_mercurio"),
-        "one_liner": "Order-flow microstructure: CVD divergence + volume "
-                     "imbalance + liquidation cascades.",
-        "pseudocode": """\
-for idx in range(min_idx, len(df) - MAX_HOLD - 2):
-    cvd_div = cvd_div_bull[idx] or cvd_div_bear[idx]
-    vimb    = volume_imbalance[idx]
-    liq     = liquidation_proxy[idx]
-
-    if not (cvd_div or vimb > IMBALANCE_THRESH or liq): continue
-
-    direction = resolve_direction_from_flow(row)
-    score = 0.30·cvd_div + 0.25·vimb + 0.30·struct + 0.15·trend
-    if score < MERCURIO_MIN_SCORE: continue
-
-    entry, stop, target, rr = calc_levels(df, idx, direction)
-    result, dur, exit_p = label_trade(df, idx+1, direction, entry, stop, target)
-    size = position_size(...) · MERCURIO_SIZE_MULT
-    if not check_aggregate_notional(...): continue   # [L6]
-    commit_trade(...)""",
-        "params": [
-            {"name": "MERCURIO_MIN_SCORE","default": 0.45,"range": "0.35-0.60",
-             "unit": "—", "effect": "min composite score to fire"},
-            {"name": "MERCURIO_SIZE_MULT","default": 1.0, "range": "0.5-1.5",
-             "unit": "—", "effect": "risk multiplier vs base Kelly"},
-            {"name": "MERCURIO_CVD_WINDOW","default": 50,"range": "20-100",
-             "unit": "bars","effect": "rolling window for CVD divergence"},
-            {"name": "MERCURIO_LIQ_VOL_MULT","default": 3.0,"range": "2-5",
-             "unit": "—","effect": "volume spike multiplier for liquidation proxy"},
-        ],
-        "formulas": [
-            "CVD[i] = Σ(taker_buy - taker_sell)[0..i]",
-            "vimb  = taker_buy_ratio[i] rolling-window normalized",
-            "liq_proxy = (vol/vol_ma > k) ∧ (range/atr > k)",
-            "score = 0.30·cvd_div + 0.25·vimb + 0.30·struct + 0.15·trend",
-        ],
-        "invariants": [
-            "CVD, vimb, liq_proxy all computed from [0..idx] only (causal)",
-            "label_trade + L6 + L7 inherited from core",
-            "L5 funding uses dynamic _funding_periods_per_8h (fixed Backlog #3)",
-            "requires liquid pairs — taker volume per bar > SPEED_MIN",
-        ],
-    },
-    "BRIDGEWATER": {
-        "source_files": ["engines/bridgewater.py", "core/sentiment.py"],
-        "main_function": ("engines/bridgewater.py", "scan_thoth"),
-        "one_liner": "Sentiment contrarian: funding z-score + OI delta + "
-                     "long/short ratio extremes.",
-        "pseudocode": """\
-sentiment_features = fetch_sentiment(symbol)  # funding_z, oi_delta, ls_ratio
-df = merge(df, sentiment_features, on='time', how='left')
-
-for idx in range(min_idx, len(df) - MAX_HOLD - 2):
-    f_z    = funding_z[idx]
-    oi_sig = oi_delta_signal[idx]
-    ls_sig = ls_ratio_signal[idx]
-
-    if abs(f_z) < 1.0 and abs(oi_sig) < 0.3 and abs(ls_sig) < 0.3:
-        continue   # sentiment not extreme enough
-
-    direction = "BEARISH" if crowded_long else "BULLISH"  # contrarian
-    score = 0.40·|f_z|/2 + 0.30·|oi_sig| + 0.30·|ls_sig|
-    if score < THOTH_MIN_SCORE: continue
-    commit_trade(...)""",
-        "params": [
-            {"name": "THOTH_MIN_SCORE", "default": 0.50,"range": "0.40-0.65",
-             "unit": "—", "effect": "min sentiment-composite score"},
-            {"name": "THOTH_SIZE_MULT", "default": 0.8, "range": "0.5-1.2",
-             "unit": "—", "effect": "risk multiplier (sentiment is sparser)"},
-            {"name": "FUNDING_Z_ABS_MIN","default": 1.0,"range": "0.8-1.5",
-             "unit": "σ", "effect": "min |funding z-score| to consider extreme"},
-        ],
-        "formulas": [
-            "funding_z = (funding - μ_30d) / σ_30d",
-            "oi_delta_signal = (OI[i] - OI[i-k]) / OI[i-k]",
-            "ls_ratio_signal = (ls_ratio[i] - 1.0) normalized by regime",
-            "contrarian: direction = opposite(crowded_side)",
-        ],
-        "invariants": [
-            "sentiment merged via merge_asof(backward) — no future info",
-            "direction is always opposite the crowded side by construction",
-            "same L2-L7 guarantees via shared-core calc_levels + label_trade",
-            "signals are sparse — can produce 0 trades on short horizons",
-        ],
-    },
-    "DE SHAW": {
-        "source_files": ["engines/deshaw.py"],
-        "main_function": ("engines/deshaw.py", "scan_pair"),
-        "one_liner": "Statistical arbitrage: cointegration-driven pair trading "
-                     "with z-score mean reversion.",
-        "pseudocode": """\
-merged = calc_spread_zscore(df_a, df_b, beta, alpha)   # Engle-Granger
-for idx in range(min_idx, len(merged) - 2):
-    z = zscore[idx]
-
-    if in_trade:
-        if low[idx] <= liq_price(entry, dir): exit("LIQ")   # [Backlog #4]
-        elif z crosses mean in favorable direction: exit("WIN")
-        elif z hits stop threshold: exit("LOSS")
-        elif hold > MAX_HOLD: exit("time")
-        continue
-
-    if abs(z) < NEWTON_ZSCORE_ENTRY: continue
-    direction = "BEARISH" if z > 0 else "BULLISH"    # short/long spread
-    entry = a_open[idx+1] · (1 ± slip)               # [Backlog #1]
-    size  = position_size(account, entry, stop, score)
-    if not check_aggregate_notional(size*entry, [], account, LEVERAGE):
-        continue
-    open_trade(...)""",
-        "params": [
-            {"name": "NEWTON_ZSCORE_ENTRY","default": 2.0,"range": "1.5-3.0",
-             "unit": "σ","effect": "|z| threshold to open a spread trade"},
-            {"name": "NEWTON_ZSCORE_EXIT", "default": 0.0,"range": "-0.5-0.5",
-             "unit": "σ","effect": "|z| level at which winners are closed"},
-            {"name": "NEWTON_ZSCORE_STOP", "default": 3.5,"range": "3.0-5.0",
-             "unit": "σ","effect": "|z| level that triggers stop-out"},
-            {"name": "NEWTON_COINT_PVALUE","default": 0.05,"range": "0.01-0.1",
-             "unit": "p","effect": "pair filter: max ADF test p-value"},
-            {"name": "NEWTON_SPREAD_WINDOW","default": 200,"range":"100-400",
-             "unit": "bars","effect": "rolling window for spread z-score"},
-            {"name": "NEWTON_MAX_HOLD",   "default": 150,"range": "80-300",
-             "unit": "bars","effect": "max hold bars before time exit"},
-        ],
-        "formulas": [
-            "spread = a_close - β · b_close - α",
-            "z = (spread - μ_window) / σ_window",
-            "pair selection: Engle-Granger cointegration, p < NEWTON_COINT_PVALUE",
-            "half_life ≈ -ln(2) / ln(ρ_AR1)",
-        ],
-        "invariants": [
-            "pair cointegration verified offline before scan loop",
-            "one open spread per pair at a time (in_trade bool)",
-            "entry at open[idx+1] + slippage (Backlog #1 fix)",
-            "liquidation guard inside exit loop (Backlog #4 fix)",
-            "L6 single-position cap enforced via check_aggregate_notional",
-        ],
-    },
-    "MILLENNIUM": {
-        "source_files": [
-            "engines/millennium.py",
-            "engines/citadel.py",
-            "core/harmonics.py",
-        ],
-        "main_function": ("engines/millennium.py", "scan_multistrategy"),
-        "one_liner": "Regime-weighted ensemble of CITADEL (trend) + RENAISSANCE "
-                     "(harmonics), with rolling confidence-scaled weights.",
-        "pseudocode": """\
-citadel_trades     = scan_symbol(df, sym)          # trend
-renaissance_trades = scan_hermes(df, sym)          # harmonic patterns
-
-for trade in merge_by_timestamp(citadel, renaissance):
-    regime = regime_of(trade.timestamp - REGIME_LAG·trade_interval)
-
-    w_citadel     = base_weights[regime] · citadel_sortino_boost
-    w_renaissance = base_weights[regime] · renaissance_sortino_boost
-    # kill switch: rolling sortino below -0.5 → peso fixo em ENSEMBLE_MIN_W
-
-    trade.size *= (w_citadel if trade.engine=="CITADEL" else w_renaissance)
-    commit(trade)""",
-        "params": [
-            {"name": "CITADEL_CAPITAL_WEIGHT","default": 0.65,"range":"0.4-0.8",
-             "unit": "—","effect": "base capital allocation to CITADEL"},
-            {"name": "RENAISSANCE_CAPITAL_WEIGHT","default": 0.35,"range":"0.2-0.6",
-             "unit": "—","effect": "base allocation to RENAISSANCE"},
-            {"name": "ENSEMBLE_WINDOW", "default": 30, "range": "15-60",
-             "unit": "trades","effect": "rolling window for weight recompute"},
-            {"name": "KILL_SWITCH_SORTINO","default": -0.5,"range":"-1.0--0.2",
-             "unit": "σ","effect": "sortino floor that pauses a sub-engine"},
-            {"name": "REGIME_LAG",      "default": 5,  "range": "3-10",
-             "unit": "trades","effect": "lag on regime input to break feedback"},
-            {"name": "CONFIDENCE_N_MIN","default": 50, "range": "30-100",
-             "unit": "trades","effect": "sample size for full-confidence score"},
-        ],
-        "formulas": [
-            "w_i = base_w[regime] · max(ENSEMBLE_MIN_W, sortino_boost_i)",
-            "confidence = min(1, sqrt(n_recent / CONFIDENCE_N_MIN))",
-            "final_weight = confidence · w_i + (1-confidence) · base_w_i",
-            "kill switch: sortino < -0.5 → weight = ENSEMBLE_MIN_W",
-        ],
-        "invariants": [
-            "sub-engines run independently; no cross-signal coupling",
-            "regime lag of REGIME_LAG trades breaks weight→trade feedback",
-            "no sub-engine can be fully silenced (floor at ENSEMBLE_MIN_W)",
-            "all per-strategy invariants (L1-L11) inherited from CITADEL + harmonics",
-        ],
-    },
-    "TWO SIGMA": {
-        "source_files": ["engines/twosigma.py"],
-        "main_function": ("engines/twosigma.py", "trades_to_features"),
-        "one_liner": "LightGBM meta-ensemble: predicts which engine to weight "
-                     "higher given current market context at trade open.",
-        "pseudocode": """\
-# Training (offline, walk-forward per split)
-trades_df = trades_to_features(all_prior_trades)      # AT-OPEN columns only
-split     = int(len(trades_df) * train_ratio)
-train     = trades_df.iloc[:split]
-test      = trades_df.iloc[split:]
-train["target"] = build_target(train)     # best engine next 10 trades
-test["target"]  = build_target(test)      # same, test segment only
-X_train = train[FEATURE_COLS]             # whitelist enforced
-model   = lgb.train(params, X_train, train["target"])
-
-# Inference (online)
-features = trade_context_at_open(trade)
-probs    = model.predict([features])
-weights  = softmax_normalize(probs) → per-engine weight""",
-        "params": [
-            {"name": "retrain_every","default":500,"range":"200-2000",
-             "unit": "trades","effect":"trades before model retrains"},
-            {"name": "train_ratio", "default":0.7,"range":"0.5-0.8",
-             "unit": "—","effect":"walk-forward split for train vs test"},
-            {"name": "lookahead",   "default":10,"range":"5-30",
-             "unit": "trades","effect":"target = best engine in next N trades"},
-            {"name": "num_leaves",  "default":31,"range":"15-63",
-             "unit": "—","effect":"LightGBM leaf count per tree"},
-            {"name": "learning_rate","default":0.05,"range":"0.01-0.1",
-             "unit": "—","effect":"LightGBM learning rate"},
-        ],
-        "formulas": [
-            "target[i] = argmax_engine(mean_pnl of trades [i+1..i+N])",
-            "FEATURE_COLS ⊂ AT_OPEN (strict whitelist, asserted at import)",
-            "X = train[FEATURE_COLS].values  (17 features, no leakage)",
-            "predict: argmax softmax(model.predict(features))",
-        ],
-        "invariants": [
-            "no AT-EXIT field ever lands in FEATURE_COLS (module-level assert)",
-            "train/test split computes targets SEPARATELY per segment (no cross-boundary leak, Backlog #2)",
-            "runtime guard in .train() re-checks feature whitelist before lgb.train",
-            "fallback to static equal-weight when model absent or data < 50 trades",
-        ],
-    },
-    "JANE STREET": {
-        "source_files": ["engines/janestreet.py"],
-        "main_function": ("engines/janestreet.py", "ExecutionSimulator"),
-        "one_liner": "Cross-venue funding + basis arbitrage across 13 CEX "
-                     "venues with latency-aware fill simulation.",
-        "pseudocode": """\
-venues = fetch_all_venues()   # 13 CEXs in parallel
-pairs  = find_mispriced_pairs(venues.funding, venues.basis)
-
-for (venue_a, venue_b, symbol) in pairs:
-    edge = |funding_a - funding_b|  # or basis diff
-    if edge < MIN_EDGE_BPS: continue
-
-    book_a = fetch_orderbook(venue_a, symbol)
-    book_b = fetch_orderbook(venue_b, symbol)
-    fill   = ExecutionSimulator.simulate_arb_pair(book_a, book_b, notional)
-    if not fill.feasible: continue
-
-    net_edge = edge - fill.total_slippage_bps - 2·ARB_LATENCY_BPS - 2·fee_bps
-    if net_edge > MIN_NET_EDGE_BPS:
-        execute_both_legs(venue_a, venue_b, notional, side_a, side_b)""",
-        "params": [
-            {"name": "ARB_LATENCY_BPS", "default":2.0,"range":"1-5",
-             "unit": "bps","effect":"pessimistic latency markup per leg (Backlog #5)"},
-            {"name": "MIN_EDGE_BPS",    "default":5,  "range":"3-10",
-             "unit": "bps","effect":"minimum gross edge to consider a pair"},
-            {"name": "MIN_NET_EDGE_BPS","default":2,  "range":"1-5",
-             "unit": "bps","effect":"minimum net edge after costs"},
-            {"name": "NOTIONAL_USD",    "default":1000,"range":"500-5000",
-             "unit": "USD","effect":"size per arb pair attempt"},
-            {"name": "MAX_UNFILLED_PCT","default":0.05,"range":"0.02-0.10",
-             "unit": "—","effect":"max unfilled fraction before pair is skipped"},
-        ],
-        "formulas": [
-            "gross_edge = |funding_a - funding_b| × 10_000",
-            "slippage = book_walk(notional) + ARB_LATENCY_BPS per leg",
-            "avg_price(BUY)  = avg_book × (1 + latency/10_000)",
-            "avg_price(SELL) = avg_book × (1 - latency/10_000)",
-            "feasible = unfilled < 5% on both legs",
-        ],
-        "invariants": [
-            "funding signs respected (long pays when funding > 0)",
-            "both legs must confirm before PnL accrues",
-            "latency markup is pessimistic — conservative edge estimates",
-            "venue latency tracked via LatencyProfiler for post-hoc analysis",
-        ],
-    },
-}
+from launcher_support.briefings import BRIEFINGS
 
 
 BASKETS_UI = [
@@ -903,9 +335,9 @@ PERIODS_UI = [
 ]
 
 
-# ═══════════════════════════════════════════════════════════
+# -----------------------------------------------------------
 # BACKTEST LIST COLUMNS — single source of truth
-# ═══════════════════════════════════════════════════════════
+# -----------------------------------------------------------
 # (label, widget width in chars). Used by both the crypto-futures
 # dashboard Backtest tab and the standalone DATA > BACKTESTS screen,
 # plus the row renderer in _dash_backtest_render. Keeping the widths
@@ -916,6 +348,31 @@ PERIODS_UI = [
 _BT_COLS: list[tuple[str, int]] = [
     ("DATE / TIME",  19),
     ("STRATEGY",     14),
+    # TF: 5 → 6 chars. "15m"/"1h"/"4h" cabem facil em 5, mas
+    # a coluna encostava no DAYS; 6 da respiro visual e fica
+    # na mesma largura da coluna DAYS/TRADES — visual mais consistente.
+    ("TF",            6),
+    ("DAYS",          5),
+    ("BASKET",       10),
+    ("RUN",          14),
+    ("TRADES",        8),
+    ("WIN%",          8),
+    ("PNL",          12),
+    ("SHARPE",        8),
+    ("DD",            8),
+]
+
+
+# -----------------------------------------------------------
+# BACKTEST RUNS TABLE — per-engine view (ENGINE column dropped)
+# -----------------------------------------------------------
+# Used by the right-bottom runs list in the BACKTEST tab after
+# the engine → run → metrics hierarchy refactor. Same char widths
+# as _BT_COLS so the existing row renderer can be reused; the
+# STRATEGY column is omitted because the list is already filtered
+# to a single engine (picked in the left panel).
+_BT_RUN_COLS: list[tuple[str, int]] = [
+    ("DATE / TIME",  19),
     ("TF",            5),
     ("DAYS",          5),
     ("BASKET",       10),
@@ -928,26 +385,206 @@ _BT_COLS: list[tuple[str, int]] = [
 ]
 
 
+# -----------------------------------------------------------
+# BACKTEST ENGINE BADGES — OOS status glyphs for the left panel
+# -----------------------------------------------------------
+# Static map: CLAUDE.md engine table + 2026-04-16 OOS audit
+# verdicts. Keys cover both institutional slugs and their legacy
+# lowercase aliases (e.g. "thoth" → bridgewater) so runs written
+# before the engine rename still get the right glyph.
+_ENGINE_BADGES: dict[str, str] = {
+    "citadel":            "?",
+    "backtest":           "?",
+    "jump":               "?",
+    "mercurio":           "?",
+    "renaissance":        "??",
+    "harmonics":          "??",
+    "harmonics_backtest": "??",
+    "bridgewater":        "??",
+    "thoth":              "??",
+    "phi":                "??",
+    "two_sigma":          "?",
+    "twosigma":           "?",
+    "prometeu":           "?",
+    "aqr":                "?",
+    "darwin":             "?",
+    "jane_street":        "?",
+    "janestreet":         "?",
+    "arbitrage":          "?",
+    "millennium":         "·",
+    "multistrategy":      "·",
+    "winton":             "·",
+    "graham":             "???",
+}
+
+
+def _boot_tunnel_manager():
+    """Lazy construct TunnelManager from keys.json -> vps_ssh block.
+
+    Returns None silently if config missing or malformed — launcher
+    keeps working in local-disk mode. Singleton lives em
+    launcher_support/tunnel_registry pra sobreviver ao problema
+    __main__-vs-launcher (quando `python launcher.py` roda, o modulo
+    launcher vira `__main__` e `from launcher import X` de outro lugar
+    carrega um modulo separado sem o singleton).
+    """
+    from launcher_support.tunnel_registry import (
+        get_tunnel_manager as _reg_get,
+        set_tunnel_manager as _reg_set,
+        set_tunnel_boot_error as _reg_set_err,
+    )
+    current = _reg_get()
+    if current is not None:
+        return current
+    _reg_set_err(None)  # clear any prior boot error
+    try:
+        # Encrypted-aware: fail-closed quando enc ativo. Fallback
+        # manual pro plaintext so em ImportError (cryptography ausente).
+        # KeyStoreLockedError/Corrupt nao caem pra plaintext stale.
+        from core.risk.key_store import (
+            load_runtime_keys,
+            KeyStoreError,
+        )
+        try:
+            data = load_runtime_keys(
+                allow_plaintext_env="_LAUNCHER_NEVER_PLAINTEXT_"
+            )
+        except KeyStoreError:
+            return None
+        except (ImportError, ModuleNotFoundError):
+            from pathlib import Path as _Path
+            import json as _json
+            keys_path = _Path("config/keys.json")
+            if not keys_path.exists():
+                return None
+            data = _json.loads(keys_path.read_text(encoding="utf-8"))
+        block = (data or {}).get("vps_ssh")
+        if not block or not block.get("host"):
+            return None
+        # Reject obvious placeholders from the 2026-04-19 keys wipe template.
+        # Without this check, TunnelManager spawns ssh with "cole_aqui_o_host"
+        # and floods data/.cockpit_cache/tunnel.log with hundreds of dead
+        # reconnect attempts while the cockpit UI silently shows no data.
+        if _vps_block_has_placeholders(block):
+            import logging as _log
+            reason = ("vps_ssh config com placeholders (COLE_AQUI_*). "
+                      "Edit config/keys.json + restart launcher.")
+            _log.getLogger("aurum.launcher").error("tunnel: %s", reason)
+            _reg_set_err(reason)
+            return None
+        from launcher_support.ssh_tunnel import TunnelConfig, TunnelManager
+        from pathlib import Path as _Path
+        cfg = TunnelConfig(
+            host=block["host"],
+            user=block.get("user", "root"),
+            ssh_port=int(block.get("ssh_port", 22)),
+            local_port=int(block.get("local_port", 8787)),
+            remote_host=block.get("remote_host", "localhost"),
+            remote_port=int(block.get("remote_port", 8787)),
+            key_path=block.get("key_path"),
+            # Cockpit tunnel uses a dedicated known_hosts file so a stale
+            # global ~/.ssh/known_hosts entry doesn't black-hole the UI.
+            known_hosts_path=str((_Path("data/.cockpit_cache/known_hosts")).resolve()),
+        )
+        manager = TunnelManager(cfg, log_dir=_Path("data/.cockpit_cache"))
+        _reg_set(manager)
+        return manager
+    except Exception:
+        return None
+
+
+def _vps_block_has_placeholders(block: dict) -> bool:
+    """True se qualquer campo critico contem template-placeholder string.
+
+    O wipe 2026-04-19 substituiu segredos por COLE_AQUI_*; sem rejeitar
+    aqui, o launcher spawna ssh com hostname invalido e o watchdog gasta
+    retries eternos. Checagem case-insensitive — placeholder pode vir com
+    variantes de capitalizacao.
+    """
+    markers = ("cole_aqui", "COLE_AQUI", "<paste", "<your")
+    critical = (block.get("host"), block.get("key_path"), block.get("user"))
+    for v in critical:
+        if v is None:
+            continue
+        vs = str(v)
+        for m in markers:
+            if m.lower() in vs.lower():
+                return True
+    return False
+
+
+def get_tunnel_manager():
+    """Public accessor — delega pro tunnel_registry singleton."""
+    from launcher_support.tunnel_registry import get_tunnel_manager as _reg_get
+    return _reg_get()
+
+
 class App(tk.Tk):
+    _SPLASH_DESIGN_W = 920
+    _SPLASH_DESIGN_H = 640
+    _MENU_DESIGN_W = 920
+    _MENU_DESIGN_H = 540
+
     def __init__(self):
+        boot_t0 = time.perf_counter()
+        self._shutdown_done = False
+        _tk_t0 = time.perf_counter()
         super().__init__()
+        emit_timing_metric("boot.tk_root", ms=(time.perf_counter() - _tk_t0) * 1000.0)
+        _logging_t0 = time.perf_counter()
+        try:
+            _configure_screen_logging()
+        except Exception:
+            pass
+        emit_timing_metric("boot.screen_logging", ms=(time.perf_counter() - _logging_t0) * 1000.0)
+
         self.title("AURUM Terminal")
         self.configure(bg=BG)
+        # Defensive: forca Tk default palette pra BG em tudo. Se alguma
+        # Frame em algum canto esquecer bg=BG explicito, o Windows
+        # mostraria SystemButtonFace (~#F0F0F0) = "branco" no fundo.
+        # tk_setPalette varre todos widget defaults e seta em massa —
+        # inclui menu/dialog/messagebox criados internamente. Chamado
+        # ANTES de chrome/widgets serem criados.
+        _palette_t0 = time.perf_counter()
+        try:
+            self.tk_setPalette(
+                background=BG, foreground=WHITE,
+                activeBackground=BG3, activeForeground=WHITE,
+                highlightColor=BORDER, highlightBackground=BG,
+            )
+        except Exception:
+            pass
+        emit_timing_metric("boot.palette", ms=(time.perf_counter() - _palette_t0) * 1000.0)
+        _dpi_t0 = time.perf_counter()
+        self._configure_windows_dpi()
         self.geometry("960x660")
         self.minsize(860, 560)
+        emit_timing_metric("boot.dpi_geometry", ms=(time.perf_counter() - _dpi_t0) * 1000.0)
 
-        # Taskbar icon
-        try:
-            import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("aurum.finance.terminal")
-        except: pass
-        try:
-            ico = ROOT / "server" / "logo" / "aurum.ico"
-            if ico.exists(): self.iconbitmap(str(ico))
-        except: pass
+        # Taskbar icon: deferred via after_idle to avoid ~70ms boot hit.
+        # Icon and AppUserModelID are cosmetic; apply after window renders.
+        _icon_scheduled_t0 = time.perf_counter()
+        def _apply_taskbar_icon():
+            _icon_t0 = time.perf_counter()
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("aurum.finance.terminal")
+            except: pass
+            try:
+                ico = ROOT / "server" / "logo" / "aurum.ico"
+                if ico.exists(): self.iconbitmap(str(ico))
+            except: pass
+            emit_timing_metric("boot.icon_deferred", ms=(time.perf_counter() - _icon_t0) * 1000.0)
+        self.after_idle(_apply_taskbar_icon)
+        emit_timing_metric("boot.icon", ms=(time.perf_counter() - _icon_scheduled_t0) * 1000.0)
 
+        _state_t0 = time.perf_counter()
         self.proc = None
         self.oq = queue.Queue()
+        self._ui_task_queue = queue.Queue()
+        self._ui_task_after_id = None
+        self._ui_alive = True
         self.history = []  # nav history for back
         self._exec_progress_after_id = None
         self._exec_visual_mode = None
@@ -965,7 +602,7 @@ class App(tk.Tk):
         self._exec_last_feed_at = 0.0
         self._exec_managed_info = None
 
-        # ─── Bloomberg 3D main menu state ────────────────
+        # --- Bloomberg 3D main menu state ----------------
         self._start_t = time.monotonic()
         self._menu_live = {
             "markets":  {},
@@ -980,19 +617,275 @@ class App(tk.Tk):
         self._menu_live_after_id = None  # after() handle for 5s refresh
         self._active_tile_slots = self._TILE_SLOTS         # overridden by splash
         self._active_cd_center = (self._CD_CX, self._CD_CY)  # overridden by splash
+        self._splash_viewport = (0, 0, self._SPLASH_DESIGN_W, self._SPLASH_DESIGN_H)
+        self._menu_viewport = (0, 0, self._MENU_DESIGN_W, self._MENU_DESIGN_H)
+        self._splash_render_scale = 1.0
+        self._menu_render_scale = 1.0
 
-        # ─── Splash HL1 gate state ────────────────────────
+        # --- Splash HL1 gate state ------------------------
         self._splash_cursor_on = True
         self._splash_pulse_after_id = None
         self._splash_canvas = None
+        self._timing_starts: dict[str, float] = {}
+        emit_timing_metric("boot.state_init", ms=(time.perf_counter() - _state_t0) * 1000.0)
 
-        threading.Thread(target=_fetch, daemon=True).start()
+        # Lazy-init MAIN_GROUPS (deferred to avoid ~640ms pandas+requests import
+        # at module level; pays the cost here on first App() instantiation).
+        _ensure_main_groups()
+
+        chrome_t0 = time.perf_counter()
+        if _boot_workers_enabled():
+            threading.Thread(target=_fetch, daemon=True).start()
         self._chrome()
+        emit_timing_metric("boot.chrome", ms=(time.perf_counter() - chrome_t0) * 1000.0)
+        self._ui_schedule_drain()
+        splash_t0 = time.perf_counter()
         self._splash()
+        emit_timing_metric("boot.enter_splash", ms=(time.perf_counter() - splash_t0) * 1000.0)
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self._quit)
+        emit_timing_metric("boot.until_shell_ready", ms=(time.perf_counter() - boot_t0) * 1000.0)
 
-    # ─── CHROME ──────────────────────────────────────────
+        # SSH tunnel pro cockpit API.
+        # Boot sync so prepara o manager; o start real vai pro loop do Tk
+        # para nao deixar a janela branca enquanto o ssh handshaking roda.
+        tunnel_t0 = time.perf_counter()
+        self._aurum_tunnel = None
+        if _boot_workers_enabled():
+            try:
+                tunnel = _boot_tunnel_manager()
+                if tunnel is not None:
+                    self._aurum_tunnel = tunnel
+                    self.after(25, self._start_tunnel_async)
+            except Exception:
+                # Tunnel falhou -> launcher segue em local-mode.
+                self._aurum_tunnel = None
+        emit_timing_metric("boot.tunnel_start", ms=(time.perf_counter() - tunnel_t0) * 1000.0)
+
+        # ShadowPoller: le cockpit API em thread separada e cacheia.
+        # UI thread nunca faz HTTP sync (evita freeze da mainloop).
+        self._aurum_shadow_poller = None
+        poller_t0 = time.perf_counter()
+        if _boot_workers_enabled():
+            try:
+                from launcher_support.shadow_poller import ShadowPoller
+                from launcher_support.tunnel_registry import set_shadow_poller
+                from launcher_support.engines_live_view import _get_cockpit_client
+                poller = ShadowPoller(
+                    client_factory=_get_cockpit_client,
+                    engine="millennium",
+                    poll_sec=5.0,
+                )
+                poller.start()
+                set_shadow_poller(poller)
+                self._aurum_shadow_poller = poller
+            except Exception:
+                pass
+        emit_timing_metric("boot.shadow_poller_start", ms=(time.perf_counter() - poller_t0) * 1000.0)
+
+        # Pre-warm cockpit runs + paper snapshot caches off the main thread
+        # so first click on ENGINES renders from cache. Shadow is already
+        # covered by ShadowPoller above.
+        warm_t0 = time.perf_counter()
+        tunnel_ref = self._aurum_tunnel
+        app_ref = self
+        if _boot_workers_enabled():
+            try:
+                def _warm_cockpit_caches() -> None:
+                    import time as _t
+                    # SSH tunnel starts async; wait for UP before firing the
+                    # HTTP fetch (connection refused otherwise -> cache []).
+                    if tunnel_ref is not None:
+                        deadline = _t.monotonic() + 15.0
+                        while _t.monotonic() < deadline:
+                            # Bail if the app is shutting down so we don't
+                            # block quit on a straggling HTTP fetch.
+                            if not getattr(app_ref, "_ui_alive", True):
+                                return
+                            try:
+                                st = tunnel_ref.status
+                                if hasattr(st, "name") and st.name == "UP":
+                                    break
+                            except Exception:
+                                pass
+                            _t.sleep(0.2)
+                        else:
+                            return
+                    if not getattr(app_ref, "_ui_alive", True):
+                        return
+                    try:
+                        from launcher_support.engines_live_view import (
+                            _load_cockpit_runs_sync,
+                            _fetch_paper_extras_sync,
+                            _fetch_remote_shadow_run_sync,
+                            _COCKPIT_RUNS_CACHE,
+                            _COCKPIT_RUNS_LOCK,
+                            _PAPER_SNAPSHOT_CACHE,
+                            _PAPER_SNAPSHOT_LOCK,
+                            _REMOTE_SHADOW_RUN_CACHE,
+                            _REMOTE_SHADOW_RUN_LOCK,
+                        )
+                        rows = _load_cockpit_runs_sync()
+                        if not rows:
+                            return
+                        with _COCKPIT_RUNS_LOCK:
+                            _COCKPIT_RUNS_CACHE["ts"] = _t.monotonic()
+                            _COCKPIT_RUNS_CACHE["runs"] = list(rows)
+                            _COCKPIT_RUNS_CACHE["loading"] = False
+                        for row in rows:
+                            engine_ok = str(row.get("engine") or "").lower() == "millennium"
+                            status_ok = str(row.get("status") or "").lower() == "running"
+                            mode = str(row.get("mode") or "").lower()
+                            rid = str(row.get("run_id") or "")
+                            if not (engine_ok and status_ok and rid):
+                                continue
+                            if mode == "paper":
+                                try:
+                                    payload = _fetch_paper_extras_sync(rid)
+                                    with _PAPER_SNAPSHOT_LOCK:
+                                        _PAPER_SNAPSHOT_CACHE[rid] = (_t.monotonic(), payload)
+                                except Exception:
+                                    pass
+                            elif mode == "shadow":
+                                # Warm the per-run shadow cache too — sem isso
+                                # o primeiro click no picker RUNNING NOW ainda
+                                # espera o worker assíncrono terminar o fetch
+                                # inicial (heartbeat + trades via VPS).
+                                try:
+                                    payload = _fetch_remote_shadow_run_sync(rid)
+                                    with _REMOTE_SHADOW_RUN_LOCK:
+                                        _REMOTE_SHADOW_RUN_CACHE[rid] = (_t.monotonic(), payload)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                threading.Thread(
+                    target=_warm_cockpit_caches,
+                    name="aurum-cockpit-cache-warmup",
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
+        emit_timing_metric(
+            "boot.cockpit_cache_warmup_start",
+            ms=(time.perf_counter() - warm_t0) * 1000.0,
+        )
+
+    def _start_tunnel_async(self) -> None:
+        """Start the cockpit tunnel off the critical paint path."""
+        tunnel = getattr(self, "_aurum_tunnel", None)
+        if tunnel is None:
+            return
+
+        def _worker():
+            t0 = time.perf_counter()
+            try:
+                tunnel.start()
+            except Exception:
+                pass
+            emit_timing_metric(
+                "boot.tunnel_start_async",
+                ms=(time.perf_counter() - t0) * 1000.0,
+            )
+
+        threading.Thread(
+            target=_worker,
+            name="aurum-tunnel-start",
+            daemon=True,
+        ).start()
+
+    def _shutdown_runtime(self) -> None:
+        """Stop background services idempotently for WM_DELETE and tests.
+
+        Fase FAST (sync, ~10ms): flags + after_cancel. Tudo que e cheap.
+        Fase SLOW (daemon thread): poller.stop + tunnel.stop. Antes rodava
+        sync e bloqueava o close button por ate 3s (tunnel.terminate ->
+        wait 1s -> kill -> wait 1s -> watchdog join 1s no pior caso com
+        SSH.exe preso no Windows). Isso fazia o operador ter que apertar
+        X duas vezes — primeiro clique congelava aguardando cleanup,
+        segundo clique fechava a janela.
+
+        Agora: FAST part + kick daemon thread e destroy() retorna em
+        <50ms. Daemon thread termina quando process exit (SSH.exe
+        orphan eh reapado no proximo startup via _reap_orphan_tunnel_on_port).
+        """
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+        self._ui_alive = False
+        try:
+            aid = getattr(self, "_ui_task_after_id", None)
+            if aid:
+                try:
+                    self.after_cancel(aid)
+                except Exception:
+                    pass
+                self._ui_task_after_id = None
+        except Exception:
+            pass
+
+        # SLOW phase em daemon thread — nao bloqueia destroy()
+        poller = getattr(self, "_aurum_shadow_poller", None)
+        tunnel = getattr(self, "_aurum_tunnel", None)
+        self._aurum_shadow_poller = None
+        self._aurum_tunnel = None
+        if poller is None and tunnel is None:
+            return  # nada pra limpar
+
+        try:
+            from launcher_support.tunnel_registry import (
+                set_shadow_poller, set_tunnel_manager,
+            )
+        except Exception:
+            set_shadow_poller = None
+            set_tunnel_manager = None
+
+        def _bg_cleanup() -> None:
+            if poller is not None:
+                try:
+                    poller.stop(timeout_sec=0.5)
+                except Exception:
+                    pass
+                if set_shadow_poller is not None:
+                    try:
+                        set_shadow_poller(None)
+                    except Exception:
+                        pass
+            if tunnel is not None:
+                try:
+                    tunnel.stop(timeout_sec=1.0)
+                except Exception:
+                    pass
+                if set_tunnel_manager is not None:
+                    try:
+                        set_tunnel_manager(None)
+                    except Exception:
+                        pass
+
+        import threading
+        threading.Thread(
+            target=_bg_cleanup, daemon=True,
+            name="aurum-shutdown-cleanup",
+        ).start()
+
+    def destroy(self):
+        self._shutdown_runtime()
+        return super().destroy()
+
+    def _configure_windows_dpi(self) -> None:
+        """Prefer per-monitor DPI awareness on Windows laptops with scaling."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+    # --- CHROME ------------------------------------------
     def _chrome(self):
         # Ticker
         tb = tk.Frame(self, bg=BG2, height=18); tb.pack(fill="x"); tb.pack_propagate(False)
@@ -1005,115 +898,30 @@ class App(tk.Tk):
         # Header
         hd = tk.Frame(self, bg=BG, height=26); hd.pack(fill="x"); hd.pack_propagate(False)
         hc = tk.Frame(hd, bg=BG); hc.pack(fill="both", expand=True, padx=10)
-        tk.Label(hc, text="AURUM", font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        # Macro Brain quick-return button — futuristic cyan, always top-left
-        # after AURUM brand. Sempre visível.
-        self.h_macro_btn = tk.Label(
-            hc, text=" ▸ MACRO ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#00eaff", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_macro_btn.pack(side="left", padx=(8, 0))
-        self.h_macro_btn.bind(
-            "<Button-1>", lambda e: self._macro_brain_menu()
-        )
-        self.h_macro_btn.bind(
-            "<Enter>",
-            lambda e: self.h_macro_btn.configure(bg="#00ffff", fg="#001015")
-        )
-        self.h_macro_btn.bind(
-            "<Leave>",
-            lambda e: self.h_macro_btn.configure(bg="#00eaff", fg="#000000")
-        )
+        tk.Label(hc, text="AURUM", font=(FONT, 8, "bold"), fg=WHITE, bg=BG).pack(side="left")
+        # Neutral header nav buttons — all share the terminal chrome palette
+        # (BG2 fill, WHITE text, subtle BG3/AMBER_B hover). No per-button hue.
+        def _mk_nav_btn(text: str, cmd) -> tk.Label:
+            btn = tk.Label(
+                hc, text=text, font=(FONT, 8, "bold"),
+                fg=WHITE, bg=BG2, cursor="hand2", padx=6, pady=0,
+            )
+            btn.pack(side="left", padx=(4, 0))
+            btn.bind("<Button-1>", lambda e: cmd())
+            btn.bind("<Enter>",
+                     lambda e: btn.configure(bg=BG3, fg=AMBER_B))
+            btn.bind("<Leave>",
+                     lambda e: btn.configure(bg=BG2, fg=WHITE))
+            return btn
 
-        # Main menu quick-access — magenta futuristic, sempre visível.
-        # Complementa MACRO button: uma click → cockpit, outra → terminal/engines.
-        self.h_main_btn = tk.Label(
-            hc, text=" ≡ MAIN ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#ff00a0", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_main_btn.pack(side="left", padx=(4, 0))
-        self.h_main_btn.bind("<Button-1>", lambda e: self._menu("main"))
-        self.h_main_btn.bind(
-            "<Enter>",
-            lambda e: self.h_main_btn.configure(bg="#ff33b0", fg="#150005")
-        )
-        self.h_main_btn.bind(
-            "<Leave>",
-            lambda e: self.h_main_btn.configure(bg="#ff00a0", fg="#000000")
-        )
-
-        # BACKTEST — verde neon · research seguro, sem capital real.
-        self.h_backtest_btn = tk.Label(
-            hc, text=" ◆ BACKTEST ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#00ff80", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_backtest_btn.pack(side="left", padx=(4, 0))
-        self.h_backtest_btn.bind(
-            "<Button-1>", lambda e: self._strategies_backtest()
-        )
-        self.h_backtest_btn.bind(
-            "<Enter>",
-            lambda e: self.h_backtest_btn.configure(bg="#33ffa0", fg="#001505")
-        )
-        self.h_backtest_btn.bind(
-            "<Leave>",
-            lambda e: self.h_backtest_btn.configure(bg="#00ff80", fg="#000000")
-        )
-
-        # ENGINES — âmbar · futuros ao vivo rodando (capital real · safety gates).
-        self.h_engines_btn = tk.Label(
-            hc, text=" ▣ ENGINES ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#ff8c00", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_engines_btn.pack(side="left", padx=(4, 0))
-        self.h_engines_btn.bind(
-            "<Button-1>", lambda e: self._strategies_live()
-        )
-        self.h_engines_btn.bind(
-            "<Enter>",
-            lambda e: self.h_engines_btn.configure(bg="#ffaa33", fg="#150a00")
-        )
-        self.h_engines_btn.bind(
-            "<Leave>",
-            lambda e: self.h_engines_btn.configure(bg="#ff8c00", fg="#000000")
-        )
-
-        # DATA — púrpura · runs · backtests · reports · trades DB
-        self.h_data_btn = tk.Label(
-            hc, text=" ▤ DATA ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#a855f7", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_data_btn.pack(side="left", padx=(4, 0))
-        self.h_data_btn.bind(
-            "<Button-1>", lambda e: self._data_center()
-        )
-        self.h_data_btn.bind(
-            "<Enter>",
-            lambda e: self.h_data_btn.configure(bg="#c084fc", fg="#0a0010")
-        )
-        self.h_data_btn.bind(
-            "<Leave>",
-            lambda e: self.h_data_btn.configure(bg="#a855f7", fg="#000000")
-        )
-
-        # ARBITRAGE — amarelo · delta-neutral funding + basis + spot spreads
-        # Single entry point for everything JANE STREET related.
-        self.h_arb_btn = tk.Label(
-            hc, text=" ⇄ ARBITRAGE ", font=(FONT, 8, "bold"),
-            fg="#000000", bg="#ffd700", cursor="hand2", padx=6, pady=0,
-        )
-        self.h_arb_btn.pack(side="left", padx=(4, 0))
-        self.h_arb_btn.bind(
-            "<Button-1>", lambda e: self._arbitrage_hub()
-        )
-        self.h_arb_btn.bind(
-            "<Enter>",
-            lambda e: self.h_arb_btn.configure(bg="#ffed4e", fg="#1a1500")
-        )
-        self.h_arb_btn.bind(
-            "<Leave>",
-            lambda e: self.h_arb_btn.configure(bg="#ffd700", fg="#000000")
-        )
+        self.h_macro_btn    = _mk_nav_btn(" ▸ MACRO ",     self._macro_brain_menu)
+        self.h_main_btn     = _mk_nav_btn(" = MAIN ",      lambda: self._menu("main"))
+        self.h_backtest_btn = _mk_nav_btn(" ◆ BACKTEST ",  self._strategies_backtest)
+        self.h_engines_btn  = _mk_nav_btn(" ▣ ENGINES ",   self._strategies_live)
+        self.h_data_btn     = _mk_nav_btn(" ▤ DATA ",      self._data_center)
+        self.h_arb_btn      = _mk_nav_btn(" ⇄ ARBITRAGE ", self._arbitrage_hub)
+        # Extra left padding for the first button so it clears the AURUM brand.
+        self.h_macro_btn.pack_configure(padx=(8, 0))
 
         self.h_path = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_path.pack(side="left", padx=(8,0))
         self.h_stat = tk.Label(hc, text="", font=(FONT, 8), fg=DIM, bg=BG); self.h_stat.pack(side="right")
@@ -1123,6 +931,21 @@ class App(tk.Tk):
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
         self.main = tk.Frame(self, bg=BG); self.main.pack(fill="both", expand=True)
+        # screens_container is a SIBLING of self.main (direct child of root),
+        # NOT a child of self.main — because _clr() destroys all children of
+        # self.main in legacy path. Sibling survives across switches.
+        self.screens_container = tk.Frame(self, bg=BG)
+        # Packed lazily on first screens.show(); pack_forget-ed when legacy path active.
+        from launcher_support.screens.manager import ScreenManager
+        from launcher_support.screens.registry import register_default_screens
+        self.screens = ScreenManager(parent=self.screens_container)
+        register_default_screens(
+            self.screens,
+            app=self,
+            conn=_get_conn(),
+            root_path=ROOT,
+            tagline=SYSTEM_TAGLINE,
+        )
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # Footer
@@ -1178,7 +1001,40 @@ class App(tk.Tk):
         # chain instead of stacking.
         self._funding_alive = False
         self._funding_timer_armed = False
+        # ENGINES LIVE cockpit owns ShadowPoller + WSPriceFeed + detail
+        # tickers. Without this teardown, navigating away (BACKTEST, MAIN,
+        # DATA, ...) leaves those pollers alive in background threads,
+        # contending for aurum.db and the GIL. The 2026-04-20 freeze
+        # reproduced when the user clicked BACKTEST after ENGINES LIVE —
+        # picker render never got enough main-thread time to complete.
+        prior_live = getattr(self, "_engines_live_handle", None)
+        if prior_live and callable(prior_live.get("cleanup")):
+            try:
+                prior_live["cleanup"]()
+            except Exception:
+                pass
+            self._engines_live_handle = None
         for w in self.main.winfo_children(): w.destroy()
+        # Default to LEGACY mode: self.main visible, screens_container hidden.
+        # Migrated-screen wrappers (e.g. _splash) flip this AFTER _clr.
+        sc = getattr(self, "screens_container", None)
+        if sc is not None and sc.winfo_manager():
+            sc.pack_forget()
+        if not self.main.winfo_manager():
+            self.main.pack(fill="both", expand=True)
+        # If a migrated screen is currently active, give it an on_exit tick
+        # so timers/bindings get cancelled when legacy navigation happens
+        # without going through ScreenManager.show().
+        mgr = getattr(self, "screens", None)
+        if mgr is not None and mgr.current_name() is not None:
+            current = mgr._cache.get(mgr.current_name())
+            if current is not None:
+                try:
+                    current.on_exit()
+                except Exception:
+                    pass
+                current.pack_forget()
+                mgr._current_name = None
 
     def _clear_kb(self):
         """Clear our custom global keybindings before a screen switch.
@@ -1203,6 +1059,41 @@ class App(tk.Tk):
             callback()
         self.bind(key, wrapper)
 
+    def _ui_call_soon(self, callback):
+        """Queue a UI callback from any thread; drained on Tk main thread."""
+        if not getattr(self, "_ui_alive", False):
+            return
+        try:
+            self._ui_task_queue.put_nowait(callback)
+        except Exception:
+            return
+
+    def _ui_schedule_drain(self):
+        if not getattr(self, "_ui_alive", False):
+            return
+        try:
+            self._ui_task_after_id = self.after(50, self._ui_drain_tasks)
+        except (RuntimeError, tk.TclError):
+            self._ui_task_after_id = None
+
+    def _ui_drain_tasks(self):
+        self._ui_task_after_id = None
+        if not getattr(self, "_ui_alive", False):
+            return
+        drained = 0
+        max_drain = 200
+        while drained < max_drain:
+            try:
+                callback = self._ui_task_queue.get_nowait()
+            except queue.Empty:
+                break
+            drained += 1
+            try:
+                callback()
+            except Exception:
+                pass
+        self._ui_schedule_drain()
+
     def _tick(self):
         self.t_clk.configure(text=datetime.now().strftime("%H:%M:%S"))
         self.t_lbl.configure(text=_ticker_str(), fg=AMBER_D)
@@ -1218,7 +1109,7 @@ class App(tk.Tk):
             self.h_site.configure(text="")
         self.after(3000, self._tick)
 
-    # ─── Bloomberg 3D menu — live data fetchers ──────────
+    # --- Bloomberg 3D menu — live data fetchers ----------
     # Each fetcher returns {"line1","line2","line3","line4"} of strings.
     # Any failure → "—". Never raises. Called from a worker thread.
 
@@ -1244,7 +1135,7 @@ class App(tk.Tk):
                 lines["line2"] = "ETH —"
             lines["line3"] = f"{len(UNIVERSE)} pairs"
             try:
-                from core.portfolio import detect_macro
+                from core.risk.portfolio import detect_macro
                 lines["line4"] = f"MACRO {detect_macro()}"
             except Exception:
                 lines["line4"] = "MACRO —"
@@ -1385,7 +1276,7 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    # ─── Bloomberg 3D menu — canvas renderers ────────────
+    # --- Bloomberg 3D menu — canvas renderers ------------
     # All drawing happens on one full-frame canvas. Tiles are isometric
     # boxes built from lines/polygons; the CD at the center uses ovals/arcs.
 
@@ -1403,8 +1294,8 @@ class App(tk.Tk):
         ("sw", 192, 480),
         ("se", 728, 480),
     ]
-    _TILE_W = 220
-    _TILE_H = 118
+    _TILE_W = 340
+    _TILE_H = 200
     _TILE_DEPTH = 16
 
     _CD_CX = 460
@@ -1425,10 +1316,112 @@ class App(tk.Tk):
         except Exception:
             return hex_color
 
+    @staticmethod
+    def _calc_centered_viewport(
+        canvas_w: int,
+        canvas_h: int,
+        design_w: int,
+        design_h: int,
+    ) -> tuple[int, int, int, int]:
+        """Return a centered design-space viewport within the live canvas."""
+        live_w = max(int(canvas_w or 0), design_w)
+        live_h = max(int(canvas_h or 0), design_h)
+        x0 = max((live_w - design_w) // 2, 0)
+        y0 = max((live_h - design_h) // 2, 0)
+        return x0, y0, x0 + design_w, y0 + design_h
+
+    def _center_canvas_items(self, canvas, design_w: int, design_h: int) -> tuple[int, int, int, int]:
+        """Center an already-rendered fixed-layout canvas within the live viewport."""
+        viewport = self._calc_centered_viewport(
+            canvas.winfo_width(),
+            canvas.winfo_height(),
+            design_w,
+            design_h,
+        )
+        items = canvas.find_all()
+        if not items:
+            return viewport
+        bbox = canvas.bbox(*items)
+        if not bbox:
+            return viewport
+        cur_cx = (bbox[0] + bbox[2]) / 2
+        cur_cy = (bbox[1] + bbox[3]) / 2
+        target_cx = viewport[0] + (design_w / 2)
+        target_cy = viewport[1] + (design_h / 2)
+        canvas.move("all", target_cx - cur_cx, target_cy - cur_cy)
+        return viewport
+
+    @staticmethod
+    def _scale_canvas_text_fonts(canvas, ratio: float) -> None:
+        if abs(ratio - 1.0) < 0.001:
+            return
+        for item in canvas.find_all():
+            if canvas.type(item) != "text":
+                continue
+            font_name = canvas.itemcget(item, "font")
+            if not font_name:
+                continue
+            try:
+                actual = tkfont.Font(font=font_name).actual()
+                size = int(actual.get("size", 8) or 8)
+                family = actual.get("family", FONT)
+                weight = actual.get("weight", "normal")
+                slant = actual.get("slant", "roman")
+                underline = int(actual.get("underline", 0) or 0)
+                overstrike = int(actual.get("overstrike", 0) or 0)
+                new_size = max(6, int(round(abs(size) * ratio)))
+                if size < 0:
+                    new_size = -new_size
+                canvas.itemconfigure(
+                    item,
+                    font=(family, new_size, weight, slant, underline, overstrike),
+                )
+            except Exception:
+                continue
+
+    def _apply_canvas_scale(self, canvas, design_w: int, design_h: int, previous_scale: float) -> tuple[tuple[int, int, int, int], float]:
+        live_w = max(canvas.winfo_width(), 1)
+        live_h = max(canvas.winfo_height(), 1)
+        scale = max(min(live_w / design_w, live_h / design_h), 1.0)
+        ratio = scale / max(previous_scale, 0.001)
+        if canvas.find_all():
+            if abs(scale - previous_scale) >= 0.01:
+                canvas.scale("all", 0, 0, ratio, ratio)
+                self._scale_canvas_text_fonts(canvas, ratio)
+            scaled_w = int(round(design_w * scale))
+            scaled_h = int(round(design_h * scale))
+            x0 = max((live_w - scaled_w) // 2, 0)
+            y0 = max((live_h - scaled_h) // 2, 0)
+            bbox = canvas.bbox("all")
+            if bbox:
+                canvas.move("all", x0 - bbox[0], y0 - bbox[1])
+            return (x0, y0, x0 + scaled_w, y0 + scaled_h), scale
+        viewport = self._calc_centered_viewport(live_w, live_h, design_w, design_h)
+        return viewport, scale
+
+    def _schedule_first_paint_metric(self, name: str) -> None:
+        self._timing_starts[name] = time.perf_counter()
+
+        def _emit() -> None:
+            started = self._timing_starts.pop(name, None)
+            if started is None:
+                return
+            emit_timing_metric(
+                f"paint.{name}",
+                ms=(time.perf_counter() - started) * 1000.0,
+            )
+
+        try:
+            self.after_idle(_emit)
+        except Exception:
+            self._timing_starts.pop(name, None)
+
     def _tile_rect(self, idx: int) -> tuple:
         slots = getattr(self, "_active_tile_slots", None) or self._TILE_SLOTS
         _, cx, cy = slots[idx]
-        w, h = self._TILE_W, self._TILE_H
+        scale = max(getattr(self, "_menu_render_scale", 1.0), 1.0)
+        w = int(round(self._TILE_W * scale))
+        h = int(round(self._TILE_H * scale))
         return (cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2)
 
     def _draw_cd_center(self, canvas, r=None) -> None:
@@ -1564,6 +1557,15 @@ class App(tk.Tk):
             canvas.create_text(value_x, yy, anchor="w", text=value, font=(FONT, 8, "bold"),
                                fill=color, tags=tag)
 
+    def _bind_canvas_window_width(self, canvas, window_id, pad_x: int = 0, min_width: int = 0) -> None:
+        def _fit(_event=None):
+            live_w = max(canvas.winfo_width(), 1)
+            inner_w = max(live_w - pad_x, min_width)
+            canvas.coords(window_id, 0, 0)
+            canvas.itemconfigure(window_id, width=inner_w)
+        canvas.bind("<Configure>", _fit)
+        _fit()
+
     def _ui_page_shell(self, title: str, subtitle: str = "",
                        pad_x: int = 28, pad_y: int = 18,
                        content_width: int | None = None) -> tuple[tk.Frame, tk.Frame]:
@@ -1593,11 +1595,20 @@ class App(tk.Tk):
             inner = tk.Frame(canvas, bg=BG, width=content_width)
             inner.bind("<Configure>", lambda e: canvas.configure(
                 scrollregion=canvas.bbox("all")))
-            canvas.create_window((0, 0), window=inner, anchor="nw",
-                                 width=content_width)
+            window_id = canvas.create_window((0, 0), window=inner, anchor="nw",
+                                             width=content_width)
+            def _fit_inner(_event=None):
+                live_w = max(canvas.winfo_width(), 1)
+                gutter = 28
+                inner_w = max(content_width, live_w - gutter)
+                offset_x = max((live_w - inner_w) // 2, 0)
+                canvas.coords(window_id, offset_x, 0)
+                canvas.itemconfigure(window_id, width=inner_w)
+            canvas.bind("<Configure>", _fit_inner)
             canvas.configure(yscrollcommand=sb.set)
             canvas.pack(side="left", fill="both", expand=True)
             sb.pack(side="right", fill="y")
+            _fit_inner()
             def _on_wheel(event):
                 canvas.yview_scroll(-1 * (event.delta // 120), "units")
             def _enter_canvas(event):
@@ -1766,18 +1777,26 @@ class App(tk.Tk):
     def _menu_tiles_repaint_text(self) -> None:
         if self._menu_canvas is None:
             return
-        for idx in range(4):
-            self._draw_isometric_tile(self._menu_canvas, idx, idx == self._menu_focused_tile)
+        try:
+            screen = getattr(self, "screens", None)._cache.get("main_menu")
+        except Exception:
+            screen = None
+        if screen is not None and hasattr(screen, "redraw_tiles"):
+            try:
+                screen.redraw_tiles()
+                return
+            except Exception:
+                pass
 
     def _menu_tile_focus(self, idx: int) -> None:
         if not (0 <= idx <= 3):
             return
-        prev = self._menu_focused_tile
         self._menu_focused_tile = idx
         if self._menu_canvas is None:
             return
-        self._draw_isometric_tile(self._menu_canvas, prev, False)
-        self._draw_isometric_tile(self._menu_canvas, idx, True)
+        if getattr(self, "_menu_expanded_tile", None) is None:
+            self._menu_tiles_repaint_text()
+            return
         self._draw_spokes(self._menu_canvas, idx)
 
     def _menu_tile_focus_delta(self, delta: int) -> None:
@@ -1788,7 +1807,10 @@ class App(tk.Tk):
             return
         children = MAIN_GROUPS[self._menu_expanded_tile][3]
         self._menu_sub_focus = (self._menu_sub_focus + delta) % len(children)
-        self._menu_sub_render(self._menu_expanded_tile)
+        # Full rebuild keeps chrome + submenu in the same scale space;
+        # incremental _menu_sub_render drew at design coords on an already
+        # scaled canvas and left the new rows off-center.
+        self._menu_tile_expand_impl(self._menu_expanded_tile, preserve_sub_focus=True)
 
     def _menu_sub_select(self, tile_idx: int, sub_idx: int) -> None:
         if not (0 <= tile_idx <= 3):
@@ -1850,7 +1872,7 @@ class App(tk.Tk):
         except Exception:
             self._menu_live_after_id = None
 
-    # ─── SPLASH (Layer 0) — HL1 Black Mesa gate ──────────
+    # --- SPLASH (Layer 0) — HL1 Black Mesa gate ----------
     def _splash_on_click(self) -> None:
         """Click / ENTER / space handler — route to Macro Brain cockpit first."""
         if self._splash_pulse_after_id is not None:
@@ -1926,104 +1948,45 @@ class App(tk.Tk):
                        fill=AMBER_D, outline="")
 
         # Label
-        cv.create_text(cx, cy + R + 12, text="Ω  SIGNAL  TOPOLOGY",
+        cv.create_text(cx, cy + R + 12, text="O  SIGNAL  TOPOLOGY",
                        font=(FONT, 7), fill=DIM2, anchor="center")
 
         self.after(33, self._cd_draw)  # ~30 fps
 
     def _splash(self):
-        """Premium institutional landing screen."""
+        """Premium institutional landing screen (migrated to ScreenManager)."""
         self._clr()
         self._clear_kb()
         self.history.clear()
-        self.h_path.configure(text="")
-        self.h_stat.configure(text="READY", fg=AMBER_B)
-        self.f_lbl.configure(text="ENTER proceed  |  CLICK proceed  |  Q quit")
-
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=640)
-        canvas.pack(fill="both", expand=True)
-        self._menu_canvas = canvas
-        self._splash_canvas = canvas
-
-        canvas.create_line(48, 48, 872, 48, fill=AMBER_D, width=1)
-        canvas.create_line(48, 596, 872, 596, fill=DIM2, width=1)
-
-        # Centered column: CD logo → wordmark → tagline. Single
-        # vertical axis (x=460) — the old layout had the logo pinned
-        # top-left while the title floated center, which read as
-        # misaligned. Stacking everything on the axis is cleaner.
-        self._active_cd_center = (460, 108)
-        self._draw_cd_center(canvas, r=28)
-
-        canvas.create_text(460, 186, anchor="center", text=BANNER_PREMIUM,
-                           font=(FONT, 18, "bold"), fill=AMBER, tags="wordmark")
-        canvas.create_text(460, 232, anchor="center", text=SYSTEM_TAGLINE,
-                           font=(FONT, 9, "bold"), fill=AMBER_D, tags="subtitle")
-        # Single thin rule under the tagline — separates brand stack
-        # from the session overview panel below without the old
-        # double-scanline clutter.
-        canvas.create_line(280, 258, 640, 258, fill=AMBER_D, width=1,
-                           tags="subtitle")
-
-        try:
-            st = _conn.status_summary()
-            market_val = st.get("market", "-")
-        except Exception:
-            market_val = "-"
-        try:
-            keys = self._load_json("keys.json")
-            has_tg = bool(keys.get("telegram", {}).get("bot_token"))
-            has_keys = bool(keys.get("demo", {}).get("api_key") or keys.get("testnet", {}).get("api_key"))
-        except Exception:
-            has_tg = False
-            has_keys = False
-
-        market_cell = "LIVE" if market_val and market_val != "-" else "OFFLINE"
-        market_col = GREEN if market_cell == "LIVE" else DIM
-        conn_cell = "BINANCE READY" if has_keys else "OFFLINE"
-        conn_col = GREEN if has_keys else DIM
-        tg_cell = "ONLINE" if has_tg else "OFFLINE"
-        tg_col = GREEN if has_tg else DIM
-
-        # Single session overview panel, two tidy columns — divider
-        # removed, the visual hierarchy is carried by the panel border
-        # and the column spacing alone.
-        self._draw_panel(canvas, 140, 296, 780, 414, title="SESSION OVERVIEW",
-                         accent=AMBER, tag="splash")
-        self._draw_kv_rows(canvas, 168, 330, [
-            ("ENGINE", "AURUM CORE", WHITE),
-            ("MODE", "OPERATOR CONSOLE", AMBER_B),
-            ("ACCOUNT", "PAPER · MULTI", WHITE),
-            ("ENVIRONMENT", "LOCAL", WHITE),
-        ], value_x=316, tag="splash")
-        self._draw_kv_rows(canvas, 472, 330, [
-            ("MARKET FEED", market_cell, market_col),
-            ("CONNECTION", conn_cell, conn_col),
-            ("TELEGRAM", tg_cell, tg_col),
-            ("RISK", "KILL-SWITCH ARMED", RED),
-        ], value_x=640, tag="splash")
-
-        # One pulsing prompt, nothing else — the old layout had
-        # three stacked call-to-action lines which competed. The
-        # single blinking line reads like a terminal cursor.
-        self._splash_cursor_on = True
-        canvas.create_text(460, 500, anchor="center",
-                           text="[ ENTER TO ACCESS DESK ]_",
-                           font=(FONT, 11, "bold"), fill=AMBER_B,
-                           tags="prompt2")
-
-        click_handler = lambda e: self._splash_on_click()
-        canvas.bind("<Button-1>", click_handler)
+        # Hide legacy main body; show screens_container (sibling of self.main).
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        # Legacy compat: ENTER/space still routed via Terminal-level kb.
+        # Registered here because _clear_kb wipes them on every switch.
         self._kb("<Return>", self._splash_on_click)
         self._kb("<space>", self._splash_on_click)
-        self._bind_global_nav()
+        self._schedule_first_paint_metric("splash")
+        screen = self.screens.show("splash")
+        # Expose canvas handle for legacy callers (_splash_pulse_tick, etc).
+        self._splash_canvas = screen.canvas
+        self._menu_canvas = screen.canvas
         try:
             self.focus_set()
         except Exception:
             pass
-        self._splash_pulse_after_id = self.after(500, self._splash_pulse_tick)
+
+    def _render_splash(self, _event=None) -> None:
+        canvas = self._splash_canvas
+        if canvas is None:
+            return
+        self._splash_viewport, self._splash_render_scale = self._apply_canvas_scale(
+            canvas,
+            self._SPLASH_DESIGN_W,
+            self._SPLASH_DESIGN_H,
+            self._splash_render_scale,
+        )
 
     def _splash_pulse_tick(self):
         canvas = self._splash_canvas
@@ -2047,159 +2010,51 @@ class App(tk.Tk):
         self._clr()
         self._clear_kb()
         self.history.clear()
-        # Edge-aligned 2x2: tiles extend to within 44px of the panel edge
-        # (52/868), leaving a 288px gap in the middle for the CD router.
-        self._active_tile_slots = [
-            ("nw", 192, 182),
-            ("ne", 728, 182),
-            ("sw", 192, 340),
-            ("se", 728, 340),
-        ]
-        self._active_cd_center = (460, 261)
-        self.h_stat.configure(text="DESK SELECT", fg=AMBER_B)
-        self.h_path.configure(text="> MAIN  |  DESK ROUTER")
-        self.f_lbl.configure(text="1-4 open desk  |  arrows navigate  |  enter select  |  esc landing")
-
-        f = tk.Frame(self.main, bg=BG)
-        f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0, width=920, height=540)
-        canvas.pack(fill="both", expand=True)
-        self._menu_canvas = canvas
-
-        if not any(self._menu_live.get(k) for k in ("markets", "execute", "research", "control")):
-            self._menu_live_fetch_async()
-
-        # Persistent outer frame (survives tile_expand so the screen stays enquadrada)
-        canvas.delete("frame")
-        # Double border + accent rail for a proper framed window
-        canvas.create_rectangle(24, 18, 896, 522, outline=AMBER_D,
-                                width=2, tags="frame")
-        canvas.create_rectangle(28, 22, 892, 518, outline=BORDER,
-                                width=1, tags="frame")
-        # Top title-bar with accent rail
-        canvas.create_rectangle(32, 24, 888, 40, outline="",
-                                fill=BG2, tags="frame")
-        canvas.create_line(32, 40, 888, 40, fill=AMBER, width=1, tags="frame")
-        canvas.create_text(42, 32, anchor="w", text="AURUM FINANCE",
-                           font=(FONT, 8, "bold"), fill=WHITE, tags="frame")
-        canvas.create_rectangle(170, 26, 260, 38, outline=AMBER,
-                                fill=BG, width=1, tags="frame")
-        canvas.create_text(215, 32, anchor="center", text="MAIN MENU",
-                           font=(FONT, 8, "bold"), fill=AMBER, tags="frame")
-        canvas.create_text(876, 32, anchor="e",
-                           text="DESK ROUTER / BLOOMBERG MODE",
-                           font=(FONT, 7), fill=DIM, tags="frame")
-        # Bottom rail so the frame reads as a single window
-        canvas.create_line(32, 510, 888, 510, fill=AMBER_D, width=1, tags="frame")
-
-        # ROUTING HEADER — 3 colunas limpas (DESK · PROFILE · NAV), sem logo
-        # redundante (a brand já está na title bar do frame) e sem overlap.
-        self._draw_panel(canvas, 52, 58, 868, 108,
-                         title="  ROUTING HEADER  ", accent=AMBER, tag="menu")
-
-        def _col(x_lbl, label, x_val, value, value_fg=WHITE):
-            canvas.create_text(x_lbl, 78, anchor="w", text=label,
-                               font=(FONT, 7, "bold"), fill=DIM, tags="menu")
-            canvas.create_text(x_val, 78, anchor="w", text=value,
-                               font=(FONT, 9, "bold"), fill=value_fg, tags="menu")
-
-        # Col 1 — DESK ROUTER
-        _col(66, "DESK", 110, "AURUM ROUTER", AMBER)
-        canvas.create_text(66, 96, anchor="w",
-                           text="markets · execute · research · control",
-                           font=(FONT, 7), fill=DIM, tags="menu")
-        # Divider
-        canvas.create_line(296, 68, 296, 100,
-                           fill=self._dim_color(AMBER, 0.4), width=1, tags="menu")
-        # Col 2 — PROFILE
-        _col(310, "PROFILE", 364, "PAPER · LOCAL", GREEN)
-        canvas.create_text(310, 96, anchor="w",
-                           text="operator mode · kill-switch armed",
-                           font=(FONT, 7), fill=DIM, tags="menu")
-        canvas.create_line(556, 68, 556, 100,
-                           fill=self._dim_color(AMBER, 0.4), width=1, tags="menu")
-        # Col 3 — NAVIGATION
-        _col(570, "NAV", 604, "1-4 · ENTER · ESC", WHITE)
-        canvas.create_text(570, 96, anchor="w",
-                           text="click tile · number key · esc to landing",
-                           font=(FONT, 7), fill=DIM, tags="menu")
-
-        self._draw_cd_center(canvas, r=52)
-        # Subtle separator below ROUTING HEADER (bottom separator removed —
-        # SYSTEM CONTEXT title chip was overlapping it).
-        canvas.create_line(60, 118, 860, 118,
-                           fill=self._dim_color(AMBER, 0.3),
-                           width=1, tags="menu")
-        self._draw_spokes(canvas, self._menu_focused_tile)
-        for idx in range(4):
-            self._draw_isometric_tile(canvas, idx, idx == self._menu_focused_tile)
-
-        # SYSTEM CONTEXT — panel sits 10px below tile band (tiles end @ 399),
-        # panel 412-504 gives room for title chip (402-424) + KV rows (432-492)
-        self._draw_panel(canvas, 52, 412, 868, 504,
-                         title="  SYSTEM CONTEXT  ", accent=AMBER, tag="menu")
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self._schedule_first_paint_metric("main_menu")
+        self.screens.show("main_menu")
         try:
-            market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNSET")
+            self.focus_set()
         except Exception:
-            market_label = "UNSET"
-        # Tight 16px line height fits 4 rows inside the panel body (432-492)
-        self._draw_kv_rows(canvas, 78, 434, [
-            ("ENGINE",  "DESK ROUTER",         TILE_MARKETS),
-            ("MODE",    "OPERATOR",            WHITE),
-            ("ACCOUNT", "PAPER",               GREEN),
-            ("MARKET",  market_label.upper(),  AMBER_B),
-        ], value_x=218, line_h=16, tag="menu")
-        self._draw_kv_rows(canvas, 468, 434, [
-            ("BASKET",      "DEFAULT",             WHITE),
-            ("TIMEFRAME",   "15M",                 TILE_EXECUTE),
-            ("ENVIRONMENT", "LOCAL",               TILE_RESEARCH),
-            ("RISK",        "KILL-SWITCH ARMED",   RED),
-        ], value_x=630, line_h=16, tag="menu")
+            pass
 
-        def _canvas_click(event):
-            try:
-                ex, ey = event.x, event.y
-                hit = None
-                for idx in range(4):
-                    x1, y1, x2, y2 = self._tile_rect(idx)
-                    if x1 <= ex <= x2 and y1 <= ey <= y2:
-                        hit = idx
-                        break
-                if hit is None:
-                    # Clicked outside any tile — show feedback so user knows
-                    # the click was registered (was confusing before).
-                    self.h_stat.configure(
-                        text=f"NO TILE @ ({ex},{ey})", fg=AMBER_D,
-                    )
-                    return "break"
-                label = MAIN_GROUPS[hit][0]
-                self.h_stat.configure(text=f"→ {label}", fg=AMBER_B)
-                self._menu_tile_focus(hit)
-                self._menu_tile_expand(hit)
-                return "break"
-            except Exception as exc:
-                import traceback
-                tb = traceback.format_exc()
-                try:
-                    messagebox.showerror(
-                        "Menu click",
-                        f"{type(exc).__name__}: {exc}\n\n{tb}",
-                    )
-                except Exception:
-                    pass
-        canvas.bind("<Button-1>", _canvas_click)
-
-        for n in (1, 2, 3, 4):
-            self._kb(f"<Key-{n}>", lambda _n=n - 1: (self._menu_tile_focus(_n), self._menu_tile_expand(_n)))
-        self._kb("<Right>", lambda: self._menu_tile_focus_delta(+1))
-        self._kb("<Left>", lambda: self._menu_tile_focus_delta(-1))
-        self._kb("<Down>", lambda: self._menu_tile_focus_delta(+2))
-        self._kb("<Up>", lambda: self._menu_tile_focus_delta(-2))
-        self._kb("<Tab>", lambda: self._menu_tile_focus_delta(+1))
-        self._kb("<Return>", lambda: self._menu_tile_expand(self._menu_focused_tile))
-        self._kb("<Escape>", self._splash)
-        self._bind_global_nav()
-        self._menu_live_schedule()
+    def _render_main_menu(self, _event=None) -> None:
+        canvas = self._menu_canvas
+        if canvas is None:
+            return
+        viewport, self._menu_render_scale = self._apply_canvas_scale(
+            canvas,
+            self._MENU_DESIGN_W,
+            self._MENU_DESIGN_H,
+            self._menu_render_scale,
+        )
+        # _apply_canvas_scale aligns bbox-TL to viewport-TL, which ignores
+        # the 24/18 design padding of the frame chrome and leaves content
+        # visually shifted. Re-center the bbox against the live window
+        # (same compensation splash.py applies in _render_resize). Without
+        # this, _active_tile_slots (computed below from viewport origin)
+        # ends up ~24*scale off from where tiles actually render, and any
+        # redraw via _tile_rect pulls tiles to the right.
+        live_w = max(canvas.winfo_width(), 1)
+        live_h = max(canvas.winfo_height(), 1)
+        bbox = canvas.bbox("all")
+        if bbox:
+            bbox_cx = (bbox[0] + bbox[2]) / 2
+            bbox_cy = (bbox[1] + bbox[3]) / 2
+            canvas.move("all", live_w / 2 - bbox_cx, live_h / 2 - bbox_cy)
+        self._menu_viewport = viewport
+        dx, dy = viewport[0], viewport[1]
+        scale = self._menu_render_scale
+        self._active_tile_slots = [
+            ("nw", int(round(202 * scale)) + dx, int(round(150 * scale)) + dy),
+            ("ne", int(round(718 * scale)) + dx, int(round(150 * scale)) + dy),
+            ("sw", int(round(202 * scale)) + dx, int(round(390 * scale)) + dy),
+            ("se", int(round(718 * scale)) + dx, int(round(390 * scale)) + dy),
+        ]
+        self._active_cd_center = (int(round(460 * scale)) + dx, int(round(270 * scale)) + dy)
 
     def _menu_tile_expand(self, idx: int) -> None:
         try:
@@ -2214,20 +2069,24 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-    def _menu_tile_expand_impl(self, idx: int) -> None:
+    def _menu_tile_expand_impl(self, idx: int, preserve_sub_focus: bool = False) -> None:
         if not (0 <= idx <= 3) or self._menu_canvas is None:
             return
         self._menu_expanded_tile = idx
-        self._menu_sub_focus = 0
+        if not preserve_sub_focus:
+            self._menu_sub_focus = 0
 
         canvas = self._menu_canvas
-        # Clear everything except the persistent outer "frame"
-        for i in range(4):
-            canvas.delete(f"tile{i}")
-        canvas.delete("cd")
-        canvas.delete("spokes")
-        canvas.delete("menu")
-        canvas.delete("submenu")
+        # Rebuild from scratch at design (scale-1) coords. Previously we
+        # kept the already-scaled "frame" and drew the expanded content at
+        # design coords on top, which left the two at different scales —
+        # expanded panel drifted relative to the frame. Clearing + chrome
+        # redraw + end-of-method _render_main_menu() keeps them aligned.
+        canvas.delete("all")
+        self._menu_render_scale = 1.0
+        screen = getattr(self, "_main_menu_screen", None)
+        if screen is not None:
+            screen.draw_chrome()
 
         label, key_num, color, children = MAIN_GROUPS[idx]
         # Expand uses the full inner area (leaves room for outer frame + top bar)
@@ -2302,6 +2161,11 @@ class App(tk.Tk):
         self._kb("<Key-0>", self._menu_tile_collapse)
         self._bind_global_nav()
         self.f_lbl.configure(text="1-N select path  |  click item  |  enter confirm  |  esc back")
+        # Re-apply scale now that chrome + expanded content are drawn at
+        # design coords. Without this, expand on a zoomed window leaves
+        # content at scale 1 while the header remains in design coords —
+        # equivalent layout but looks shrunk-and-off-center.
+        self._render_main_menu()
 
     def _menu_sub_render(self, idx: int) -> None:
         if self._menu_canvas is None:
@@ -2456,7 +2320,7 @@ class App(tk.Tk):
         self._kb("<Key-r>", lambda: self._menu("risk"))
         self._kb("<Key-q>", self._quit)
 
-    # ─── MENU ────────────────────────────────────────────
+    # --- MENU --------------------------------------------
     def _menu(self, key):
         # Route to specialized screens
         if key == "main":
@@ -2483,16 +2347,36 @@ class App(tk.Tk):
             self._crypto_dashboard()
             try:
                 self._dash_render_tab("backtest")
-            except Exception:
-                pass
+            except Exception as exc:
+                import traceback as _tb
+                _tb.print_exc()
+                try:
+                    self.h_stat.configure(
+                        text=f"BACKTEST RENDER FAIL: {type(exc).__name__}",
+                        fg=RED,
+                    )
+                except Exception:
+                    pass
             return
         if key == "backtest":
             # Legacy alias — same as dash-backtest for older call sites.
             self._crypto_dashboard()
             try:
                 self._dash_render_tab("backtest")
-            except Exception:
-                pass
+            except Exception as exc:
+                import traceback as _tb
+                _tb.print_exc()
+                try:
+                    self.h_stat.configure(
+                        text=f"BACKTEST RENDER FAIL: {type(exc).__name__}",
+                        fg=RED,
+                    )
+                except Exception:
+                    pass
+            return
+
+        if key == "live":
+            self._strategies_live()
             return
 
         self._clr(); self._clear_kb()
@@ -2517,7 +2401,7 @@ class App(tk.Tk):
             self._kb("<Key-0>", lambda: self._menu("main"))
             self._bind_global_nav()
 
-        # ─── MAIN MENU: Fibonacci design ─────────────────
+        # --- MAIN MENU: Fibonacci design -----------------
         if key == "main":
             f = tk.Frame(self.main, bg=BG); f.pack(fill="both", expand=True)
 
@@ -2572,7 +2456,7 @@ class App(tk.Tk):
                 start=180, extent=90, outline=AMBER_D, width=1, dash=(3, 6))
 
             # Phi label
-            fib_canvas.create_text(cx + 100, cy - 130, text="φ = 1.618", font=(FONT, 7),
+            fib_canvas.create_text(cx + 100, cy - 130, text="f = 1.618", font=(FONT, 7),
                                     fill=DIM2, anchor="w")
 
             # Title over canvas
@@ -2596,7 +2480,7 @@ class App(tk.Tk):
                 tk.Label(row, text=f" {num} ", font=(FONT, 9, "bold"), fg=BG, bg=AMBER, width=3).pack(side="left")
 
                 # Connecting dot
-                tk.Label(row, text="─", font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left")
+                tk.Label(row, text="-", font=(FONT, 7), fg=DIM2, bg=BG).pack(side="left")
 
                 nl = tk.Label(row, text=f" {name}", font=(FONT, 10, "bold"), fg=WHITE, bg=BG3,
                               anchor="w", padx=8, pady=5, width=14)
@@ -2618,29 +2502,29 @@ class App(tk.Tk):
                 if num < 10:  # Tk only supports single-digit <Key-N> bindings
                     self._kb(f"<Key-{num}>", cmd)
 
-        # ─── SUBMENUS: clean list ─────────────────────────
+        # --- SUBMENUS: clean list -------------------------
         else:
             f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
 
             # Hermes cameo background for backtest submenu
             if key == "backtest":
                 _HERMES = (
-                    "                ╭──────╮          \n"
-                    "             ╭──╯░░░░░░╰──╮       \n"
-                    "          ╭──╯░░░░░░░░░░░░╰─╮     \n"
-                    "    ──── ╱░░░░░░░░░░░░░░░░░░│     \n"
-                    "   ────╱░░░░░░░▓▓░░░░░░░░░░░│     \n"
-                    "       │░░░░░▓▓▓▓▓░░░░░░░░░╱      \n"
-                    "       │░░░░░▓▓▓▓░░░░░░░░╱        \n"
-                    "       │░░░░░░▓▓░░░░░░░╱          \n"
-                    "       │░░░░░░░░░░▒▒░╱            \n"
-                    "       │░░░░░░░░▒▒▒╱              \n"
-                    "       │░░░░░░░░▒▒│               \n"
-                    "       ╰╮░░░░░░░░╱                \n"
-                    "        ╰╮░░░░░╱                  \n"
-                    "         ╰╮░░╱                    \n"
-                    "          ╰╱                      \n"
-                    "      φ = 1.618                   \n"
+                    "                ?------?          \n"
+                    "             ?--?¦¦¦¦¦¦?--?       \n"
+                    "          ?--?¦¦¦¦¦¦¦¦¦¦¦¦?-?     \n"
+                    "    ---- ?¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦     \n"
+                    "   ----?¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦     \n"
+                    "       ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦?      \n"
+                    "       ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦?        \n"
+                    "       ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦?          \n"
+                    "       ¦¦¦¦¦¦¦¦¦¦¦¦¦¦?            \n"
+                    "       ¦¦¦¦¦¦¦¦¦¦¦¦?              \n"
+                    "       ¦¦¦¦¦¦¦¦¦¦¦¦               \n"
+                    "       ??¦¦¦¦¦¦¦¦?                \n"
+                    "        ??¦¦¦¦¦?                  \n"
+                    "         ??¦¦?                    \n"
+                    "          ??                      \n"
+                    "      f = 1.618                   \n"
                 )
                 tk.Label(f, text=_HERMES, font=(FONT, 7), fg="#1a1a2e",
                          bg=BG, justify="right", anchor="e").place(relx=0.92, rely=0.5, anchor="e")
@@ -2678,150 +2562,18 @@ class App(tk.Tk):
             for w in [brow, bl]:
                 w.bind("<Button-1>", lambda e: self._menu("main"))
 
-    # ─── STRATEGY BRIEFING ──────────────────────────────
+    # --- STRATEGY BRIEFING ------------------------------
     def _brief(self, name, script, desc, parent_menu):
-        """Half-Life 2 / Bloomberg terminal aesthetic: dense, single-column,
-        amber-on-black, monospace. Cuts cruft (technical V2 panel, model
-        governance, meta operacional) in favor of the 4 things that matter:
-        identity, best config, pipeline, edge/risk."""
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text=f"> {parent_menu.upper()} > {name}")
-        self.h_stat.configure(text="BRIEFING", fg=AMBER_D)
-        self.f_lbl.configure(text="ENTER executar  |  ESC voltar")
+        """Delegate to launcher_support.screens.brief.render. Full
+        implementation (4-section Bloomberg-style briefing + code viewer
+        button) lives there. Kept as a method shim so every internal call
+        site (_strategies rows, backtest/live menu entries, tests) stays
+        unchanged.
+        """
+        from launcher_support.screens.brief import render as _render_brief
+        _render_brief(self, name, script, desc, parent_menu)
 
-        brief = BRIEFINGS.get(name, {})
-
-        _outer, f = self._ui_page_shell(name, desc, content_width=720)
-
-        # Bloomberg-style section header — amber bar + label + thin rule
-        def _section(parent, title):
-            tk.Frame(parent, bg=BG, height=14).pack()
-            row = tk.Frame(parent, bg=BG)
-            row.pack(fill="x")
-            tk.Frame(row, bg=AMBER, width=3).pack(side="left", fill="y")
-            tk.Label(row, text=f" {title} ", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=BG, anchor="w", padx=6).pack(side="left", fill="x", expand=True)
-            tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-
-        # ── HEADER bar: BRIEFING badge + 1-line desc + amber rule ──
-        hdr = tk.Frame(f, bg=BG)
-        hdr.pack(fill="x", pady=(0, 4))
-        tk.Label(hdr, text=" BRIEFING ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER, padx=6, pady=2).pack(side="left")
-        tk.Label(hdr, text=f"  {desc}", font=(FONT, 8), fg=DIM, bg=BG,
-                 anchor="w").pack(side="left", fill="x", expand=True)
-        tk.Frame(f, bg=AMBER_D, height=1).pack(fill="x", pady=(4, 0))
-
-        # Philosophy as a single italic block (no panel chrome)
-        if brief.get("philosophy"):
-            tk.Frame(f, bg=BG, height=10).pack()
-            tk.Label(f, text=brief["philosophy"], font=(FONT, 8, "italic"),
-                     fg=AMBER_D, bg=BG, wraplength=680, justify="left",
-                     anchor="w").pack(fill="x")
-
-        # ── BEST CONFIG (most actionable, render first) ──
-        bc = brief.get("best_config")
-        if bc:
-            _section(f, "BEST CONFIG · BATTERY VALIDATED")
-            for k, v in bc.items():
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=0)
-                tk.Label(row, text=f"  {k.upper():<14}", font=(FONT, 8, "bold"),
-                         fg=AMBER_D, bg=BG, anchor="w", width=16).pack(side="left")
-                # Status row gets emoji-aware color
-                v_str = str(v)
-                _fg = (GREEN if "✓" in v_str else
-                       RED   if "✗" in v_str else
-                       AMBER if "⚠" in v_str else WHITE)
-                tk.Label(row, text=v_str, font=(FONT, 8),
-                         fg=_fg, bg=BG, anchor="w",
-                         wraplength=540, justify="left").pack(side="left", fill="x", expand=True)
-
-        # ── PIPELINE (numbered, no panel chrome) ──
-        if brief.get("logic"):
-            _section(f, "PIPELINE")
-            for i, step in enumerate(brief["logic"], start=1):
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=1)
-                tk.Label(row, text=f"  {i:02d}", font=(FONT, 7, "bold"),
-                         fg=AMBER, bg=BG, width=4, anchor="w").pack(side="left")
-                tk.Label(row, text=step, font=(FONT, 8), fg=WHITE, bg=BG,
-                         wraplength=620, justify="left",
-                         anchor="w").pack(side="left", fill="x", expand=True)
-
-        # ── EDGE / RISK (color-tagged inline pills) ──
-        if brief.get("edge") or brief.get("risk"):
-            _section(f, "EDGE / RISK")
-            if brief.get("edge"):
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text="  EDGE  ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=GREEN, padx=4).pack(side="left")
-                tk.Label(row, text="  " + brief["edge"], font=(FONT, 8),
-                         fg=WHITE, bg=BG, anchor="w",
-                         wraplength=580, justify="left").pack(side="left", fill="x", expand=True)
-            if brief.get("risk"):
-                row = tk.Frame(f, bg=BG)
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text="  RISK  ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=RED, padx=4).pack(side="left")
-                tk.Label(row, text="  " + brief["risk"], font=(FONT, 8),
-                         fg=DIM, bg=BG, anchor="w",
-                         wraplength=580, justify="left").pack(side="left", fill="x", expand=True)
-
-        tk.Frame(f, bg=BG, height=20).pack()
-
-        is_bt = parent_menu == "backtest"
-        is_live = parent_menu == "live"
-
-        btn_f = tk.Frame(f, bg=BG)
-        btn_f.pack()
-
-        if is_bt:
-            next_fn = lambda: self._config_backtest(name, script, desc, parent_menu)
-            btn_text = "  CONFIGURAR & RODAR  "
-        elif is_live:
-            next_fn = lambda: self._config_live(name, script, desc, parent_menu)
-            btn_text = "  SELECIONAR MODO & RODAR  "
-        else:
-            next_fn = lambda: self._exec(name, script, desc, parent_menu, [])
-            btn_text = "  EXECUTAR  "
-
-        run_btn = tk.Label(btn_f, text=btn_text, font=(FONT, 10, "bold"),
-                           fg=BG, bg=AMBER, cursor="hand2", padx=12, pady=4)
-        run_btn.pack(side="left", padx=4)
-        run_btn.bind("<Button-1>", lambda e: next_fn())
-        self._kb("<Return>", next_fn)
-
-        # VER CÓDIGO — opens engine source. Uses BRIEFINGS_V2 main_function
-        # when available (richer entry point), falls back to script + scan_symbol.
-        _v2 = BRIEFINGS_V2.get(name, None)
-        _v2_files = _v2.get("source_files") if _v2 else None
-        _v2_main  = _v2.get("main_function") if _v2 else None
-        def _open_code(_e=None, _script=script,
-                       _files=_v2_files, _main=_v2_main):
-            try:
-                files = _files if _files else [_script]
-                main  = _main  if _main  else (_script, "scan_symbol")
-                CodeViewer(self, source_files=files, main_function=main)
-            except Exception as exc:
-                messagebox.showerror("CodeViewer", f"{type(exc).__name__}: {exc}")
-
-        code_btn = tk.Label(btn_f, text="  VER CÓDIGO  ", font=(FONT, 10, "bold"),
-                            fg=AMBER, bg=BG3, cursor="hand2", padx=12, pady=4)
-        code_btn.pack(side="left", padx=4)
-        code_btn.bind("<Button-1>", _open_code)
-        self._kb("<F2>", _open_code)
-
-        back_btn = tk.Label(btn_f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
-                            cursor="hand2", padx=12, pady=4)
-        back_btn.pack(side="left", padx=4)
-        back_btn.bind("<Button-1>", lambda e: self._menu(parent_menu))
-        self._kb("<Escape>", lambda: self._menu(parent_menu))
-        return
-
-
-    # ─── CALIBRATED CONFIG RESOLVER ───────────────────────
+    # --- CALIBRATED CONFIG RESOLVER -----------------------
     @staticmethod
     def _best_calibrated_config(engine_name: str) -> dict:
         """Resolve the best validated config for an engine.
@@ -2877,13 +2629,18 @@ class App(tk.Tk):
             pass
         return out
 
-    # ─── INLINE LIVE EXEC (from picker RUN chip in LIVE mode) ──────
+    @staticmethod
+    def _engine_extra_cli_flags(engine_name: str) -> list[str]:
+        from launcher_support.screens.engines import engine_extra_cli_flags
+        return engine_extra_cli_flags(engine_name)
+
+    # --- INLINE LIVE EXEC (from picker RUN chip in LIVE mode) ------
     def _exec_live_inline(self, name, script, desc, mode_preset, cfg):
         """Fire a strategy in live mode (paper/demo/testnet/live) directly
         from the picker. Routes via engines/live.py for the unified live
         runner; janestreet uses its own dedicated arbitrage runner.
 
-        mode_preset ∈ {'paper','demo','testnet','live'}.
+        mode_preset ? {'paper','demo','testnet','live'}.
         cfg may carry leverage/basket overrides (basket only relevant for
         engines that filter their universe). Refuses to dispatch LIVE mode
         without an explicit confirm dialog — capital safety gate.
@@ -2918,7 +2675,7 @@ class App(tk.Tk):
         )
         self._exec(name, live_script, desc, "live", [], cli_args=cli)
 
-    # ─── INLINE BACKTEST EXEC (from picker RUN chip) ──────
+    # --- INLINE BACKTEST EXEC (from picker RUN chip) ------
     def _exec_backtest_inline(self, name, script, desc, parent_menu, cfg):
         """Fire backtest directly from engine_picker RUN chip — no intermediate
         pages. cfg = {preset, period, basket, leverage, plots}.
@@ -2975,6 +2732,7 @@ class App(tk.Tk):
                 cli += ["--leverage", str(_lev)]
         except (ValueError, TypeError):
             pass
+        cli += self._engine_extra_cli_flags(name)
         cli += ["--no-menu"]
 
         if getattr(self, "_strategies_picker", None):
@@ -2991,7 +2749,7 @@ class App(tk.Tk):
         if not handle:
             return False
         try:
-            from core.proc import spawn, _is_alive
+            from core.ops.proc import spawn, _is_alive
         except Exception:
             return False
 
@@ -3030,6 +2788,13 @@ class App(tk.Tk):
             pct = 8.0
             tail = "background active"
             log_path = Path(info["log_file"])
+            # Engines como MILLENNIUM logam centenas de linhas por segundo
+            # durante walk-forward / monte carlo. Dispatchar set_progress
+            # por linha (via self.after(0, ...)) enfila dezenas de rebuilds
+            # do picker na main thread, travando a UI e o Windows. Batch:
+            # processa todas as linhas do chunk, mas so dispara UM
+            # set_progress por ciclo do loop (cada ~150ms), usando o ultimo
+            # pct/tail acumulado.
             while True:
                 try:
                     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -3040,10 +2805,12 @@ class App(tk.Tk):
                     chunk = ""
 
                 if chunk:
+                    saw_line = False
                     for raw in chunk.splitlines():
                         clean = raw.strip()
                         if not clean:
                             continue
+                        saw_line = True
                         next_pct, stage = self._strategies_progress_target(clean)
                         if next_pct > 0:
                             pct = max(pct, next_pct)
@@ -3053,6 +2820,7 @@ class App(tk.Tk):
                             tail = clean[:180]
                         self._strategies_inline_runs[slug]["pct"] = pct
                         self._strategies_inline_runs[slug]["tail"] = tail
+                    if saw_line:
                         try:
                             self.after(0, lambda s=slug, p=pct, t=tail: handle["set_progress"](s, p, t, True))
                         except Exception:
@@ -3086,179 +2854,16 @@ class App(tk.Tk):
         threading.Thread(target=_tail, daemon=True).start()
         return True
 
-    # ─── BACKTEST CONFIG (clickable inputs) ──────────────
+    # --- BACKTEST CONFIG (clickable inputs) --------------
     def _config_backtest(self, name, script, desc, parent_menu):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text=f"> {parent_menu.upper()} > {name} > CONFIG")
-        self.h_stat.configure(text="CONFIGURAR", fg=AMBER_D)
-        self.f_lbl.configure(text="Clique nas opções  |  ENTER rodar com seleções")
+        """Delegate to launcher_support.screens.config_backtest.render.
+        Full dialog (period + basket + charts + leverage selectors and
+        do_run that assembles stdin-inputs + CLI args) lives there.
+        """
+        from launcher_support.screens.config_backtest import render as _render_config_backtest
+        _render_config_backtest(self, name, script, desc, parent_menu)
 
-        # State
-        self._cfg_period = "90"
-        self._cfg_basket = ""  # empty = default
-        self._cfg_plots = "s"
-        self._cfg_leverage = ""
-
-        _outer, f = self._ui_page_shell(
-            f"{name} · BACKTEST CONFIG",
-            "Configure run horizon, basket and execution options before launch",
-            content_width=920,
-        )
-
-        # ── PERIOD ──
-        tk.Label(f, text="PERÍODO", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-        per_f = tk.Frame(f, bg=BG)
-        per_f.pack(fill="x", pady=(0, 14))
-
-        self._per_btns = []
-        for label, hint, val in PERIODS_UI:
-            btn = tk.Label(per_f, text=f" {label} ", font=(FONT, 9, "bold"),
-                           fg=BG if val == "90" else DIM, bg=AMBER if val == "90" else BG3,
-                           cursor="hand2", padx=10, pady=4)
-            btn.pack(side="left", padx=2)
-            self._per_btns.append((btn, val))
-
-            def select_period(event, v=val):
-                self._cfg_period = v
-                for b, bv in self._per_btns:
-                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
-            btn.bind("<Button-1>", select_period)
-
-        # ── BASKET ──
-        tk.Label(f, text="CESTA DE ATIVOS", font=(FONT, 8, "bold"), fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
-        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(2, 6))
-
-        # Basket buttons — row 1
-        bsk_f = tk.Frame(f, bg=BG)
-        bsk_f.pack(fill="x")
-
-        self._bsk_btns = []
-        self._bsk_assets = {b[1]: b[2] for b in BASKETS_UI}  # val -> asset list
-
-        for label, val, assets in BASKETS_UI[:5]:
-            btn = tk.Label(bsk_f, text=f" {label} ", font=(FONT, 8, "bold"),
-                           fg=BG if val == "" else DIM, bg=AMBER if val == "" else BG3,
-                           cursor="hand2", padx=8, pady=3)
-            btn.pack(side="left", padx=2)
-            self._bsk_btns.append((btn, val))
-            btn.bind("<Button-1>", lambda e, v=val: self._select_basket(v))
-
-        # Row 2
-        bsk_f2 = tk.Frame(f, bg=BG)
-        bsk_f2.pack(fill="x", pady=(2, 0))
-        for label, val, assets in BASKETS_UI[5:]:
-            btn = tk.Label(bsk_f2, text=f" {label} ", font=(FONT, 8, "bold"),
-                           fg=DIM, bg=BG3, cursor="hand2", padx=8, pady=3)
-            btn.pack(side="left", padx=2)
-            self._bsk_btns.append((btn, val))
-            btn.bind("<Button-1>", lambda e, v=val: self._select_basket(v))
-
-        # Preview bar — shows selected assets
-        self._bsk_preview_f = tk.Frame(f, bg=BG)
-        self._bsk_preview_f.pack(fill="x", pady=(6, 14))
-        self._bsk_preview_count = tk.Label(self._bsk_preview_f, text="", font=(FONT, 7, "bold"),
-                                            fg=AMBER_D, bg=BG, padx=6)
-        self._bsk_preview_count.pack(side="left", pady=4)
-        self._bsk_preview_lbl = tk.Label(self._bsk_preview_f, text="", font=(FONT, 7),
-                                          fg=DIM, bg=BG, anchor="w", padx=4)
-        self._bsk_preview_lbl.pack(side="left", fill="x", expand=True, pady=4)
-        tk.Frame(self._bsk_preview_f, bg=DIM2, height=1).pack(fill="x", side="bottom")
-
-        # Show default basket on load
-        self._select_basket("")
-
-        # ── OPTIONS ──
-        opt_f = tk.Frame(f, bg=BG)
-        opt_f.pack(fill="x", pady=(0, 14))
-
-        # Charts toggle
-        self._plot_btn = tk.Label(opt_f, text=" GRÁFICOS ON ", font=(FONT, 8, "bold"),
-                                   fg=BG, bg=GREEN, cursor="hand2", padx=8, pady=3)
-        self._plot_btn.pack(side="left", padx=2)
-        def toggle_plots(event):
-            self._cfg_plots = "s" if self._cfg_plots == "n" else "n"
-            on = self._cfg_plots == "s"
-            self._plot_btn.configure(text=" GRÁFICOS ON " if on else " GRÁFICOS OFF ",
-                                      fg=BG if on else DIM, bg=GREEN if on else BG3)
-        self._plot_btn.bind("<Button-1>", toggle_plots)
-
-        # Leverage
-        tk.Label(opt_f, text="  LEVERAGE:", font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="left", padx=(12, 4))
-        self._lev_btns = []
-        for lev in ["1.0", "2.0", "3.0", "5.0"]:
-            btn = tk.Label(opt_f, text=f" {lev}x ", font=(FONT, 8, "bold"),
-                           fg=BG if lev == "1.0" else DIM, bg=AMBER if lev == "1.0" else BG3,
-                           cursor="hand2", padx=6, pady=3)
-            btn.pack(side="left", padx=1)
-            self._lev_btns.append((btn, lev))
-            def select_lev(event, v=lev):
-                self._cfg_leverage = "" if v == "1.0" else v
-                for b, bv in self._lev_btns:
-                    b.configure(fg=BG if bv == v else DIM, bg=AMBER if bv == v else BG3)
-            btn.bind("<Button-1>", select_lev)
-
-        tk.Frame(f, bg=BG, height=10).pack()
-
-        # Summary
-        tk.Frame(f, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
-
-        # Run button
-        btn_f = tk.Frame(f, bg=BG)
-        btn_f.pack()
-
-        def do_run():
-            # Build BOTH stdin auto-inputs (legacy) AND CLI args (preferred).
-            # Engines that parse argparse use CLI; engines with interactive
-            # prompts read stdin. Modern engines respect --no-menu and CLI
-            # args, falling back to stdin only when --no-menu is absent.
-            inputs = [self._cfg_period, self._cfg_basket]
-            if name == "CITADEL":
-                inputs.append(self._cfg_plots)
-            inputs.append(self._cfg_leverage)
-            inputs.append("")  # enter to start
-
-            # CLI args — works for CITADEL/BRIDGEWATER/JUMP/DE SHAW/RENAISSANCE
-            cli = []
-            try:
-                _days = int(str(self._cfg_period).strip()) if str(self._cfg_period).strip() else 0
-                if _days >= 7:
-                    cli += ["--days", str(_days)]
-            except (ValueError, TypeError):
-                pass
-            _basket = str(self._cfg_basket or "").strip()
-            # _cfg_basket may be a numeric index ("1","2"...) or basket name
-            if _basket and not _basket.isdigit():
-                cli += ["--basket", _basket]
-            elif _basket.isdigit():
-                # Resolve index → basket name
-                from config.params import BASKETS
-                _bnames = [k for k in BASKETS if k != "custom"]
-                _idx = int(_basket) - 1
-                if 0 <= _idx < len(_bnames):
-                    cli += ["--basket", _bnames[_idx]]
-            try:
-                _lev = float(str(self._cfg_leverage).replace("x", "").strip()) if str(self._cfg_leverage).strip() else 0
-                if 0.1 <= _lev <= 125:
-                    cli += ["--leverage", str(_lev)]
-            except (ValueError, TypeError):
-                pass
-            cli += ["--no-menu"]
-            self._exec(name, script, desc, parent_menu, inputs, cli_args=cli)
-
-        run_btn = tk.Label(btn_f, text="  RODAR BACKTEST  ", font=(FONT, 11, "bold"),
-                           fg=BG, bg=AMBER, cursor="hand2", padx=16, pady=5)
-        run_btn.pack(side="left", padx=4)
-        run_btn.bind("<Button-1>", lambda e: do_run())
-        self._kb("<Return>", do_run)
-
-        back_btn = tk.Label(btn_f, text="  VOLTAR  ", font=(FONT, 10), fg=DIM, bg=BG3,
-                            cursor="hand2", padx=12, pady=5)
-        back_btn.pack(side="left", padx=4)
-        back_btn.bind("<Button-1>", lambda e: self._brief(name, script, desc, parent_menu))
-        self._kb("<Escape>", lambda: self._brief(name, script, desc, parent_menu))
-
-    # ─── LIVE CONFIG (clickable mode select) ───────────
+    # --- LIVE CONFIG (clickable mode select) -----------
     def _config_live(self, name, script, desc, parent_menu):
         """Config screen for live engines — select mode then run."""
         self._clr(); self._clear_kb()
@@ -3394,157 +2999,17 @@ class App(tk.Tk):
             self._p(f"\n  Erro no dashboard de resultados: {e}\n", "r")
             self._p("  Use o menu DADOS para navegar relatórios manualmente.\n", "d")
 
-    # ─── RESULTS DASHBOARD (Overview + Trade Inspector) ──────
+    # --- RESULTS DASHBOARD (Overview + Trade Inspector) ------
     def _show_results(self, parent_menu, run_id=None):
-        """Parse latest backtest JSON and show a tabbed dashboard.
-        Tab 1 = Overview (metrics / equity / MC / regime).
-        Tab 2 = Trade Inspector (list + matplotlib chart + data panel)."""
-        self._clr(); self._clear_kb()
-        self._results_parent_menu = parent_menu
-        self.h_stat.configure(text="RESULTADOS", fg=GREEN)
-        self.f_lbl.configure(
-            text="ESC voltar  |  1 overview  2 trades  |  ← → navegar trade")
-        self._kb("<Escape>", lambda: self._menu(parent_menu))
-        self._kb("<Key-1>", lambda: self._results_render_tab("overview"))
-        self._kb("<Key-2>", lambda: self._results_render_tab("trades"))
-        self._kb("<Left>",  lambda: self._results_prev_trade())
-        self._kb("<Up>",    lambda: self._results_prev_trade())
-        self._kb("<Right>", lambda: self._results_next_trade())
-        self._kb("<Down>",  lambda: self._results_next_trade())
+        """Delegate to launcher_support.screens.results.render. Report
+        resolution (explicit run_id → latest data/runs/ → legacy layout),
+        JSON parsing, state parking, tab strip + Overview kick-off live
+        there.
+        """
+        from launcher_support.screens.results import render as _render_results
+        _render_results(self, parent_menu, run_id=run_id)
 
-        # Locate the requested run (preferred) or latest run + its exported JSON.
-        # New layout (preferred): data/runs/<run_id>/<engine>_*.json  (run_dir = parent)
-        # Legacy layout (fallback): data/<engine>/<run_id>/reports/<engine>_*.json
-        report = None
-        run_dir = None
-        skip_names = {"config.json", "equity.json", "index.json", "overfit.json", "price_data.json", "summary.json", "trades.json"}
-
-        if run_id:
-            run_meta = self._bt_resolve_run(run_id)
-            report_path = str(run_meta.get("report_json_path") or "").strip()
-            run_dir_path = str(run_meta.get("run_dir") or "").strip()
-            if report_path:
-                cand = Path(report_path)
-                if cand.exists():
-                    report = cand
-            if run_dir_path:
-                cand_dir = Path(run_dir_path)
-                if cand_dir.exists():
-                    run_dir = cand_dir
-            if report is None and run_dir is not None:
-                candidates = sorted(
-                    [p for p in run_dir.glob("*.json") if p.name not in skip_names],
-                    key=lambda p: p.stat().st_mtime, reverse=True,
-                )
-                if candidates:
-                    report = candidates[0]
-
-        if report is None:
-            runs_root = ROOT / "data" / "runs"
-            if runs_root.exists():
-                run_dirs = sorted(
-                    [d for d in runs_root.iterdir() if d.is_dir()],
-                    key=lambda p: p.stat().st_mtime, reverse=True,
-                )
-                for rd in run_dirs:
-                    candidates = sorted(
-                        [p for p in rd.glob("*.json") if p.name not in skip_names],
-                        key=lambda p: p.stat().st_mtime, reverse=True,
-                    )
-                    if candidates:
-                        report = candidates[0]
-                        run_dir = rd
-                        break
-
-        if report is None:
-            data_dir = ROOT / "data"
-            legacy = sorted(
-                [
-                    p for p in data_dir.rglob("*.json")
-                    if p.name not in skip_names and "reports" in str(p.parent)
-                ],
-                key=lambda p: p.stat().st_mtime, reverse=True
-            )
-            for r in legacy:
-                report = r
-                run_dir = r.parent.parent
-                break
-
-        if report is None:
-            f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-            tk.Label(f, text="Nenhum relatório encontrado.", font=(FONT, 10),
-                     fg=DIM, bg=BG).pack(pady=20)
-            return
-
-        try:
-            with open(report, "r", encoding="utf-8") as fj:
-                data = json.load(fj)
-        except Exception as e:
-            f = tk.Frame(self.main, bg=BG); f.pack(expand=True)
-            tk.Label(f, text=f"Erro ao ler relatório: {e}", font=(FONT, 9),
-                     fg=RED, bg=BG).pack(pady=20)
-            return
-
-        self._results_data = data
-        self._results_report = report
-        self._results_run_dir = run_dir
-
-        # Load OHLC (optional — older runs may not have it)
-        self._price_data = {}
-        price_path = self._results_run_dir / "price_data.json"
-        if price_path.exists():
-            try:
-                with open(price_path, "r", encoding="utf-8") as pf:
-                    self._price_data = json.load(pf)
-            except Exception:
-                self._price_data = {}
-
-        all_trades = data.get("trades", [])
-        closed = [t for t in all_trades if t.get("result") in ("WIN", "LOSS")]
-        self._results_trades = closed
-        self._results_filtered = list(range(len(closed)))
-        self._results_active_idx = 0
-        self._results_filter = "all"
-        self._results_tab = "overview"
-        self._results_tab_btns = {}
-        self._results_item_widgets = {}
-        self._results_canvas = None
-        self._results_chart_frame = None
-        self._results_data_panel = None
-        self._results_list_canvas = None
-        self._results_list_inner = None
-        self._results_counter = None
-        self._results_stats = None
-
-        # Outer layout: title bar + tab strip + tab body
-        root = tk.Frame(self.main, bg=BG); root.pack(fill="both", expand=True)
-
-        title = tk.Frame(root, bg=BG); title.pack(fill="x", padx=20, pady=(10, 4))
-        tk.Label(title, text="RESULTADOS DO BACKTEST",
-                 font=(FONT, 12, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        meta = f"{data.get('version','')}  ·  {data.get('run_id','')}"
-        tk.Label(title, text=meta, font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=10)
-        n_closed = len(closed)
-        wr = (sum(1 for t in closed if t.get("result") == "WIN") / n_closed * 100) if n_closed else 0
-        tk.Label(title, text=f"{n_closed}t  WR {wr:.1f}%",
-                 font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG).pack(side="right")
-
-        # Tab strip
-        strip = tk.Frame(root, bg=BG, height=30); strip.pack(fill="x")
-        strip.pack_propagate(False)
-        for tab_id, label in [("overview", "1 OVERVIEW"), ("trades", "2 TRADES")]:
-            btn = tk.Label(strip, text=f" {label} ", font=(FONT, 9, "bold"),
-                           fg=DIM, bg=BG, padx=14, pady=5, cursor="hand2")
-            btn.pack(side="left", padx=(0, 10), pady=1)
-            btn.bind("<Button-1>", lambda e, t=tab_id: self._results_render_tab(t))
-            self._results_tab_btns[tab_id] = btn
-
-        tk.Frame(root, bg=DIM2, height=1).pack(fill="x")
-        self._results_body = tk.Frame(root, bg=BG)
-        self._results_body.pack(fill="both", expand=True)
-
-        self._results_render_tab("overview")
-
+    @timed_legacy_switch("results_tab")
     def _results_render_tab(self, tab):
         if not hasattr(self, "_results_body") or not self._results_body.winfo_exists():
             return
@@ -3562,259 +3027,18 @@ class App(tk.Tk):
         else:
             self._results_build_trades(self._results_body)
 
-    # ── OVERVIEW TAB ──────────────────────────────────────
+    # -- OVERVIEW TAB --------------------------------------
     def _results_build_overview(self, parent):
-        data = self._results_data
-        report = self._results_report
-        s  = self._normalize_summary(data)
-        mc = data.get("monte_carlo", {})
-        bm = data.get("bear_market", {})
-        eq = data.get("equity", [])
+        """Delegate to launcher_support.screens.results_overview.render.
+        The 340-line implementation (metrics, per-strategy breakdown,
+        equity curve, Monte Carlo paths + distribution, regime, actions)
+        lives there. This shim preserves the method dispatch site at
+        launcher.py:~3190 (_show_results flow).
+        """
+        from launcher_support.screens.results_overview import render as _render_results_overview
+        _render_results_overview(self, parent)
 
-        f = tk.Frame(parent, bg=BG); f.pack(fill="both", expand=True)
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(f, orient="vertical", command=canvas.yview)
-        sf = tk.Frame(canvas, bg=BG)
-        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=sf, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        # Scroll only while cursor is over this canvas (no global bleed-through)
-        def _on_enter(_e=None, c=canvas):
-            c.bind_all("<MouseWheel>",
-                       lambda ev: c.yview_scroll(-1 * (ev.delta // 120), "units"))
-        def _on_leave(_e=None, c=canvas):
-            try: c.unbind_all("<MouseWheel>")
-            except Exception: pass
-        canvas.bind("<Enter>", _on_enter)
-        canvas.bind("<Leave>", _on_leave)
-
-        pad = 24
-
-        # ── KEY METRICS ──
-        met_f = tk.Frame(sf, bg=BG); met_f.pack(fill="x", padx=pad, pady=(12, 8))
-        pnl = s.get("total_pnl", 0) or 0
-        roi = s.get("ret", 0) or 0
-        pnl_color = GREEN if pnl >= 0 else RED
-        metrics = [
-            (f"+${pnl:,.0f}" if pnl >= 0 else f"-${abs(pnl):,.0f}", "PnL TOTAL", pnl_color),
-            (f"{roi:+.1f}%", "ROI", pnl_color),
-            (f"{s.get('sharpe', 0) or 0:.2f}",  "SHARPE",    AMBER),
-            (f"{s.get('sortino', 0) or 0:.2f}", "SORTINO",   AMBER),
-            (f"{s.get('win_rate', 0) or 0:.1f}%","TX ACERTO", WHITE),
-            (f"{s.get('total_trades', 0) or 0}", "TRADES",    WHITE),
-        ]
-        for val, label, color in metrics:
-            mf = tk.Frame(met_f, bg=BG3, padx=12, pady=8)
-            mf.pack(side="left", padx=2, fill="x", expand=True)
-            tk.Label(mf, text=val, font=(FONT, 16, "bold"), fg=color, bg=BG3).pack()
-            tk.Label(mf, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG3).pack()
-
-        def _fit_points(series, width, height, pad_x=10, pad_y=10, mn=None, mx=None):
-            if not series or len(series) < 2:
-                return []
-            mn = min(series) if mn is None else mn
-            mx = max(series) if mx is None else mx
-            rng = (mx - mn) or 1
-            pts = []
-            for i, v in enumerate(series):
-                x = pad_x + (width - pad_x * 2) * i / max(len(series) - 1, 1)
-                y = height - pad_y - (height - pad_y * 2) * (v - mn) / rng
-                pts.append((x, y))
-            return pts
-
-        def _draw_line_chart(widget, series, line_color, fill_color=None,
-                             min_label=None, max_label=None, end_label=None):
-            widget.delete("all")
-            w = widget.winfo_width() or 700
-            h = int(widget.cget("height")) or 120
-            if not series or len(series) < 2:
-                return
-            mn, mx = min(series), max(series)
-            pts = _fit_points(series, w, h, mn=mn, mx=mx)
-            if fill_color:
-                fill_pts = [(pts[0][0], h - 10)] + pts + [(pts[-1][0], h - 10)]
-                widget.create_polygon(*[c for p in fill_pts for c in p], fill=fill_color, outline="")
-            widget.create_line(*[c for p in pts for c in p], fill=line_color, width=1.8, smooth=True)
-            if max_label is not None:
-                widget.create_text(8, 8, text=max_label, font=(FONT, 7), fill=DIM, anchor="nw")
-            if min_label is not None:
-                widget.create_text(8, h - 8, text=min_label, font=(FONT, 7), fill=DIM, anchor="sw")
-            if end_label is not None:
-                widget.create_text(w - 8, 8, text=end_label, font=(FONT, 7, "bold"),
-                                   fill=line_color, anchor="ne")
-
-        # ── EQUITY CURVE ──
-        if eq and len(eq) > 2:
-            tk.Label(sf, text="CURVA DE EQUITY", font=(FONT, 8, "bold"),
-                     fg=AMBER_D, bg=BG).pack(anchor="w", padx=pad, pady=(8, 4))
-            eq_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=140)
-            eq_canvas.pack(fill="x", padx=pad, pady=(0, 8))
-
-            def draw_equity(event=None):
-                _draw_line_chart(
-                    eq_canvas,
-                    eq,
-                    AMBER,
-                    fill_color="#1a1400",
-                    min_label=f"${min(eq):,.0f}",
-                    max_label=f"${max(eq):,.0f}",
-                    end_label=f"FINAL ${eq[-1]:,.0f}",
-                )
-            eq_canvas.bind("<Configure>", draw_equity)
-
-        # ── MONTE CARLO ──
-        if mc:
-            tk.Label(sf, text="MONTE CARLO  (1000 simulações)",
-                     font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG
-                     ).pack(anchor="w", padx=pad, pady=(8, 4))
-            mc_f = tk.Frame(sf, bg=BG); mc_f.pack(fill="x", padx=pad, pady=(0, 8))
-            mc_items = [
-                (f"{mc.get('pct_pos', 0):.1f}%",  "POSITIVO",
-                 GREEN if mc.get('pct_pos', 0) > 50 else RED),
-                (f"${mc.get('p5', 0):,.0f}",      "P5 (PIOR)",    DIM),
-                (f"${mc.get('median', 0):,.0f}",  "MEDIANA",      AMBER),
-                (f"${mc.get('p95', 0):,.0f}",     "P95 (MELHOR)", GREEN),
-                (f"{mc.get('ror', 0):.1f}%",      "RISCO RUÍNA",
-                 GREEN if mc.get('ror', 0) == 0 else RED),
-            ]
-            for val, label, color in mc_items:
-                mf = tk.Frame(mc_f, bg=BG3, padx=10, pady=6)
-                mf.pack(side="left", padx=2, fill="x", expand=True)
-                tk.Label(mf, text=val, font=(FONT, 12, "bold"),
-                         fg=color, bg=BG3).pack()
-                tk.Label(mf, text=label, font=(FONT, 7), fg=DIM, bg=BG3).pack()
-
-            mc_paths = mc.get("paths") or []
-            if mc_paths:
-                mc_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=150)
-                mc_canvas.pack(fill="x", padx=pad, pady=(0, 8))
-
-                def draw_mc_paths(event=None):
-                    mc_canvas.delete("all")
-                    w = mc_canvas.winfo_width() or 700
-                    h = int(mc_canvas.cget("height")) or 150
-                    valid = [p for p in mc_paths if p and len(p) > 1]
-                    if not valid:
-                        return
-                    mn = min(min(p) for p in valid)
-                    mx = max(max(p) for p in valid)
-                    for path in valid[:120]:
-                        pts = _fit_points(path, w, h, mn=mn, mx=mx)
-                        if len(pts) >= 2:
-                            mc_canvas.create_line(*[c for p in pts for c in p],
-                                                  fill="#274d3d", width=1)
-                    median_path = sorted(valid, key=lambda p: p[-1])[len(valid) // 2]
-                    median_pts = _fit_points(median_path, w, h, mn=mn, mx=mx)
-                    if len(median_pts) >= 2:
-                        mc_canvas.create_line(*[c for p in median_pts for c in p],
-                                              fill=AMBER, width=2.0, smooth=True)
-                    base_line = [eq[0]] * len(valid[0]) if eq else [0] * len(valid[0])
-                    base_pts = _fit_points(base_line, w, h, mn=mn, mx=mx)
-                    if len(base_pts) >= 2:
-                        mc_canvas.create_line(*[c for p in base_pts for c in p],
-                                              fill=DIM2, width=1, dash=(4, 3))
-                    mc_canvas.create_text(8, 8, text=f"${mx:,.0f}",
-                                          font=(FONT, 7), fill=DIM, anchor="nw")
-                    mc_canvas.create_text(8, h - 8, text=f"${mn:,.0f}",
-                                          font=(FONT, 7), fill=DIM, anchor="sw")
-                    mc_canvas.create_text(w - 8, 8, text="PATHS + MEDIANA",
-                                          font=(FONT, 7, "bold"), fill=AMBER, anchor="ne")
-                mc_canvas.bind("<Configure>", draw_mc_paths)
-
-            mc_finals = mc.get("finals") or []
-            if mc_finals:
-                dist_canvas = tk.Canvas(sf, bg=PANEL, highlightthickness=0, height=110)
-                dist_canvas.pack(fill="x", padx=pad, pady=(0, 8))
-
-                def draw_mc_distribution(event=None):
-                    dist_canvas.delete("all")
-                    w = dist_canvas.winfo_width() or 700
-                    h = int(dist_canvas.cget("height")) or 110
-                    if len(mc_finals) < 2:
-                        return
-                    vals = mc_finals
-                    mn = min(vals)
-                    mx = max(vals)
-                    rng = (mx - mn) or 1
-                    bins = min(28, max(8, len(vals) // 25))
-                    counts = [0] * bins
-                    for v in vals:
-                        idx = min(bins - 1, int((v - mn) / rng * bins))
-                        counts[idx] += 1
-                    top = max(counts) or 1
-                    usable_w = w - 20
-                    bar_w = usable_w / bins
-                    for i, ct in enumerate(counts):
-                        x0 = 10 + i * bar_w
-                        x1 = x0 + max(bar_w - 2, 1)
-                        y1 = h - 12
-                        y0 = y1 - (h - 28) * ct / top
-                        dist_canvas.create_rectangle(x0, y0, x1, y1, fill="#2c3e34", outline="")
-
-                    def _mark(value, color, label):
-                        x = 10 + usable_w * ((value - mn) / rng)
-                        dist_canvas.create_line(x, 10, x, h - 10, fill=color, width=1)
-                        dist_canvas.create_text(x + 4, 8, text=label, font=(FONT, 7),
-                                                fill=color, anchor="nw")
-
-                    _mark(mc.get("p5", mn), RED, "P5")
-                    _mark(mc.get("median", vals[len(vals) // 2]), AMBER, "MED")
-                    _mark(mc.get("p95", mx), GREEN, "P95")
-                    dist_canvas.create_text(8, h - 8, text=f"${mn:,.0f}",
-                                            font=(FONT, 7), fill=DIM, anchor="sw")
-                    dist_canvas.create_text(w - 8, h - 8, text=f"${mx:,.0f}",
-                                            font=(FONT, 7), fill=DIM, anchor="se")
-                    dist_canvas.create_text(w - 8, 8, text="DISTRIBUICAO FINAL",
-                                            font=(FONT, 7, "bold"), fill=WHITE, anchor="ne")
-                dist_canvas.bind("<Configure>", draw_mc_distribution)
-
-        # ── REGIME PERFORMANCE ──
-        if bm:
-            tk.Label(sf, text="PERFORMANCE POR REGIME",
-                     font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG
-                     ).pack(anchor="w", padx=pad, pady=(8, 4))
-            for regime, rd in bm.items():
-                if not rd: continue
-                rf = tk.Frame(sf, bg=BG3); rf.pack(fill="x", padx=pad, pady=1)
-                rc = GREEN if regime == "BULL" else RED if regime == "BEAR" else AMBER
-                tk.Label(rf, text=f" {regime} ", font=(FONT, 8, "bold"),
-                         fg=BG, bg=rc, padx=4).pack(side="left", padx=4, pady=4)
-                tk.Label(rf, text=(f"{rd.get('n',0)} trades  "
-                                   f"WR {rd.get('wr',0):.1f}%  "
-                                   f"Sharpe {rd.get('sharpe',0):.2f}  "
-                                   f"DD {rd.get('max_dd',0):.1f}%"),
-                         font=(FONT, 8), fg=WHITE, bg=BG3, padx=8
-                         ).pack(side="left", pady=4)
-                pnl_r = rd.get("pnl", 0)
-                tk.Label(rf, text=f"${pnl_r:+,.0f}", font=(FONT, 9, "bold"),
-                         fg=GREEN if pnl_r >= 0 else RED, bg=BG3, padx=8
-                         ).pack(side="right", pady=4)
-
-        # ── ACTIONS ──
-        tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", padx=pad, pady=(12, 8))
-        act_f = tk.Frame(sf, bg=BG); act_f.pack(padx=pad, pady=(0, 16))
-
-        report_html = self._results_run_dir / "report.html"
-        if report_html.exists():
-            oh = tk.Label(act_f, text="  ABRIR HTML  ", font=(FONT, 9, "bold"),
-                          fg=BG, bg=AMBER, cursor="hand2", padx=10, pady=3)
-            oh.pack(side="left", padx=4)
-            oh.bind("<Button-1>", lambda e: self._open_file(report_html))
-
-        ti = tk.Label(act_f, text="  TRADE INSPECTOR →  ",
-                      font=(FONT, 9, "bold"), fg=BG, bg=GREEN,
-                      cursor="hand2", padx=10, pady=3)
-        ti.pack(side="left", padx=4)
-        ti.bind("<Button-1>", lambda e: self._results_render_tab("trades"))
-
-        bk = tk.Label(act_f, text="  VOLTAR  ", font=(FONT, 9),
-                      fg=DIM, bg=BG3, cursor="hand2", padx=10, pady=3)
-        bk.pack(side="left", padx=4)
-        bk.bind("<Button-1>", lambda e: self._menu(self._results_parent_menu))
-
-    # ── TRADES TAB (inspector) ─────────────────────────────
+    # -- TRADES TAB (inspector) -----------------------------
     def _results_build_trades(self, parent):
         if not self._results_trades:
             tk.Label(parent, text="Sem trades fechadas neste run.",
@@ -3899,7 +3123,8 @@ class App(tk.Tk):
         self._results_list_inner.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self._results_list_inner, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=self._results_list_inner, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -3916,6 +3141,7 @@ class App(tk.Tk):
         self._results_list_canvas = canvas
         self._results_build_list_items()
 
+    @timed_legacy_switch("results_list")
     def _results_build_list_items(self):
         if self._results_list_inner is None:
             return
@@ -4052,7 +3278,8 @@ class App(tk.Tk):
                     text=f"WR {wr:.1f}%   PnL ${pnl:+,.0f}   Sharpe {sharpe:.2f}")
             except Exception: pass
 
-    # ── CHART RENDER (matplotlib via FigureCanvasTkAgg) ──
+    # -- CHART RENDER (matplotlib via FigureCanvasTkAgg) --
+    @timed_legacy_switch("results_chart")
     def _results_render_chart(self, trade):
         # Destroy previous canvas (releases the Figure)
         for w in self._results_chart_frame.winfo_children():
@@ -4166,7 +3393,7 @@ class App(tk.Tk):
         pnl    = float(trade.get("pnl", 0) or 0)
         score  = float(trade.get("score", 0) or 0)
         fig.suptitle(
-            f"{sym}  {side}  {result}  ${pnl:+,.2f}  Ω={score:.3f}",
+            f"{sym}  {side}  {result}  ${pnl:+,.2f}  O={score:.3f}",
             fontsize=10, color="#C8C8C8",
             fontfamily="monospace", fontweight="bold")
 
@@ -4181,6 +3408,7 @@ class App(tk.Tk):
         # Keep reference so gc doesn't collect the figure while it's visible
         self._results_canvas = canvas
 
+    @timed_legacy_switch("results_data")
     def _results_render_data_panel(self, trade):
         for w in self._results_data_panel.winfo_children():
             try: w.destroy()
@@ -4212,7 +3440,7 @@ class App(tk.Tk):
 
         fields = [
             ("Symbol",   str(trade.get("symbol", "?")),              WHITE),
-            ("Score Ω",  f"{float(trade.get('score', 0) or 0):.3f}", AMBER),
+            ("Score O",  f"{float(trade.get('score', 0) or 0):.3f}", AMBER),
             ("Side",     "LONG" if is_long else "SHORT",             WHITE),
             ("Regime",   str(trade.get("macro_bias", "?")),          WHITE),
             ("Entry",    f"${entry:,.4f}",                           WHITE),
@@ -4237,7 +3465,7 @@ class App(tk.Tk):
 
         # Omega component bars
         tk.Frame(inner, bg=PANEL, height=10).pack()
-        tk.Label(inner, text="Ω COMPONENTS", font=(FONT, 7, "bold"),
+        tk.Label(inner, text="O COMPONENTS", font=(FONT, 7, "bold"),
                  fg=AMBER, bg=PANEL, anchor="w").pack(fill="x")
         tk.Frame(inner, bg=DIM2, height=1).pack(fill="x", pady=(2, 4))
 
@@ -4291,7 +3519,7 @@ class App(tk.Tk):
             self._bsk_preview_count.configure(text="")
             self._bsk_preview_lbl.configure(text="")
 
-    # ─── EXECUTE ENGINE ──────────────────────────────────
+    # --- EXECUTE ENGINE ----------------------------------
     def _exec(self, name, script, desc, parent_menu, auto_inputs, cli_args=None):
         self._clr(); self._clear_kb()
         self._exec_parent = parent_menu  # save for results screen
@@ -4312,16 +3540,16 @@ class App(tk.Tk):
         tk.Label(top, text=f" {name} ", font=(FONT, 8, "bold"), fg=BG, bg=AMBER).pack(side="left", padx=6, pady=3)
         tk.Label(top, text=desc, font=(FONT, 8), fg=DIM, bg=BG2, padx=6).pack(side="left", pady=3)
 
-        tk.Button(top, text=" STOP ", font=(FONT, 7, "bold"), fg=RED, bg=BG2, border=0, cursor="hand2",
+        tk.Button(top, text=" STOP ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                   activeforeground=WHITE, activebackground=BG3, command=self._stop).pack(side="right", padx=4, pady=3)
-        tk.Button(top, text=" BACK ", font=(FONT, 7, "bold"), fg=DIM, bg=BG2, border=0, cursor="hand2",
+        tk.Button(top, text=" BACK ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                   activeforeground=WHITE, activebackground=BG3,
                   command=lambda: (self._stop(), self._menu(parent_menu))).pack(side="right", pady=3)
         if is_bt:
-            tk.Button(top, text=" CMD ", font=(FONT, 7, "bold"), fg=AMBER, bg=BG2, border=0, cursor="hand2",
+            tk.Button(top, text=" CMD ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                       activeforeground=WHITE, activebackground=BG3,
                       command=lambda: self._exec_show_view("console")).pack(side="right", padx=(0, 4), pady=3)
-            tk.Button(top, text=" MAPA ", font=(FONT, 7, "bold"), fg=GREEN, bg=BG2, border=0, cursor="hand2",
+            tk.Button(top, text=" MAPA ", font=(FONT, 7, "bold"), fg=WHITE, bg=BG2, border=0, cursor="hand2",
                       activeforeground=WHITE, activebackground=BG3,
                       command=lambda: self._exec_show_view("visual")).pack(side="right", padx=(0, 4), pady=3)
 
@@ -4397,7 +3625,7 @@ class App(tk.Tk):
 
         # Print header
         self._p(f" {name}  {desc}  {datetime.now().strftime('%H:%M:%S')}\n", "a")
-        self._p("─"*60 + "\n", "d")
+        self._p("-"*60 + "\n", "d")
 
         # Launch
         path = ROOT / script
@@ -4426,7 +3654,7 @@ class App(tk.Tk):
                                   _cli=cli_args,
                                   _name=name):
                     try:
-                        from core.proc import spawn as _spawn
+                        from core.ops.proc import spawn as _spawn
                         info = _spawn(_proc_key,
                                       stdin_lines=_inputs or None,
                                       cli_args=_cli or None)
@@ -4463,7 +3691,7 @@ class App(tk.Tk):
                 threading.Thread(target=_spawn_worker, daemon=True).start()
                 return
 
-            _cmd = [sys.executable, "-X", "utf8", "-u", str(path)]
+            _cmd = [preferred_python_executable(), "-X", "utf8", "-u", str(path)]
             if cli_args:
                 _cmd.extend(cli_args)
 
@@ -4527,7 +3755,7 @@ class App(tk.Tk):
         info = getattr(self, "_exec_managed_info", None)
         if info:
             try:
-                from core.proc import _is_alive
+                from core.ops.proc import _is_alive
                 return _is_alive(int(info["pid"]), expected=info)
             except Exception:
                 return False
@@ -4767,7 +3995,7 @@ class App(tk.Tk):
         self.oq.put(None)
 
     def _read_managed_log(self, log_path: Path, info: dict):
-        from core.proc import _is_alive
+        from core.ops.proc import _is_alive
 
         last = 0
         while True:
@@ -4811,7 +4039,7 @@ class App(tk.Tk):
                         self._exec_stage_label.configure(
                             text="installation complete" if rc == 0 else f"installation failed  ·  exit {rc}"
                         )
-                    self._p(f"\n{'─'*60}\n", "d")
+                    self._p(f"\n{'-'*60}\n", "d")
                     self._p(f"  EXIT {rc}\n", "g" if rc == 0 else "r")
                     self.h_stat.configure(text="DONE" if rc == 0 else f"EXIT {rc}", fg=GREEN if rc == 0 else RED)
                     self.proc = None
@@ -4855,7 +4083,7 @@ class App(tk.Tk):
             if self._exec_stage_label is not None and self._exec_stage_label.winfo_exists():
                 self._exec_stage_label.configure(text="operator stopped installation")
             try:
-                from core.proc import stop_proc
+                from core.ops.proc import stop_proc
                 stop_proc(int(self._exec_managed_info["pid"]), expected=self._exec_managed_info)
                 self._p(f"\n  >> BACKGROUND STOP {self._exec_managed_info['pid']}\n", "r")
             except Exception as e:
@@ -4863,12 +4091,13 @@ class App(tk.Tk):
             self.h_stat.configure(text="STOPPED", fg=RED)
             self._exec_managed_info = None
 
-    # ─── MARKETS (Layer 2) ───────────────────────────────
-    # ─── MARKET ROUTES — direct entries from MARKETS tile ─────────
+    # --- MARKETS (Layer 2) -------------------------------
+    # --- MARKET ROUTES — direct entries from MARKETS tile ---------
     def _market_route(self, market_key: str) -> None:
         """Activate `market_key` and route to its dashboard. Stubs (not yet
         wired) show COMING SOON in h_stat instead of crashing."""
-        info = MARKETS.get(market_key, {})
+        _CM, _MARKETS = _lazy_connections()
+        info = _MARKETS.get(market_key, {})
         label = info.get("label", market_key.upper())
         if not info.get("available"):
             self.h_stat.configure(text=f"{label} · COMING SOON", fg=AMBER_D)
@@ -4882,7 +4111,7 @@ class App(tk.Tk):
                 pass
             return
         try:
-            _conn.active_market = market_key
+            _get_conn().active_market = market_key
         except Exception:
             pass
         # Crypto futures has its own dashboard; others fall back to _markets
@@ -4900,171 +4129,33 @@ class App(tk.Tk):
     def _market_onchain(self):        self._market_route("onchain")
 
     def _markets(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> MARKETS"); self.h_stat.configure(text="SELECT", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC return  |  ENTER keep current  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._kb("<Return>", lambda: self._menu("main"))
-        self._bind_global_nav()
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("markets")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
-        _outer, body = self._ui_page_shell(
-            "MARKETS",
-            "Select active market routing and environment context",
-        )
-        panel = self._ui_panel_frame(
-            body,
-            "MARKET ROUTER",
-            "Routing contexts, venue clusters and dashboard entry points",
-        )
-
-        summary = tk.Frame(panel, bg=BG)
-        summary.pack(fill="x", padx=10, pady=(0, 8))
-        current_label = MARKETS.get(_conn.active_market, {}).get("label", "?")
-        tk.Label(summary, text=f"ACTIVE  {current_label}", font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG).pack(side="left")
-        tk.Label(summary, text=f"  ROUTES  {len(MARKETS)}", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(12, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 8))
-
-        for i, (mk, info) in enumerate(MARKETS.items()):
-            num = i + 1
-            is_active = mk == _conn.active_market
-            avail = info["available"]
-            row, nl, dl = self._ui_action_row(
-                panel,
-                str(num),
-                info["label"],
-                info["desc"],
-                available=avail,
-                tag=("ACTIVE" if is_active else ("COMING SOON" if not avail else "OPEN")),
-                tag_fg=(BG if is_active else (DIM if not avail else BG)),
-                tag_bg=(GREEN if is_active else (BG2 if not avail else AMBER_D)),
-                title_width=18,
-            )
-
-            if avail:
-                def sel_market(event=None, k=mk):
-                    _conn.active_market = k
-                    if k == "crypto_futures":
-                        self._crypto_dashboard()
-                    else:
-                        self._markets()  # refresh
-                for w in [row, nl, dl]:
-                    w.bind("<Button-1>", sel_market)
-                    w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=nl, a=is_active: n.configure(fg=AMBER if a else WHITE))
-                self._kb(f"<Key-{num}>", sel_market)
-            else:
-                def show_coming(event=None, label=info["label"]):
-                    self.h_stat.configure(text=f"{label} | COMING SOON", fg=AMBER_D)
-                for w in [row, nl, dl]:
-                    w.bind("<Button-1>", show_coming)
-                self._kb(f"<Key-{num}>", show_coming)
-
-        self._ui_note(panel, "[enter] keep current    [0] return", fg=DIM)
-        self._ui_back_row(panel, lambda: self._menu("main"))
-
-    # ─── CONNECTIONS (Layer 2) ────────────────────────────
+    # --- CONNECTIONS (Layer 2) ----------------------------
     def _connections(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> CONNECTIONS"); self.h_stat.configure(text="ROUTING", fg=GREEN)
-        self.f_lbl.configure(text="ESC return  |  number select  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("connections")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
-        _outer, body = self._ui_page_shell(
-            "CONNECTIONS",
-            "Exchange, broker, data-provider and notification endpoints",
-        )
-        panel = self._ui_panel_frame(
-            body,
-            "ACCESS MATRIX",
-            "Configured services and setup entry points",
-        )
-
-        sections = [
-            ("CRYPTO EXCHANGES", [
-                ("1", "binance_futures", "Binance Futures"),
-                ("2", "binance_spot", "Binance Spot"),
-                ("3", "bybit", "Bybit"),
-                ("4", "okx", "OKX"),
-                ("5", "hyperliquid", "Hyperliquid"),
-                ("6", "gate", "Gate.io"),
-            ]),
-            ("BROKERS", [
-                ("7", "mt5", "MetaTrader 5 — Forex, CFDs, Indices"),
-                ("8", "ib", "Interactive Brokers — Equities, Options"),
-                ("9", "alpaca", "Alpaca — Commission-free US equities"),
-            ]),
-            ("DATA PROVIDERS", [
-                ("A", "coinglass", "CoinGlass — OI, liquidations"),
-                ("B", "glassnode", "Glassnode — on-chain"),
-                ("C", "cftc", "CFTC COT — public API (no key)"),
-                ("D", "fred", "FRED — macro data (no key)"),
-                ("E", "yahoo", "Yahoo Finance — equities (no key)"),
-            ]),
-            ("NOTIFICATIONS", [
-                ("T", "telegram", "Telegram Bot"),
-                ("W", "discord", "Discord Webhook"),
-            ]),
-        ]
-
-        # Scrollable
-        canvas = tk.Canvas(panel, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
-        sf = tk.Frame(canvas, bg=BG)
-        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=sf, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
-        sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
-        def _wheel(event):
-            try:
-                canvas.yview_scroll(-1 * (event.delta // 120), "units")
-            except Exception:
-                pass
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-        canvas.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
-        for section_name, items in sections:
-            sec = self._ui_section(sf, section_name)
-
-            for key_label, provider, desc in items:
-                conn = _conn.get(provider)
-                is_conn = conn.get("connected", False)
-                is_public = conn.get("public", False)
-
-                if is_conn:
-                    tag = "PUBLIC API" if is_public else "CONNECTED"
-                    tag_fg = BG
-                    tag_bg = GREEN
-                else:
-                    tag = "OFFLINE"
-                    tag_fg = DIM
-                    tag_bg = BG2
-                # Click handler — only binance_futures and telegram are actionable
-                if provider == "binance_futures":
-                    cmd = lambda: self._cfg_keys()
-                elif provider == "telegram":
-                    cmd = lambda: self._cfg_tg()
-                else:
-                    def _coming(event=None, d=desc):
-                        self.h_stat.configure(text=f"{d} — setup coming soon", fg=AMBER_D)
-                    cmd = _coming
-
-                self._ui_action_row(
-                    sec, key_label, provider.upper(), desc,
-                    command=cmd,
-                    tag=tag, tag_fg=tag_fg, tag_bg=tag_bg, title_width=20,
-                )
-
-        # Visible BACK row at the bottom of the scrollable list
-        self._ui_back_row(sf, lambda: self._menu("main"))
-
-    # ─── ARBITRAGE (Layer 2) ──────────────────────────────
+    # --- ARBITRAGE (Layer 2) ------------------------------
     def _alchemy_enter(self):
         """Redirect to the unified ARBITRAGE DESK (engine tab).
 
@@ -5098,7 +4189,7 @@ class App(tk.Tk):
 
         self._menu("main")
 
-    # ═══════════════════════════════════════════════════════════════
+    # ---------------------------------------------------------------
     # ARBITRAGE HUB — MP3-style router
     # Five legs of funding/basis arbitrage, one minimalist menu:
     #   C  CEX ↔ CEX  → JANE STREET cockpit (execution)
@@ -5106,7 +4197,7 @@ class App(tk.Tk):
     #   X  CEX ↔ DEX  → funding scanner (observation)
     #   B  BASIS TRADE → spot-perp basis screen
     #   S  SPOT ↔ SPOT → cross-venue spot spread screen
-    # ═══════════════════════════════════════════════════════════════
+    # ---------------------------------------------------------------
     _ARB_HUB_ITEMS = [
         ("C", "CEX  \u2194  CEX",
          "jane street execution cockpit",
@@ -5125,51 +4216,48 @@ class App(tk.Tk):
          "_arb_spot_screen"),
     ]
 
-    # ══════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------
     # ARBITRAGE DESK — unified tabbed view
     # Single entry point for everything arbitrage-related. Internal tabs
     # cover all modes (CEX-CEX, DEX-DEX, CEX-DEX, BASIS, SPOT) plus the
     # JANE STREET engine control panel. Replaces the old row-menu hub,
     # _arb_basis_screen, _arb_spot_screen, and _funding_scanner_screen
     # (those stay as thin redirects for back-compat).
-    # ══════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------
 
     _ARB_TAB_DEFS = [
-        # (key, tab_id, label, color)
-        ("1", "cex-cex", "CEX \u2194 CEX",   "#ffd700"),
-        ("2", "dex-dex", "DEX \u2194 DEX",   "#00eaff"),
-        ("3", "cex-dex", "CEX \u2194 DEX",   "#c084fc"),
-        ("4", "basis",   "BASIS",            "#32bcad"),
-        ("5", "spot",    "SPOT \u2194 SPOT", "#ff00a0"),
-        ("6", "engine",  "ENGINE",           "#00ff80"),
+        # (key, tab_id, label, color) — collapsed 6→3 tabs in Phase 1
+        # redesign (2026-04-22). All legacy tab ids route into these.
+        ("1", "opps",      "OPPS",       "#ffd700"),
+        ("2", "positions", "POSITIONS",  "#00ff80"),
+        ("3", "history",   "HISTORY",    "#c084fc"),
     ]
 
     # Which tab_ids are "type" (scanner-driven) vs. "meta" (engine-driven).
-    # Consumed by Task 7's render to place the category separator before
-    # POSITIONS/HISTORY. Covers BOTH the current 6-tab layout AND the future
-    # 8-tab layout so Task 7 can swap _ARB_TAB_DEFS without touching this.
+    # Consumed by v2-density render (Task 7) to place the category separator
+    # before POSITIONS/HISTORY. Covers chore's 3-tab Phase-1 layout AND the
+    # future 8-tab v2-density layout so the swap in Task 7 doesn't touch this.
     _ARB_TAB_CATEGORIES = {
-        # v1 tab ids (current):
+        # Phase-1 tab ids (chore/repo-cleanup current):
+        "opps": "type", "positions": "meta", "history": "meta",
+        # v2 density tab ids (will be valid after Task 7):
         "cex-cex": "type", "dex-dex": "type", "cex-dex": "type",
-        "basis": "type", "spot": "type", "engine": "meta",
-        # v2 tab ids (future, will be valid after Task 7):
-        "perp-perp": "type", "spot-spot": "type",
-        "positions": "meta", "history": "meta",
+        "perp-perp": "type", "spot-spot": "type", "basis": "type",
     }
 
-    # Legacy tab ids kept for backward-compat. Callers elsewhere in launcher.py
-    # still pass "spot" and "engine"; when Task 7 flips _ARB_TAB_DEFS to v2,
-    # _arbitrage_hub will translate them via this map. Task 6 just declares it
-    # (not consumed yet).
+    # Legacy tab ids routed into the Phase-1 3-tab layout (chore/repo-cleanup
+    # state). Task 7 will FLIP this to route the other direction (legacy v1
+    # names → v2 density tab ids) atomically with the _ARB_TAB_DEFS swap.
     _ARB_LEGACY_TAB_MAP = {
-        "opps":   "cex-cex",
+        "cex-cex": "opps", "dex-dex": "opps", "cex-dex": "opps",
+        "basis": "opps", "spot": "opps",
         "engine": "positions",
-        "spot":   "spot-spot",
     }
 
-    # Column layout for the v2 density opps table. Not consumed by the
-    # current render (Task 9 will wire it). 8 columns: VIAB + SYM + VENUES
-    # + APR + PROFIT$ + LIFE + BKEVN + DEPTH$1k.
+    # Column layout for the v2 density opps table (Task 9 will wire it into
+    # the painter). 8 columns: VIAB + SYM + VENUES + APR + PROFIT$ + LIFE +
+    # BKEVN + DEPTH$1k. Declared here so Task 9 can consume without touching
+    # class-level defs.
     _ARB_OPPS_COLS = [
         ("VIAB",     5,  "w"),
         ("SYM",      14, "w"),   # includes TYPE suffix "(P-P)"/"(P-S)"/"(S-S)"
@@ -5187,562 +4275,129 @@ class App(tk.Tk):
 
     def _arb_lifetime_tracker(self):
         """Lazy accessor to the per-launcher LifetimeTracker."""
-        from core.arb_lifetime import LifetimeTracker
+        from core.arb.lifetime import LifetimeTracker
         if self._arb_lifetime_tracker_cached is None:
             self._arb_lifetime_tracker_cached = LifetimeTracker()
         return self._arb_lifetime_tracker_cached
 
-    def _arbitrage_hub(self, tab: str = "cex-cex"):
-        """Unified arbitrage desk with 6 internal tabs.
+    def _arbitrage_hub(self, tab: str = "opps"):
+        from launcher_support.screens.arbitrage_hub import render_hub
+        return render_hub(self, tab)
 
-        Each tab renders its own view into a shared content frame. A single
-        background scanner feeds the status strip AND the active tab's data.
-        JANE STREET engine snapshot (if running) overlays real positions on
-        the CEX-CEX tab.
-        """
-        self._clr(); self._clear_kb()
-        self.history.append("main")
-        self.h_path.configure(text=f"> ARBITRAGE > {tab.upper()}")
-        self.h_stat.configure(text="DESK", fg=AMBER_D)
-        self.f_lbl.configure(text="1-6 switch tab  |  R refresh  |  ESC back")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, outer = self._ui_page_shell(
-            "ARBITRAGE DESK",
-            "All arbitrage modes in one place — scan, execute, monitor",
-        )
-
-        # ── Status strip ──
-        # Left: live-scan indicator + clock + ISO date, right: scanner
-        # telemetry (CEX/DEX counts, top APR). Dot turns green when the
-        # scanner has successfully populated the cache, stays dim while
-        # the first scan is pending.
-        status = tk.Frame(outer, bg=BG, height=20)
-        status.pack(fill="x", padx=16, pady=(2, 4))
-        status.pack_propagate(False)
-
-        dot_color = GREEN if getattr(self, "_arb_cache", None) else DIM
-        self._arb_live_dot = tk.Label(status, text="●",
-                                       font=(FONT, 9, "bold"),
-                                       fg=dot_color, bg=BG)
-        self._arb_live_dot.pack(side="left", padx=(0, 4))
-        tk.Label(status, text="LIVE", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 8))
-        self._arb_clock = tk.Label(status, text="", font=(FONT, 7),
-                                    fg=WHITE, bg=BG)
-        self._arb_clock.pack(side="left")
-        try:
-            now = datetime.now()
-            self._arb_clock.configure(
-                text=f"{now.strftime('%H:%M:%S UTC')}  ·  "
-                     f"{now.strftime('%Y-%m-%d')}")
-        except Exception:
-            pass
-
-        # Right side — telemetry grouped by label·value chips.
-        self._arb_sum_best = tk.Label(status, text="TOP  —",
-                                       font=(FONT, 7, "bold"),
-                                       fg=AMBER, bg=BG)
-        self._arb_sum_best.pack(side="right")
-        self._arb_sum_dex = tk.Label(status, text="DEX  —",
-                                      font=(FONT, 7), fg=DIM2, bg=BG)
-        self._arb_sum_dex.pack(side="right", padx=(0, 14))
-        self._arb_sum_cex = tk.Label(status, text="CEX  —",
-                                      font=(FONT, 7), fg=DIM2, bg=BG)
-        self._arb_sum_cex.pack(side="right", padx=(0, 14))
-        tk.Label(status, text="SCAN", font=(FONT, 7, "bold"),
-                 fg=DIM, bg=BG).pack(side="right", padx=(0, 8))
-
-        # ── Tab strip ──
-        # Same grouping pattern as Macro Brain: three functional
-        # buckets rendered with a heading above and a bronze vertical
-        # rule between them. Same HL2 chip styling (bracket-prefixed,
-        # solid amber when active, flat BG with dim text when idle,
-        # BG3/WHITE on hover). Keys 1-6 preserved.
-        arb_group_of = {
-            "cex-cex": "PAIRS", "dex-dex": "PAIRS", "cex-dex": "PAIRS",
-            "basis":   "RATES", "spot":    "RATES",
-            "engine":  "EXECUTE",
-        }
-        grouped_tabs: list[tuple[str, list[tuple[str, str, str]]]] = []
-        for key, tid, label, _color in self._ARB_TAB_DEFS:
-            g = arb_group_of.get(tid, "OTHER")
-            if not grouped_tabs or grouped_tabs[-1][0] != g:
-                grouped_tabs.append((g, []))
-            grouped_tabs[-1][1].append((key, tid, label))
-
-        tabs_frame = tk.Frame(outer, bg=BG)
-        tabs_frame.pack(fill="x", padx=16, pady=(2, 0))
-        self._arb_tab = tab
-        self._arb_tab_labels = {}
-
-        first_group = True
-        for group_name, group_items in grouped_tabs:
-            if not first_group:
-                tk.Frame(tabs_frame, bg=BORDER, width=1).pack(
-                    side="left", fill="y", padx=8, pady=(16, 2))
-            first_group = False
-
-            g_box = tk.Frame(tabs_frame, bg=BG)
-            g_box.pack(side="left", padx=(0, 2))
-            tk.Label(
-                g_box, text=group_name,
-                font=(FONT, 6, "bold"), fg=AMBER, bg=BG,
-                anchor="w", padx=4,
-            ).pack(fill="x", pady=(0, 2))
-
-            g_row = tk.Frame(g_box, bg=BG); g_row.pack(fill="x")
-
-            for key, tid, label in group_items:
-                is_active = (tid == tab)
-                if is_active:
-                    fg, bg = BG, AMBER
-                else:
-                    fg, bg = DIM, BG
-                lbl = tk.Label(
-                    g_row,
-                    text=f"  [{key}]  {label}  ",
-                    font=(FONT, 9, "bold"),
-                    fg=fg, bg=bg, cursor="hand2",
-                    padx=10, pady=4, bd=0, highlightthickness=0,
-                )
-                lbl.pack(side="left", padx=(0, 1))
-                lbl.bind("<Button-1>",
-                         lambda _e, _t=tid: self._arbitrage_hub(_t))
-                if not is_active:
-                    lbl.bind(
-                        "<Enter>",
-                        lambda _e, w=lbl: w.config(bg=BG3, fg=WHITE),
-                    )
-                    lbl.bind(
-                        "<Leave>",
-                        lambda _e, w=lbl: w.config(bg=BG, fg=DIM),
-                    )
-                self._arb_tab_labels[tid] = lbl
-
-        tk.Frame(outer, bg=BORDER, height=1).pack(
-            fill="x", padx=16, pady=(4, 6))
-
-        # ── Content area (tab-specific render) ──
-        content = tk.Frame(outer, bg=BG)
-        content.pack(fill="both", expand=True, padx=16, pady=(0, 6))
-        self._arb_content = content
-
-        # Keyboard shortcuts — 1-6 switch tabs, R refresh, ESC back
-        for key, tid, _, _ in self._ARB_TAB_DEFS:
-            self._kb(f"<Key-{key}>",
-                     lambda _t=tid: self._arbitrage_hub(_t))
-        self._kb("<Key-r>",
-                 lambda: self._arbitrage_hub(self._arb_tab))
-
-        # Route to the tab renderer
-        render_map = {
-            "cex-cex": self._arb_render_cex_cex,
-            "dex-dex": self._arb_render_dex_dex,
-            "cex-dex": self._arb_render_cex_dex,
-            "basis":   self._arb_render_basis,
-            "spot":    self._arb_render_spot,
-            "engine":  self._arb_render_engine,
-        }
-        render_fn = render_map.get(tab, self._arb_render_cex_cex)
-        render_fn(content)
-
-        # If we have cached scan data from the previous tab visit, repaint
-        # immediately instead of waiting ~2s for the next scan to finish.
-        cache = getattr(self, "_arb_cache", None)
-        if cache:
-            try:
-                self._arb_hub_telem_update(
-                    cache["stats"], cache["top"], cache["opps"],
-                    cache["arb_cc"], cache["arb_dd"], cache["arb_cd"],
-                    cache["basis"], cache["spot"])
-            except Exception:
-                pass
-
-        # Kick off first async scan + schedule recurring refresh.
-        self._arb_hub_scan_async()
-        self._arb_schedule_refresh()
-
-        # Live clock tick — updates every second while the hub is open.
-        self._arb_schedule_clock()
-
-    # ── Auto-refresh loop ─────────────────────────────────────
+    # -- Auto-refresh loop -------------------------------------
     def _arb_schedule_refresh(self, delay_ms: int = 15_000):
-        """Re-scan every delay_ms while the arbitrage desk is on screen.
-
-        We identify "on screen" by checking that self._arb_tab_labels still
-        exists and isn't destroyed — the moment the user leaves the hub
-        (back to main menu, another page), that dict is replaced or the
-        widgets are gone, and the scheduled tick no-ops instead of trying
-        to repaint dead Tk widgets.
-        """
-        try:
-            # Cancel previous pending refresh if any
-            prev = getattr(self, "_arb_refresh_after", None)
-            if prev:
-                try:
-                    self.after_cancel(prev)
-                except Exception:
-                    pass
-            def _tick():
-                labels = getattr(self, "_arb_tab_labels", None)
-                if not labels:
-                    return
-                first = next(iter(labels.values()), None)
-                try:
-                    if first is None or not first.winfo_exists():
-                        return
-                except Exception:
-                    return
-                self._arb_hub_scan_async()
-                self._arb_refresh_after = self.after(delay_ms, _tick)
-            self._arb_refresh_after = self.after(delay_ms, _tick)
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import schedule_refresh
+        return schedule_refresh(self, delay_ms)
     def _arb_schedule_clock(self):
-        """Tick the status strip clock every second."""
-        def _tick():
-            lbl = getattr(self, "_arb_clock", None)
-            if lbl is None:
-                return
-            try:
-                if not lbl.winfo_exists():
-                    return
-                lbl.configure(text=datetime.now().strftime("%H:%M:%S UTC"))
-                self.after(1000, _tick)
-            except Exception:
-                pass
-        try:
-            self.after(1000, _tick)
-        except Exception:
-            pass
+        from launcher_support.screens.arbitrage_hub import schedule_clock
+        return schedule_clock(self)
+    def _arb_update_status_strip(self):
+        from launcher_support.screens.arbitrage_hub import update_status_strip
+        return update_status_strip(self)
 
-    # ── Table helper used by every tab ─────────────────────────
+    # -- Table helper used by every tab -------------------------
     def _arb_make_table(self, parent, cols: list[tuple[str, int, str]],
                          on_click=None):
-        """Build a grid-aligned header + body. Returns (body_frame, repaint_fn).
+        from launcher_support.screens.arbitrage_hub import make_table
+        return make_table(self, parent, cols, on_click)
 
-        cols: list of (label, width_chars, anchor). Header and body share the
-        same grid column configuration, so cells stay perfectly aligned no
-        matter the row content. Previous pack-based implementation drifted
-        when cell text lengths varied.
-
-        on_click(row_idx): optional callback fired when the user clicks any
-        cell of a body row. Lets each tab attach a detail pane that reacts
-        to the selected pair.
-        """
-        # Header row
-        hdr = tk.Frame(parent, bg=BG)
-        hdr.pack(fill="x", padx=2)
-        for i, (label, w, anchor) in enumerate(cols):
-            hdr.grid_columnconfigure(i, minsize=w * 7, weight=0, uniform="arb")
-            sticky = "w" if anchor == "w" else "e"
-            tk.Label(hdr, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG, anchor=anchor).grid(
-                row=0, column=i, sticky=sticky + "ns", padx=3, pady=(0, 2))
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(0, 2))
-
-        # Body uses the same column config so each column lines up to header
-        body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, padx=2)
-        for i, (_, w, _) in enumerate(cols):
-            body.grid_columnconfigure(i, minsize=w * 7, weight=0, uniform="arb")
-
-        # In-place row cache: list of (cells, hover_bg) per current row.
-        # repaint() diffs rows against this cache and only mutates cells
-        # that actually changed, so a 15s scan refresh doesn't flicker —
-        # text just updates like a terminal ticker.
-        state = {"rows": [], "placeholder": None}
-
-        def _clear_placeholder():
-            if state["placeholder"] is not None:
-                state["placeholder"].destroy()
-                state["placeholder"] = None
-
-        def _set_placeholder(msg: str):
-            # Only replace the message if different — avoid flicker cycles.
-            ph = state["placeholder"]
-            if ph is not None:
-                try:
-                    if ph.cget("text") == msg:
-                        return
-                    ph.configure(text=msg)
-                    return
-                except Exception:
-                    pass
-            # Remove any rows first (placeholder = empty state)
-            for (cells, _) in state["rows"]:
-                for c in cells:
-                    c.destroy()
-            state["rows"] = []
-            state["placeholder"] = tk.Label(
-                body, text=msg, font=(FONT, 8),
-                fg=DIM2, bg=BG, justify="center")
-            state["placeholder"].grid(
-                row=0, column=0, columnspan=len(cols), pady=16)
-
-        def _make_row(ri: int, row, bg_row: str):
-            cells = []
-            for ci, ((txt, fg), (_, _, anchor)) in enumerate(zip(row, cols)):
-                sticky = "w" if anchor == "w" else "e"
-                cursor = "hand2" if on_click else "arrow"
-                cell = tk.Label(body, text=txt, font=(FONT, 8),
-                                 fg=fg, bg=bg_row, anchor=anchor,
-                                 cursor=cursor)
-                cell.grid(row=ri, column=ci,
-                          sticky=sticky + "nsew", padx=3, pady=1)
-                cells.append(cell)
-                if on_click is not None:
-                    cell.bind(
-                        "<Button-1>", lambda _e, _i=ri: on_click(_i))
-            if on_click is not None:
-                def _hover_in(_e, cells=cells):
-                    for c in cells:
-                        c.configure(bg=BG3)
-                def _hover_out(_e, cells=cells, bgx=bg_row):
-                    for c in cells:
-                        c.configure(bg=bgx)
-                for c in cells:
-                    c.bind("<Enter>", _hover_in)
-                    c.bind("<Leave>", _hover_out)
-            return cells
-
-        def _update_row(cells, row, bg_row):
-            for c, (txt, fg) in zip(cells, row):
-                # Only push changes — comparing beforehand keeps Tk from
-                # redrawing cells whose text/fg are identical to current.
-                try:
-                    if c.cget("text") != txt:
-                        c.configure(text=txt)
-                    if c.cget("fg") != fg:
-                        c.configure(fg=fg)
-                    if c.cget("bg") != bg_row:
-                        c.configure(bg=bg_row)
-                except Exception:
-                    pass
-
-        def repaint(rows: list[list[tuple[str, str]]]):
-            """Diff-update rows in place. No destroy+rebuild on normal
-            refresh, so the table reads like a ticker instead of blinking."""
-            if not rows:
-                has_scan = getattr(self, "_arb_cache", None) is not None
-                msg = ("  \u2014 no pairs match current filters \u2014\n"
-                       "  click filter chips above to relax"
-                       if has_scan else
-                       "  \u2014 scanning venues, hold on \u2014")
-                _set_placeholder(msg)
-                return
-
-            _clear_placeholder()
-            # Update existing rows in place where possible
-            for ri, row in enumerate(rows):
-                bg_row = BG if ri % 2 == 0 else BG2
-                if ri < len(state["rows"]):
-                    cells, _ = state["rows"][ri]
-                    _update_row(cells, row, bg_row)
-                    state["rows"][ri] = (cells, bg_row)
-                else:
-                    cells = _make_row(ri, row, bg_row)
-                    state["rows"].append((cells, bg_row))
-            # Trim excess rows (previous refresh had more data than this one)
-            while len(state["rows"]) > len(rows):
-                cells, _ = state["rows"].pop()
-                for c in cells:
-                    c.destroy()
-
-        return body, repaint
-
-    # ── Shared filter bar (click to cycle each chip) ─────────
+    # -- Shared filter bar (click to cycle each chip) ---------
     _ARB_APR_OPTS   = [5, 10, 20, 50, 100]
     _ARB_VOL_OPTS   = [0, 100_000, 500_000, 1_000_000, 5_000_000]
     _ARB_OI_OPTS    = [0, 50_000, 100_000, 500_000, 1_000_000]
     _ARB_RISK_OPTS  = ["HIGH", "MED", "LOW"]
     _ARB_GRADE_OPTS = ["SKIP", "MAYBE", "GO"]
-    # Defaults são permissivos DE PROPÓSITO — se começarmos apertado
-    # (GRADE≥MAYBE, APR≥20%), o usuário abre a desk e vê tabela vazia sem
-    # saber porquê. Começa relaxado, user aperta se quiser ver só o topo.
+    # Phase 2 redesign: default ships with GRADE=MAYBE (≈ +WAIT), hiding
+    # SKIP noise of the day. User clicks "ALL" to see everything or
+    # "GO ONLY" to tighten.
     _ARB_FILTER_DEFAULTS = {
         "min_apr": 5.0, "min_volume": 0, "min_oi": 0,
-        "risk_max": "HIGH", "grade_min": "SKIP",
+        "risk_max": "HIGH", "grade_min": "MAYBE",
+        "exclude_risky_venues": False,
+        "realistic_only": True,
         # v2 density filters (2026-04-23) — declared for Task 10 to wire.
         # Defaults = off / permissive so existing behavior is unchanged.
-        "exclude_risky_venues": False,
-        "realistic_only":       True,
-        "profit_min_usd":       0.0,     # cut opps with net <$X per $1k per 24h
-        "life_min_seconds":     0,       # require pair seen for ≥X seconds
-        "venues_allow":         None,    # None = all venues OK; list = allowlist
+        "profit_min_usd":   0.0,     # cut opps with net <$X per $1k per 24h
+        "life_min_seconds": 0,       # require pair seen for ≥X seconds
+        "venues_allow":     None,    # None = all venues OK; list = allowlist
     }
 
+    # Venues considered "risky" for the [NO RISKY VENUES] toggle —
+    # reliability ≤ 94 from core.arb.arb_scoring._DEFAULT_VENUE_RELIABILITY.
+    _ARB_RISKY_VENUES = frozenset({"bingx", "bitget", "paradex"})
+
+    # REALISTIC filter cutoffs. APR > 500% is almost always stale funding
+    # on a thinly-traded perp — looks juicy in the list, impossible to
+    # actually execute. Vol < $5M means >20bps slippage on a $1k position
+    # which eats the whole edge.
+    _ARB_REALISTIC_APR_MAX = 500.0
+    _ARB_REALISTIC_VOL_MIN = 5_000_000.0
+
     def _arb_filter_state(self) -> dict:
-        if not hasattr(self, "_arb_filters"):
-            self._arb_filters = dict(self._ARB_FILTER_DEFAULTS)
-        return self._arb_filters
-
+        from launcher_support.screens.arbitrage_hub import filter_state
+        return filter_state(self)
+    @staticmethod
+    def _arb_filters_path():
+        from launcher_support.screens.arbitrage_hub import filters_path
+        return filters_path()
+    def _arb_load_filters(self) -> dict:
+        from launcher_support.screens.arbitrage_hub import load_filters
+        return load_filters(self)
+    def _arb_save_filters(self) -> None:
+        from launcher_support.screens.arbitrage_hub import save_filters
+        return save_filters(self)
     def _arb_fmt_filter(self, key: str, val) -> str:
-        if key == "min_apr":
-            return f"APR\u2265{int(val)}%"
-        if key == "min_volume":
-            if val == 0: return "VOL\u2265OFF"
-            if val >= 1_000_000: return f"VOL\u2265{int(val/1_000_000)}M"
-            return f"VOL\u2265{int(val/1_000)}K"
-        if key == "min_oi":
-            if val == 0: return "OI\u2265OFF"
-            if val >= 1_000_000: return f"OI\u2265{int(val/1_000_000)}M"
-            return f"OI\u2265{int(val/1_000)}K"
-        if key == "risk_max":
-            return f"RISK\u2264{val}"
-        if key == "grade_min":
-            return f"GRADE\u2265{val}"
-        return f"{key}={val}"
+        from launcher_support.screens.arbitrage_hub import fmt_filter
+        return fmt_filter(self, key, val)
+    def _arb_rerender_current_tab(self) -> None:
+        from launcher_support.screens.arbitrage_hub import rerender_current_tab
+        return rerender_current_tab(self)
 
+    def _arb_set_grade_min(self, grade: str) -> None:
+        from launcher_support.screens.arbitrage_hub import set_grade_min
+        return set_grade_min(self, grade)
+    def _arb_toggle_risky_venues(self) -> None:
+        from launcher_support.screens.arbitrage_hub import toggle_risky_venues
+        return toggle_risky_venues(self)
+    def _arb_toggle_realistic(self) -> None:
+        from launcher_support.screens.arbitrage_hub import toggle_realistic
+        return toggle_realistic(self)
+    def _arb_refresh_viab_toolbar(self) -> None:
+        from launcher_support.screens.arbitrage_hub import refresh_viab_toolbar
+        return refresh_viab_toolbar(self)
+    def _arb_build_viab_toolbar(self, parent):
+        from launcher_support.screens.arbitrage_hub import build_viab_toolbar
+        return build_viab_toolbar(self, parent)
     def _arb_build_filter_bar(self, parent):
-        """Render the shared filter chip strip. Click a chip to cycle its value.
-
-        Filters persist across tab switches via self._arb_filters. Any value
-        change re-renders the active tab from the cached scan (no network).
-        """
-        state = self._arb_filter_state()
-        bar = tk.Frame(parent, bg=BG2)
-        bar.pack(fill="x", pady=(0, 4))
-        tk.Label(bar, text=" FILTERS ", font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG2).pack(side="left", padx=(4, 2))
-        tk.Label(bar, text="› click pra ciclar",
-                 font=(FONT, 6), fg=DIM, bg=BG2).pack(
-            side="left", padx=(0, 6))
-
-        self._arb_filter_labels = {}
-        filter_defs = [
-            ("min_apr",    self._ARB_APR_OPTS),
-            ("min_volume", self._ARB_VOL_OPTS),
-            ("min_oi",     self._ARB_OI_OPTS),
-            ("risk_max",   self._ARB_RISK_OPTS),
-            ("grade_min",  self._ARB_GRADE_OPTS),
-        ]
-        for fkey, fopts in filter_defs:
-            cur = state.get(fkey)
-            lbl = tk.Label(bar, text=f" {self._arb_fmt_filter(fkey, cur)} ",
-                           font=(FONT, 7, "bold"), fg=AMBER, bg=BG3,
-                           cursor="hand2", padx=6, pady=2)
-            lbl.pack(side="left", padx=2, pady=2)
-            self._arb_filter_labels[fkey] = lbl
-            # Hover signals "this is a chip you can click to cycle"
-            # — previously only the cursor changed, easy to miss.
-            lbl.bind("<Enter>",
-                     lambda _e, w=lbl: w.config(bg=BORDER_H, fg=AMBER_B))
-            lbl.bind("<Leave>",
-                     lambda _e, w=lbl: w.config(bg=BG3, fg=AMBER))
-
-            def _cycle(_e=None, _k=fkey, _opts=fopts):
-                s = self._arb_filter_state()
-                cur = s.get(_k)
-                try:
-                    idx = _opts.index(cur)
-                except ValueError:
-                    idx = 0
-                nxt = _opts[(idx + 1) % len(_opts)]
-                s[_k] = nxt
-                self._arb_filter_labels[_k].configure(
-                    text=f" {self._arb_fmt_filter(_k, nxt)} ")
-                # Re-render the current tab with cached data
-                cache = getattr(self, "_arb_cache", None)
-                if cache:
-                    self._arb_hub_telem_update(
-                        cache.get("stats"), cache.get("top"),
-                        cache.get("opps", []), cache.get("arb_cc", []),
-                        cache.get("arb_dd", []), cache.get("arb_cd", []),
-                        cache.get("basis", []), cache.get("spot", []))
-            lbl.bind("<Button-1>", _cycle)
-
-    # ── Detail pane (populated on row click) ──────────────────
+        from launcher_support.screens.arbitrage_hub import build_filter_bar
+        return build_filter_bar(self, parent)
+    # -- Detail pane (populated on row click) ------------------
     def _arb_build_detail_pane(self, parent):
-        """Reserve a detail panel below the table. Updated on row click with
-        the selected pair's factor breakdown + score."""
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 2))
-        # Title row: DETAIL + hint so the user knows this panel fills
-        # from a row click — was easy to miss as a passive label.
-        title_row = tk.Frame(parent, bg=BG); title_row.pack(fill="x")
-        tk.Label(title_row, text="DETAIL",
-                 font=(FONT, 7, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(title_row, text="  › clique numa linha pra inspecionar",
-                 font=(FONT, 6), fg=DIM, bg=BG).pack(side="left")
-        body = tk.Frame(parent, bg=BG2)
-        body.pack(fill="x", pady=(2, 0))
-        default = tk.Label(body,
-                           text="  (nenhuma linha selecionada — clique pra abrir)",
-                           font=(FONT, 7), fg=DIM2, bg=BG2)
-        default.pack(anchor="w", padx=6, pady=6)
-        self._arb_detail_body = body
-        self._arb_detail_default = default
+        from launcher_support.screens.arbitrage_hub import build_detail_pane
+        return build_detail_pane(self, parent)
+    # Size chips for the detail simulator. Matches the reasonable range
+    # for paper mode ($5k account, max 3 positions — $500 to $5k per leg).
+    _ARB_SIM_SIZES = (500.0, 1000.0, 2500.0, 5000.0)
 
+    def _arb_simulate(self, pair: dict, size_usd: float) -> dict:
+        from launcher_support.screens.arbitrage_hub import simulate
+        return simulate(self, pair, size_usd)
+    @timed_legacy_switch("arb_detail")
     def _arb_show_detail(self, pair: dict):
-        """Populate the detail pane with the factor breakdown of a pair."""
-        body = getattr(self, "_arb_detail_body", None)
-        if body is None:
-            return
-        for w in body.winfo_children():
-            w.destroy()
-
-        # Compute the factor breakdown via the same scorer used for filtering.
-        try:
-            from core.arb_scoring import score_opp
-            res = score_opp(pair)
-        except Exception:
-            res = None
-
-        header_txt = self._arb_pair_label(pair)
-        tk.Label(body, text=header_txt,
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG2,
-                 anchor="w").pack(fill="x", padx=6, pady=(4, 2))
-
-        # Factor table
-        if res is not None:
-            grid = tk.Frame(body, bg=BG2)
-            grid.pack(fill="x", padx=6, pady=(0, 4))
-            factor_rows = [
-                ("NET APR", res.factors.get("net_apr"),
-                    f"{float(pair.get('net_apr') or pair.get('apr') or 0):+.1f}%"),
-                ("VOLUME",  res.factors.get("volume"),
-                    self._fmt_vol(pair.get("volume_24h")
-                                  or self._pair_min(pair.get("volume_24h_short"),
-                                                     pair.get("volume_24h_long")))),
-                ("OI",      res.factors.get("oi"),
-                    self._fmt_vol(pair.get("open_interest")
-                                  or self._pair_min(pair.get("open_interest_short"),
-                                                     pair.get("open_interest_long")))),
-                ("RISK",    res.factors.get("risk"),   pair.get("risk", "\u2014")),
-                ("SLIP",    res.factors.get("slippage"), "\u2014"),
-                ("VENUE",   res.factors.get("venue"),
-                    self._arb_venue_label(pair)),
-            ]
-            for i, (label, score, value) in enumerate(factor_rows):
-                grid.grid_columnconfigure(1, weight=1)
-                tk.Label(grid, text=label, font=(FONT, 7, "bold"),
-                         fg=DIM, bg=BG2, width=8, anchor="w").grid(
-                    row=i, column=0, sticky="w", padx=(0, 6))
-                tk.Label(grid, text=value, font=(FONT, 8),
-                         fg=WHITE, bg=BG2, anchor="w").grid(
-                    row=i, column=1, sticky="w")
-                s_txt = "\u2014" if score is None else f"{score:.0f}/100"
-                s_fg = (GREEN if (score or 0) >= 70 else
-                        AMBER if (score or 0) >= 40 else DIM)
-                tk.Label(grid, text=s_txt, font=(FONT, 7),
-                         fg=s_fg, bg=BG2, width=10, anchor="e").grid(
-                    row=i, column=2, sticky="e")
-
-            tk.Frame(body, bg=BORDER, height=1).pack(
-                fill="x", padx=6, pady=(2, 2))
-            sum_line = tk.Frame(body, bg=BG2)
-            sum_line.pack(fill="x", padx=6, pady=(0, 4))
-            grade_fg = (GREEN if res.grade == "GO" else
-                        AMBER if res.grade == "MAYBE" else DIM)
-            tk.Label(sum_line, text=f"SCORE {res.score:.0f}/100",
-                     font=(FONT, 9, "bold"), fg=WHITE, bg=BG2).pack(side="left")
-            tk.Label(sum_line, text=f"  GRADE {res.grade}",
-                     font=(FONT, 9, "bold"), fg=grade_fg,
-                     bg=BG2).pack(side="left", padx=(8, 0))
-
+        from launcher_support.screens.arbitrage_hub import show_detail
+        return show_detail(self, pair)
+    def _arb_set_detail_size(self, size_usd: float) -> None:
+        from launcher_support.screens.arbitrage_hub import set_detail_size
+        return set_detail_size(self, size_usd)
+    def _arb_toggle_detail_adv(self) -> None:
+        from launcher_support.screens.arbitrage_hub import toggle_detail_adv
+        return toggle_detail_adv(self)
+    def _arb_viab_reason(self, pair: dict, res) -> str:
+        from launcher_support.screens.arbitrage_hub import viab_reason
+        return viab_reason(self, pair, res)
+    def _arb_open_as_paper(self, pair: dict, *, size_usd: float | None = None) -> None:
+        from launcher_support.screens.arbitrage_hub import open_as_paper
+        return open_as_paper(self, pair, size_usd=size_usd)
     @staticmethod
     def _pair_min(a, b):
         vals = [v for v in (a, b) if v is not None]
@@ -5764,95 +4419,18 @@ class App(tk.Tk):
 
     @staticmethod
     def _arb_venue_label(pair: dict) -> str:
-        if pair.get("long_venue") and pair.get("short_venue"):
-            return f"{pair['long_venue']} \u2192 {pair['short_venue']}"
-        return str(pair.get("venue") or "\u2014")
-
+        from launcher_support.screens.arbitrage_hub import venue_label
+        return venue_label(pair)
     @staticmethod
     def _arb_pair_label(pair: dict) -> str:
-        sym = pair.get("symbol") or pair.get("sym") or "\u2014"
-        venue = (f"{pair.get('long_venue', '')} \u2194 {pair.get('short_venue', '')}"
-                 if pair.get("long_venue") else pair.get("venue", ""))
-        return f"{sym}  \u00b7  {venue.strip(' \u2194')}"
-
-    # ── Scoring filter ───────────────────────────────────────
+        from launcher_support.screens.arbitrage_hub import pair_label
+        return pair_label(pair)
     def _arb_score_fallback(self, pair: dict):
-        """Synthesize a ScoreResult from net_apr alone.
-
-        arb_pairs() doesn't propagate volume_24h / open_interest per leg,
-        so score_opp returns mostly-None factors and grades SKIP for
-        everything. When that happens, fall back to a pure-APR score so the
-        table doesn't look all-SKIP.
-        """
-        from core.arb_scoring import ScoreResult
-        apr = abs(float(pair.get("net_apr") or pair.get("apr") or 0))
-        # APR → score mapping: 0% = 0, 50%+ = 100
-        score = min(100.0, apr * 2.0)
-        if score >= 70:
-            grade = "GO"
-        elif score >= 40:
-            grade = "MAYBE"
-        else:
-            grade = "SKIP"
-        return ScoreResult(score=round(score, 0), grade=grade,
-                            factors={"net_apr": score})
-
+        from launcher_support.screens.arbitrage_hub import score_fallback
+        return score_fallback(self, pair)
     def _arb_filter_and_score(self, pairs: list) -> list[tuple[dict, object]]:
-        """Apply user filters + scoring to each pair.
-
-        Uses arb_scoring.score_opp when pair has enough fields (vol/oi), else
-        falls back to an APR-only heuristic so the table is never all-SKIP.
-        Returns (pair_dict, ScoreResult) in descending score order.
-        """
-        from core.arb_scoring import score_opp
-        state = self._arb_filter_state()
-        min_apr    = state.get("min_apr", 0)
-        min_volume = state.get("min_volume", 0)
-        min_oi     = state.get("min_oi", 0)
-        risk_max   = state.get("risk_max", "HIGH")
-        grade_min  = state.get("grade_min", "SKIP")
-        _R = {"LOW": 0, "MED": 1, "HIGH": 2}
-        _G = {"GO": 0, "MAYBE": 1, "SKIP": 2}
-        risk_cap  = _R.get(risk_max, 2)
-        grade_cap = _G.get(grade_min, 2)
-
-        out = []
-        for p in (pairs or []):
-            # Cheap filters first
-            apr = abs(float(p.get("net_apr") or p.get("apr") or 0))
-            if apr < min_apr:
-                continue
-            vol = (p.get("volume_24h")
-                   or self._pair_min(p.get("volume_24h_short"),
-                                      p.get("volume_24h_long")) or 0)
-            if min_volume and float(vol) < min_volume:
-                continue
-            oi = (p.get("open_interest")
-                  or self._pair_min(p.get("open_interest_short"),
-                                     p.get("open_interest_long")) or 0)
-            if min_oi and float(oi) < min_oi:
-                continue
-            risk = p.get("risk", "HIGH")
-            if _R.get(risk, 2) > risk_cap:
-                continue
-
-            # Score via arb_scoring. If all non-APR factors come back None
-            # (pair dict lacks volume/oi per leg), fall back to APR-only.
-            try:
-                sr = score_opp(p)
-                populated = sum(1 for v in sr.factors.values() if v is not None)
-                if populated <= 1:
-                    sr = self._arb_score_fallback(p)
-            except Exception:
-                sr = self._arb_score_fallback(p)
-
-            if _G.get(sr.grade, 2) > grade_cap:
-                continue
-            out.append((p, sr))
-        out.sort(key=lambda t: t[1].score, reverse=True)
-        return out
-
-    # ── Tab renderers ──────────────────────────────────────────
+        from launcher_support.screens.arbitrage_hub import filter_and_score
+        return filter_and_score(self, pairs)
     _ARB_PAIRS_COLS = [
         ("#",     3,  "e"), ("SYM",    7, "w"),
         ("LONG",  10, "w"), ("SHORT",  10, "w"),
@@ -5861,830 +4439,124 @@ class App(tk.Tk):
         ("GRADE", 8,  "e"),
     ]
 
-    def _arb_render_cex_cex(self, parent):
-        """CEX↔CEX tab: paired funding arb opportunities + JANE STREET
-        live positions (if the engine is running and writing snapshots)."""
-        tk.Label(parent, text="CEX \u2194 CEX  \u00b7  Jane Street delta-neutral funding",
-                 font=(FONT, 8, "bold"), fg=AMBER, bg=BG).pack(
-            anchor="w", pady=(0, 4))
-
-        self._arb_build_filter_bar(parent)
-        self._arb_cex_selected = []  # filtered pairs, index-aligned with table rows
-
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_cex_selected):
-                self._arb_show_detail(self._arb_cex_selected[ri])
-        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
-                                           on_click=_on_click)
-        self._arb_cex_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-        # Live JANE STREET positions (shown only if engine has a fresh snapshot)
-        try:
-            from core.alchemy_state import AlchemyState
-            state = getattr(self, "_arb_alchemy_state", None)
-            if state is None:
-                state = AlchemyState()
-                self._arb_alchemy_state = state
-            snap = state.read()
-            if not snap.get("_stale", True) and snap.get("positions"):
-                tk.Label(parent, text="LIVE POSITIONS",
-                         font=(FONT, 7, "bold"), fg=AMBER,
-                         bg=BG).pack(anchor="w", pady=(6, 2))
-                pcols = [("SYM", 7, "w"), ("L/S", 10, "w"),
-                         ("PNL", 9, "e"), ("DECAY", 8, "e"), ("EXIT", 8, "e")]
-                _, p_repaint = self._arb_make_table(parent, pcols)
-                pos_rows = []
-                for p in snap.get("positions", []):
-                    pnl = p.get("pnl", 0) or 0
-                    exit_s = p.get("exit_in_s", 0) or 0
-                    h, rem = divmod(int(exit_s), 3600)
-                    m = rem // 60
-                    long_v = (p.get("long") or "")[:3].upper()
-                    short_v = (p.get("short") or "")[:3].upper()
-                    pos_rows.append([
-                        ((p.get("sym") or "\u2014")[:6], WHITE),
-                        (f"{long_v}/{short_v}", AMBER_D),
-                        (f"{pnl:+.2f}", GREEN if pnl >= 0 else RED),
-                        (f"-{p.get('edge_decay_pct', 0):.0f}%", AMBER),
-                        (f"{h}h{m:02d}" if exit_s > 0 else "\u2014", DIM),
-                    ])
-                p_repaint(pos_rows)
-        except Exception:
-            pass
-
-    def _arb_render_dex_dex(self, parent):
-        tk.Label(parent, text="DEX \u2194 DEX  \u00b7  funding diff across decentralized venues",
-                 font=(FONT, 8, "bold"), fg="#00eaff", bg=BG).pack(anchor="w", pady=(0, 4))
-        self._arb_build_filter_bar(parent)
-        self._arb_dex_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_dex_selected):
-                self._arb_show_detail(self._arb_dex_selected[ri])
-        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
-                                           on_click=_on_click)
-        self._arb_dex_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-    def _arb_render_cex_dex(self, parent):
-        tk.Label(parent, text="CEX \u2194 DEX  \u00b7  funding diff cex vs dex",
-                 font=(FONT, 8, "bold"), fg="#c084fc", bg=BG).pack(anchor="w", pady=(0, 4))
-        self._arb_build_filter_bar(parent)
-        self._arb_cdex_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_cdex_selected):
-                self._arb_show_detail(self._arb_cdex_selected[ri])
-        _, repaint = self._arb_make_table(parent, self._ARB_PAIRS_COLS,
-                                           on_click=_on_click)
-        self._arb_cdex_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-    def _arb_render_basis(self, parent):
-        tk.Label(parent, text="BASIS  \u00b7  buy spot / short perp (or reverse) to lock basis",
-                 font=(FONT, 8, "bold"), fg="#32bcad", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("PERP", 9, "w"),
-                ("SPOT", 9, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
-                ("BASIS", 8, "e"), ("APR", 7, "e")]
-        self._arb_basis_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_basis_selected):
-                self._arb_show_detail(self._arb_basis_selected[ri])
-        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
-        self._arb_basis_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
-
-    def _arb_render_spot(self, parent):
-        tk.Label(parent, text="SPOT \u2194 SPOT  \u00b7  same asset, different exchange",
-                 font=(FONT, 8, "bold"), fg="#ff00a0", bg=BG).pack(anchor="w", pady=(0, 4))
-        cols = [("#", 3, "e"), ("SYM", 7, "w"), ("VENUE A", 9, "w"),
-                ("VENUE B", 9, "w"), ("PRICE A", 11, "e"),
-                ("PRICE B", 11, "e"), ("SPREAD", 9, "e")]
-        self._arb_spot_selected = []
-        def _on_click(ri: int):
-            if 0 <= ri < len(self._arb_spot_selected):
-                self._arb_show_detail(self._arb_spot_selected[ri])
-        _, repaint = self._arb_make_table(parent, cols, on_click=_on_click)
-        self._arb_spot_repaint = repaint
-        repaint([])
-        self._arb_build_detail_pane(parent)
+    # Legacy renderers (cex_cex, dex_dex, cex_dex, basis, spot) removed
+    # in Phase 4 organize (2026-04-22). Their data now flows into the
+    # unified OPPS tab. The _arb_*_repaint/_selected fields they wrote
+    # to are no longer referenced; if you need the raw pair lists they
+    # live in self._arb_cache (populated by _arb_hub_scan_async).
 
     def _arb_render_engine(self, parent):
-        """JANE STREET engine controls + live risk + log tail."""
-        try:
-            from core.alchemy_state import AlchemyState
-            state = getattr(self, "_arb_alchemy_state", None)
-            if state is None:
-                state = AlchemyState()
-                self._arb_alchemy_state = state
-            snap = state.read()
-        except Exception:
-            snap = {"_stale": True}
+        from launcher_support.screens.arbitrage_hub import render_engine
+        return render_engine(self, parent)
+    # ═══════════════════════════════════════════════════════════
+    # Phase 1 redesign (2026-04-22): 3-tab layout
+    # ═══════════════════════════════════════════════════════════
+    # 6-column layout after organize pass (2026-04-22):
+    # Dropped TYPE (~always PERP_PERP, goes in detail) and VOL
+    # (REALISTIC filter already gates anything uninvestable, and the
+    # detail pane shows vol ratio at the actual trade size). Left with
+    # the 6 columns that actually drive the "take this or not?" call.
+    _ARB_OPPS_COLS = [
+        ("VIAB",    5,  "w"),
+        ("SYM",    11,  "w"),
+        ("VENUES", 22,  "w"),
+        ("APR",     9,  "e"),
+        ("BKEVN",   7,  "e"),
+        ("SCORE",   5,  "e"),
+    ]
 
-        stale = snap.get("_stale", True)
-        running_badge = ("OFF", RED) if stale else ("RUN", GREEN)
-
-        # Status strip (engine-specific)
-        top = tk.Frame(parent, bg=BG)
-        top.pack(fill="x", pady=(0, 4))
-        tk.Label(top, text="JANE STREET",
-                 font=(FONT, 9, "bold"), fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(top, text=f"  \u00b7  {running_badge[0]}  \u00b7  mode {snap.get('mode', '—')}",
-                 font=(FONT, 8), fg=running_badge[1], bg=BG).pack(side="left")
-
-        # Live risk gauges
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(2, 4))
-        gauges = tk.Frame(parent, bg=BG)
-        gauges.pack(fill="x", pady=(0, 4))
-        for k, label, fmt in [
-            ("account", "ACCT", "${:,.0f}"),
-            ("drawdown_pct", "DD", "{:+.2f}%"),
-            ("exposure_usd", "EXPO", "${:,.0f}"),
-            ("realized_pnl", "REAL", "${:+,.2f}"),
-            ("unrealized_pnl", "UPNL", "${:+,.2f}"),
-            ("losses_streak", "STREAK", "{}"),
-            ("trades_count", "TRADES", "{}"),
-        ]:
-            val = snap.get(k, 0) or 0
-            try:
-                vtxt = fmt.format(val)
-            except Exception:
-                vtxt = "—"
-            col = tk.Frame(gauges, bg=BG)
-            col.pack(side="left", padx=(0, 16))
-            tk.Label(col, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG).pack(anchor="w")
-            tk.Label(col, text=vtxt, font=(FONT, 10, "bold"),
-                     fg=WHITE, bg=BG).pack(anchor="w")
-
-        # Controls
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        ctrls = tk.Frame(parent, bg=BG)
-        ctrls.pack(fill="x", pady=(0, 4))
-        tk.Label(ctrls, text="  controls:",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left")
-        for text, cmd, color in [
-            ("START PAPER", lambda: self._arb_engine_start("paper"), GREEN),
-            ("START DEMO",  lambda: self._arb_engine_start("demo"),  AMBER),
-            ("STOP",        self._arb_engine_stop,                    RED),
-        ]:
-            b = tk.Label(ctrls, text=f"  {text}  ", font=(FONT, 7, "bold"),
-                         fg=BG, bg=color, cursor="hand2", padx=6, pady=1)
-            b.pack(side="left", padx=(6, 0))
-            b.bind("<Button-1>", lambda _e, _c=cmd: _c())
-
-        # Log tail (last 8 lines from most recent log)
-        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(6, 4))
-        tk.Label(parent, text="LOG TAIL",
-                 font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(anchor="w")
-        log_body = tk.Text(parent, height=10, font=(FONT, 7),
-                           bg=BG2, fg=DIM, bd=0, highlightthickness=0,
-                           wrap="none")
-        log_body.pack(fill="both", expand=True, pady=(2, 0))
-        try:
-            from pathlib import Path as _P
-            logs = sorted((_P("data") / ".proc_logs").glob("janestreet_*.log"),
-                          key=lambda p: p.stat().st_mtime, reverse=True)
-            if logs:
-                with logs[0].open("r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()[-60:]
-                log_body.insert("end", "".join(lines))
-                log_body.see("end")
-            else:
-                log_body.insert("end", "  no log yet — start the engine\n")
-        except Exception as e:
-            log_body.insert("end", f"  log unavailable: {e}\n")
-        log_body.configure(state="disabled")
-
-    # ── Engine control shortcuts ──────────────────────────────
+    def _arb_render_opps(self, parent):
+        from launcher_support.screens.arbitrage_hub import render_opps
+        return render_opps(self, parent)
+    def _arb_render_positions(self, parent):
+        from launcher_support.screens.arbitrage_hub import render_positions
+        return render_positions(self, parent)
+    def _arb_render_history(self, parent):
+        from launcher_support.screens.arbitrage_hub import render_history
+        return render_history(self, parent)
+    def _arb_paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot):
+        from launcher_support.screens.arbitrage_hub import paint_opps
+        return paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot)
+    # -- Engine control shortcuts ------------------------------
     def _arb_engine_start(self, mode: str):
-        """Start JANE STREET engine in the given mode (paper/demo/live)."""
-        from core import proc
-        proc.spawn("janestreet", cli_args=["--mode", mode])
-        try:
-            self.after(500, lambda: self._arbitrage_hub("engine"))
-        except Exception:
-            pass
-
+        from launcher_support.screens.arbitrage_hub import engine_start
+        return engine_start(self, mode)
     def _arb_engine_stop(self):
-        """Stop any running JANE STREET process."""
-        from core import proc
-        for p in proc.list_procs():
-            if p.get("engine") == "janestreet" and p.get("alive"):
-                proc.stop_proc(p["pid"], expected=p)
-        try:
-            self.after(500, lambda: self._arbitrage_hub("engine"))
-        except Exception:
-            pass
+        from launcher_support.screens.arbitrage_hub import engine_stop
+        return engine_stop(self)
+    _ARB_SCAN_FRESH_SECS = 10  # within this window, skip new scan
 
-    # ── Background scan: populates status strip + active tab ────
+    def _arb_scan_is_fresh(self) -> bool:
+        from launcher_support.screens.arbitrage_hub import scan_is_fresh
+        return scan_is_fresh(self)
     def _arb_hub_scan_async(self):
-        """Run FundingScanner in a worker thread and push results to the UI.
-
-        The scanner is cached (CACHE_TTL) so hopping between tabs doesn't
-        hammer venue APIs. After the scan returns, the status strip is
-        always refreshed; the active tab's table is repainted with live
-        data via whichever ``_arb_*_repaint`` callback is registered.
-        """
-        import threading
-        try:
-            from core.funding_scanner import FundingScanner
-        except Exception as e:
-            self._arb_set_status_error(f"scanner unavailable: {str(e)[:40]}")
-            return
-        scanner = getattr(self, "_funding_scanner", None)
-        if scanner is None:
-            scanner = FundingScanner()
-            self._funding_scanner = scanner
-
-        def _worker():
-            try:
-                opps = scanner.scan()
-                stats = scanner.stats()
-                # Lower min_spread_apr from 5% to 1% — the UI filter handles
-                # tighter thresholds now; we want the scanner to hand us as
-                # many candidates as possible so the post-filter has options
-                # to display.
-                arb_cc = scanner.arb_pairs(mode="cex-cex", min_spread_apr=1.0)
-                arb_dd = scanner.arb_pairs(mode="dex-dex", min_spread_apr=1.0)
-                arb_cd = scanner.arb_pairs(mode="cex-dex", min_spread_apr=1.0)
-                basis = []
-                spot = []
-                try:
-                    scanner.scan_spot()
-                    basis = scanner.basis_pairs(min_basis_bps=5)[:20]
-                    spot = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
-                except Exception:
-                    pass
-                top = opps[0] if opps else None
-                try:
-                    self.after(0, lambda: self._arb_hub_telem_update(
-                        stats, top, opps, arb_cc, arb_dd, arb_cd, basis, spot))
-                except (RuntimeError, tk.TclError):
-                    # Tk root gone (test teardown / app shutdown) — drop update
-                    pass
-            except Exception as e:
-                try:
-                    self.after(0, lambda: self._arb_set_status_error(
-                        f"scan failed: {str(e)[:40]}"))
-                except (RuntimeError, tk.TclError):
-                    pass
-
-        threading.Thread(target=_worker, daemon=True).start()
-
+        from launcher_support.screens.arbitrage_hub import hub_scan_async
+        return hub_scan_async(self)
     def _arb_set_status_error(self, msg: str):
-        """Paint the right side of the status strip with an error tag
-        and flip the live dot to red so the scan state is obvious at a
-        glance (green = fresh data, red = scan failed, dim = pending)."""
-        dot = getattr(self, "_arb_live_dot", None)
-        if dot is not None:
-            try: dot.configure(fg=RED)
-            except Exception: pass
-        lbl = getattr(self, "_arb_sum_best", None)
-        if lbl is not None:
-            try:
-                lbl.configure(text=msg, fg=RED)
-            except Exception:
-                pass
-
+        from launcher_support.screens.arbitrage_hub import set_status_error
+        return set_status_error(self, msg)
     def _arb_hub_telem_update(self, stats, top, opps, arb_cc, arb_dd, arb_cd,
                                basis, spot):
-        """Populate the status strip and the active tab's table.
-
-        stats     : dict from FundingScanner.stats() — dex_online / cex_online
-        top       : top FundingOpp across all venues (or None)
-        opps      : full list of FundingOpp from scanner.scan()
-        arb_cc    : list of CEX↔CEX arb pairs (dict) — paired funding diff
-        arb_dd    : list of DEX↔DEX arb pairs
-        arb_cd    : list of CEX↔DEX arb pairs
-        basis     : list of basis (spot-perp) pairs from scanner.basis_pairs
-        spot      : list of spot spread pairs from scanner.spot_arb_pairs
-
-        Each tab renderer registers a repaint callback (e.g. _arb_cex_repaint);
-        we only call the one for the currently active tab.
-        """
-        # Status strip — data flowed in, flip the live dot to green.
-        dex_on = (stats or {}).get("dex_online", 0)
-        cex_on = (stats or {}).get("cex_online", 0)
-        try:
-            dot = getattr(self, "_arb_live_dot", None)
-            if dot is not None:
-                dot.configure(fg=GREEN)
-            self._arb_sum_cex.configure(text=f"CEX  {cex_on}", fg=WHITE)
-            self._arb_sum_dex.configure(text=f"DEX  {dex_on}", fg=WHITE)
-            top_s = "—"
-            top_fg = DIM2
-            if top is not None and getattr(top, "apr", None) is not None:
-                try:
-                    apr_v = float(top.apr)
-                    top_s = f"{apr_v:+.2f}%"
-                    top_fg = GREEN if apr_v > 0 else (RED if apr_v < 0 else DIM2)
-                except Exception:
-                    pass
-            self._arb_sum_best.configure(text=f"TOP  {top_s}", fg=top_fg)
-        except Exception:
-            pass
-
-        # Cache raw results so tab switches can repaint without rescanning
-        self._arb_cache = {
-            "stats": stats, "top": top, "opps": opps,
-            "arb_cc": arb_cc, "arb_dd": arb_dd, "arb_cd": arb_cd,
-            "basis": basis, "spot": spot,
-        }
-
-        # Route to the repaint callback for the active tab
-        tab = getattr(self, "_arb_tab", "cex-cex")
-        if tab == "cex-cex":
-            self._arb_paint_pairs(arb_cc,
-                getattr(self, "_arb_cex_repaint", None), "_arb_cex_selected")
-        elif tab == "dex-dex":
-            self._arb_paint_pairs(arb_dd,
-                getattr(self, "_arb_dex_repaint", None), "_arb_dex_selected")
-        elif tab == "cex-dex":
-            self._arb_paint_pairs(arb_cd,
-                getattr(self, "_arb_cdex_repaint", None), "_arb_cdex_selected")
-        elif tab == "basis":
-            self._arb_paint_basis(basis)
-        elif tab == "spot":
-            self._arb_paint_spot(spot)
-        # ENGINE tab doesn't consume scanner data
-
+        from launcher_support.screens.arbitrage_hub import hub_telem_update
+        return hub_telem_update(self, stats, top, opps, arb_cc, arb_dd, arb_cd,
+                               basis, spot)
+    @staticmethod
+    def _arb_feed_engine(engine, raw_opps, arb_pairs_merged):
+        from launcher_support.screens.arbitrage_hub import feed_engine
+        return feed_engine(engine, raw_opps, arb_pairs_merged)
     def _arb_paint_pairs(self, pairs, repaint, selected_attr: str):
-        """Render the 9-column pair table with scoring filter applied.
-
-        selected_attr: name of the instance attribute that holds the filtered
-        pair list, so click handlers can map row index → pair dict.
-        """
-        if repaint is None:
-            return
-        filtered = self._arb_filter_and_score(pairs)[:20]
-        # Expose filtered list so _on_click resolves correctly
-        setattr(self, selected_attr, [p for p, _ in filtered])
-
-        rows = []
-        for i, (a, sr) in enumerate(filtered, 1):
-            net_apr = float(a.get("net_apr", 0) or 0)
-            apr_fg = GREEN if net_apr >= 20 else (AMBER if net_apr >= 10 else DIM)
-            risk = a.get("risk", "\u2014")
-            risk_fg = RED if risk == "HIGH" else (AMBER if risk == "MED" else GREEN)
-            vol = (a.get("volume_24h") or
-                   self._pair_min(a.get("volume_24h_short"),
-                                   a.get("volume_24h_long")) or 0)
-            oi = (a.get("open_interest") or
-                  self._pair_min(a.get("open_interest_short"),
-                                  a.get("open_interest_long")) or 0)
-            grade_fg = (GREEN if sr.grade == "GO" else
-                        AMBER if sr.grade == "MAYBE" else DIM)
-            grade_txt = f"{int(sr.score):>2} {sr.grade}"
-            rows.append([
-                (f"{i:>2}", DIM),
-                ((a.get("symbol", "\u2014") or "\u2014")[:7], WHITE),
-                ((a.get("long_venue") or "\u2014")[:10].lower(), AMBER_D),
-                ((a.get("short_venue") or "\u2014")[:10].lower(), AMBER_D),
-                (f"{net_apr:+.1f}%", apr_fg),
-                (self._fmt_vol(vol), DIM),
-                (self._fmt_vol(oi), DIM),
-                (risk, risk_fg),
-                (grade_txt, grade_fg),
-            ])
-        repaint(rows)
-
+        from launcher_support.screens.arbitrage_hub import paint_pairs
+        return paint_pairs(self, pairs, repaint, selected_attr)
     def _arb_paint_basis(self, basis):
-        repaint = getattr(self, "_arb_basis_repaint", None)
-        if repaint is None:
-            return
-        # Filter: basis pairs can be scored via arb_scoring — each leg has a
-        # net_apr-equivalent (basis_apr). Use the user's APR floor + grade
-        # filter; volume/OI filters don't apply (basis data is thinner).
-        state = self._arb_filter_state()
-        min_apr = state.get("min_apr", 0)
-        filtered_list = []
-        for p in (basis or []):
-            if abs(float(p.get("basis_apr", 0) or 0)) < min_apr:
-                continue
-            filtered_list.append(p)
-        filtered_list = filtered_list[:20]
-        self._arb_basis_selected = filtered_list
-        rows = []
-        for i, p in enumerate(filtered_list, 1):
-            bps = p.get("basis_bps", 0)
-            bps_fg = GREEN if abs(bps) >= 20 else (AMBER if abs(bps) >= 10 else DIM)
-            rows.append([
-                (f"{i:>2}", DIM),
-                (p.get("symbol", "\u2014")[:7], WHITE),
-                (p.get("venue_perp", "\u2014")[:9].lower(), AMBER_D),
-                (p.get("venue_spot", "\u2014")[:9].lower(), AMBER_D),
-                (f"${p.get('mark_price', 0):,.2f}", DIM),
-                (f"${p.get('spot_price', 0):,.2f}", DIM),
-                (f"{bps:+.0f}bps", bps_fg),
-                (f"{p.get('basis_apr', 0):.0f}%", bps_fg),
-            ])
-        repaint(rows)
-
+        from launcher_support.screens.arbitrage_hub import paint_basis
+        return paint_basis(self, basis)
     def _arb_paint_spot(self, spot):
-        repaint = getattr(self, "_arb_spot_repaint", None)
-        if repaint is None:
-            return
-        # Spot spreads have bps but no APR; apply a minimum-bps tripwire via
-        # the risk filter as a loose proxy — HIGH = ≥3bps, MED = ≥8, LOW = ≥15.
-        state = self._arb_filter_state()
-        risk_max = state.get("risk_max", "HIGH")
-        thresholds = {"HIGH": 3, "MED": 8, "LOW": 15}
-        min_bps = thresholds.get(risk_max, 3)
-        filtered_list = [p for p in (spot or [])
-                         if float(p.get("spread_bps", 0) or 0) >= min_bps][:20]
-        self._arb_spot_selected = filtered_list
-        rows = []
-        for i, p in enumerate(filtered_list, 1):
-            bps = p.get("spread_bps", 0)
-            bps_fg = GREEN if bps >= 15 else (AMBER if bps >= 8 else DIM)
-            rows.append([
-                (f"{i:>2}", DIM),
-                (p.get("symbol", "\u2014")[:7], WHITE),
-                (p.get("venue_a", "\u2014")[:9].lower(), AMBER_D),
-                (p.get("venue_b", "\u2014")[:9].lower(), AMBER_D),
-                (f"${p.get('price_a', 0):,.4f}", DIM),
-                (f"${p.get('price_b', 0):,.4f}", DIM),
-                (f"{bps:.1f}bps", bps_fg),
-            ])
-        repaint(rows)
-
-    # ═══════════════════════════════════════════════════════════════
+        from launcher_support.screens.arbitrage_hub import paint_spot
+        return paint_spot(self, spot)
+    # ---------------------------------------------------------------
     # LEGACY SCREENS — thin redirects to the unified ARBITRAGE DESK.
     # The old standalone basis / spot / funding screens were folded into
     # tabs. These stubs keep external call sites working until callers
     # migrate to _arbitrage_hub(tab=…).
-    # ═══════════════════════════════════════════════════════════════
+    # ---------------------------------------------------------------
     def _arb_basis_screen(self):
-        """Redirect: old basis screen → BASIS tab of the unified desk."""
-        self._arbitrage_hub(tab="basis")
-
+        from launcher_support.screens.arbitrage_hub import basis_screen
+        return basis_screen(self)
     def _arb_basis_screen_legacy(self):
-        """Spot-perp basis trade screen — shows basis opportunities."""
-        self._clr(); self._clear_kb()
-        self.history.append("_arbitrage_hub")
-        self.h_path.configure(text="> ARBITRAGE > BASIS TRADE")
-        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
-        self.f_lbl.configure(text="R refresh  |  ESC back")
-
-        self._kb("<Escape>", lambda: self._arbitrage_hub())
-        self._kb("<Key-r>", lambda: self._arb_basis_screen())
-        self._bind_global_nav()
-
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True, padx=24, pady=12)
-
-        tk.Label(outer, text="BASIS TRADE", font=(FONT, 10, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="center")
-        tk.Label(outer, text="spot-perp basis  \u00b7  buy spot, short perp",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
-
-        # Table
-        cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("PERP", 10, "w"),
-                ("SPOT", 10, "w"), ("MARK", 10, "e"), ("SPOT$", 10, "e"),
-                ("BASIS", 8, "e"), ("APR", 8, "e")]
-        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
-        for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
-
-        inner = tk.Frame(outer, bg=BG)
-        inner.pack(fill="both", expand=True)
-
-        # Fetch basis pairs in background
-        import threading
-        def _worker():
-            try:
-                from core.funding_scanner import FundingScanner
-                scanner = getattr(self, "_funding_scanner", None)
-                if scanner is None:
-                    scanner = FundingScanner()
-                    self._funding_scanner = scanner
-                scanner.scan()
-                scanner.scan_spot()
-                pairs = scanner.basis_pairs(min_basis_bps=5)[:20]
-                self.after(0, lambda: self._arb_basis_paint(inner, cols, pairs))
-            except Exception as e:
-                self.after(0, lambda: tk.Label(inner,
-                    text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
-        threading.Thread(target=_worker, daemon=True).start()
-
+        from launcher_support.screens.arbitrage_hub import basis_screen_legacy
+        return basis_screen_legacy(self)
+    @timed_legacy_switch("arb_basis")
     def _arb_basis_paint(self, inner, cols, pairs):
-        for w in inner.winfo_children():
-            w.destroy()
-        try:
-            self.h_stat.configure(text=f"{len(pairs)} BASIS", fg=AMBER)
-        except Exception:
-            pass
-        if not pairs:
-            tk.Label(inner, text="  \u2014 no basis opportunities above 5bps \u2014",
-                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
-            return
-        for i, p in enumerate(pairs, 1):
-            bg = BG if i % 2 == 1 else BG2
-            rf = tk.Frame(inner, bg=bg); rf.pack(fill="x")
-            basis_fg = GREEN if abs(p["basis_bps"]) >= 20 else (AMBER if abs(p["basis_bps"]) >= 10 else DIM)
-            cells = [
-                (f"{i:>3}", DIM), (p["symbol"], WHITE),
-                (p["venue_perp"], AMBER_D), (p["venue_spot"], AMBER_D),
-                (f"${p['mark_price']:,.2f}", DIM),
-                (f"${p['spot_price']:,.2f}", DIM),
-                (f"{p['basis_bps']:+.0f}bps", basis_fg),
-                (f"{p['basis_apr']:.0f}%", basis_fg),
-            ]
-            for (txt, fg), (_, w, anchor) in zip(cells, cols):
-                tk.Label(rf, text=txt, font=(FONT, 8), fg=fg, bg=bg,
-                         width=w, anchor=anchor).pack(side="left")
-
-    # ═══════════════════════════════════════════════════════════════
+        from launcher_support.screens.arbitrage_hub import basis_paint
+        return basis_paint(self, inner, cols, pairs)
+    # ---------------------------------------------------------------
     # SPOT ↔ SPOT SCREEN — cross-venue spot price divergence
-    # ═══════════════════════════════════════════════════════════════
+    # ---------------------------------------------------------------
     def _arb_spot_screen(self):
-        """Redirect: old spot screen → SPOT tab of the unified desk."""
-        self._arbitrage_hub(tab="spot")
-
+        from launcher_support.screens.arbitrage_hub import spot_screen
+        return spot_screen(self)
     def _arb_spot_screen_legacy(self):
-        """Spot-spot spread screen — cross-venue spot price divergence."""
-        self._clr(); self._clear_kb()
-        self.history.append("_arbitrage_hub")
-        self.h_path.configure(text="> ARBITRAGE > SPOT \u2194 SPOT")
-        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
-        self.f_lbl.configure(text="R refresh  |  ESC back")
-
-        self._kb("<Escape>", lambda: self._arbitrage_hub())
-        self._kb("<Key-r>", lambda: self._arb_spot_screen())
-        self._bind_global_nav()
-
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True, padx=24, pady=12)
-
-        tk.Label(outer, text="SPOT SPREAD", font=(FONT, 10, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="center")
-        tk.Label(outer, text="cross-venue spot price divergence",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="center", pady=(1, 4))
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
-
-        cols = [("#", 3, "e"), ("SYMBOL", 8, "w"), ("VENUE A", 10, "w"),
-                ("VENUE B", 10, "w"), ("PRICE A", 12, "e"), ("PRICE B", 12, "e"),
-                ("SPREAD", 10, "e")]
-        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
-        for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
-
-        inner = tk.Frame(outer, bg=BG)
-        inner.pack(fill="both", expand=True)
-
-        import threading
-        def _worker():
-            try:
-                from core.funding_scanner import FundingScanner
-                scanner = getattr(self, "_funding_scanner", None)
-                if scanner is None:
-                    scanner = FundingScanner()
-                    self._funding_scanner = scanner
-                scanner.scan_spot()
-                pairs = scanner.spot_arb_pairs(min_spread_bps=3)[:20]
-                self.after(0, lambda: self._arb_spot_paint(inner, cols, pairs))
-            except Exception as e:
-                self.after(0, lambda: tk.Label(inner,
-                    text=f"  scan failed: {e}", font=(FONT, 8), fg=RED, bg=BG).pack())
-        threading.Thread(target=_worker, daemon=True).start()
-
+        from launcher_support.screens.arbitrage_hub import spot_screen_legacy
+        return spot_screen_legacy(self)
+    @timed_legacy_switch("arb_spot")
     def _arb_spot_paint(self, inner, cols, pairs):
-        for w in inner.winfo_children():
-            w.destroy()
-        try:
-            self.h_stat.configure(text=f"{len(pairs)} SPREADS", fg=AMBER)
-        except Exception:
-            pass
-        if not pairs:
-            tk.Label(inner, text="  \u2014 no spot spreads above 3bps \u2014",
-                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
-            return
-        for i, p in enumerate(pairs, 1):
-            bg = BG if i % 2 == 1 else BG2
-            rf = tk.Frame(inner, bg=bg); rf.pack(fill="x")
-            spread_fg = GREEN if p["spread_bps"] >= 15 else (AMBER if p["spread_bps"] >= 8 else DIM)
-            cells = [
-                (f"{i:>3}", DIM), (p["symbol"], WHITE),
-                (p["venue_a"], AMBER_D), (p["venue_b"], AMBER_D),
-                (f"${p['price_a']:,.4f}", DIM), (f"${p['price_b']:,.4f}", DIM),
-                (f"{p['spread_bps']:.1f}bps", spread_fg),
-            ]
-            for (txt, fg), (_, w, anchor) in zip(cells, cols):
-                tk.Label(rf, text=txt, font=(FONT, 8), fg=fg, bg=bg,
-                         width=w, anchor=anchor).pack(side="left")
-
-    # ═══════════════════════════════════════════════════════════════
+        from launcher_support.screens.arbitrage_hub import spot_paint
+        return spot_paint(self, inner, cols, pairs)
+    # ---------------------------------------------------------------
     # FUNDING SCANNER SCREEN — shared between DEX-DEX and CEX-DEX modes
-    # ═══════════════════════════════════════════════════════════════
+    # ---------------------------------------------------------------
     def _funding_scanner_screen(self, mode: str = "dex-dex"):
         """Redirect: old funding scanner → DEX-DEX or CEX-DEX tab."""
         tab = "cex-dex" if mode == "cex-dex" else "dex-dex"
         self._arbitrage_hub(tab=tab)
 
-    def _funding_scanner_screen_legacy(self, mode: str = "dex-dex"):
-        """Live cross-venue funding rate observer.
-
-        mode:
-            "dex-dex"  — show only DEX opps, arb pairs filtered to DEX-DEX
-            "cex-dex"  — show top of everything, arb pairs require mix
-
-        Layout is intentionally LCD/MP3-player minimal: monochrome amber,
-        one thin divider per section, no heavy borders. Auto-refresh every
-        60 seconds via self.after; manual refresh with R. Scan runs in a
-        background thread so the Tk loop never blocks.
-        """
-        assert mode in ("dex-dex", "cex-dex")
-        self._clr(); self._clear_kb()
-        self._funding_alive = True
-        self._funding_mode = mode
-
-        if mode == "dex-dex":
-            title_text = "DEX FUNDING"
-            subtitle = "pure cross-dex  \u00b7  hyperliquid  \u00b7  dydx  \u00b7  paradex"
-            self.h_path.configure(text="> ARBITRAGE > DEX\u2194DEX")
-        else:
-            title_text = "CEX \u2194 DEX SPREAD"
-            subtitle = "cex/dex funding differential  \u00b7  biggest historical apr"
-            self.h_path.configure(text="> ARBITRAGE > CEX\u2194DEX")
-
-        self.h_stat.configure(text="SCANNING\u2026", fg=AMBER_D)
-        self.f_lbl.configure(
-            text="R refresh  |  C jane  |  D dex\u2194dex  |  X cex\u2194dex  |  ESC back"
-        )
-
-        self._kb("<Escape>", lambda: self._arbitrage_hub())
-        self._kb("<Key-r>", lambda: self._funding_refresh(force=True))
-        self._kb("<Key-c>", lambda: self._alchemy_enter())
-        self._kb("<Key-d>", lambda: self._funding_scanner_screen("dex-dex"))
-        self._kb("<Key-x>", lambda: self._funding_scanner_screen("cex-dex"))
-        self._kb("<Key-f>", lambda: self._funding_filter_toggle())
-        self._bind_global_nav()
-
-        outer = tk.Frame(self.main, bg=BG)
-        outer.pack(fill="both", expand=True, padx=24, pady=12)
-
-        # ── Title block (compact, Bloomberg-density) ─────────────
-        tk.Label(outer, text=title_text, font=(FONT, 10, "bold"),
-                 fg=AMBER, bg=BG).pack(anchor="center")
-        tk.Label(outer, text=subtitle, font=(FONT, 7),
-                 fg=DIM, bg=BG).pack(anchor="center", pady=(1, 2))
-
-        self._funding_meta = tk.Label(
-            outer, text="  last scan \u2014\u2014  \u00b7  \u2014 venues  ",
-            font=(FONT, 7), fg=DIM2, bg=BG)
-        self._funding_meta.pack(anchor="center")
-
-        tk.Frame(outer, bg=BORDER, height=1).pack(fill="x", pady=(4, 4))
-
-        # ── Filter bar ──────────────────────────────────────────
-        try:
-            from config.params import ARB_FILTER_DEFAULTS
-        except (ImportError, AttributeError):
-            ARB_FILTER_DEFAULTS = {
-                "min_apr": 20.0, "min_volume": 500_000,
-                "min_oi": 0, "risk_max": "HIGH", "grade_min": "SKIP",
-            }
-        if not hasattr(self, "_arb_filters"):
-            self._arb_filters = dict(ARB_FILTER_DEFAULTS)
-
-        _APR_OPTS    = [5, 10, 20, 50, 100]
-        _VOL_OPTS    = [0, 100_000, 500_000, 1_000_000, 5_000_000]
-        _OI_OPTS     = [0, 50_000, 100_000, 500_000, 1_000_000]
-        _RISK_OPTS   = ["HIGH", "MED", "LOW"]
-        _GRADE_OPTS  = ["SKIP", "MAYBE", "GO"]
-
-        def _fmt_filter(key, val):
-            if key == "min_apr":
-                return f"APR \u2265{int(val)}%"
-            if key == "min_volume":
-                if val == 0:
-                    return "VOL \u2265OFF"
-                if val >= 1_000_000:
-                    return f"VOL \u2265{int(val/1_000_000)}M"
-                return f"VOL \u2265{int(val/1_000)}K"
-            if key == "min_oi":
-                if val == 0:
-                    return "OI \u2265OFF"
-                if val >= 1_000_000:
-                    return f"OI \u2265{int(val/1_000_000)}M"
-                return f"OI \u2265{int(val/1_000)}K"
-            if key == "risk_max":
-                return f"RISK \u2264{val}"
-            if key == "grade_min":
-                return f"GRADE \u2265{val}"
-            return f"{key}={val}"
-
-        def _cycle_filter(key, opts):
-            cur = self._arb_filters.get(key)
-            try:
-                idx = opts.index(cur)
-            except ValueError:
-                idx = 0
-            nxt = opts[(idx + 1) % len(opts)]
-            self._arb_filters[key] = nxt
-            lbl = self._arb_filter_labels.get(key)
-            if lbl:
-                lbl.configure(text=_fmt_filter(key, nxt))
-            self._funding_repaint_filtered()
-
-        fbar = tk.Frame(outer, bg=BG2)
-        fbar.pack(fill="x", pady=(0, 3))
-        self._funding_filter_bar = fbar
-
-        self._arb_filter_labels = {}
-        _filter_defs = [
-            ("min_apr",    _APR_OPTS),
-            ("min_volume", _VOL_OPTS),
-            ("min_oi",     _OI_OPTS),
-            ("risk_max",   _RISK_OPTS),
-            ("grade_min",  _GRADE_OPTS),
-        ]
-        for fkey, fopts in _filter_defs:
-            cur_val = self._arb_filters.get(fkey)
-            lbl = tk.Label(
-                fbar, text=_fmt_filter(fkey, cur_val),
-                font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG2,
-                cursor="hand2", padx=6,
-            )
-            lbl.pack(side="left")
-            lbl.bind("<Button-1>", lambda e, k=fkey, o=fopts: _cycle_filter(k, o))
-            self._arb_filter_labels[fkey] = lbl
-
-        tk.Label(fbar, text="F:toggle", font=(FONT, 6), fg=DIM2, bg=BG2,
-                 padx=4).pack(side="right")
-
-        # ── Table header ────────────────────────────────────────
-        cols = [
-            ("#",       3,  "e"),
-            ("SYMBOL",  10, "w"),
-            ("VENUE",   12, "w"),
-            ("TYPE",    4,  "w"),
-            ("RATE",    12, "e"),
-            ("APR",     9,  "e"),
-            ("VOL",     10, "e"),
-            ("RISK",    5,  "w"),
-            ("SCORE",   10, "w"),
-        ]
-        hrow = tk.Frame(outer, bg=BG); hrow.pack(fill="x")
-        for label, w, anchor in cols:
-            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
-                     fg=DIM, bg=BG, width=w, anchor=anchor).pack(side="left")
-        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
-
-        # ── Scrollable row container ────────────────────────────
-        table_wrap = tk.Frame(outer, bg=BG, height=280)
-        table_wrap.pack(fill="both", expand=False)
-        table_wrap.pack_propagate(False)
-
-        canvas = tk.Canvas(table_wrap, bg=BG, bd=0, highlightthickness=0)
-        scroll = tk.Scrollbar(table_wrap, orient="vertical",
-                              command=canvas.yview)
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-
-        inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        inner.bind("<Configure>",
-                   lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
-
-        def _on_wheel(event, c=canvas):
-            try: c.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except tk.TclError: pass
-        canvas.bind("<Enter>",
-                    lambda e, c=canvas: c.bind_all("<MouseWheel>", _on_wheel))
-        canvas.bind("<Leave>",
-                    lambda e, c=canvas: c.unbind_all("<MouseWheel>"))
-
-        self._funding_table_inner = inner
-        self._funding_cols = cols
-
-        # ── Arb spreads strip ───────────────────────────────────
-        tk.Frame(outer, bg=AMBER_D, height=1).pack(fill="x", pady=(8, 4))
-        tk.Label(outer, text="\u25ba  ARB  SPREADS  (same symbol, venues diverging)",
-                 font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(
-                     fill="x")
-        self._funding_arb_frame = tk.Frame(outer, bg=BG)
-        self._funding_arb_frame.pack(fill="x", pady=(2, 0))
-
-        # ── First load ──────────────────────────────────────────
-        self._funding_refresh(force=False)
 
     def _funding_refresh(self, force: bool = False):
         """Fire a background scan and repaint on completion."""
         if not getattr(self, "_funding_alive", False):
             return
         import threading
-        from core.funding_scanner import FundingScanner
+        from core.ui.funding_scanner import FundingScanner
 
         scanner = getattr(self, "_funding_scanner", None)
         if scanner is None:
@@ -6709,13 +4581,13 @@ class App(tk.Tk):
                 arb = scanner.arb_pairs(mode=mode, min_spread_apr=5.0)[:5]
                 # fire optional telegram alerts for the biggest opps
                 try:
-                    from core.funding_scanner import maybe_alert_telegram
+                    from core.ui.funding_scanner import maybe_alert_telegram
                     maybe_alert_telegram(rows, apr_threshold=100.0)
                 except Exception:
                     pass
-                self.after(0, lambda: self._funding_paint(rows, arb, stats))
+                self._ui_call_soon(lambda: self._funding_paint(rows, arb, stats))
             except Exception as e:
-                self.after(0, lambda: self._funding_fail(str(e)))
+                self._ui_call_soon(lambda: self._funding_fail(str(e)))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -6732,178 +4604,14 @@ class App(tk.Tk):
                     pass
             self.after(60_000, _tick)
 
+    @timed_legacy_switch("funding_paint")
     def _funding_paint(self, rows, arb, stats):
-        from datetime import datetime
-        if not getattr(self, "_funding_alive", False):
-            return
-        inner = getattr(self, "_funding_table_inner", None)
-        if inner is None:
-            return
-
-        # cache for filter repaint
-        self._funding_cached = (rows, arb, stats)
-
-        # ── Scoring & filtering ──────────────────────────────────
-        try:
-            from core.arb_scoring import score_opp, score_batch
-            _scoring_ok = True
-        except Exception:
-            _scoring_ok = False
-
-        filters = getattr(self, "_arb_filters", None)
-
-        # Build score list for all rows (parallel)
-        row_scores = None
-        if _scoring_ok:
-            try:
-                opp_dicts = [o.to_dict() for o in rows]
-                row_scores = score_batch(opp_dicts)
-            except Exception:
-                row_scores = None
-
-        # Apply filters
-        if filters and rows:
-            _RISK_ORDER  = {"LOW": 0, "MED": 1, "HIGH": 2}
-            _GRADE_ORDER = {"GO": 0, "MAYBE": 1, "SKIP": 2}
-            risk_max_ord  = _RISK_ORDER.get(filters.get("risk_max", "HIGH"), 2)
-            grade_min_ord = _GRADE_ORDER.get(filters.get("grade_min", "SKIP"), 2)
-            min_apr    = filters.get("min_apr", 0)
-            min_volume = filters.get("min_volume", 0)
-            min_oi     = filters.get("min_oi", 0)
-
-            filtered_rows   = []
-            filtered_scores = []
-            for idx, o in enumerate(rows):
-                if abs(o.apr) < min_apr:
-                    continue
-                if min_volume and o.volume_24h < min_volume:
-                    continue
-                if min_oi and o.open_interest < min_oi:
-                    continue
-                if _RISK_ORDER.get(o.risk, 2) < risk_max_ord:
-                    # row risk is stricter than allowed max — include it
-                    pass
-                elif _RISK_ORDER.get(o.risk, 2) > risk_max_ord:
-                    continue
-                sr = row_scores[idx] if row_scores else None
-                if sr is not None:
-                    if _GRADE_ORDER.get(sr.grade, 2) > grade_min_ord:
-                        continue
-                filtered_rows.append(o)
-                filtered_scores.append(sr)
-            rows      = filtered_rows
-            row_scores = filtered_scores
-
-        # rebuild rows
-        for w in inner.winfo_children():
-            w.destroy()
-
-        for i, o in enumerate(rows, 1):
-            bg = BG if i % 2 == 1 else BG2
-            rf = tk.Frame(inner, bg=bg)
-            rf.pack(fill="x")
-
-            # APR color classes
-            apr_abs = abs(o.apr)
-            if apr_abs >= 100:
-                apr_fg = GREEN
-            elif apr_abs >= 50:
-                apr_fg = AMBER
-            else:
-                apr_fg = DIM
-            risk_fg = RED if o.risk == "HIGH" else (AMBER_D if o.risk == "MED" else DIM)
-            sym_fg = WHITE
-            venue_fg = AMBER_D
-
-            # SCORE cell
-            sr = row_scores[i - 1] if row_scores else None
-            if sr is not None:
-                sc = int(sr.score)
-                if sr.grade == "GO":
-                    score_txt = f"\u2588\u2588 {sc:>2} GO"
-                    score_fg  = GREEN
-                elif sr.grade == "MAYBE":
-                    score_txt = f"\u2588\u2591 {sc:>2} MAYBE"
-                    score_fg  = AMBER
-                else:
-                    score_txt = f"\u2591\u2591 {sc:>2} SKIP"
-                    score_fg  = DIM2
-            else:
-                score_txt = ""
-                score_fg  = DIM2
-
-            cells = [
-                (f"{i:>3}", DIM),
-                (o.symbol, sym_fg),
-                (o.venue, venue_fg),
-                (o.venue_type, DIM2),
-                (f"{o.rate*100:+.3f}%/{o.interval_h:.0f}h", DIM),
-                (f"{o.apr:+.0f}%", apr_fg),
-                (f"${o.volume_24h/1e6:.1f}M", DIM),
-                (o.risk, risk_fg),
-                (score_txt, score_fg),
-            ]
-            for (txt, fg), (_lbl, w, anchor) in zip(cells, self._funding_cols):
-                tk.Label(rf, text=txt, font=(FONT, 8),
-                         fg=fg, bg=bg, width=w, anchor=anchor).pack(side="left")
-
-        if not rows:
-            tk.Label(inner, text="  \u2014 no opportunities above threshold \u2014  ",
-                     font=(FONT, 8), fg=DIM2, bg=BG).pack(pady=20)
-
-        # arb pairs strip
-        arb_frame = getattr(self, "_funding_arb_frame", None)
-        if arb_frame:
-            for w in arb_frame.winfo_children():
-                w.destroy()
-            if arb:
-                for a in arb:
-                    # score arb pair
-                    arb_score_tag = ""
-                    if _scoring_ok:
-                        try:
-                            asr = score_opp(a)
-                            if asr.grade == "GO":
-                                arb_score_tag = f"  \u2588\u2588{int(asr.score):>2}GO"
-                            elif asr.grade == "MAYBE":
-                                arb_score_tag = f"  \u2588\u2591{int(asr.score):>2}MAYBE"
-                            else:
-                                arb_score_tag = f"  \u2591\u2591{int(asr.score):>2}SKIP"
-                        except Exception:
-                            arb_score_tag = ""
-                    line = (
-                        f"   {a['symbol']:8s}  "
-                        f"SHORT {a['short_venue']:<11s} ({a['short_apr']:+6.1f}%)  "
-                        f"\u2192  "
-                        f"LONG {a['long_venue']:<11s} ({a['long_apr']:+6.1f}%)  "
-                        f"net {a['net_apr']:+6.0f}%"
-                        f"{arb_score_tag}"
-                    )
-                    net_fg = GREEN if abs(a["net_apr"]) >= 50 else AMBER
-                    tk.Label(arb_frame, text=line, font=(FONT, 8),
-                             fg=net_fg, bg=BG, anchor="w").pack(fill="x")
-            else:
-                tk.Label(arb_frame,
-                         text="   \u2014 no cross-venue spreads above 5% APR \u2014",
-                         font=(FONT, 8), fg=DIM2, bg=BG, anchor="w").pack(fill="x")
-
-        # meta strip
-        try:
-            now = datetime.now().strftime("%H:%M:%S")
-            total = stats.get("total", 0)
-            dex_on = stats.get("dex_online", 0)
-            cex_on = stats.get("cex_online", 0)
-            errs = stats.get("errors") or {}
-            err_tag = f"  \u00b7  {len(errs)} failed" if errs else ""
-            self._funding_meta.configure(
-                text=f"  last scan {now}  \u00b7  "
-                     f"{dex_on} dex  {cex_on} cex  "
-                     f"\u00b7  {total} perps{err_tag}  ",
-                fg=DIM,
-            )
-            self.h_stat.configure(text="LIVE", fg=GREEN)
-        except Exception:
-            pass
+        """Delegate to launcher_support.screens.funding_paint.render.
+        The 170-line score+filter+paint logic for the funding scanner
+        opportunities table (and its arb-pairs strip + meta) lives there.
+        """
+        from launcher_support.screens.funding_paint import render as _render_funding_paint
+        _render_funding_paint(self, rows, arb, stats)
 
     def _funding_fail(self, reason: str):
         if not getattr(self, "_funding_alive", False):
@@ -6937,66 +4645,34 @@ class App(tk.Tk):
         except tk.TclError:
             pass
 
-    # ─── TERMINAL (Layer 2) ───────────────────────────────
+    # --- TERMINAL (Layer 2) -------------------------------
     def _terminal(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> TERMINAL"); self.h_stat.configure(text="DATA", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  H hub  |  S strategies")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("terminal")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
-        _outer, body = self._ui_page_shell("TERMINAL", "Data, charts and research routing")
-        panel = self._ui_panel_frame(body, "RESEARCH ROUTER", "Available and planned market intelligence modules")
+    def _deploy_pipeline(self):
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("deploy_pipeline")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
-        sections = [
-            ("MARKET DATA", [
-                ("1", "Price Monitor",       "Watchlist ao vivo com múltiplos TFs", False),
-                ("2", "Orderbook Depth",     "L2 data, bid/ask heatmap", False),
-                ("3", "Funding Rates",       "Cross-exchange funding comparison", False),
-                ("4", "Liquidation Map",     "Estimated liquidation levels", False),
-            ]),
-            ("MACRO & FUNDAMENTAL", [
-                ("5", "COT Report",          "CFTC Commitment of Traders", False),
-                ("6", "Economic Calendar",   "Fed, CPI, PMI, NFP, FOMC", False),
-                ("7", "Macro Dashboard",     "DXY, yields, M2, fear & greed", False),
-                ("8", "Token Fundamentals",  "TVL, supply, unlocks, revenue", False),
-            ]),
-            ("RESEARCH", [
-                ("9", "Correlation Matrix",  "Cross-asset correlation radar", False),
-                ("A", "Regime Detector",     "Current market regime (HMM/GARCH)", False),
-                ("B", "Seasonality",         "Hour/day/month patterns", False),
-            ]),
-            ("LOCAL DATA", [
-                ("D", "Reports & Logs",      "Browse backtest reports", True),
-                ("P", "Processes",           "Manage running engines", True),
-            ]),
-        ]
-
-        for section_name, items in sections:
-            sec = self._ui_section(panel, section_name)
-
-            for key_label, name, desc, available in items:
-                tag = None if available else "COMING SOON"
-
-                if name == "Reports & Logs":
-                    cmd = lambda: self._data()
-                elif name == "Processes":
-                    cmd = lambda: self._procs()
-                elif available:
-                    cmd = lambda n=name: self.h_stat.configure(text=f"{n}", fg=AMBER_D)
-                else:
-                    cmd = lambda n=name: self.h_stat.configure(text=f"{n} — COMING SOON", fg=DIM)
-
-                self._ui_action_row(
-                    sec, key_label, name, desc,
-                    command=cmd,
-                    available=available, tag=tag, tag_fg=DIM, tag_bg=BG2, title_width=22,
-                )
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
-
-    # ─── DATA CENTER (hub) ─────────────────────────────────
+    # --- DATA CENTER (hub) ---------------------------------
     def _data_center(self):
         """Unified entry point for everything data: backtest metrics,
         running/finished engine logs, and raw report files.
@@ -7010,123 +4686,29 @@ class App(tk.Tk):
                         live log tail streaming).
           REPORTS    →  legacy _data raw JSON/log file browser.
         """
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA")
-        self.h_stat.configure(text="CENTER", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  B backtests  |  E engines  |  R reports  |  P prefetch  |  X export")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell(
-            "DATA CENTER",
-            "Backtests, engine logs, reports and export surfaces",
-        )
-        panel = self._ui_panel_frame(body, "DATA ROUTING", "Primary storage and review workflows")
-
-        # Quick counts for each card so the user sees signal, not just titles.
-        bt_count = self._data_count_backtests()
-        eng_running, eng_total = self._data_count_procs()
-        rep_count = self._data_count_reports()
-        summary = tk.Frame(panel, bg=BG)
-        summary.pack(fill="x", pady=(0, 10))
-        tk.Label(summary, text=f"RUNS  {bt_count}", font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG).pack(side="left")
-        tk.Label(summary, text=f"ENGINES  {eng_running}/{eng_total}", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(18, 0))
-        tk.Label(summary, text=f"FILES  {rep_count}", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(18, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 10))
-        self._ui_note(
-            panel,
-            "Use DATA as the review desk: validated runs first, raw artifacts second, export only when sending outside the terminal.",
-            fg=DIM,
-        )
-
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("data_center")
         try:
-            from core import cache as _cache_mod
-            _cache_info = _cache_mod.info()
-            _cache_tag = (f"{_cache_info['n_files']} syms · "
-                          f"{_cache_info['total_bytes']/1024/1024:.1f} MB"
-                          if _cache_info["n_files"]
-                          else "vazio — clique pra baixar")
-        except Exception:
-            _cache_tag = "indisponivel"
-
-        sections = [
-            ("PRIMARY ROUTES", [
-                ("B", "BACKTESTS", "validated runs, metrics and run-level inspection",
-                 f"{bt_count} runs on disk", lambda: self._data_backtests()),
-                ("E", "ENGINE LOGS", "running and recent engines with live tail",
-                 f"{eng_running} running · {eng_total} total", lambda: self._data_engines()),
-            ]),
-            ("HISTORICAL CACHE", [
-                ("P", "PREFETCH OHLCV", "baixa bluechip 3000d · 15m pra usar offline",
-                 _cache_tag, lambda: self._data_prefetch()),
-            ]),
-            ("ARTIFACTS", [
-                ("R", "REPORT INDEX", "raw JSON and persisted report artifact browser",
-                 f"{rep_count} files indexed", lambda: self._data()),
-            ]),
-            ("EXTERNAL REVIEW", [
-                ("X", "EXPORT ANALYSIS", "single-file snapshot for external analysis workflows",
-                 "< 2 MB JSON", lambda: self._export_analysis()),
-            ]),
-        ]
-
-        for section_name, items in sections:
-            sec = self._ui_section(panel, section_name)
-            for key_label, name, desc, stat, cmd in items:
-                row, name_lbl, desc_lbl = self._ui_action_row(
-                    sec, key_label, name, desc,
-                    command=cmd,
-                    title_width=20,
-                    tag=stat,
-                    tag_fg=AMBER_D,
-                    tag_bg=BG,
-                )
-                for w in (row, name_lbl, desc_lbl):
-                    w.bind("<Enter>", lambda e, n=name_lbl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=name_lbl: n.configure(fg=WHITE))
-
-                key_bind = f"<Key-{key_label.lower()}>"
-                self._kb(key_bind, cmd)
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
-
-    def _data_prefetch(self, basket: str = "bluechip", days: int = 3000,
-                       interval: str = "15m"):
-        """Dispara tools/prefetch.py via core.proc.spawn, em background.
-
-        Roda com args default (bluechip · 3000d · 15m futures). O tail do log
-        aparece na tela de ENGINE LOGS — mesma UX das engines.
-        """
-        try:
-            from core.proc import spawn
-        except Exception as e:
-            messagebox.showerror("Prefetch", f"indisponivel: {e}")
-            return
-        info = spawn("prefetch", cli_args=[
-            "--basket", basket,
-            "--days", str(days),
-            "--interval", interval,
-        ])
-        if not info:
-            messagebox.showwarning(
-                "Prefetch", "ja esta em execucao (ou falhou ao iniciar).")
-            return
-        pid = info.get("pid", "?")
-        messagebox.showinfo(
-            "Prefetch iniciado",
-            f"PID {pid}\nbasket  {basket}\ndepth   {days}d\ninterval {interval}\n\n"
-            "segue em background — veja ENGINE LOGS pro tail ao vivo.")
-        # refresh current screen so the cache-size pill updates after the run
-        try:
-            self.after(1500, self._data_center)
+            self.focus_set()
         except Exception:
             pass
 
-    # ── Counts used by the DATA CENTER cards ──────────────────
+    # --- DATA > OHLCV LAKE (cache browser + downloader) -------
+    def _data_lake(self):
+        """Delegate to launcher_support.screens.data_lake.render. Full
+        implementation (split-pane cache browser + download form) lives
+        there; this shim keeps the menu-dispatch contract
+        (launcher_support/screens/data_center.py uses ``app._data_lake``).
+        """
+        from launcher_support.screens.data_lake import render as _render_data_lake
+        _render_data_lake(self)
+
+    # -- Counts used by the DATA CENTER cards ------------------
     def _data_count_backtests(self) -> int:
         try:
             runs_dir = ROOT / "data" / "runs"
@@ -7138,7 +4720,7 @@ class App(tk.Tk):
 
     def _data_count_procs(self) -> tuple[int, int]:
         try:
-            from core.proc import list_procs
+            from core.ops.proc import list_procs
             procs = list_procs()
             running = sum(1 for p in procs if p.get("alive"))
             return running, len(procs)
@@ -7152,7 +4734,7 @@ class App(tk.Tk):
             if not dd.exists():
                 return 0
             for sub in ("runs", "darwin", "arbitrage",
-                        "mercurio", "newton", "thoth",
+                        "mercurio", "thoth",
                         "prometeu", "multistrategy", "live"):
                 p = dd / sub
                 if p.exists():
@@ -7161,7 +4743,7 @@ class App(tk.Tk):
             pass
         return total
 
-    # ─── DATA > EXPORT ANALYSIS (single-file snapshot) ────────
+    # --- DATA > EXPORT ANALYSIS (single-file snapshot) --------
     def _export_analysis(self):
         """Generate a single-file analysis snapshot for external review.
 
@@ -7180,7 +4762,7 @@ class App(tk.Tk):
 
         def _worker():
             try:
-                from core.analysis_export import export_analysis
+                from core.analysis.analysis_export import export_analysis
                 ts = datetime.now().strftime("%Y-%m-%d_%H%M")
                 out_dir = ROOT / "data" / "exports"
                 out_dir.mkdir(parents=True, exist_ok=True)
@@ -7243,828 +4825,182 @@ class App(tk.Tk):
         self._crypto_dashboard()
         self.after(0, lambda: self._dash_render_tab("backtest"))
 
-    # ─── DATA > BACKTESTS (standalone) ────────────────────────
+    # --- DATA > BACKTESTS (standalone) ------------------------
     def _data_backtests(self):
-        """Standalone backtest browser, decoupled from the crypto-futures tab.
+        """Delegate to launcher_support.screens.data_backtests.render.
 
-        Reuses the existing dashboard rendering functions
-        (_dash_backtest_render, _dash_backtest_select, _dash_backtest_delete)
-        by registering the local widgets into self._dash_widgets under the
-        same keys the dashboard uses. Zero code duplication — the click
-        handlers, detail panel, and DELETE button already work against
-        (bt_list, bt_count, bt_detail) keys.
-
-        Reached from DATA CENTER > BACKTESTS (or keyboard B at the hub).
+        Standalone backtest browser decoupled from the crypto-futures
+        tab; reuses the dashboard's shared (bt_list, bt_count, bt_detail)
+        widget keys via app._dash_widgets so the existing click handlers
+        work without duplication. Reached from DATA CENTER > BACKTESTS.
         """
+        from launcher_support.screens.data_backtests import render as _render_data_backtests
+        _render_data_backtests(self)
+
+    # --- LIVE RUNS (historico de runs live/paper/shadow/demo/testnet) ----
+    def _data_live_runs(self):
+        """LIVE RUNS screen — histórico de runs em modos live/paper/shadow/demo/testnet."""
         self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA > BACKTESTS")
-        self.h_stat.configure(text="BROWSE", fg=AMBER_D)
-        self.f_lbl.configure(
-            text="ESC voltar  |  click run for details  |  DELETE to remove")
-        self._kb("<Escape>", lambda: self._data_center())
-
-        # Ensure _dash_widgets exists — the standalone screen owns this
-        # instance attr when it's used outside the dashboard build path.
-        self._dash_widgets = getattr(self, "_dash_widgets", {})
-
-        _outer, outer = self._ui_page_shell(
-            "BACKTEST RUNS",
-            "Indexed historical runs reconciled against data/index.json",
-        )
-        hdr = tk.Frame(outer, bg=BG); hdr.pack(fill="x")
-        count_l = tk.Label(hdr, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        count_l.pack(side="right")
-        self._dash_widgets[("bt_count",)] = count_l
-        tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(4, 10))
-
-        split = tk.Frame(outer, bg=BG)
-        split.pack(fill="both", expand=True)
-
-        # ── LEFT: run list ──
-        left = tk.Frame(split, bg=BG)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
-
-        hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
-        for label, width in _BT_COLS:
-            tk.Label(hrow, text=label, font=(FONT, 8, "bold"),
-                     fg=DIM, bg=BG, width=width, anchor="w").pack(side="left")
-        tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
-
-        # Scrollable inner frame for the row list
-        canvas_wrap = tk.Frame(left, bg=BG); canvas_wrap.pack(fill="both", expand=True)
-        canvas = tk.Canvas(canvas_wrap, bg=BG, bd=0, highlightthickness=0)
-        scroll = tk.Scrollbar(canvas_wrap, orient="vertical",
-                              command=canvas.yview)
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-
-        inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        inner.bind("<Configure>",
-                   lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
-
-        # Mouse wheel — scoped to the list (not bind_all, which would leak)
-        def _on_wheel(event, c=canvas):
-            try: c.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except tk.TclError: pass
-        def _enter(_e=None, c=canvas):
-            c.bind_all("<MouseWheel>", _on_wheel)
-        def _leave(_e=None, c=canvas):
-            try: c.unbind_all("<MouseWheel>")
-            except tk.TclError: pass
-        canvas.bind("<Enter>", _enter)
-        canvas.bind("<Leave>", _leave)
-        inner.bind("<Enter>", _enter)
-        inner.bind("<Leave>", _leave)
-
-        self._dash_widgets[("bt_list",)] = inner
-        self._dash_widgets[("bt_canvas",)] = canvas
-
-        # ── RIGHT: detail panel ──
-        right = tk.Frame(split, bg=PANEL, width=340)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
-
-        tk.Label(right, text="DETAILS", font=(FONT, 7, "bold"),
-                 fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw",
-                                                        padx=10, pady=(10, 4))
-        tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(0, 6))
-
-        # Scrollable inner area — metric blocks (PERFORMANCE/TRADES/CONFIG)
-        # can overflow the panel height on smaller windows. Wrapping the
-        # detail body in a Canvas + Scrollbar lets the content grow without
-        # clipping, while the "[ DETAILS ]" badge above stays pinned.
-        scroll_wrap = tk.Frame(right, bg=PANEL)
-        scroll_wrap.pack(fill="both", expand=True, padx=6, pady=(2, 6))
-
-        d_canvas = tk.Canvas(scroll_wrap, bg=PANEL, bd=0,
-                             highlightthickness=0)
-        d_scroll = tk.Scrollbar(scroll_wrap, orient="vertical",
-                                command=d_canvas.yview)
-        d_canvas.configure(yscrollcommand=d_scroll.set)
-        d_canvas.pack(side="left", fill="both", expand=True)
-        d_scroll.pack(side="right", fill="y")
-
-        detail_body = tk.Frame(d_canvas, bg=PANEL)
-        d_canvas.create_window((0, 0), window=detail_body, anchor="nw",
-                               width=300)
-        detail_body.bind("<Configure>",
-                         lambda e, c=d_canvas:
-                         c.configure(scrollregion=c.bbox("all")))
-
-        def _on_dwheel(event, c=d_canvas):
-            try: c.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except tk.TclError: pass
-        def _d_enter(_e=None, c=d_canvas):
-            c.bind_all("<MouseWheel>", _on_dwheel)
-        def _d_leave(_e=None, c=d_canvas):
-            try: c.unbind_all("<MouseWheel>")
-            except tk.TclError: pass
-        d_canvas.bind("<Enter>", _d_enter)
-        d_canvas.bind("<Leave>", _d_leave)
-        detail_body.bind("<Enter>", _d_enter)
-        detail_body.bind("<Leave>", _d_leave)
-
-        self._dash_widgets[("bt_detail",)] = detail_body
-
-        # Placeholder — overwritten by auto-select below when the index
-        # has any runs. Kept as a fallback for the empty-index case.
-        tk.Label(detail_body,
-                 text="\n  click any run on the left\n  to load metrics + actions",
-                 font=(FONT, 9, "bold"), fg=AMBER_D, bg=PANEL,
-                 justify="left").pack(anchor="w")
-
-        # Bottom bar: back + jump to engine logs
-        tk.Frame(outer, bg=BG, height=10).pack()
-        bottom = tk.Frame(outer, bg=BG); bottom.pack(fill="x")
-
-        back_btn = tk.Label(bottom, text="  VOLTAR  ",
-                            font=(FONT, 9), fg=DIM, bg=BG,
-                            cursor="hand2", padx=10, pady=3)
-        back_btn.pack(side="left")
-        back_btn.bind("<Button-1>", lambda e: self._data_center())
-        back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=AMBER))
-        back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=DIM))
-
-        eng_btn = tk.Label(bottom, text="  ENGINE LOGS  ",
-                           font=(FONT, 9, "bold"), fg=AMBER_D, bg=BG,
-                           cursor="hand2", padx=10, pady=3)
-        eng_btn.pack(side="left", padx=(6, 0))
-        eng_btn.bind("<Button-1>", lambda e: self._data_engines())
-        eng_btn.bind("<Enter>", lambda e: eng_btn.configure(fg=AMBER))
-        eng_btn.bind("<Leave>", lambda e: eng_btn.configure(fg=AMBER_D))
-
-        # Trigger the initial render — this reads data/index.json, sorts
-        # by timestamp desc, renders up to 50 rows with click handlers.
-        self._dash_backtest_render()
-
-        # Auto-select the most recent run so the detail panel is never
-        # empty on first open. The user was getting confused when the
-        # only visible thing in the right pane was "[ DETAILS ]" plus a
-        # dim placeholder — it looked like nothing clickable existed.
-        # With auto-select the detail panel always shows real metrics,
-        # OPEN HTML + DELETE buttons immediately. Clicking other rows
-        # still swaps the selection as before.
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("live_runs")
         try:
-            newest = getattr(self, "_bt_recent_run_id", None)
-            if newest:
-                self.after(0, lambda rid=newest:
-                           self._dash_backtest_select(rid))
-        except (OSError, json.JSONDecodeError, TypeError):
+            self.focus_set()
+        except Exception:
             pass
 
-    # ─── ENGINE LOGS (live proc list + log tail) ──────────────
+    # --- RUNS HISTORY (unified database of every run) ------------
+    def _data_runs_history(self):
+        """Tela institucional de todas as runs via ScreenManager."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("runs_history")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
+    # --- ENGINES — tela unificada (HISTORY / LIVE / LOGS) --------
     def _data_engines(self):
-        """Live engine control & log tail view.
+        """Abre /engines — wrapper com chip bar HISTORY/LIVE/LOGS.
 
-        Implements part of Fase 2 from the professional-fund-readiness plan:
-        two-column layout with a proc list on the left (auto-refresh 2s) and
-        a live log tail stream on the right for the currently selected proc.
-
-        Backed by core.proc.list_procs (identity-aware, safe against PID
-        recycling) and stop_proc (raises PidRecycledError on mismatch rather
-        than taskkilling the wrong process).
+        Consolida o que antes eram 3 entradas separadas no DATA CENTER
+        (RUNS HISTORY, LIVE RUNS, ENGINE LOGS) numa tela unica com a
+        mesma organizacao visual do /backtests. Os 3 sub-screens
+        originais continuam registrados, pra atalhos legacy e navegacao
+        direta (ex: live_runs -> runs_history via tecla R).
         """
         self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA > ENGINES")
-        self.h_stat.configure(text="LIVE", fg=GREEN)
-        self.f_lbl.configure(text="ESC voltar  |  click proc to tail  |  STOP / PURGE")
-        self._kb("<Escape>", lambda: self._data_center())
-
-        # State for this screen — held as instance attrs so the worker thread
-        # and the UI poll can reach them. Cleaned up on screen exit.
-        self._eng_selected_pid: int | None = None
-        self._eng_tail_stop: threading.Event = threading.Event()
-        self._eng_tail_thread: threading.Thread | None = None
-        self._eng_log_queue: queue.Queue = queue.Queue()
-        self._eng_after_id: str | None = None
-
-        _outer, outer = self._ui_page_shell(
-            "ENGINE LOGS",
-            "Running and recent engines with live log tail and verified stop control",
-        )
-
-        split = tk.Frame(outer, bg=BG)
-        split.pack(fill="both", expand=True)
-
-        # ── LEFT: proc list ──────────────────────────────────
-        left = tk.Frame(split, bg=BG, width=420)
-        left.pack(side="left", fill="y", padx=(0, 8))
-        left.pack_propagate(False)
-
-        tk.Label(left, text="PROCS", font=(FONT, 7, "bold"),
-                 fg=AMBER_D, bg=BG, anchor="w").pack(anchor="w", pady=(0, 4))
-
-        hrow = tk.Frame(left, bg=BG); hrow.pack(fill="x")
-        for label, width in [("STATE", 7), ("ENGINE", 10), ("PID", 7),
-                             ("STARTED", 12)]:
-            tk.Label(hrow, text=label, font=(FONT, 7, "bold"), fg=DIM, bg=BG,
-                     width=width, anchor="w").pack(side="left")
-        tk.Frame(left, bg=DIM2, height=1).pack(fill="x", pady=(1, 2))
-
-        list_wrap = tk.Frame(left, bg=BG)
-        list_wrap.pack(fill="both", expand=True)
-        self._eng_list_wrap = list_wrap
-
-        # Bottom action bar for the list
-        actions_l = tk.Frame(left, bg=BG); actions_l.pack(fill="x", pady=(6, 0))
-
-        def _do_stop():
-            pid = self._eng_selected_pid
-            if pid is None:
-                self.h_stat.configure(text="NO PROC SELECTED", fg=RED)
-                self.after(1200, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-                return
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if hasattr(self, "screens") and getattr(self, "screens", None) is not None:
+            if not self.screens_container.winfo_manager():
+                self.screens_container.pack(fill="both", expand=True)
+            self.screens.show("engines")
             try:
-                from core.proc import stop_proc, PidRecycledError
-                ok = stop_proc(pid)
-                msg = f"STOPPED {pid}" if ok else f"{pid} NOT RUNNING"
-                self.h_stat.configure(text=msg, fg=GREEN if ok else AMBER_D)
-            except PidRecycledError as e:
-                self.h_stat.configure(text=f"REFUSED: PID REUSE", fg=RED)
-                messagebox.showerror("PID recycling detected",
-                                     f"stop_proc refused:\n\n{e}")
-            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-            self._eng_refresh()
+                self.focus_set()
+            except Exception:
+                pass
+            return
 
-        def _do_purge():
-            try:
-                from core.proc import purge_finished
-                n = purge_finished()
-                self.h_stat.configure(text=f"PURGED {n}", fg=AMBER)
-            except Exception as e:
-                self.h_stat.configure(text=f"PURGE FAILED: {str(e)[:30]}", fg=RED)
-            self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-            self._eng_refresh()
-
-        # SPAWN dropdown — needs a popup menu rather than a simple onclick
-        # because the user picks an engine from a list. Attaches a Tk.Menu
-        # populated from core.proc.ENGINES at click time.
-        def _do_spawn(engine_name: str):
-            try:
-                from core.proc import spawn
-                info = spawn(engine_name)
-            except Exception as e:
-                self.h_stat.configure(
-                    text=f"SPAWN ERR: {str(e)[:30]}", fg=RED)
-                info = None
-            if info:
-                self.h_stat.configure(
-                    text=f"SPAWNED {engine_name} pid={info['pid']}",
-                    fg=GREEN)
-                # Auto-select the newly-spawned proc so its log tail
-                # immediately starts streaming.
-                self.after(300, lambda p=info: self._eng_select(p))
-            else:
-                self.h_stat.configure(
-                    text=f"SPAWN FAILED: {engine_name}", fg=RED)
-            self.after(2000,
-                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
-            self._eng_refresh()
-
-        try:
-            from core.proc import ENGINES as _ENGINES
-        except Exception:
-            _ENGINES = {}
-        spawn_menu = tk.Menu(actions_l, tearoff=0,
-                             bg=BG3, fg=AMBER,
-                             activebackground=AMBER, activeforeground=BG,
-                             font=(FONT, 8))
-        try:
-            from config.params import FROZEN_ENGINES as _FROZEN
-        except Exception:
-            _FROZEN = []
-        for eng_name in sorted(_ENGINES.keys()):
-            _frozen = eng_name.upper() in [f.upper() for f in _FROZEN]
-            _label  = f"{eng_name.upper()} [FROZEN]" if _frozen else eng_name.upper()
-            _fg     = DIM if _frozen else AMBER
-            spawn_menu.add_command(
-                label=_label,
-                foreground=_fg,
-                command=lambda n=eng_name: _do_spawn(n))
-
-        def _popup_spawn(event, m=spawn_menu):
-            try:
-                m.tk_popup(event.x_root, event.y_root)
-            finally:
-                m.grab_release()
-
-        spawn_btn = tk.Label(actions_l, text="  SPAWN ▸  ",
-                             font=(FONT, 7, "bold"),
-                             fg=GREEN, bg=BG3, cursor="hand2",
-                             padx=6, pady=3)
-        spawn_btn.pack(side="left", padx=(0, 6))
-        spawn_btn.bind("<Button-1>", _popup_spawn)
-        spawn_btn.bind("<Enter>", lambda e: spawn_btn.configure(bg=GREEN, fg=BG))
-        spawn_btn.bind("<Leave>", lambda e: spawn_btn.configure(bg=BG3, fg=GREEN))
-
-        for label, cmd, color in [
-                ("STOP",  _do_stop,  RED),
-                ("PURGE", _do_purge, AMBER_D),
-                ("REFRESH", lambda: self._eng_refresh(), AMBER)]:
-            b = tk.Label(actions_l, text=f"  {label}  ", font=(FONT, 7, "bold"),
-                         fg=color, bg=BG3, cursor="hand2", padx=6, pady=3)
-            b.pack(side="left", padx=2)
-            b.bind("<Button-1>", lambda e, c=cmd: c())
-
-        # ── RIGHT: log tail viewer ───────────────────────────
-        right = tk.Frame(split, bg=PANEL)
-        right.pack(side="right", fill="both", expand=True)
-
-        tk.Label(right, text="LOG TAIL", font=(FONT, 7, "bold"),
-                 fg=AMBER_D, bg=PANEL, anchor="w").pack(anchor="nw", padx=8, pady=(8, 2))
-        tk.Frame(right, bg=DIM2, height=1).pack(fill="x", padx=8, pady=(0, 4))
-
-        self._eng_log_header = tk.Label(
-            right, text=" — select a proc to stream its log — ",
-            font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w")
-        self._eng_log_header.pack(fill="x", padx=8)
-
-        self._eng_log_text = tk.Text(
-            right, wrap="none", bg=BG, fg=WHITE, font=(FONT, 8),
-            insertbackground=WHITE, padx=6, pady=6,
-            borderwidth=0, highlightthickness=0)
-        self._eng_log_text.pack(fill="both", expand=True, padx=8, pady=(2, 8))
-        self._eng_log_text.config(state="disabled")
-
-        # Initial list render + auto-refresh tick
-        self._eng_refresh()
-        self._eng_poll_logs()
-
+    @timed_legacy_switch("eng_refresh")
     def _eng_refresh(self):
-        """Rebuild the proc list and reschedule the 2s auto-refresh tick."""
-        if not hasattr(self, "_eng_list_wrap"):
-            return
-        try:
-            if not self._eng_list_wrap.winfo_exists():
-                return
-        except Exception:
-            return
+        from launcher_support.screens.engines import refresh
+        return refresh(self)
 
-        for w in self._eng_list_wrap.winfo_children():
-            try: w.destroy()
-            except Exception: pass
+    def _eng_normalize_local_proc(self, proc: dict) -> dict:
+        from launcher_support.screens.engines import normalize_local_proc
+        return normalize_local_proc(proc)
 
-        try:
-            from core.proc import list_procs
-            procs = list_procs()
-        except Exception as e:
-            tk.Label(self._eng_list_wrap,
-                     text=f"  list_procs failed: {e}",
-                     font=(FONT, 7), fg=RED, bg=BG,
-                     anchor="w").pack(fill="x")
-            procs = []
+    def _eng_known_slugs(self) -> set[str]:
+        from launcher_support.screens.engines import known_slugs
+        return known_slugs()
 
-        if not procs:
-            tk.Label(self._eng_list_wrap,
-                     text="  — no tracked engines —",
-                     font=(FONT, 7), fg=DIM, bg=BG,
-                     anchor="w").pack(fill="x", pady=8)
-        else:
-            for p in procs:
-                self._eng_render_row(p)
+    def _eng_base_slug(self, row: dict) -> str:
+        from launcher_support.screens.engines import base_slug
+        return base_slug(row)
 
-        # Reschedule
-        try:
-            if getattr(self, "_eng_after_id", None):
-                self.after_cancel(self._eng_after_id)
-        except Exception:
-            pass
-        try:
-            self._eng_after_id = self.after(2000, self._eng_refresh)
-        except Exception:
-            pass
+    def _eng_is_engine_row(self, row: dict) -> bool:
+        from launcher_support.screens.engines import is_engine_row
+        return is_engine_row(self, row)
+
+    def _eng_matches_mode_filter(self, row: dict) -> bool:
+        from launcher_support.screens.engines import matches_mode_filter
+        return matches_mode_filter(self, row)
+
+    def _eng_row_key(self, row: dict) -> str:
+        from launcher_support.screens.engines import row_key
+        return row_key(row)
+
+    def _eng_set_mode_filter(self, mode_name: str) -> None:
+        from launcher_support.screens.engines import set_mode_filter
+        return set_mode_filter(self, mode_name)
+
+    def _eng_refresh_filter_tabs(self) -> None:
+        from launcher_support.screens.engines import refresh_filter_tabs
+        return refresh_filter_tabs(self)
+
+    def _eng_run_id_of(self, row: dict) -> str | None:
+        from launcher_support.screens.engines import run_id_of
+        return run_id_of(row)
+
+    def _eng_recency_key(self, row: dict) -> float:
+        from launcher_support.screens.engines import recency_key
+        return recency_key(row)
+
+    def _eng_scan_vps_runs(self, limit: int = 10) -> list[dict]:
+        from launcher_support.screens.engines import scan_vps_runs
+        return scan_vps_runs(limit=limit)
+
+    def _eng_scan_historical_runs(self, *, limit: int = 15,
+                                   hours: int = 48) -> list[dict]:
+        from launcher_support.screens.engines import scan_historical_runs
+        return scan_historical_runs(self, limit=limit, hours=hours)
 
     def _eng_render_row(self, proc: dict):
-        alive = bool(proc.get("alive"))
-        pid = proc.get("pid")
-        engine = proc.get("engine", "?")
-        started = str(proc.get("started", ""))[:16].replace("T", " ")
-        state = "LIVE" if alive else "done"
-        state_color = GREEN if alive else DIM
+        from launcher_support.screens.engines import render_row
+        return render_row(self, proc)
 
-        row = tk.Frame(self._eng_list_wrap, bg=BG, cursor="hand2")
-        row.pack(fill="x", pady=0)
-
-        cells = [
-            (state,   7,  state_color, "bold"),
-            (engine, 10,  WHITE,       "bold"),
-            (str(pid), 7, AMBER_D,     "normal"),
-            (started, 12, DIM,         "normal"),
-        ]
-        labels = []
-        for text, width, color, weight in cells:
-            lbl = tk.Label(row, text=text, font=(FONT, 7, weight),
-                           fg=color, bg=BG, width=width, anchor="w")
-            lbl.pack(side="left")
-            labels.append(lbl)
-
-        def _select(_e=None, p=proc):
-            self._eng_select(p)
-        def _hover_on(_e=None, labels=labels):
-            for l in labels:
-                try: l.configure(bg=BG3)
-                except Exception: pass
-        def _hover_off(_e=None, labels=labels, p=proc):
-            bg = BG3 if self._eng_selected_pid == p.get("pid") else BG
-            for l in labels:
-                try: l.configure(bg=bg)
-                except Exception: pass
-
-        for w in (row, *labels):
-            w.bind("<Button-1>", _select)
-            w.bind("<Enter>", _hover_on)
-            w.bind("<Leave>", _hover_off)
-
-        if self._eng_selected_pid == pid:
-            for l in labels:
-                try: l.configure(bg=BG3)
-                except Exception: pass
+    def _eng_uptime_of(self, proc: dict, hb: dict) -> str:
+        from launcher_support.screens.engines import uptime_of
+        return uptime_of(proc, hb)
 
     def _eng_select(self, proc: dict):
-        """Stop old log tail, start a new one for the selected proc."""
-        pid = proc.get("pid")
-        self._eng_selected_pid = pid
+        from launcher_support.screens.engines import select
+        return select(self, proc)
 
-        # Stop old tail worker if any
-        if self._eng_tail_thread is not None:
-            self._eng_tail_stop.set()
-            self._eng_tail_thread = None
-        self._eng_tail_stop = threading.Event()
+    def _eng_load_entries(self, proc: dict) -> None:
+        from launcher_support.screens.engines import load_entries
+        return load_entries(self, proc)
 
-        # Clear the text widget and reset header
-        try:
-            self._eng_log_text.config(state="normal")
-            self._eng_log_text.delete("1.0", "end")
-            self._eng_log_text.config(state="disabled")
-        except tk.TclError:
-            return
+    def _eng_fetch_entries(self, proc: dict,
+                           stop: threading.Event) -> tuple[list[str], str]:
+        from launcher_support.screens.engines import fetch_entries
+        return fetch_entries(proc, stop)
 
-        log_file = proc.get("log_file") or ""
-        engine = proc.get("engine", "?")
-        self._eng_log_header.configure(
-            text=f"  {engine} · pid {pid} · {log_file}", fg=AMBER_D)
+    def _eng_apply_entries(self, lines: list[str], summary: str) -> None:
+        from launcher_support.screens.engines import apply_entries
+        return apply_entries(self, lines, summary)
 
-        if not log_file:
-            return
-
-        log_path = ROOT / log_file if not Path(log_file).is_absolute() else Path(log_file)
-        t = threading.Thread(
-            target=self._eng_tail_worker,
-            args=(log_path, self._eng_tail_stop),
-            daemon=True)
-        t.start()
-        self._eng_tail_thread = t
-        # Trigger list re-render so the new selection highlights
-        self._eng_refresh()
+    def _eng_tail_remote_worker(self, run_id: str,
+                                stop_event: threading.Event):
+        from launcher_support.screens.engines_live import tail_remote_worker
+        return tail_remote_worker(self, run_id, stop_event)
 
     def _eng_tail_worker(self, log_path: Path, stop_event: threading.Event):
-        """Read the log file tail-f style, push new lines into the queue.
-
-        Starts by reading the LAST ~500 lines so the viewer isn't empty on
-        open, then follows appends. The queue is consumed by the UI thread
-        in _eng_poll_logs.
-        """
-        if not log_path.exists():
-            self._eng_log_queue.put(("SYSTEM",
-                                     f"(log file not found: {log_path})"))
-            return
-        try:
-            # Seed with last ~500 lines for context
-            with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
-                lines = fh.readlines()
-                for line in lines[-500:]:
-                    self._eng_log_queue.put(("LINE", line.rstrip("\n")))
-                fh.seek(0, 2)  # EOF
-
-                while not stop_event.is_set():
-                    line = fh.readline()
-                    if not line:
-                        if stop_event.wait(0.25):
-                            break
-                        continue
-                    self._eng_log_queue.put(("LINE", line.rstrip("\n")))
-        except OSError as e:
-            self._eng_log_queue.put(("SYSTEM", f"(log read error: {e})"))
+        from launcher_support.screens.engines_live import tail_worker
+        return tail_worker(self, log_path, stop_event)
 
     def _eng_poll_logs(self):
-        """UI-thread poll: drain the queue, append to the Text widget,
-        cap at 1000 lines to keep memory bounded, reschedule tick."""
-        try:
-            if not hasattr(self, "_eng_log_text"):
-                return
-            if not self._eng_log_text.winfo_exists():
-                return
-        except Exception:
-            return
+        from launcher_support.screens.engines_live import poll_logs
+        return poll_logs(self)
 
-        drained = 0
-        max_drain = 200  # don't block the UI if logs burst
-        new_lines: list[str] = []
-        try:
-            while drained < max_drain:
-                kind, line = self._eng_log_queue.get_nowait()
-                new_lines.append(line)
-                drained += 1
-        except queue.Empty:
-            pass
-
-        if new_lines:
-            try:
-                self._eng_log_text.config(state="normal")
-                self._eng_log_text.insert("end", "\n".join(new_lines) + "\n")
-                # Cap to 1000 lines — delete oldest
-                total_lines = int(self._eng_log_text.index("end-1c").split(".")[0])
-                if total_lines > 1000:
-                    self._eng_log_text.delete("1.0",
-                                              f"{total_lines - 1000}.0")
-                self._eng_log_text.see("end")
-                self._eng_log_text.config(state="disabled")
-            except tk.TclError:
-                return
-
-        try:
-            self.after(200, self._eng_poll_logs)
-        except Exception:
-            pass
-
-    # ─── STRATEGIES (Layer 2) ─────────────────────────────
+    # --- STRATEGIES (Layer 2) -----------------------------
     def _strategies(self, filter_group: str | None = None):
-        """Engine picker. filter_group in {'BACKTEST','LIVE','TOOLS',None}.
-        None shows all groups; a value restricts the picker to that one."""
-        self._clr(); self._clear_kb()
-        market_label = MARKETS.get(_conn.active_market, {}).get("label", "UNKNOWN")
-
-        _titles = {
-            "BACKTEST": ("BACKTEST", "research · walkforward · Monte Carlo", "#00ff80"),
-            "LIVE":     ("ENGINES LIVE", "paper · demo · testnet · safety gates", "#ff8c00"),
-            "TOOLS":    ("TOOLS", "utilities · research labs", AMBER_D),
-            None:       ("STRATEGIES", "all engines across groups", AMBER),
-        }
-        title, subtitle, title_hue = _titles.get(filter_group, _titles[None])
-        self.h_path.configure(text=f"> {title}")
-        self.h_stat.configure(text=market_label, fg=AMBER_D)
-        self.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        # Compact layout: ONE-LINE strip (rail · title · pills · counts) + picker.
-        # Subtitle e MARKET chip removidos — h_path/h_stat já mostram contexto.
-        root = tk.Frame(self.main, bg=BG)
-        root.pack(fill="both", expand=True, padx=14, pady=10)
-
-        # ── Single header strip: rail · title · pills · counts ──
-        strip = tk.Frame(root, bg=BG)
-        strip.pack(fill="x")
-        tk.Frame(strip, bg=title_hue, width=3, height=22).pack(
-            side="left", padx=(0, 8))
-        tk.Label(strip, text=title, font=(FONT, 12, "bold"),
-                 fg=title_hue, bg=BG).pack(side="left", padx=(0, 14))
-
-        # Segmented pills inline with title
-        segments = [
-            ("BACKTEST", "BACKTEST", "#00ff80"),
-            ("ENGINES",  "LIVE",     "#ff8c00"),
-            ("TOOLS",    "TOOLS",    AMBER_D),
-            ("ALL",      None,       AMBER),
-        ]
-        for seg_label, grp, hue in segments:
-            active = grp == filter_group
-            fg = "#000000" if active else hue
-            bg = hue if active else BG3
-            b = tk.Label(strip, text=f" {seg_label} ",
-                         font=(FONT, 7, "bold"),
-                         fg=fg, bg=bg, padx=8, pady=3,
-                         cursor="hand2")
-            b.pack(side="left", padx=(0, 3))
-            if not active:
-                b.bind("<Button-1>",
-                       lambda _e, _g=grp: self._strategies(filter_group=_g))
-                b.bind("<Enter>",
-                       lambda _e, _b=b, _h=hue: _b.configure(bg=_h, fg="#000000"))
-                b.bind("<Leave>",
-                       lambda _e, _b=b, _h=hue: _b.configure(bg=BG3, fg=_h))
-
-        # Right-side counts pill (populated after tracks load)
-        counts_lbl = tk.Label(strip, text="", font=(FONT, 7, "bold"),
-                              fg=DIM, bg=BG, padx=6)
-        counts_lbl.pack(side="right")
-
-        tk.Frame(root, bg=title_hue, height=1).pack(fill="x", pady=(8, 8))
-
-        # Picker host — takes the rest of the screen
-        picker_host = tk.Frame(root, bg=BG)
-        picker_host.pack(fill="both", expand=True)
-
-        # expose counts label so the later block can fill it in
-        self._strategies_counts_lbl = counts_lbl
-        # kept for compat with old code further down that expects `panel`
-        panel = root
-
-        try:
-            from config.engines import ENGINES
-            from core import engine_picker as ep
-            from core.proc import list_procs, stop_proc
-        except Exception as e:
-            tk.Label(picker_host, text=f"picker unavailable: {e}",
-                     font=(FONT, 9), fg=RED, bg=BG).pack(pady=20)
-            self._ui_back_row(panel, lambda: self._menu("main"))
-            return
-
-        _group_parent = {"BACKTEST": "backtest", "LIVE": "live", "TOOLS": "tools"}
-        _proc_to_slug = {
-            "backtest": "citadel",
-            "mercurio": "jump",
-            "thoth": "bridgewater",
-            "newton": "deshaw",
-            "multi": "millennium",
-            "prometeu": "twosigma",
-            "renaissance": "renaissance",
-            "live": "live",
-            "arb": "janestreet",
-            "darwin": "aqr",
-            "chronos": "winton",
-        }
-        running_map = {}
-        try:
-            for proc in list_procs():
-                if proc.get("status") != "running" or not proc.get("alive"):
-                    continue
-                slug = _proc_to_slug.get(proc.get("engine"))
-                if slug:
-                    running_map[slug] = proc
-        except Exception:
-            running_map = {}
-
-        def _run_for(slug, meta):
-            name = meta.get("display", slug.upper())
-            script = meta.get("script", "")
-            desc = meta.get("desc", "")
-            group = ep.DEFAULT_GROUPS.get(slug, "BACKTEST")
-            parent_key = _group_parent.get(group, "backtest")
-            is_live_view = filter_group == "LIVE"
-
-            def _run(cfg=None,
-                     n=name, s=script, d=desc, k=parent_key,
-                     live=is_live_view):
-                preset = (cfg or {}).get("preset", "custom")
-                # LIVE view — RUN chip produces preset in {paper,demo,testnet,live}
-                if live and preset in ("paper", "demo", "testnet", "live"):
-                    self._exec_live_inline(n, s, d, preset, cfg)
-                    return
-                # BACKTEST inline
-                if k == "backtest" and cfg:
-                    self._exec_backtest_inline(n, s, d, k, cfg)
-                    return
-                # Fallback — brief screen
-                self._brief(n, s, d, k)
-
-            return _run
-
-        def _stop_for(slug, _meta):
-            def _stop():
-                proc = running_map.get(slug)
-                inline = getattr(self, "_strategies_inline_runs", {}).get(slug)
-                try:
-                    if proc:
-                        stop_proc(int(proc["pid"]), expected=proc)
-                    elif inline:
-                        stop_proc(int(inline["pid"]))
-                except Exception:
-                    return
-                try:
-                    handle = getattr(self, "_strategies_picker", None)
-                    if handle:
-                        handle["set_progress"](slug, 0.0, "stopped by operator", False)
-                except Exception:
-                    pass
-            return _stop
-
-        def _brief_for(_slug, meta):
-            name = meta.get("display", _slug.upper())
-            return BRIEFINGS.get(name)
-
-        tracks = ep.build_tracks_from_registry(
-            ENGINES, on_run_for=_run_for, on_stop_for=_stop_for, brief_for=_brief_for,
-        )
-        for t in tracks:
-            if t.slug in running_map:
-                t.status = "running"
-        if filter_group == "LIVE":
-            # Only expose engines with a concrete live entrypoint. Most
-            # backtest strategies do not accept a strategy selector when
-            # routed via engines/live.py, so listing them here would launch
-            # the wrong engine.
-            _live_slugs = {"citadel", "live", "janestreet"}
-            tracks = [t for t in tracks if t.slug in _live_slugs]
-            for t in tracks:
-                t.group = "LIVE"
-        elif filter_group:
-            tracks = [t for t in tracks if t.group == filter_group]
-
-        # Counts pill — only RUNNING is meaningful, rest is noise
-        running_n = sum(1 for t in tracks if t.status == "running")
-        counts_txt = f"{len(tracks)} ENGINES" + (f"  ·  {running_n} RUNNING" if running_n else "")
-        try:
-            self._strategies_counts_lbl.configure(text=counts_txt, fg=AMBER_D)
-        except Exception:
-            pass
-
-        # ENGINES LIVE — "NOW PLAYING" strip above the picker. Each running
-        # engine is a clickable pill; clicking focuses it in the iPod list +
-        # opens the LOG chip so the user lands on the live tail.
-        if filter_group == "LIVE" and running_map:
-            self._engines_now_playing(picker_host, tracks, running_map)
-
-        picker_mode = "live" if filter_group == "LIVE" else "backtest"
-        handle = ep.render(picker_host, tracks, mode=picker_mode)
-        self._strategies_picker = handle
-
-        # Hydrate metrics in background so render is instant. The DB query
-        # is fast (<20ms) but doing it on the main thread before render
-        # makes the menu feel "travado" on slower disks/OneDrive sync.
-        import threading as _th
-        _th.Thread(
-            target=self._strategies_hydrate_metrics,
-            args=(tracks, handle),
-            daemon=True,
-        ).start()
-        for slug, proc in running_map.items():
-            try:
-                handle["set_progress"](slug, 6.0, f"managed pid {proc.get('pid')} | already running", True)
-            except Exception:
-                pass
-
-        self._kb("<Down>",   lambda: handle["delta"](+1))
-        self._kb("<Up>",     lambda: handle["delta"](-1))
-        self._kb("<Return>", lambda: handle["run_current"]())
+        """Delegate to launcher_support.screens.strategies.render. Full
+        engine-picker implementation (title strip, segmented pills,
+        counts, picker host + hydrate thread) lives there. Internal
+        recursive calls (pill clicks) loop back through this method so
+        the segmented nav keeps working via the App surface.
+        """
+        from launcher_support.screens.strategies import render as _render_strategies
+        _render_strategies(self, filter_group=filter_group)
 
     def _engines_now_playing(self, host, tracks, running_map):
-        """NOW PLAYING strip — running live engines as clickable pills above
-        the picker. Clicking a pill: focuses that track + opens the LOG chip
-        on the right panel so the user lands on the live tail (iPod feel).
-        """
-        from datetime import datetime as _dt
-        bar = tk.Frame(host, bg=BG2,
-                       highlightbackground=BORDER, highlightthickness=1)
-        bar.pack(fill="x", pady=(0, 6))
-        tk.Label(bar, text="  NOW PLAYING ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=GREEN, padx=6, pady=2).pack(side="left", padx=(4, 8), pady=4)
-
-        slug_to_idx = {t.slug: i for i, t in enumerate(tracks)}
-        for slug, proc in running_map.items():
-            idx = slug_to_idx.get(slug)
-            if idx is None:
-                continue
-            name = tracks[idx].name
-            mode = (proc.get("engine") or "").upper()
-            # Uptime — derive from started timestamp (ISO)
-            up_lbl = "—"
-            try:
-                started = proc.get("started")
-                if started:
-                    t0 = _dt.fromisoformat(started)
-                    secs = (_dt.now() - t0).total_seconds()
-                    h, rem = divmod(int(secs), 3600)
-                    m, _ = divmod(rem, 60)
-                    up_lbl = f"{h}h{m:02d}m" if h else f"{m}m"
-            except Exception:
-                pass
-
-            pill = tk.Frame(bar, bg=BG3,
-                            highlightbackground=GREEN, highlightthickness=1,
-                            cursor="hand2")
-            pill.pack(side="left", padx=2, pady=4)
-            tk.Label(pill, text="●", font=(FONT, 9, "bold"),
-                     fg=GREEN, bg=BG3, padx=4).pack(side="left")
-            tk.Label(pill, text=name, font=(FONT, 8, "bold"),
-                     fg=WHITE, bg=BG3).pack(side="left", padx=(0, 4))
-            tk.Label(pill, text=f" {up_lbl} ", font=(FONT, 7),
-                     fg=DIM, bg=BG3).pack(side="left")
-
-            def _focus(_e=None, _i=idx):
-                handle = getattr(self, "_strategies_picker", None)
-                if not handle:
-                    return
-                try:
-                    handle["select_index"](_i)
-                except Exception:
-                    pass
-                try:
-                    handle["open_chip"]("LOG")
-                except Exception:
-                    pass
-            for w in (pill,) + tuple(pill.winfo_children()):
-                w.bind("<Button-1>", _focus)
+        from launcher_support.screens.engines_live import engines_now_playing
+        return engines_now_playing(self, host, tracks, running_map)
 
     def _strategies_hydrate_metrics(self, tracks, picker_handle=None) -> None:
         """Populate track metrics from the DB. Runs in a background thread
         so the picker renders immediately — metrics fill in shortly after."""
         try:
             import sqlite3
-            import threading
             from pathlib import Path as _P
             db = _P("data/aurum.db")
             if not db.exists():
@@ -8075,7 +5011,6 @@ class App(tk.Tk):
                 "renaissance": "renaissance",
                 "jump":        "jump",
                 "bridgewater": "bridgewater",
-                "deshaw":      "deshaw",
                 "millennium":  "millennium",
                 "twosigma":    "twosigma",
                 "janestreet":  "janestreet",
@@ -8129,8 +5064,18 @@ class App(tk.Tk):
         self._strategies(filter_group="BACKTEST")
 
     def _strategies_live(self):
-        """Live/demo/testnet entry point — real execution paths with safety gates."""
-        self._strategies(filter_group="LIVE")
+        """Live/demo/testnet entry point routed via ScreenManager."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("engines_live")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     def _strategies_render_tab(self, tab):
         if not hasattr(self, "_strategies_inner") or self._strategies_inner is None:
@@ -8185,362 +5130,80 @@ class App(tk.Tk):
             if key_bind:
                 self._kb(key_bind, cmd)
 
-    # ─── RISK (Layer 2) ──────────────────────────────────
+    # --- RISK (Layer 2) ----------------------------------
     def _macro_brain_menu(self):
-        """Macro Brain cockpit — intro screen + dense market data.
-
-        Background cycle runs every 5 min in a daemon thread, keeping the
-        store fresh without touching the UI. Prices flow in naturally —
-        we never redraw the whole page (that would yank the user around
-        if they navigated elsewhere mid-tick). Pressing R gives a manual
-        refresh; the auto-render approach was removed after it caused
-        teleport-back bugs.
-
-        ESC → main menu (trade engines).
-        ENTER/space also → main menu (from splash click).
-        """
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="")  # Cockpit is intro — no nav breadcrumb
-        self.h_stat.configure(text="COCKPIT", fg=AMBER)
-        self.f_lbl.configure(
-            text="ESC main menu  |  R refresh  |  C run cycle  |  bg cycle 5m")
-        # Strong escape bindings — cockpit should never be a dead end
-        self._kb("<Escape>",   lambda: self._menu("main"))
-        self._kb("<Key-0>",    lambda: self._menu("main"))
-        self._kb("<BackSpace>", lambda: self._menu("main"))
-        self._bind_global_nav()
-        # Override global R (risk) → refresh cockpit (after global nav binds)
-        self._kb("<Key-r>",    lambda: self._macro_brain_menu())
+        """Macro Brain cockpit routed via ScreenManager."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("macro_brain")
         try:
-            from macro_brain.dashboard_view import render as _macro_render
-            _macro_render(self.main, app=self)
-        except Exception as e:
-            tk.Label(self.main,
-                     text=f"Macro Brain failed to render:\n{e}\n\nPress ESC → main menu",
-                     font=(FONT, 10), fg=RED, bg=BG).pack(pady=40)
-            return
-
-        # Tag the page so the auto-cycle loop knows when to stop. _clr()
-        # resets this to None on any navigation, so out-of-page ticks
-        # no-op instead of re-entering the cockpit.
-        self._macro_page_token = object()
-        tok = self._macro_page_token
-
-        def _still_here(t):
-            return getattr(self, "_macro_page_token", None) is t
-
-        # ── Continuous flow: tick every 10s, no destroy/rebuild ──────
-        # dashboard_view.tick_update() reads the macro store and pushes
-        # fresh values to existing Tk labels in place. No flicker, no
-        # teleport, prices just "flow" like a ticker tape.
-        def _auto_tick():
-            if not _still_here(tok):
-                return
-            try:
-                from macro_brain.dashboard_view import tick_update
-                tick_update()
-            except Exception:
-                pass
-            self._macro_render_after = self.after(10_000, _auto_tick)
-
-        # Background cycle every 5 min — actively fetches new prices from
-        # the macro brain's configured sources. Runs in a daemon thread so
-        # Tk never blocks on network I/O. After fetch completes, the next
-        # tick picks up the new values. No UI rebuild involved.
-        def _auto_cycle():
-            if not _still_here(tok):
-                return
-            import threading
-            def _work():
-                try:
-                    from macro_brain.brain import run_once
-                    run_once(force=False)  # respects source-level cadences
-                except Exception:
-                    pass
-            threading.Thread(target=_work, daemon=True).start()
-            self._macro_cycle_after = self.after(300_000, _auto_cycle)
-
-        # Kick a cycle immediately so the user doesn't wait 5 min on first
-        # open — same worker pattern so it never blocks the UI.
-        import threading
-        def _kickoff():
-            try:
-                from macro_brain.brain import run_once
-                run_once(force=False)
-            except Exception:
-                pass
-        threading.Thread(target=_kickoff, daemon=True).start()
-
-        self._macro_render_after = self.after(10_000, _auto_tick)
-        self._macro_cycle_after  = self.after(300_000, _auto_cycle)
+            self.focus_set()
+        except Exception:
+            pass
 
     def _risk_menu(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> RISK"); self.h_stat.configure(text="CONSOLE", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("risk")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
-        _outer, body = self._ui_page_shell("RISK CONSOLE", "Portfolio and risk management surfaces")
-        panel = self._ui_panel_frame(body, "RISK ROUTER", "Current and planned monitoring modules")
-
-        sections = [
-            ("PORTFOLIO", [
-                ("1", "Open Positions",     "All active positions across venues"),
-                ("2", "P&L Today",          "Real-time daily P&L"),
-                ("3", "P&L History",        "Historical equity curve"),
-                ("4", "Exposure Map",       "Sector/asset heatmap"),
-            ]),
-            ("RISK METRICS", [
-                ("5", "VaR Calculator",     "Value at Risk (1d, 5d, 30d)"),
-                ("6", "Drawdown Monitor",   "Current DD + historical worst"),
-                ("7", "Correlation Risk",   "Portfolio correlation exposure"),
-                ("8", "Kill Switch Status", "3-layer kill switch state"),
-            ]),
-            ("STRESS TEST", [
-                ("9", "Market Crash",       "-20% BTC in 1h scenario"),
-                ("A", "Liquidity Crisis",   "Spread blowout + slippage spike"),
-                ("B", "Black Swan",         "Custom shock parameters"),
-            ]),
-        ]
-
-        for section_name, items in sections:
-            sec = self._ui_section(panel, section_name)
-
-            for key_label, name, desc in items:
-                self._ui_action_row(
-                    sec, key_label, name, desc,
-                    available=False, tag="COMING SOON", tag_fg=DIM, tag_bg=BG2, title_width=22,
-                )
-
-        self._ui_note(panel, "Risk console modules are in development.", fg=DIM)
-        self._ui_note(panel, "Backtest stress tests remain available in STRATEGIES > MILLENNIUM.", fg=AMBER_D)
-        self._ui_back_row(panel, lambda: self._menu("main"))
-
-    # ─── SPECIAL SCREENS ─────────────────────────────────
+    # --- SPECIAL SCREENS ---------------------------------
     def _special(self, key):
         if key == "data":    self._data()
         elif key == "procs": self._procs()
         elif key == "config": self._config()
 
     def _data(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> DATA"); self.h_stat.configure(text="BROWSE", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC back  |  click to open file  |  latest 200 indexed artifacts")
-        self._kb("<Escape>", lambda: self._menu("main"))
-
-        _outer, body = self._ui_page_shell("DATA & REPORTS", "Indexed JSON and report artifacts across the data tree")
-        panel = self._ui_panel_frame(body, "ARTIFACT INDEX", "Recent persisted files across runs and legacy engine directories")
-
-        # Walk every known data tree and tag each file with the section it
-        # came from. Previous filter `"reports" in str(r) or "darwin" in str(r)`
-        # ignored the entire data/runs/ modern layout and left this screen
-        # empty for every backtest run after the write-path refactor. [Fase 0.1 / D1]
-        reports: list[tuple[Path, object, str]] = []  # (path, stat, section)
-        dd = ROOT / "data"
-
-        def _collect(root: Path, section: str, pattern: str = "*.json"):
-            if not root.exists():
-                return
-            for r in root.rglob(pattern):
-                try:
-                    reports.append((r, r.stat(), section))
-                except (OSError, FileNotFoundError):
-                    continue
-
-        if dd.exists():
-            _collect(dd / "runs",      "RUNS")       # modern backtest runs
-            _collect(dd / "darwin",    "DARWIN")     # darwin evolution logs
-            _collect(dd / "arbitrage", "ARBITRAGE")  # arbitrage session reports
-            # Legacy per-engine dirs
-            for legacy in ("mercurio", "newton", "thoth", "prometeu",
-                           "multistrategy", "live"):
-                _collect(dd / legacy, legacy.upper())
-            # Legacy dated reports tree (data/YYYY-MM-DD/reports/*.json)
-            for dated in dd.iterdir() if dd.exists() else []:
-                if dated.is_dir() and dated.name[:4].isdigit() and (dated / "reports").exists():
-                    _collect(dated / "reports", "LEGACY")
-            reports.sort(key=lambda rs: rs[1].st_mtime, reverse=True)
-
-        counts: dict[str, int] = {}
-        for _r, _st, section in reports:
-            counts[section] = counts.get(section, 0) + 1
-
-        meta = tk.Frame(panel, bg=BG)
-        meta.pack(fill="x", pady=(0, 8))
-        tk.Label(meta, text=f"TOTAL  {len(reports)}", font=(FONT, 8, "bold"),
-                 fg=AMBER_D, bg=BG).pack(side="left")
-        for sec_name in ("RUNS", "ARBITRAGE", "DARWIN", "LEGACY"):
-            n = counts.get(sec_name, 0)
-            if n:
-                tk.Label(meta, text=f"{sec_name}  {n}", font=(FONT, 8),
-                         fg=DIM, bg=BG).pack(side="left", padx=(16, 0))
-        tk.Frame(panel, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
-        self._ui_note(
-            panel,
-            "Artifact index is chronological. Open BACKTESTS for validated run review; use this screen for raw persisted files.",
-            fg=DIM,
-        )
-
-        routes = self._ui_section(panel, "ROUTES", note="review and drill-down")
-        self._ui_action_row(
-            routes, "B", "BACKTESTS", "Open validated run browser with metrics and detail panel",
-            command=self._data_backtests, tag="PRIMARY", tag_fg=AMBER_D, tag_bg=BG, title_width=18,
-        )
-        self._ui_action_row(
-            routes, "E", "ENGINE LOGS", "Open running-engine log tail and process inspection",
-            command=self._data_engines, tag="OPERATIONS", tag_fg=AMBER_D, tag_bg=BG, title_width=18,
-        )
-        self._kb("<Key-b>", self._data_backtests)
-        self._kb("<Key-e>", self._data_engines)
-
-        canvas = tk.Canvas(panel, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
-        sf = tk.Frame(canvas, bg=BG)
-        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0,0), window=sf, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
-        sb.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
-
-        tk.Label(sf, text=f"  {'SECTION':<10} {'FILE':<60} {'DATE':<15} {'SIZE':>8}",
-                 font=(FONT, 7, "bold"), fg=AMBER_D, bg=BG, anchor="w").pack(fill="x")
-        tk.Frame(sf, bg=DIM2, height=1).pack(fill="x", pady=1)
-
-        if not reports:
-            tk.Label(sf, text="  No reports found.", font=(FONT, 9), fg=DIM, bg=BG).pack(anchor="w", pady=8)
-            return
-
-        # Section → color for the badge
-        sec_color = {
-            "RUNS":      AMBER,
-            "DARWIN":    GREEN,
-            "ARBITRAGE": AMBER_B,
-            "LEGACY":    DIM,
-        }
-
-        for r, st, section in reports[:200]:
-            try:
-                rel = str(r.relative_to(ROOT))
-            except ValueError:
-                rel = str(r)
-            mt = datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
-            sz = f"{st.st_size/1024:.0f}K" if st.st_size < 1024*1024 else f"{st.st_size/(1024*1024):.1f}M"
-            col = sec_color.get(section, WHITE)
-
-            row = tk.Frame(sf, bg=BG, cursor="hand2")
-            row.pack(fill="x")
-            sec_lbl = tk.Label(row, text=f" {section:<9}", font=(FONT, 7, "bold"),
-                               fg=col, bg=BG, width=10, anchor="w")
-            sec_lbl.pack(side="left")
-            name_lbl = tk.Label(row, text=f" {rel:<60}",
-                                font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
-            name_lbl.pack(side="left")
-            date_lbl = tk.Label(row, text=f" {mt:<15}",
-                                font=(FONT, 7), fg=DIM, bg=BG, anchor="w")
-            date_lbl.pack(side="left")
-            size_lbl = tk.Label(row, text=f" {sz:>8}",
-                                font=(FONT, 7), fg=DIM, bg=BG, anchor="e")
-            size_lbl.pack(side="left")
-            tk.Frame(row, bg=DIM2, height=1).pack(side="bottom", fill="x")
-
-            labels = (sec_lbl, name_lbl, date_lbl, size_lbl)
-
-            def _enter(_e=None, labels=labels):
-                for l in labels:
-                    try: l.configure(bg=BG3)
-                    except tk.TclError: pass
-                try: name_lbl.configure(fg=WHITE)
-                except tk.TclError: pass
-            def _leave(_e=None, labels=labels):
-                for l in labels:
-                    try: l.configure(bg=BG)
-                    except tk.TclError: pass
-                try: name_lbl.configure(fg=DIM)
-                except tk.TclError: pass
-
-            for w in (row, *labels):
-                w.bind("<Enter>", _enter)
-                w.bind("<Leave>", _leave)
-                w.bind("<Button-1>", lambda e, p=r: self._open_file(p))
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("data_reports")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     def _procs(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> PROCS"); self.h_stat.configure(text="MANAGE", fg=GREEN)
-        self.f_lbl.configure(text="ESC back  |  R refresh")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-r>", self._procs)
-
-        _outer, body = self._ui_page_shell("PROCESSES", "Running engine processes and control actions", content_width=820)
-        panel = self._ui_panel_frame(body, "PROCESS CONTROL", "Live engines currently registered in the local process index")
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("processes")
         try:
-            from core.proc import list_procs, stop_proc
-            ps = [p for p in list_procs() if p.get("alive")]
+            self.focus_set()
         except Exception:
-            ps = []
-            stop_proc = None  # type: ignore
-        if not ps:
-            self._ui_note(panel, "No engines running.", fg=DIM)
-
-        def _safe_stop(pid):
-            """stop_proc can raise on dead PIDs or permission errors — catch
-            everything and re-render so the list stays in sync."""
-            if pid is None or stop_proc is None:
-                return
-            try:
-                stop_proc(int(pid))
-            except Exception as e:
-                self.h_stat.configure(text=f"STOP FAILED: {str(e)[:30]}", fg=RED)
-            self.after(200, self._procs)
-
-        for p in ps:
-            row = tk.Frame(panel, bg=BG3); row.pack(fill="x", padx=14, pady=2)
-            tk.Label(row, text=f" {p.get('engine','?').upper()} ", font=(FONT, 8, "bold"), fg=BG, bg=GREEN).pack(side="left")
-            tk.Label(row, text=f"  PID {p.get('pid','?')}", font=(FONT, 9), fg=WHITE, bg=BG3, padx=6, pady=4).pack(side="left")
-            tk.Button(row, text="STOP", font=(FONT, 7, "bold"), fg=RED, bg=BG3, border=0, cursor="hand2",
-                      command=lambda pid=p.get("pid"): _safe_stop(pid)).pack(side="right", padx=4, pady=2)
-        self._ui_back_row(panel, lambda: self._menu("main"))
+            pass
 
     def _config(self):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text="> SETTINGS"); self.h_stat.configure(text="CONFIG", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("settings")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
-        _outer, body = self._ui_page_shell("SETTINGS", "Configuration surfaces for credentials, deploy and operator defaults")
-        panel = self._ui_panel_frame(body, "CONFIGURATION ROUTER", "Editable and planned configuration modules")
-
-        cfgs = [
-            ("API KEYS",           "Exchange & broker credentials",      self._cfg_keys,  True),
-            ("MACRO BRAIN APIS",   "FRED, NewsAPI (data sources)",       self._cfg_macro_keys, True),
-            ("TELEGRAM",           "Bot token & chat ID",                self._cfg_tg,    True),
-            ("RISK PARAMETERS",    "Account size, max risk, leverage",   None,            False),
-            ("STRATEGY DEFAULTS",  "Timeframes, symbols, baskets",      None,            False),
-            ("DISPLAY",            "Theme, font size, ticker symbols",   None,            False),
-            ("DATA DIRECTORY",     "Where reports & logs are stored",    None,            False),
-            ("VPS / DEPLOY",       "Remote server SSH connection",       self._cfg_vps,   True),
-            ("BACKUP / RESTORE",   "Export/import all settings",         None,            False),
-        ]
-        for i, (name, desc, cmd, available) in enumerate(cfgs):
-            self._ui_action_row(
-                panel, str(i + 1), name, desc,
-                command=cmd if available else None,
-                available=available,
-                tag=None if available else "COMING SOON",
-                tag_fg=DIM, tag_bg=BG2, title_width=20,
-            )
-            if cmd and available:
-                self._kb(f"<Key-{i+1}>", cmd)
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
-        # <Key-0> is already bound at the top of _config; no rebind here.
-
-    # ─── CONFIG EDITORS ──────────────────────────────────
+    # --- CONFIG EDITORS ----------------------------------
     def _cfg_edit(self, title, fields, load_fn, save_fn, back_fn=None):
         back = back_fn or self._config
         self._clr(); self._clear_kb()
@@ -8588,6 +5251,26 @@ class App(tk.Tk):
         self._ui_note(panel, "CTRL+S saves immediately to the local configuration store.", fg=DIM)
 
     def _load_json(self, name):
+        # keys.json: se store criptografado existir, usa load_runtime_keys
+        # (encrypted-first) pra nao ler plaintext stale divergente.
+        if name == "keys.json":
+            enc_path = ROOT / "config" / "keys.json.enc"
+            if enc_path.exists():
+                try:
+                    from core.risk.key_store import load_runtime_keys, KeyStoreError
+                    # Forca fail-closed ignorando AURUM_ALLOW_PLAINTEXT_KEYS.
+                    # Se o operador quer editar via launcher, tem que rodar
+                    # encrypt_keys.py e passar AURUM_KEY_PASSWORD — nunca
+                    # cair em plaintext stale enquanto enc existe.
+                    return load_runtime_keys(
+                        allow_plaintext_env="_LAUNCHER_NEVER_PLAINTEXT_"
+                    )
+                except KeyStoreError:
+                    runtime_health.record("launcher.keys_locked")
+                    return {}
+                except Exception:
+                    runtime_health.record("launcher.config_load_failure")
+                    return {}
         p = ROOT / "config" / name
         if p.exists():
             try:
@@ -8597,6 +5280,16 @@ class App(tk.Tk):
         return {}
 
     def _save_json(self, name, data):
+        # Bloqueia edicao de keys.json em modo encrypted pra nao criar divergencia
+        # silenciosa entre plaintext (launcher) e keys.json.enc (engines/live).
+        if name == "keys.json":
+            enc_path = ROOT / "config" / "keys.json.enc"
+            if enc_path.exists():
+                runtime_health.record("launcher.config_save_blocked_encrypted")
+                raise RuntimeError(
+                    "config/keys.json.enc esta ativo; edicao pelo launcher foi bloqueada. "
+                    "Use tools/maintenance/encrypt_keys.py pra atualizar o store criptografado."
+                )
         p = ROOT / "config" / name; p.parent.mkdir(parents=True, exist_ok=True)
         try:
             atomic_write_json(p, data, indent=4)
@@ -8667,7 +5360,7 @@ class App(tk.Tk):
             ("dns","DNS","1.1.1.1",False),
         ], lambda: self._load_json("vpn.json"), lambda v: self._save_json("vpn.json", v))
 
-    # ─── CRYPTO FUTURES DASHBOARD ─────────────────────────
+    # --- CRYPTO FUTURES DASHBOARD -------------------------
     def _crypto_dashboard(self):
         """Bloomberg-style dashboard for the crypto futures market.
         Runs all HTTP fetches in a worker thread, refreshes every 30s,
@@ -8679,7 +5372,7 @@ class App(tk.Tk):
 
         # Lazy imports — fail soft if a module is missing
         try:
-            from core.market_data import MarketDataFetcher
+            from core.data.market_data import MarketDataFetcher
             from config.params import SYMBOLS as _SYMS
         except Exception as e:
             tk.Label(self.main, text=f"Erro ao iniciar dashboard: {e}",
@@ -8712,6 +5405,7 @@ class App(tk.Tk):
         self._dash_cockpit_snap: dict = {}
         self._dash_cockpit_stream = None      # subprocess.Popen handle while streaming
         self._dash_cockpit_streaming = False  # bool
+        self._dash_cockpit_stream_pending = False
 
         # Navigation
         self._kb("<Escape>", self._dash_exit_to_markets)
@@ -8738,13 +5432,13 @@ class App(tk.Tk):
 
         # Mark this market active so the rest of the app sees the choice
         try:
-            _conn.active_market = "crypto_futures"
+            _get_conn().active_market = "crypto_futures"
         except Exception: pass
 
         # First tab render kicks off its own fetch loop
         self._dash_render_tab("home")
 
-    # ── DASHBOARD: SIDEBAR ────────────────────────────────
+    # -- DASHBOARD: SIDEBAR --------------------------------
     def _dash_build_sidebar(self, parent):
         """CS 1.6 style sidebar — connection status only, no balance placeholders.
         Two sections: DATA FEEDS (exchanges) and ACCOUNTS (paper/testnet/demo/live)."""
@@ -8759,9 +5453,10 @@ class App(tk.Tk):
         # === DATA FEEDS ===
         section("DATA FEEDS")
 
-        exchanges = MARKETS.get("crypto_futures", {}).get("exchanges", [])
+        _CM, _MARKETS = _lazy_connections()
+        exchanges = _MARKETS.get("crypto_futures", {}).get("exchanges", [])
         for ex_key in exchanges:
-            info = _conn.get(ex_key) or {}
+            info = _get_conn().get(ex_key) or {}
             label = info.get("label", ex_key).upper().replace("BINANCE ", "BINANCE\n")
             is_conn = info.get("connected", False)
 
@@ -8838,7 +5533,7 @@ class App(tk.Tk):
         # === MARKET footer ===
         tk.Frame(parent, bg=PANEL).pack(fill="both", expand=True)
         tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
-        st = _conn.status_summary()
+        st = _get_conn().status_summary()
         tk.Label(parent, text=f"market: {st['market']}",
                  font=(FONT, 7), fg=AMBER_D, bg=PANEL,
                  anchor="w").pack(fill="x", padx=10, pady=(4, 0))
@@ -8867,7 +5562,7 @@ class App(tk.Tk):
         def loop():
             while getattr(self, "_dash_alive", False):
                 try:
-                    lat = _conn.ping("binance_futures")
+                    lat = _get_conn().ping("binance_futures")
                 except Exception:
                     lat = None
                 def apply(lat=lat):
@@ -8897,7 +5592,7 @@ class App(tk.Tk):
 
         threading.Thread(target=loop, daemon=True).start()
 
-    # ── DASHBOARD: MAIN COLUMN ────────────────────────────
+    # -- DASHBOARD: MAIN COLUMN ----------------------------
     def _dash_section_header(self, parent, text):
         head = tk.Frame(parent, bg=BG)
         head.pack(fill="x", pady=(0, 3))
@@ -8923,7 +5618,7 @@ class App(tk.Tk):
             pct_l   = tk.Label(row, text="—", font=(FONT, 9),
                                fg=DIM, bg=BG, width=10, anchor="w")
             pct_l.pack(side="left")
-            bar_l   = tk.Label(row, text="░" * 10, font=(FONT, 9),
+            bar_l   = tk.Label(row, text="¦" * 10, font=(FONT, 9),
                                fg=DIM, bg=BG, anchor="w")
             bar_l.pack(side="left")
             extra_l = tk.Label(row, text="", font=(FONT, 8),
@@ -9009,7 +5704,7 @@ class App(tk.Tk):
                 w.bind("<Enter>", lambda e, x=l: x.configure(fg=AMBER))
                 w.bind("<Leave>", lambda e, x=l: x.configure(fg=DIM))
 
-    # ── DASHBOARD: ASYNC FETCH + APPLY ────────────────────
+    # -- DASHBOARD: ASYNC FETCH + APPLY --------------------
     def _dash_fetch_async(self):
         """Run market data fetch + ping in a daemon thread, then post results to UI."""
         if not getattr(self, "_dash_alive", False):
@@ -9021,11 +5716,11 @@ class App(tk.Tk):
             except Exception:
                 pass
             try:
-                self._dash_latency = _conn.ping("binance_futures")
+                self._dash_latency = _get_conn().ping("binance_futures")
             except Exception:
                 self._dash_latency = None
             try:
-                self._dash_balance = _conn.get_balance("binance_futures")
+                self._dash_balance = _get_conn().get_balance("binance_futures")
             except Exception:
                 self._dash_balance = None
             if getattr(self, "_dash_alive", False):
@@ -9050,13 +5745,13 @@ class App(tk.Tk):
         tickers = snap["tickers"]
         fng     = snap["fear_greed"]
 
-        # ── header status ──
+        # -- header status --
         if tickers:
             self.h_stat.configure(text="LIVE", fg=GREEN)
         else:
             self.h_stat.configure(text="OFFLINE", fg=RED)
 
-        # ── sidebar: binance status + latency ──
+        # -- sidebar: binance status + latency --
         bf_status = self._dash_widgets.get(("ex_status", "binance_futures"))
         bf_lat    = self._dash_widgets.get(("ex_latency", "binance_futures"))
         bf_name   = self._dash_widgets.get(("ex_name", "binance_futures"))
@@ -9071,7 +5766,7 @@ class App(tk.Tk):
 
         # Balance/wallets widgets were removed from the sidebar — nothing to update.
 
-        # ── market overview rows ──
+        # -- market overview rows --
         for sym in self._dash_symbols:
             w = self._dash_widgets.get(("ticker", sym))
             if not w:
@@ -9084,17 +5779,17 @@ class App(tk.Tk):
                 w["pct"].configure(text=f"{sign}{t['pct']:.2f}%", fg=color)
                 clamp = max(-1.0, min(1.0, t["pct"] / 5.0))
                 n_filled = int(round((clamp + 1) / 2 * 10))
-                w["bar"].configure(text="█" * n_filled + "░" * (10 - n_filled), fg=color)
+                w["bar"].configure(text="¦" * n_filled + "¦" * (10 - n_filled), fg=color)
                 vol_b = t["vol"] / 1e9
                 extra = f"vol24h ${vol_b:.2f}B" if vol_b >= 1 else f"vol24h ${t['vol']/1e6:.0f}M"
                 w["extra"].configure(text=extra, fg=DIM)
             else:
                 w["price"].configure(text="—", fg=DIM)
                 w["pct"].configure(text="offline", fg=DIM)
-                w["bar"].configure(text="░" * 10, fg=DIM)
+                w["bar"].configure(text="¦" * 10, fg=DIM)
                 w["extra"].configure(text="")
 
-        # ── top movers ──
+        # -- top movers --
         sorted_t = sorted(tickers.items(), key=lambda kv: kv[1]["pct"], reverse=True)
         up3 = sorted_t[:3]
         dn3 = sorted_t[-3:][::-1] if len(sorted_t) >= 3 else []
@@ -9114,13 +5809,13 @@ class App(tk.Tk):
         if up_l: up_l.configure(text=_fmt_movers(up3, "↑"))
         if dn_l: dn_l.configure(text=_fmt_movers(dn3, "↓"))
 
-        # ── sentimento ──
+        # -- sentimento --
         fng_l = self._dash_widgets.get(("fng",))
         if fng_l:
             if fng:
                 v = fng["value"]; c = fng["classification"]
                 n_filled = max(0, min(10, int(round(v / 10))))
-                bar = "█" * n_filled + "░" * (10 - n_filled)
+                bar = "¦" * n_filled + "¦" * (10 - n_filled)
                 color = GREEN if v >= 60 else (RED if v <= 40 else AMBER)
                 fng_l.configure(text=f"Fear & Greed: {v} ({c})  {bar}", fg=color)
             else:
@@ -9150,7 +5845,7 @@ class App(tk.Tk):
             else:
                 ls_l.configure(text="Long/Short Ratio: —", fg=DIM)
 
-        # ── footer summary ──
+        # -- footer summary --
         btc_t = tickers.get("BTCUSDT")
         btc_str = f"BTC ${btc_t['price']:,.0f}" if btc_t else "BTC —"
         fng_str = f"Fear {fng['value']}" if fng else "Fear —"
@@ -9162,7 +5857,7 @@ class App(tk.Tk):
                   f"ESC voltar  R refresh")
         )
 
-        # ── schedule next market refresh (only while still on this tab) ──
+        # -- schedule next market refresh (only while still on this tab) --
         if getattr(self, "_dash_alive", False) and getattr(self, "_dash_tab", "market") == "market":
             aid = getattr(self, "_dash_after_id", None)
             if aid:
@@ -9212,11 +5907,11 @@ class App(tk.Tk):
         elif tab == "cockpit":
             self._dash_cockpit_fetch_async()
 
-    # ── DASHBOARD: TABS (MARKET / PORTFOLIO / TRADES / ENGINES) ──
+    # -- DASHBOARD: TABS (MARKET / PORTFOLIO / TRADES / ENGINES) --
     def _get_portfolio_monitor(self):
         pm = getattr(self, "_dash_pm", None)
         if pm is None:
-            from core.portfolio_monitor import PortfolioMonitor
+            from core.ui.portfolio_monitor import PortfolioMonitor
             pm = PortfolioMonitor()
             self._dash_pm = pm
         return pm
@@ -9301,442 +5996,26 @@ class App(tk.Tk):
             self._dash_build_cockpit_tab(self._dash_inner)
             self._dash_cockpit_fetch_async()
 
-    # ── PORTFOLIO TAB ─────────────────────────────────────
+    # -- PORTFOLIO TAB -------------------------------------
     def _dash_build_portfolio_tab(self, parent):
-        pm = self._get_portfolio_monitor()
-
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True)
-
-        # Inner accounts column
-        col = tk.Frame(wrap, bg=PANEL, width=170); col.pack(side="left", fill="y")
-        col.pack_propagate(False)
-
-        tk.Label(col, text=" ACCOUNTS ", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=10, pady=(10, 4))
-        tk.Frame(col, bg=DIM2, height=1).pack(fill="x", padx=10)
-
-        accounts = [
-            ("testnet", "TESTNET", GREEN),
-            ("demo",    "DEMO",    AMBER),
-            ("live",    "LIVE",    RED),
-            ("paper",   "PAPER",   DIM),
-        ]
-        self._dash_widgets[("portfolio_account_btns",)] = {}
-        for acc_id, label, color in accounts:
-            status = pm.status(acc_id)
-            row = tk.Frame(col, bg=PANEL, cursor="hand2")
-            row.pack(fill="x", padx=8, pady=(6, 0))
-            icon = "●" if status in ("live", "paper") else "○"
-            icon_color = color if status in ("live", "paper") else DIM
-
-            top_l = tk.Label(row, text=f"{icon} {label}", font=(FONT, 9, "bold"),
-                             fg=WHITE if status in ("live", "paper") else DIM,
-                             bg=PANEL, anchor="w")
-            top_l.pack(fill="x")
-            tk.Label(row, text=icon, font=(FONT, 7), fg=icon_color,
-                     bg=PANEL).place(in_=top_l, x=-2, y=2)
-
-            sub_l = tk.Label(row, text="…",
-                             font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w")
-            sub_l.pack(fill="x")
-            self._dash_widgets[("portfolio_account_btns",)][acc_id] = (row, top_l, sub_l)
-
-            def _click(_e=None, a=acc_id):
-                self._dash_portfolio_account = a
-                self._dash_portfolio_fetch_async()
-                self._dash_portfolio_repaint_account_btns()
-            for w in (row, top_l, sub_l):
-                w.bind("<Button-1>", _click)
-                w.bind("<Enter>", lambda e, l=top_l, s=status:
-                       l.configure(fg=AMBER))
-                w.bind("<Leave>", lambda e, l=top_l, s=status:
-                       l.configure(fg=WHITE if s in ("live", "paper") else DIM))
-
-        self._dash_portfolio_repaint_account_btns()
-
-        # Right details panel — built/refreshed by _dash_portfolio_render
-        details = tk.Frame(wrap, bg=BG)
-        details.pack(side="left", fill="both", expand=True, padx=12, pady=10)
-        self._dash_widgets[("portfolio_details",)] = details
-
-        # Cached-first: if we have a snapshot for the active account, render it
-        # immediately instead of showing a "Loading..." placeholder. The async
-        # refresh will replace it as soon as fresh data arrives.
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        if pm.get_cached(mode) is not None:
-            # Defer render so the details frame is fully packed first
-            self.after(0, self._dash_portfolio_render)
-        else:
-            tk.Label(details, text="Loading account…",
-                     font=(FONT, 9), fg=DIM, bg=BG).pack(pady=20)
+        from launcher_support.screens.dash_portfolio import build_portfolio_tab
+        return build_portfolio_tab(self, parent)
 
     def _dash_portfolio_repaint_account_btns(self):
-        btns = self._dash_widgets.get(("portfolio_account_btns",)) or {}
-        active = getattr(self, "_dash_portfolio_account", "paper")
-        pm = self._get_portfolio_monitor()
-        for acc_id, (row, top_l, sub_l) in btns.items():
-            cached = pm.get_cached(acc_id) or {}
-            status = pm.status(acc_id)
-            if status == "no_keys":
-                sub_l.configure(text="sem keys", fg=DIM)
-            elif status == "paper":
-                eq = cached.get("equity", 0) or 0
-                sub_l.configure(text=f"${eq:,.0f}", fg=AMBER_D)
-            else:
-                eq = cached.get("equity")
-                if eq is None:
-                    sub_l.configure(text="…", fg=DIM)
-                else:
-                    sub_l.configure(text=f"${eq:,.2f}", fg=GREEN)
-            row.configure(bg=BG3 if acc_id == active else PANEL)
-            top_l.configure(bg=BG3 if acc_id == active else PANEL)
-            sub_l.configure(bg=BG3 if acc_id == active else PANEL)
+        from launcher_support.screens.dash_portfolio import repaint_account_btns
+        return repaint_account_btns(self)
 
     def _dash_portfolio_fetch_async(self):
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "market") != "portfolio":
-            return
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        pm = self._get_portfolio_monitor()
-
-        def worker():
-            try:
-                pm.refresh(mode)
-            except Exception:
-                pass
-            if getattr(self, "_dash_alive", False):
-                try: self.after(0, self._dash_portfolio_render)
-                except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        from launcher_support.screens.dash_portfolio import portfolio_fetch_async
+        return portfolio_fetch_async(self)
 
     def _dash_portfolio_render(self):
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "market") != "portfolio":
-            return
-
-        pm = self._get_portfolio_monitor()
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        data = pm.get_cached(mode) or {}
-        details = self._dash_widgets.get(("portfolio_details",))
-        if details is None:
-            return
-        try:
-            if not details.winfo_exists():
-                return
-        except Exception:
-            return
-
-        for w in details.winfo_children():
-            try: w.destroy()
-            except Exception: pass
-
-        self._dash_portfolio_repaint_account_btns()
-
-        status = data.get("status", pm.status(mode))
-
-        # Empty / no-keys placeholder
-        if status == "no_keys":
-            box = tk.Frame(details, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1)
-            box.pack(pady=24, padx=20, ipadx=24, ipady=20)
-            tk.Label(box, text=mode.upper(), font=(FONT, 14, "bold"),
-                     fg=AMBER, bg=PANEL).pack(pady=(0, 10))
-            tk.Label(box, text="○ Sem API keys configuradas",
-                     font=(FONT, 9), fg=DIM, bg=PANEL).pack(pady=2)
-            tk.Label(box, text="Configura em:", font=(FONT, 8),
-                     fg=DIM, bg=PANEL).pack(pady=(8, 2))
-            tk.Label(box, text=f"SETTINGS > API KEYS > {mode.upper()}",
-                     font=(FONT, 8, "bold"), fg=AMBER_D, bg=PANEL).pack(pady=(0, 10))
-            btn = tk.Label(box, text=" IR PARA SETTINGS ",
-                           font=(FONT, 9, "bold"), fg=BG, bg=AMBER,
-                           cursor="hand2", padx=12, pady=4)
-            btn.pack(pady=(8, 0))
-            btn.bind("<Button-1>", lambda e: self._config())
-            self._dash_after_id = self.after(15000, self._dash_tick_refresh)
-            return
-
-        # === Header card ===
-        head = tk.Frame(details, bg=PANEL,
-                        highlightbackground=BORDER, highlightthickness=1)
-        head.pack(fill="x", pady=(0, 8))
-        head_title = " PAPER · simulated " if mode == "paper" else f" {mode.upper()} · Binance Futures "
-        tk.Label(head, text=head_title,
-                 font=(FONT, 8, "bold"), fg=BG, bg=AMBER).pack(side="left", padx=8, pady=4)
-
-        # Paper-only: EDIT button opens editable-state dialog
-        if mode == "paper":
-            edit_btn = tk.Label(head, text=" EDIT ",
-                                font=(FONT, 7, "bold"),
-                                fg=BG, bg=AMBER_D, cursor="hand2",
-                                padx=6, pady=2)
-            edit_btn.pack(side="right", padx=(0, 8), pady=4)
-            edit_btn.bind("<Button-1>", lambda e: self._dash_paper_edit_dialog())
-            edit_btn.bind("<Enter>", lambda e, b=edit_btn: b.configure(bg=AMBER))
-            edit_btn.bind("<Leave>", lambda e, b=edit_btn: b.configure(bg=AMBER_D))
-            # Show last-modified timestamp
-            lm = data.get("last_modified", "")
-            if lm:
-                try: lm = lm.split("T")[0] + "  " + lm.split("T")[1][:8]
-                except Exception: pass
-                tk.Label(head, text=f"modified: {lm}",
-                         font=(FONT, 7), fg=DIM2, bg=PANEL,
-                         anchor="e").pack(side="right", padx=(0, 8))
-
-        balance = float(data.get("balance", 0) or 0)
-        equity  = float(data.get("equity", 0) or 0)
-        unr     = float(data.get("unrealized_pnl", 0) or 0)
-        today   = float(data.get("today_pnl", 0) or 0)
-        m_used  = float(data.get("margin_used", 0) or 0)
-        m_free  = float(data.get("margin_free", 0) or 0)
-        unr_color = GREEN if unr >= 0 else RED
-        today_color = GREEN if today >= 0 else RED
-        margin_pct = (m_used / equity * 100) if equity > 0 else 0
-
-        grid = tk.Frame(head, bg=PANEL); grid.pack(fill="x", padx=12, pady=8)
-        cells = [
-            ("Balance", f"${balance:,.2f}", WHITE),
-            ("Equity",  f"${equity:,.2f}",  WHITE),
-            ("Unreal",  f"{'+'  if unr >= 0 else ''}${unr:,.2f}", unr_color),
-            ("Today",   f"{'+'  if today >= 0 else ''}${today:,.2f}", today_color),
-            ("Margin",  f"${m_used:,.0f}  ({margin_pct:.0f}%)", AMBER_D),
-            ("Free",    f"${m_free:,.2f}", DIM),
-        ]
-        for i, (lbl, val, col) in enumerate(cells):
-            cell = tk.Frame(grid, bg=PANEL)
-            cell.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 18), pady=2)
-            tk.Label(cell, text=lbl, font=(FONT, 7), fg=DIM, bg=PANEL,
-                     anchor="w").pack(anchor="w")
-            tk.Label(cell, text=val, font=(FONT, 10, "bold"),
-                     fg=col, bg=PANEL, anchor="w").pack(anchor="w")
-
-        # === Open positions ===
-        positions = data.get("positions") or []
-        pos_box = tk.Frame(details, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1)
-        pos_box.pack(fill="x", pady=(0, 8))
-        tk.Label(pos_box, text=f" POSIÇÕES ABERTAS ({len(positions)}) ",
-                 font=(FONT, 8, "bold"), fg=AMBER, bg=PANEL,
-                 anchor="w").pack(fill="x", padx=8, pady=(6, 2))
-        tk.Frame(pos_box, bg=DIM2, height=1).pack(fill="x", padx=8)
-        if not positions:
-            tk.Label(pos_box, text="  (no open positions)",
-                     font=(FONT, 8), fg=DIM, bg=PANEL,
-                     anchor="w").pack(fill="x", padx=8, pady=4)
-        else:
-            for p in positions[:8]:
-                pl = float(p.get("pnl", 0) or 0)
-                pl_col = GREEN if pl >= 0 else RED
-                row = tk.Frame(pos_box, bg=PANEL); row.pack(fill="x", padx=8, pady=1)
-                tk.Label(row, text=p.get("symbol", "?"), font=(FONT, 9, "bold"),
-                         fg=AMBER, bg=PANEL, width=12, anchor="w").pack(side="left")
-                tk.Label(row, text=p.get("side", "?"), font=(FONT, 8),
-                         fg=WHITE, bg=PANEL, width=6, anchor="w").pack(side="left")
-                tk.Label(row, text=f"size {p.get('size', 0):.4f}", font=(FONT, 8),
-                         fg=DIM, bg=PANEL, width=14, anchor="w").pack(side="left")
-                tk.Label(row, text=f"@ {p.get('entry', 0):,.4f}", font=(FONT, 8),
-                         fg=DIM, bg=PANEL, width=16, anchor="w").pack(side="left")
-                tk.Label(row, text=f"PnL {'+' if pl >= 0 else ''}${pl:,.2f}",
-                         font=(FONT, 9, "bold"), fg=pl_col, bg=PANEL,
-                         anchor="w").pack(side="left")
-            tk.Frame(pos_box, bg=PANEL, height=4).pack()
-
-        # === Equity curve canvas (paper account or income-based) ===
-        eq_curve = data.get("equity_curve") or []
-        if not eq_curve and data.get("income_7d"):
-            # Build a cumulative curve out of income history
-            cum = float(data.get("equity", 0) or 0)
-            eq_curve = []
-            running = 0.0
-            for row in data["income_7d"]:
-                try:
-                    running += float(row.get("income", 0) or 0)
-                    eq_curve.append(round(cum - running, 2))
-                except (TypeError, ValueError):
-                    continue
-            eq_curve.reverse()
-            if eq_curve:
-                eq_curve.append(cum)
-
-        eq_box = tk.Frame(details, bg=PANEL,
-                          highlightbackground=BORDER, highlightthickness=1)
-        eq_box.pack(fill="x", pady=(0, 8))
-        tk.Label(eq_box, text=" EQUITY CURVE ", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=8, pady=(6, 2))
-        tk.Frame(eq_box, bg=DIM2, height=1).pack(fill="x", padx=8)
-        canvas = tk.Canvas(eq_box, bg=PANEL, height=140,
-                           highlightthickness=0, bd=0)
-        canvas.pack(fill="x", padx=8, pady=(4, 6))
-        canvas.bind("<Configure>",
-                    lambda e, c=canvas, eq=eq_curve:
-                    self._dash_draw_equity_canvas(c, eq))
-
-        # === Recent trades ===
-        recent = (data.get("recent_trades") or [])[:5]
-        rb = tk.Frame(details, bg=PANEL,
-                      highlightbackground=BORDER, highlightthickness=1)
-        rb.pack(fill="x", pady=(0, 8))
-        tk.Label(rb, text=" ÚLTIMOS 5 TRADES ", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=8, pady=(6, 2))
-        tk.Frame(rb, bg=DIM2, height=1).pack(fill="x", padx=8)
-        if not recent:
-            tk.Label(rb, text="  (no trade history)",
-                     font=(FONT, 8), fg=DIM, bg=PANEL, anchor="w"
-                     ).pack(fill="x", padx=8, pady=4)
-        else:
-            for i, t in enumerate(recent):
-                pnl = float(t.get("pnl", 0) or 0)
-                col = GREEN if pnl >= 0 else RED
-                sym  = t.get("symbol", "?")
-                side = t.get("direction") or t.get("side") or t.get("buyer", "?")
-                if isinstance(side, bool):
-                    side = "BUY" if side else "SELL"
-                result = t.get("result", "")
-                row = tk.Frame(rb, bg=PANEL); row.pack(fill="x", padx=8, pady=1)
-                tk.Label(row, text=f"#{i + 1}", font=(FONT, 8),
-                         fg=DIM, bg=PANEL, width=4).pack(side="left")
-                tk.Label(row, text=sym.replace("USDT", ""),
-                         font=(FONT, 9, "bold"), fg=AMBER, bg=PANEL,
-                         width=8, anchor="w").pack(side="left")
-                tk.Label(row, text=str(side)[:5], font=(FONT, 8),
-                         fg=WHITE, bg=PANEL, width=6, anchor="w").pack(side="left")
-                tk.Label(row, text=str(result), font=(FONT, 8),
-                         fg=col, bg=PANEL, width=6, anchor="w").pack(side="left")
-                tk.Label(row, text=f"{'+' if pnl >= 0 else ''}${pnl:,.2f}",
-                         font=(FONT, 9, "bold"), fg=col, bg=PANEL, width=12,
-                         anchor="w").pack(side="left")
-            tk.Frame(rb, bg=PANEL, height=4).pack()
-
-        # === Rolling metrics (paper summary if available) ===
-        summary = data.get("summary") or {}
-        if summary:
-            mb = tk.Frame(details, bg=PANEL,
-                          highlightbackground=BORDER, highlightthickness=1)
-            mb.pack(fill="x", pady=(0, 4))
-            tk.Label(mb, text=" MÉTRICAS ", font=(FONT, 8, "bold"),
-                     fg=AMBER, bg=PANEL, anchor="w").pack(fill="x", padx=8, pady=(6, 2))
-            tk.Frame(mb, bg=DIM2, height=1).pack(fill="x", padx=8)
-            cells = [
-                ("WR",     f"{summary.get('win_rate', 0):.1f}%"),
-                ("Sharpe", f"{summary.get('sharpe', 0) or 0:.2f}"),
-                ("Sortino",f"{summary.get('sortino', 0) or 0:.2f}"),
-                ("MaxDD",  f"{summary.get('max_dd_pct', 0):.1f}%"),
-                ("Trades", str(summary.get('n_trades', 0))),
-                ("PnL",    f"${summary.get('pnl', 0) or 0:,.2f}"),
-            ]
-            grid = tk.Frame(mb, bg=PANEL); grid.pack(fill="x", padx=12, pady=8)
-            for i, (lbl, val) in enumerate(cells):
-                cell = tk.Frame(grid, bg=PANEL)
-                cell.grid(row=0, column=i, sticky="w", padx=(0, 18))
-                tk.Label(cell, text=lbl, font=(FONT, 7), fg=DIM, bg=PANEL,
-                         anchor="w").pack(anchor="w")
-                tk.Label(cell, text=val, font=(FONT, 9, "bold"),
-                         fg=WHITE, bg=PANEL, anchor="w").pack(anchor="w")
-
-        # === RUNNING ENGINES (controls) ===
-        try:
-            from core.proc import list_procs, stop_proc
-            procs = list_procs()
-        except Exception:
-            procs = []
-
-        eb = tk.Frame(details, bg=PANEL,
-                      highlightbackground=BORDER, highlightthickness=1)
-        eb.pack(fill="x", pady=(0, 8))
-
-        eb_head = tk.Frame(eb, bg=PANEL); eb_head.pack(fill="x", padx=8, pady=(6, 2))
-        tk.Label(eb_head, text=f" RUNNING ENGINES ({sum(1 for p in procs if p.get('alive'))}) ",
-                 font=(FONT, 8, "bold"), fg=AMBER, bg=PANEL,
-                 anchor="w").pack(side="left")
-        start_btn = tk.Label(eb_head, text=" + START NEW ",
-                             font=(FONT, 7, "bold"),
-                             fg=BG, bg=AMBER, cursor="hand2",
-                             padx=6, pady=2)
-        start_btn.pack(side="right")
-        def _goto_strategies(_e=None):
-            self._dash_alive = False
-            self._menu("strategies")
-        for w in (start_btn,):
-            w.bind("<Button-1>", _goto_strategies)
-            w.bind("<Enter>", lambda e, b=start_btn: b.configure(bg=AMBER_B))
-            w.bind("<Leave>", lambda e, b=start_btn: b.configure(bg=AMBER))
-        tk.Frame(eb, bg=DIM2, height=1).pack(fill="x", padx=8)
-
-        engines_known = [
-            "backtest", "live", "arb", "newton", "mercurio",
-            "thoth", "prometeu", "darwin", "chronos", "multi",
-        ]
-        seen: dict[str, dict] = {}
-        for p in procs:
-            seen[p.get("engine", "?")] = p
-
-        any_running = False
-        for eng in engines_known:
-            info = seen.get(eng)
-            is_alive = bool(info and info.get("alive"))
-            if not is_alive:
-                continue  # skip stopped engines — keep UI clean
-            any_running = True
-
-            row = tk.Frame(eb, bg=PANEL); row.pack(fill="x", padx=8, pady=2)
-            tk.Label(row, text="●", font=(FONT, 9, "bold"),
-                     fg=GREEN, bg=PANEL, width=2).pack(side="left")
-            tk.Label(row, text=eng.upper(), font=(FONT, 9, "bold"),
-                     fg=AMBER, bg=PANEL, width=12,
-                     anchor="w").pack(side="left")
-            pid = info.get("pid", 0)
-            started = str(info.get("started", ""))[:19].replace("T", " ")
-            tk.Label(row, text=f"PID {pid}", font=(FONT, 7),
-                     fg=DIM, bg=PANEL, width=10,
-                     anchor="w").pack(side="left")
-            tk.Label(row, text=started, font=(FONT, 7),
-                     fg=DIM2, bg=PANEL, anchor="w").pack(side="left", padx=(4, 0))
-
-            stop_l = tk.Label(row, text=" STOP ",
-                              font=(FONT, 7, "bold"),
-                              fg=BG, bg=RED, cursor="hand2", padx=6)
-            stop_l.pack(side="right")
-
-            def _stop(_e=None, p=pid, eng_name=eng):
-                try:
-                    ok = stop_proc(int(p))
-                except Exception:
-                    ok = False
-                self.h_stat.configure(
-                    text=f"{'STOPPED' if ok else 'STOP FAILED'} {eng_name.upper()}",
-                    fg=GREEN if ok else RED)
-                # Re-render portfolio to reflect new proc state
-                self.after(600, self._dash_portfolio_render)
-            stop_l.bind("<Button-1>", _stop)
-            stop_l.bind("<Enter>", lambda e, b=stop_l: b.configure(bg="#ff5050"))
-            stop_l.bind("<Leave>", lambda e, b=stop_l: b.configure(bg=RED))
-
-        if not any_running:
-            tk.Label(eb, text="  ○ no engines running  ·  click START NEW to launch",
-                     font=(FONT, 8), fg=DIM, bg=PANEL,
-                     anchor="w").pack(fill="x", padx=8, pady=4)
-
-        # Footer summary
-        upd = data.get("ts", "")
-        if upd:
-            try:
-                upd = upd.split("T")[1][:8]
-            except Exception:
-                pass
-        self.f_lbl.configure(
-            text=f"PORTFOLIO · {mode.upper()} · upd {upd} · "
-                 f"1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit"
-        )
-
-        # Schedule next refresh
-        if getattr(self, "_dash_alive", False) and self._dash_tab == "portfolio":
-            aid = getattr(self, "_dash_after_id", None)
-            if aid:
-                try: self.after_cancel(aid)
-                except Exception: pass
-            self._dash_after_id = self.after(15000, self._dash_tick_refresh)
+        """Delegate to launcher_support.screens.dash_portfolio.render. Full
+        rendering (header KPIs, positions, equity canvas, trades, metrics,
+        running engines, 15s re-schedule) lives there.
+        """
+        from launcher_support.screens.dash_portfolio import render as _render_dash_portfolio
+        _render_dash_portfolio(self)
 
     def _dash_draw_equity_canvas(self, canvas, eq):
         try:
@@ -9794,491 +6073,41 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    # ── TRADES TAB ─────────────────────────────────────────
+    # -- TRADES TAB -----------------------------------------
     def _dash_build_trades_tab(self, parent):
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=12, pady=10)
-
-        # Filter row
-        filt = tk.Frame(wrap, bg=BG); filt.pack(fill="x", pady=(0, 6))
-        tk.Label(filt, text="FILTROS:", font=(FONT, 8, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left", padx=(0, 6))
-
-        for tag in ("all", "win", "loss"):
-            label = tag.upper()
-            btn = tk.Label(filt, text=f" {label} ", font=(FONT, 8, "bold"),
-                           fg=BG if self._dash_trades_filter["result"] == tag else DIM,
-                           bg=AMBER if self._dash_trades_filter["result"] == tag else BG3,
-                           padx=8, pady=2, cursor="hand2")
-            btn.pack(side="left", padx=2)
-            def _click(_e=None, t=tag):
-                self._dash_trades_filter["result"] = t
-                self._dash_trades_page = 0
-                self._dash_render_tab("trades")
-            btn.bind("<Button-1>", _click)
-
-        tk.Label(filt, text="  Conta:", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left", padx=(10, 4))
-        accs = ("paper", "testnet", "demo", "live")
-        for a in accs:
-            active = self._dash_portfolio_account == a
-            btn = tk.Label(filt, text=f" {a.upper()} ", font=(FONT, 8, "bold"),
-                           fg=BG if active else DIM,
-                           bg=AMBER if active else BG3,
-                           padx=6, pady=2, cursor="hand2")
-            btn.pack(side="left", padx=1)
-            def _aclick(_e=None, x=a):
-                self._dash_portfolio_account = x
-                # Make sure we have data for this account
-                pm = self._get_portfolio_monitor()
-                if pm.get_cached(x) is None:
-                    threading.Thread(target=lambda m=x: pm.refresh(m), daemon=True).start()
-                self._dash_trades_page = 0
-                self._dash_render_tab("trades")
-            btn.bind("<Button-1>", _aclick)
-
-        # Table
-        tbl = tk.Frame(wrap, bg=PANEL,
-                       highlightbackground=BORDER, highlightthickness=1)
-        tbl.pack(fill="both", expand=True)
-        self._dash_widgets[("trades_table",)] = tbl
-
-        # Footer (page nav)
-        nav = tk.Frame(wrap, bg=BG); nav.pack(fill="x", pady=(6, 0))
-        prev_btn = tk.Label(nav, text=" ◄ prev ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
-        prev_btn.pack(side="left", padx=2)
-        prev_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(-1))
-        page_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        page_lbl.pack(side="left", padx=8)
-        next_btn = tk.Label(nav, text=" next ► ", font=(FONT, 8, "bold"),
-                            fg=AMBER, bg=BG3, padx=8, pady=2, cursor="hand2")
-        next_btn.pack(side="left", padx=2)
-        next_btn.bind("<Button-1>", lambda e: self._dash_trades_page_change(+1))
-        stats_lbl = tk.Label(nav, text="", font=(FONT, 8), fg=DIM, bg=BG)
-        stats_lbl.pack(side="right")
-        self._dash_widgets[("trades_page",)]  = page_lbl
-        self._dash_widgets[("trades_stats",)] = stats_lbl
-
-        # Initial render
-        self._dash_trades_render()
+        from launcher_support.screens.dash_trades import build_trades_tab
+        return build_trades_tab(self, parent)
 
     def _dash_trades_page_change(self, delta):
-        self._dash_trades_page = max(0, self._dash_trades_page + delta)
-        self._dash_trades_render()
+        from launcher_support.screens.dash_trades import trades_page_change
+        return trades_page_change(self, delta)
 
     def _dash_trades_render(self):
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "market") != "trades":
-            return
-        tbl = self._dash_widgets.get(("trades_table",))
-        page_lbl = self._dash_widgets.get(("trades_page",))
-        stats_lbl = self._dash_widgets.get(("trades_stats",))
-        if tbl is None:
-            return
-        try:
-            if not tbl.winfo_exists():
-                return
-        except Exception:
-            return
+        """Delegate to launcher_support.screens.dash_trades.render. Full
+        rendering (filter, pagination, trade table, page/stats labels,
+        30s reschedule) lives there.
+        """
+        from launcher_support.screens.dash_trades import render as _render_dash_trades
+        _render_dash_trades(self)
 
-        for w in tbl.winfo_children():
-            try: w.destroy()
-            except Exception: pass
-
-        pm = self._get_portfolio_monitor()
-        mode = getattr(self, "_dash_portfolio_account", "paper")
-        cached = pm.get_cached(mode)
-        if cached is None:
-            # Background refresh, render placeholder
-            threading.Thread(target=lambda m=mode: pm.refresh(m), daemon=True).start()
-            tk.Label(tbl, text="Loading…", font=(FONT, 9), fg=DIM,
-                     bg=PANEL).pack(pady=20)
-            return
-
-        trades_raw = cached.get("trades") or cached.get("recent_trades") or []
-        trades = []
-        for t in trades_raw:
-            res = t.get("result")
-            if res not in ("WIN", "LOSS"):
-                # Live API trades may not have result; derive sign-of-pnl as proxy
-                pnl = float(t.get("pnl", 0) or 0)
-                res = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else None
-            t = dict(t)
-            t["_result"] = res or "?"
-            trades.append(t)
-
-        # Apply filter
-        f = self._dash_trades_filter["result"]
-        if f == "win":
-            trades = [t for t in trades if t["_result"] == "WIN"]
-        elif f == "loss":
-            trades = [t for t in trades if t["_result"] == "LOSS"]
-
-        # Pagination
-        per_page = 18
-        total = len(trades)
-        pages = max(1, (total + per_page - 1) // per_page)
-        if self._dash_trades_page >= pages:
-            self._dash_trades_page = max(0, pages - 1)
-        page = self._dash_trades_page
-        slice_ = trades[page * per_page:(page + 1) * per_page]
-
-        # Header row
-        hdr = tk.Frame(tbl, bg=BG3); hdr.pack(fill="x")
-        cols = [("#", 4), ("SYMBOL", 12), ("SIDE", 6), ("RSLT", 5),
-                ("PnL", 12), ("R-MULT", 8), ("SCORE", 7), ("TIME", 10)]
-        for label, w in cols:
-            tk.Label(hdr, text=label, font=(FONT, 7, "bold"),
-                     fg=AMBER, bg=BG3, width=w, anchor="w",
-                     padx=4, pady=3).pack(side="left")
-        tk.Frame(tbl, bg=DIM2, height=1).pack(fill="x")
-
-        for i, t in enumerate(slice_):
-            row = tk.Frame(tbl, bg=PANEL); row.pack(fill="x")
-            sym = (t.get("symbol") or "?").replace("USDT", "")
-            side = t.get("direction") or t.get("side") or "?"
-            if isinstance(side, str):
-                side = "LONG" if side.upper() in ("BULLISH", "BUY", "LONG") else "SHORT"
-            res = t["_result"]
-            pnl = float(t.get("pnl", 0) or 0)
-            pnl_col = GREEN if pnl >= 0 else RED
-            entry = float(t.get("entry", 0) or 0)
-            stop  = float(t.get("stop", 0) or 0)
-            exit_p = float(t.get("exit_p", t.get("exit", 0)) or 0)
-            risk = abs(entry - stop)
-            if risk > 0:
-                move = (exit_p - entry) if side == "LONG" else (entry - exit_p)
-                rmult = move / risk
-            else:
-                rmult = 0.0
-            score = float(t.get("score", 0) or 0)
-            tstr  = str(t.get("time", t.get("timestamp", "")))[:10]
-
-            vals = [
-                (str(page * per_page + i + 1), DIM),
-                (sym, AMBER),
-                (side, WHITE),
-                (res, GREEN if res == "WIN" else RED),
-                (f"{'+' if pnl >= 0 else ''}${pnl:,.2f}", pnl_col),
-                (f"{rmult:+.2f}R", GREEN if rmult >= 0 else RED),
-                (f"{score:.2f}" if score else "—", DIM),
-                (tstr, DIM),
-            ]
-            for (val, col), (_, w) in zip(vals, cols):
-                tk.Label(row, text=val, font=(FONT, 8),
-                         fg=col, bg=PANEL, width=w, anchor="w",
-                         padx=4, pady=2).pack(side="left")
-
-        if not slice_:
-            # Context-aware empty state so the user knows WHY the table is empty.
-            if total == 0:
-                if mode == "paper":
-                    empty_msg = ("paper account has no trades yet\n"
-                                 "trades placed in paper mode will appear here")
-                elif cached.get("status") == "no_keys":
-                    empty_msg = (f"{mode.upper()} account has no API keys\n"
-                                 "configure in SETTINGS > API KEYS")
-                else:
-                    empty_msg = f"no trades on {mode.upper()} account (last 50)"
-            else:
-                empty_msg = f"no trades match filter '{f.upper()}'\n(total: {total})"
-            tk.Label(tbl, text=empty_msg, font=(FONT, 8),
-                     fg=DIM, bg=PANEL, justify="center").pack(pady=14)
-
-        if page_lbl:
-            page_lbl.configure(text=f"Página {page + 1}/{pages}")
-        if stats_lbl:
-            wins = sum(1 for t in trades if t["_result"] == "WIN")
-            wr = (wins / total * 100) if total else 0
-            tot_pnl = sum(float(t.get("pnl", 0) or 0) for t in trades)
-            stats_lbl.configure(
-                text=f"Total: {total}  WR {wr:.1f}%  PnL ${tot_pnl:,.0f}")
-
-        self.f_lbl.configure(
-            text=f"TRADES · {mode.upper()} · {total} trades · "
-                 f"1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit")
-
-        if getattr(self, "_dash_alive", False) and self._dash_tab == "trades":
-            aid = getattr(self, "_dash_after_id", None)
-            if aid:
-                try: self.after_cancel(aid)
-                except Exception: pass
-            self._dash_after_id = self.after(30000, self._dash_tick_refresh)
-
-    # ── HOME TAB (personal snapshot) ───────────────────────
+    # -- HOME TAB (personal snapshot) -----------------------
     def _dash_build_home_tab(self, parent):
-        """CS 1.6 style HOME: connection status + account management + engines.
-        No heavy aggregations — only what's immediately actionable.
-        Renders instantly with cached state; background refresh is lightweight."""
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=8)
-
-        # ── HUD header ──
-        hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x")
-        tk.Label(hdr, text="[ HOME ]", font=(FONT, 9, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-        tk.Label(hdr, text="personal control panel",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(side="left", padx=(8, 0))
-        clock_l = tk.Label(hdr, text="", font=(FONT, 7), fg=DIM2, bg=BG)
-        clock_l.pack(side="right")
-        self._dash_widgets[("home_clock",)] = clock_l
-        tk.Frame(wrap, bg=AMBER_D, height=1).pack(fill="x", pady=(2, 8))
-
-        # ── CONNECTIONS box ──
-        def box(title, parent_):
-            f = tk.Frame(parent_, bg=PANEL,
-                         highlightbackground=BORDER, highlightthickness=1)
-            tk.Label(f, text=f" [ {title} ] ",
-                     font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
-                     padx=6, pady=2).pack(side="top", anchor="nw", padx=6, pady=(6, 2))
-            return f
-
-        conn_box = box("CONNECTIONS", wrap)
-        conn_box.pack(fill="x", pady=(0, 6))
-        conn_inner = tk.Frame(conn_box, bg=PANEL)
-        conn_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_conn",)] = conn_inner
-
-        # ── ACCOUNTS box ──
-        acc_box = box("ACCOUNTS", wrap)
-        acc_box.pack(fill="x", pady=(0, 6))
-        acc_inner = tk.Frame(acc_box, bg=PANEL)
-        acc_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_accs",)] = acc_inner
-
-        # ── ENGINES box ──
-        eng_box = box("RUNNING ENGINES", wrap)
-        eng_box.pack(fill="x", pady=(0, 6))
-        eng_inner = tk.Frame(eng_box, bg=PANEL)
-        eng_inner.pack(fill="x", padx=10, pady=(0, 8))
-        self._dash_widgets[("home_engines",)] = eng_inner
-
-        self.f_lbl.configure(
-            text="HOME · connections + accounts + engines · "
-                 "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit · R refresh"
-        )
-
-        # Show a brief "connecting..." placeholder inside each panel until the
-        # first fetch completes and populates real data. Avoids a blank flash
-        # on tab switch.
-        for key in ("home_conn", "home_accs", "home_engines"):
-            inner = self._dash_widgets.get((key,))
-            if inner is not None:
-                tk.Label(inner, text="  connecting...",
-                         font=(FONT, 8), fg=DIM2, bg=PANEL,
-                         anchor="w").pack(fill="x", pady=2)
-        # First real render comes from _dash_home_fetch_async which is
-        # invoked by _dash_render_tab right after this build method returns.
+        from launcher_support.screens.dash_home import build_home_tab
+        return build_home_tab(self, parent)
 
     def _dash_home_fetch_async(self):
-        """Lightweight background refresh: only ping exchange + list_procs.
-        Does NOT call PortfolioMonitor.refresh for live accounts (too slow) —
-        only loads the paper state locally, which is instant."""
-        if not getattr(self, "_dash_alive", False):
-            return
-
-        def worker():
-            snap: dict = {}
-            # Paper state: local file read — instant
-            try:
-                from core.portfolio_monitor import PortfolioMonitor
-                snap["paper"] = PortfolioMonitor.paper_state_load()
-            except Exception:
-                snap["paper"] = None
-            # Exchange latency
-            try:
-                snap["latency"] = _conn.ping("binance_futures")
-            except Exception:
-                snap["latency"] = None
-            # Running engines
-            try:
-                from core.proc import list_procs
-                snap["procs"] = list_procs()
-            except Exception:
-                snap["procs"] = []
-            # Check which accounts have keys (instant — reads keys.json)
-            try:
-                pm = self._get_portfolio_monitor()
-                snap["has_keys"] = {m: pm.has_keys(m)
-                                    for m in ("testnet", "demo", "live")}
-            except Exception:
-                snap["has_keys"] = {}
-
-            self._dash_home_snap = snap
-            if getattr(self, "_dash_alive", False):
-                try: self.after(0, self._dash_home_render)
-                except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        from launcher_support.screens.dash_home import home_fetch_async
+        return home_fetch_async(self)
 
     def _dash_home_render(self):
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "home") != "home":
-            return
+        """Delegate to launcher_support.screens.dash_home.render. The
+        three panels (connections, accounts, engines) + clock + header
+        status + 10s reschedule live there.
+        """
+        from launcher_support.screens.dash_home import render as _render_dash_home
+        _render_dash_home(self)
 
-        snap    = getattr(self, "_dash_home_snap", {}) or {}
-        latency = snap.get("latency")
-        procs   = snap.get("procs") or []
-        has_keys = snap.get("has_keys") or {}
-        paper_state = snap.get("paper") or {}
-
-        # ── clock ──
-        clock_l = self._dash_widgets.get(("home_clock",))
-        if clock_l:
-            clock_l.configure(text=datetime.now().strftime("%Y-%m-%d  %H:%M:%S"))
-
-        # ── CONNECTIONS panel ──
-        conn = self._dash_widgets.get(("home_conn",))
-        if conn:
-            for w in conn.winfo_children():
-                try: w.destroy()
-                except Exception: pass
-
-            # Binance Futures (the one we actively ping)
-            rows = [
-                ("BINANCE FUTURES", latency is not None,
-                 f"{int(latency)}ms" if latency is not None else "offline"),
-                ("FEAR & GREED API", True,  "public"),
-                ("BINANCE PUBLIC",   True,  "public"),
-            ]
-            for name, ok, detail in rows:
-                r = tk.Frame(conn, bg=PANEL); r.pack(fill="x", pady=1)
-                tk.Label(r, text="●" if ok else "○",
-                         font=(FONT, 10, "bold"),
-                         fg=GREEN if ok else RED, bg=PANEL,
-                         width=3).pack(side="left")
-                tk.Label(r, text=name, font=(FONT, 8, "bold"),
-                         fg=WHITE if ok else DIM, bg=PANEL,
-                         width=20, anchor="w").pack(side="left")
-                tk.Label(r, text=detail, font=(FONT, 8),
-                         fg=DIM if ok else DIM2, bg=PANEL,
-                         anchor="w").pack(side="left", padx=(4, 0))
-
-        # ── ACCOUNTS panel (clickable rows + action buttons) ──
-        accs = self._dash_widgets.get(("home_accs",))
-        if accs:
-            for w in accs.winfo_children():
-                try: w.destroy()
-                except Exception: pass
-
-            pm = self._get_portfolio_monitor()
-            account_defs = [
-                ("paper",   "PAPER",   AMBER_D),
-                ("testnet", "TESTNET", GREEN),
-                ("demo",    "DEMO",    AMBER),
-                ("live",    "LIVE",    RED),
-            ]
-            for acc_id, label, color in account_defs:
-                if acc_id == "paper":
-                    is_on = True
-                    detail = f"${paper_state.get('current_balance', 0):,.2f}"
-                    sub    = f"trades {len(paper_state.get('trades') or [])}"
-                    action = "EDIT"
-                else:
-                    is_on = has_keys.get(acc_id, False)
-                    if is_on:
-                        cached = pm.get_cached(acc_id) or {}
-                        eq = cached.get("equity")
-                        detail = f"${eq:,.2f}" if eq is not None else "— syncing"
-                        sub = "keys ok"
-                    else:
-                        detail = "no keys"
-                        sub    = ""
-                    action = "OPEN" if is_on else "CONFIG"
-
-                r = tk.Frame(accs, bg=PANEL); r.pack(fill="x", pady=2)
-                tk.Label(r, text="●" if is_on else "○",
-                         font=(FONT, 10, "bold"),
-                         fg=color if is_on else DIM2, bg=PANEL,
-                         width=3).pack(side="left")
-                tk.Label(r, text=label, font=(FONT, 9, "bold"),
-                         fg=WHITE if is_on else DIM, bg=PANEL,
-                         width=10, anchor="w").pack(side="left")
-                tk.Label(r, text=detail, font=(FONT, 9, "bold"),
-                         fg=color if is_on else DIM, bg=PANEL,
-                         width=16, anchor="w").pack(side="left")
-                tk.Label(r, text=sub, font=(FONT, 7),
-                         fg=DIM2, bg=PANEL, anchor="w").pack(side="left")
-
-                # Action button (right)
-                btn = tk.Label(r, text=f" {action} ",
-                               font=(FONT, 7, "bold"),
-                               fg=BG, bg=color if is_on else DIM2,
-                               cursor="hand2", padx=6, pady=2)
-                btn.pack(side="right", padx=(0, 4))
-
-                def _act(_e=None, a=acc_id, on=is_on):
-                    if a == "paper":
-                        self._dash_paper_edit_dialog()
-                    elif on:
-                        self._dash_portfolio_account = a
-                        self._dash_render_tab("portfolio")
-                    else:
-                        # No keys — jump to settings
-                        self._dash_alive = False
-                        self._config()
-
-                for w in (r, btn):
-                    w.bind("<Button-1>", _act)
-                    w.bind("<Enter>", lambda e, b=btn: b.configure(bg=AMBER_B))
-                    w.bind("<Leave>", lambda e, b=btn, c=color, on=is_on:
-                           b.configure(bg=c if on else DIM2))
-
-        # ── ENGINES panel ──
-        eng = self._dash_widgets.get(("home_engines",))
-        if eng:
-            for w in eng.winfo_children():
-                try: w.destroy()
-                except Exception: pass
-
-            alive = [p for p in procs if p.get("alive")]
-            summary = tk.Frame(eng, bg=PANEL); summary.pack(fill="x", pady=(0, 2))
-            tk.Label(summary,
-                     text=f"{len(alive)} running  ·  {len(procs) - len(alive)} finished",
-                     font=(FONT, 7), fg=DIM, bg=PANEL,
-                     anchor="w").pack(side="left")
-
-            if not alive:
-                tk.Label(eng, text="○ no engines running",
-                         font=(FONT, 8), fg=DIM, bg=PANEL,
-                         anchor="w").pack(fill="x", pady=2)
-                tk.Label(eng, text="go to PORTFOLIO (3) or COCKPIT (6) to start",
-                         font=(FONT, 7), fg=DIM2, bg=PANEL,
-                         anchor="w").pack(fill="x")
-            else:
-                for p in alive[:6]:
-                    eng_name = str(p.get("engine", "?")).upper()
-                    pid  = p.get("pid", "?")
-                    started = str(p.get("started", ""))[:19].replace("T", " ")
-                    r = tk.Frame(eng, bg=PANEL); r.pack(fill="x", pady=1)
-                    tk.Label(r, text="●", font=(FONT, 10, "bold"),
-                             fg=GREEN, bg=PANEL, width=3).pack(side="left")
-                    tk.Label(r, text=eng_name, font=(FONT, 8, "bold"),
-                             fg=AMBER, bg=PANEL, width=14,
-                             anchor="w").pack(side="left")
-                    tk.Label(r, text=f"PID {pid}", font=(FONT, 7),
-                             fg=DIM, bg=PANEL, width=10,
-                             anchor="w").pack(side="left")
-                    tk.Label(r, text=started, font=(FONT, 7),
-                             fg=DIM2, bg=PANEL,
-                             anchor="w").pack(side="left")
-
-        # Header status
-        if latency is not None:
-            self.h_stat.configure(text="ONLINE", fg=GREEN)
-        else:
-            self.h_stat.configure(text="OFFLINE", fg=RED)
-
-        # Reschedule — HOME refresh is lightweight, 10s is fine
-        if getattr(self, "_dash_alive", False) and self._dash_tab == "home":
-            aid = getattr(self, "_dash_after_id", None)
-            if aid:
-                try: self.after_cancel(aid)
-                except Exception: pass
-            self._dash_after_id = self.after(10000, self._dash_tick_refresh)
-
-    # ── BACKTEST TAB (browse data/runs/) ───────────────────
+    # -- BACKTEST TAB (browse data/runs/) -------------------
     def _dash_build_backtest_tab(self, parent):
         """Two-column browser: list of runs (left) + detail panel (right).
         Click a row to show its real metrics from summary.json inline.
@@ -10295,10 +6124,13 @@ class App(tk.Tk):
 
         # Main split: list (left, 60%) + detail (right, 40%)
         split = tk.Frame(wrap, bg=BG); split.pack(fill="both", expand=True)
+        split.grid_columnconfigure(0, weight=3, uniform="bt_dash_split")
+        split.grid_columnconfigure(1, weight=2, uniform="bt_dash_split")
+        split.grid_rowconfigure(0, weight=1)
 
-        # ── LEFT: run list ──
+        # -- LEFT: run list --
         left = tk.Frame(split, bg=BG)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
         # Column headers — widths pulled from _BT_COLS so header and row
         # widgets always render at the same character positions. Same
@@ -10322,7 +6154,8 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
 
         inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        self._bind_canvas_window_width(canvas, window_id, pad_x=4)
         def _on_configure(event, c=canvas): c.configure(scrollregion=c.bbox("all"))
         inner.bind("<Configure>", _on_configure)
 
@@ -10344,12 +6177,12 @@ class App(tk.Tk):
         self._dash_widgets[("bt_list",)] = inner
         self._dash_widgets[("bt_canvas",)] = canvas
 
-        # ── RIGHT: detail panel ──
+        # -- RIGHT: detail panel --
         right = tk.Frame(split, bg=PANEL,
                          highlightbackground=BORDER, highlightthickness=1,
-                         width=300)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
+                         width=360)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_propagate(False)
 
         tk.Label(right, text=" [ DETAILS ] ",
                  font=(FONT, 7, "bold"), fg=BG, bg=AMBER,
@@ -10511,6 +6344,7 @@ class App(tk.Tk):
             "leverage": report.get("leverage"),
             "final_equity": final_equity,
             "summary_path": str(report_path),
+            "report_json_path": str(report_path),
             "config_path": str(run_dir / "config.json"),
             "report_html_path": str(report_html) if report_html.exists() else "",
             "run_dir": str(run_dir),
@@ -10526,7 +6360,6 @@ class App(tk.Tk):
             "citadel":     ROOT / "data" / "runs",
             "bridgewater": ROOT / "data" / "bridgewater",
             "jump":        ROOT / "data" / "jump",
-            "deshaw":      ROOT / "data" / "deshaw",
             "renaissance": ROOT / "data" / "renaissance",
             "janestreet":  ROOT / "data" / "janestreet",
             "millennium":  ROOT / "data" / "millennium",
@@ -10544,24 +6377,37 @@ class App(tk.Tk):
                         run_id = str(row.get("run_id") or "").strip()
                         if not run_id:
                             continue
+                        explicit_run_dir = str(row.get("run_dir") or "").strip()
+                        if explicit_run_dir:
+                            run_dir = Path(explicit_run_dir)
+                        else:
                         # Resolve run_dir via engine slug — run_ids are now
                         # prefixed (e.g. "bridgewater_2026-04-14_1029")
-                        engine_slug = str(row.get("engine") or "").lower()
-                        base_dir = _SLUG_TO_DIR.get(engine_slug, ROOT / "data" / "runs")
-                        # Strip engine prefix from run_id to get folder name
-                        folder = run_id
-                        if engine_slug and folder.startswith(f"{engine_slug}_"):
-                            folder = folder[len(engine_slug) + 1:]
-                        run_dir = base_dir / folder
-                        # Citadel keeps the prefixed form as folder name
-                        if engine_slug == "citadel" and not run_dir.exists():
-                            run_dir = base_dir / run_id
+                            engine_slug = str(row.get("engine") or "").lower()
+                            base_dir = _SLUG_TO_DIR.get(engine_slug, ROOT / "data" / "runs")
+                            # Strip engine prefix from run_id to get folder name
+                            folder = run_id
+                            if engine_slug and folder.startswith(f"{engine_slug}_"):
+                                folder = folder[len(engine_slug) + 1:]
+                            run_dir = base_dir / folder
+                            # Citadel keeps the prefixed form as folder name
+                            if engine_slug == "citadel" and not run_dir.exists():
+                                run_dir = base_dir / run_id
                         entry = dict(row)
                         entry.setdefault("run_dir", str(run_dir))
                         entry.setdefault("summary_path", str(run_dir / "summary.json"))
                         entry.setdefault("config_path", str(run_dir / "config.json"))
                         report_html = run_dir / "report.html"
                         entry.setdefault("report_html_path", str(report_html) if report_html.exists() else "")
+                        # Find the real report JSON in reports/ dir (Millennium
+                        # + legacy engines save there as <engine>_<tf>_v1.json,
+                        # never as summary.json at run_dir root). Without this
+                        # _show_results falls through to data/runs/ fallback
+                        # and loads a completely different run.
+                        if not entry.get("report_json_path"):
+                            cands = self._bt_report_candidates(run_dir)
+                            if cands:
+                                entry["report_json_path"] = str(cands[0])
                         entry.setdefault("source", "index")
                         # Fallback: read summary.json for fields that might be
                         # missing in older index entries (basket, period_days...)
@@ -10614,6 +6460,10 @@ class App(tk.Tk):
                     entry["config_path"] = str(config_path)
                     report_html = run_dir / "report.html"
                     entry["report_html_path"] = str(report_html) if report_html.exists() else entry.get("report_html_path", "")
+                    if not entry.get("report_json_path"):
+                        cands = self._bt_report_candidates(run_dir)
+                        if cands:
+                            entry["report_json_path"] = str(cands[0])
                     entry.setdefault("source", "runs")
                     runs_by_id[run_id] = entry
             except OSError:
@@ -10676,7 +6526,7 @@ class App(tk.Tk):
         def _fmt_n(v, suffix=""): return f"{v:.2f}{suffix}" if v is not None else "—"
         def _fmt_m(v): return f"${v:+,.0f}" if v is not None else "—"
         # Code-name → institutional-name (battery/marketing taxonomy).
-        # Maps both legacy lowercase file names (thoth, mercurio, newton)
+        # Maps both legacy lowercase file names (thoth, mercurio)
         # and uppercase variants. Falls back to upper() for unknowns.
         _ENGINE_NAMES = {
             "backtest":      "CITADEL",
@@ -10685,9 +6535,6 @@ class App(tk.Tk):
             "bridgewater":   "BRIDGEWATER",
             "mercurio":      "JUMP",
             "jump":          "JUMP",
-            "newton":        "DE SHAW",
-            "deshaw":        "DE SHAW",
-            "de_shaw":       "DE SHAW",
             "prometeu":      "TWO SIGMA",
             "twosigma":      "TWO SIGMA",
             "two_sigma":     "TWO SIGMA",
@@ -10709,12 +6556,12 @@ class App(tk.Tk):
 
         # [Backlog #7] Pre-L6 warning badge for engines whose pre-fix
         # reports are potentially inflated. Runs written before commit
-        # ea1f6ba (2026-04-11) are tagged in the RUN column with a "⚠"
+        # ea1f6ba (2026-04-11) are tagged in the RUN column with a "?"
         # prefix. All five engines that only got the aggregate notional
         # cap in that commit are flagged; historical runs of citadel
         # (backtest.py) are untagged because L6 landed earlier there.
         _L6_FIX_DATE = "2026-04-11"
-        _L6_AFFECTED = {"mercurio", "thoth", "harmonics", "newton",
+        _L6_AFFECTED = {"mercurio", "thoth", "harmonics",
                          "multistrategy"}
 
         for run in runs[:50]:
@@ -10742,7 +6589,7 @@ class App(tk.Tk):
             pnl_col = GREEN if (pnl or 0) > 0 else (RED if (pnl or 0) < 0 else DIM)
             short_id = run_id
             for prefix in (
-                "citadel_", "thoth_", "bridgewater_", "newton_", "deshaw_",
+                "citadel_", "thoth_", "bridgewater_",
                 "mercurio_", "jump_", "multistrategy_", "millennium_",
                 "prometeu_", "twosigma_", "renaissance_", "harmonics_",
             ):
@@ -10913,9 +6760,9 @@ class App(tk.Tk):
         lev   = g("leverage")
 
         def row(label, value, color=WHITE, bold=False):
-            r = tk.Frame(body, bg=PANEL); r.pack(fill="x", pady=1)
+            r = tk.Frame(body, bg=PANEL); r.pack(fill="x", pady=0)
             tk.Label(r, text=label, font=(FONT, 7, "bold"),
-                     fg=DIM, bg=PANEL, width=12,
+                     fg=DIM, bg=PANEL, width=10,
                      anchor="w").pack(side="left")
             tk.Label(r, text=value,
                      font=(FONT, 8, "bold" if bold else "normal"),
@@ -10997,11 +6844,11 @@ class App(tk.Tk):
             return
 
         try:
-            from core.fs import robust_rmtree
+            from core.ops.fs import robust_rmtree
             idx_path = ROOT / "data" / "index.json"
             run_dir = Path((getattr(self, "_bt_run_map", {}) or {}).get(run_id, {}).get("run_dir") or (ROOT / "data" / "runs" / run_id))
 
-            # ── Step 1: remove the row from index.json (atomic). ──
+            # -- Step 1: remove the row from index.json (atomic). --
             index_removed = False
             if idx_path.exists():
                 try:
@@ -11018,7 +6865,7 @@ class App(tk.Tk):
                         f"Could not update data/index.json:\n\n{e}")
                     return
 
-            # ── Step 2: clear the detail panel + refresh the list. ──
+            # -- Step 2: clear the detail panel + refresh the list. --
             body = self._dash_widgets.get(("bt_detail",))
             if body is not None:
                 try:
@@ -11031,12 +6878,12 @@ class App(tk.Tk):
                     pass
             self._dash_backtest_render()
 
-            # ── Step 3: disk delete (best-effort, robust against locks). ──
+            # -- Step 3: disk delete (best-effort, robust against locks). --
             disk_removed = True
             if run_dir.exists():
                 disk_removed = robust_rmtree(run_dir)
 
-            # ── Step 4: report. ──
+            # -- Step 4: report. --
             if index_removed and disk_removed:
                 self.h_stat.configure(text=f"DELETED {run_id[:20]}", fg=AMBER)
                 self.after(2000,
@@ -11056,7 +6903,7 @@ class App(tk.Tk):
                     f"  data/runs/{run_id}/\n\n"
                     f"could not be deleted right now — usually OneDrive / "
                     f"antivirus is still holding a handle on a file inside.\n\n"
-                    f"Run `python tools/reconcile_runs.py --apply` in a "
+                    f"Run `python tools/reports/reconcile_runs.py --apply` in a "
                     f"minute or two and it will be cleaned up automatically.")
             else:
                 # Neither index nor disk changed — the run_id probably
@@ -11071,6 +6918,163 @@ class App(tk.Tk):
             # here in the first place.
             messagebox.showerror(
                 "Delete failed — unexpected error",
+                f"{type(e).__name__}: {e}")
+
+    def _dash_backtest_delete_all(self):
+        """Wipe TODOS os backtest runs: index.json + disk dirs referenciados.
+
+        Escopo = apenas run_dirs listados em data/index.json. Nao toca em
+        data/live/, data/millennium_shadow/, data/.proc_logs/, etc — esses
+        nao sao backtests e nao aparecem no index. Logo: essa operacao e
+        idempotente com o que a UI mostra: apagou aqui → sumiu no DATA >
+        BACKTEST RUNS e no engine picker LAST RUNS (ambos releem index.json
+        com cache por mtime — reescrever invalida).
+
+        Flow (espelha _dash_backtest_delete):
+        1. Dupla confirmacao (destrutivo).
+        2. Coletar run_dirs do index antes de zerar.
+        3. Escrever index.json = [] (atomico).
+        4. rmtree best-effort em cada run_dir (swallow OneDrive locks).
+        5. Invalidar cache local (self._bt_run_map) + refresh da lista.
+        """
+        idx_path = ROOT / "data" / "index.json"
+        try:
+            rows = json.loads(idx_path.read_text(encoding="utf-8"))
+            if not isinstance(rows, list):
+                rows = []
+        except (OSError, json.JSONDecodeError):
+            rows = []
+        total = len(rows)
+        if total == 0:
+            self.h_stat.configure(text="NOTHING TO DELETE", fg=AMBER_D)
+            self.after(1800,
+                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+            return
+        if not messagebox.askyesno(
+                "Apagar TODOS os backtests",
+                f"Voce esta prestes a apagar {total} backtest runs.\n\n"
+                f"Isso inclui:\n"
+                f"  • {total} linhas de data/index.json\n"
+                f"  • Os diretorios data/*/<run_id>/ de cada um\n\n"
+                f"Sessoes live (data/live/) NAO sao afetadas.\n"
+                f"Processos ativos NAO sao matados.\n\n"
+                f"Continuar?"):
+            return
+        if not messagebox.askyesno(
+                "Confirmar novamente",
+                f"Ultima chance. {total} runs serao removidos.\n\n"
+                f"Certeza?"):
+            return
+
+        try:
+            from core.ops.fs import robust_rmtree
+
+            # Collect (run_id, run_dir) tuples before zeroing the index.
+            _SLUG_TO_DIR = {
+                "citadel":     ROOT / "data" / "runs",
+                "bridgewater": ROOT / "data" / "bridgewater",
+                "jump":        ROOT / "data" / "jump",
+                "renaissance": ROOT / "data" / "renaissance",
+                "janestreet":  ROOT / "data" / "janestreet",
+                "millennium":  ROOT / "data" / "millennium",
+                "twosigma":    ROOT / "data" / "twosigma",
+                "aqr":         ROOT / "data" / "aqr",
+                "graham":      ROOT / "data" / "graham",
+                "phi":         ROOT / "data" / "phi",
+            }
+            targets: list[Path] = []
+            for r in rows:
+                rid = str(r.get("run_id") or "").strip()
+                if not rid:
+                    continue
+                explicit = str(r.get("run_dir") or "").strip()
+                if explicit:
+                    targets.append(Path(explicit))
+                    continue
+                eng = str(r.get("engine") or "").lower()
+                base = _SLUG_TO_DIR.get(eng, ROOT / "data" / "runs")
+                folder = rid[len(eng) + 1:] if eng and rid.startswith(f"{eng}_") else rid
+                candidate = base / folder
+                if not candidate.exists() and eng == "citadel":
+                    candidate = base / rid  # citadel keeps the prefixed form
+                targets.append(candidate)
+
+            # Step 1a: zero index.json atomically.
+            atomic_write_json(idx_path, [], indent=2)
+            self._bt_run_map = {}
+            self._bt_recent_run_id = None
+
+            # Step 1b: zero o SQLite tbm. _query_last_runs faz fallback
+            # pra data/aurum.db quando index retorna []; sem isto, o
+            # engine picker ainda mostraria as runs antigas via DB.
+            # Truncar runs + trades (trades.run_id FK-ish logico).
+            db_path = ROOT / "data" / "aurum.db"
+            if db_path.exists():
+                try:
+                    import sqlite3 as _sq
+                    _c = _sq.connect(str(db_path))
+                    try:
+                        _c.execute("DELETE FROM trades")
+                        _c.execute("DELETE FROM runs")
+                        _c.commit()
+                    finally:
+                        _c.close()
+                except Exception:
+                    # DB wipe e best-effort — se falhar, index.json ja
+                    # esta vazio e a UI principal (DATA > BACKTEST RUNS)
+                    # reflete sumico. Picker pode mostrar stale ate rodar
+                    # reconcile, mas nao e bloqueante.
+                    pass
+
+            # Step 2: rebuild list (now empty), then refresh detail panel placeholder.
+            body = self._dash_widgets.get(("bt_detail",))
+            if body is not None:
+                try:
+                    for w in body.winfo_children():
+                        w.destroy()
+                    tk.Label(body, text="\n  all runs deleted",
+                             font=(FONT, 9, "bold"), fg=DIM, bg=PANEL,
+                             justify="left").pack(anchor="w", padx=10)
+                except tk.TclError:
+                    pass
+            try:
+                self._dash_backtest_render()
+            except Exception:
+                pass
+
+            # Step 3: best-effort disk cleanup (background not needed — 400 dirs rmtree fast).
+            deleted = 0
+            deferred = 0
+            for d in targets:
+                if not d.exists():
+                    continue
+                try:
+                    if robust_rmtree(d):
+                        deleted += 1
+                    else:
+                        deferred += 1
+                except Exception:
+                    deferred += 1
+
+            # Step 4: report.
+            if deferred == 0:
+                self.h_stat.configure(text=f"DELETED {total} RUNS", fg=AMBER)
+            else:
+                self.h_stat.configure(
+                    text=f"DELETED {total} ({deferred} disk deferred)",
+                    fg=AMBER_D,
+                )
+                messagebox.showinfo(
+                    "Disk cleanup deferred",
+                    f"{deleted} diretorios apagados do disco.\n"
+                    f"{deferred} ainda segurados por OneDrive / antivirus.\n\n"
+                    f"Rode `python tools/reports/reconcile_runs.py --apply` em "
+                    f"1-2 min pra limpar o restante.")
+            self.after(3000,
+                       lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
+        except Exception as e:
+            messagebox.showerror(
+                "Delete ALL failed — unexpected error",
                 f"{type(e).__name__}: {e}")
 
     def _dash_backtest_open(self, run_id: str):
@@ -11091,7 +7095,7 @@ class App(tk.Tk):
             self.h_stat.configure(text="OPEN FAILED", fg=RED)
             self.after(1500, lambda: self.h_stat.configure(text="LIVE", fg=GREEN))
 
-    # ── COCKPIT TAB (VPS remote control over SSH) ─────────
+    # -- COCKPIT TAB (VPS remote control over SSH) ---------
     def _dash_backtest_metrics(self, run_id: str):
         """Open the internal metrics/results view for a specific run.
 
@@ -11113,994 +7117,321 @@ class App(tk.Tk):
 
     def _dash_build_cockpit_tab(self, parent):
         """VPS remote cockpit: screen session status, positions, controls, logs."""
-        wrap = tk.Frame(parent, bg=BG); wrap.pack(fill="both", expand=True, padx=14, pady=10)
-
-        # ── Header ──
-        hdr = tk.Frame(wrap, bg=BG); hdr.pack(fill="x", pady=(0, 6))
-        tk.Label(hdr, text="VPS REMOTE COCKPIT", font=(FONT, 9, "bold"),
-                 fg=AMBER, bg=BG).pack(side="left")
-        reach_l = tk.Label(hdr, text="○ checking VPS...",
-                           font=(FONT, 8), fg=DIM, bg=BG)
-        reach_l.pack(side="right")
-        self._dash_widgets[("cp_reach",)] = reach_l
-        tk.Frame(wrap, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
-
-        # ── STATUS row: VPS info + engine status, side-by-side ──
-        row1 = tk.Frame(wrap, bg=BG); row1.pack(fill="x", pady=(0, 8))
-
-        vps_box = tk.Frame(row1, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1)
-        vps_box.pack(side="left", fill="both", expand=True, padx=(0, 6))
-        tk.Label(vps_box, text=" VPS ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER).pack(side="top", anchor="nw", padx=8, pady=4)
-        vps_inner = tk.Frame(vps_box, bg=PANEL); vps_inner.pack(fill="x", padx=12, pady=(0, 10))
-        tk.Label(vps_inner, text=f"host:     {VPS_HOST}",
-                 font=(FONT, 8), fg=WHITE, bg=PANEL,
-                 anchor="w").pack(fill="x")
-        tk.Label(vps_inner, text=f"project:  {VPS_PROJECT}",
-                 font=(FONT, 8), fg=WHITE, bg=PANEL,
-                 anchor="w").pack(fill="x")
-        vps_check_l = tk.Label(vps_inner, text="last check: —",
-                               font=(FONT, 7), fg=DIM2, bg=PANEL, anchor="w")
-        vps_check_l.pack(fill="x", pady=(4, 0))
-        self._dash_widgets[("cp_check",)] = vps_check_l
-
-        eng_box = tk.Frame(row1, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1)
-        eng_box.pack(side="left", fill="both", expand=True, padx=(6, 0))
-        tk.Label(eng_box, text=" ENGINE ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER).pack(side="top", anchor="nw", padx=8, pady=4)
-        eng_inner = tk.Frame(eng_box, bg=PANEL); eng_inner.pack(fill="x", padx=12, pady=(0, 10))
-        eng_state_l = tk.Label(eng_inner, text="○ checking...",
-                               font=(FONT, 13, "bold"), fg=DIM, bg=PANEL,
-                               anchor="w")
-        eng_state_l.pack(anchor="w")
-        eng_sub_l = tk.Label(eng_inner, text="screen session: —",
-                             font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w")
-        eng_sub_l.pack(anchor="w", pady=(2, 0))
-        self._dash_widgets[("cp_engine_state",)] = eng_state_l
-        self._dash_widgets[("cp_engine_sub",)]   = eng_sub_l
-
-        # ── POSITIONS card ──
-        pos_box = tk.Frame(wrap, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1)
-        pos_box.pack(fill="x", pady=(0, 8))
-        pos_head = tk.Label(pos_box, text=" OPEN POSITIONS (0) ",
-                            font=(FONT, 7, "bold"), fg=BG, bg=AMBER)
-        pos_head.pack(side="top", anchor="nw", padx=8, pady=4)
-        pos_inner = tk.Frame(pos_box, bg=PANEL); pos_inner.pack(fill="x", padx=12, pady=(0, 8))
-        self._dash_widgets[("cp_pos_head",)]  = pos_head
-        self._dash_widgets[("cp_pos_inner",)] = pos_inner
-
-        # ── CONTROLS row ──
-        ctrl_box = tk.Frame(wrap, bg=PANEL,
-                            highlightbackground=BORDER, highlightthickness=1)
-        ctrl_box.pack(fill="x", pady=(0, 8))
-        tk.Label(ctrl_box, text=" CONTROLS ", font=(FONT, 7, "bold"),
-                 fg=BG, bg=AMBER).pack(side="top", anchor="nw", padx=8, pady=4)
-        ctrl_inner = tk.Frame(ctrl_box, bg=PANEL); ctrl_inner.pack(fill="x", padx=12, pady=(0, 10))
-
-        buttons = [
-            ("START DEMO", GREEN, self._dash_cockpit_start_demo),
-            ("STOP",       RED,   self._dash_cockpit_stop),
-            ("DEPLOY",     AMBER, self._dash_cockpit_deploy),
-            ("STREAM LOGS", AMBER_B, self._dash_cockpit_toggle_stream),
-        ]
-        for label, color, cmd in buttons:
-            btn = tk.Label(ctrl_inner, text=f"  {label}  ",
-                           font=(FONT, 8, "bold"),
-                           fg=BG, bg=color, cursor="hand2",
-                           padx=8, pady=4)
-            btn.pack(side="left", padx=(0, 8))
-            btn.bind("<Button-1>", lambda e, c=cmd: c())
-            btn.bind("<Enter>", lambda e, b=btn, c=color:
-                     b.configure(bg=AMBER_B if c != AMBER_B else "#FFFFFF"))
-            btn.bind("<Leave>", lambda e, b=btn, c=color: b.configure(bg=c))
-            if label == "STREAM LOGS":
-                self._dash_widgets[("cp_stream_btn",)] = btn
-
-        result_l = tk.Label(ctrl_inner, text="", font=(FONT, 7),
-                            fg=DIM, bg=PANEL, anchor="w")
-        result_l.pack(side="left", padx=(10, 0))
-        self._dash_widgets[("cp_action",)] = result_l
-
-        # ── LIVE LOG card (Text widget + scrollbar) ──
-        log_box = tk.Frame(wrap, bg=PANEL,
-                           highlightbackground=BORDER, highlightthickness=1)
-        log_box.pack(fill="both", expand=True, pady=(0, 0))
-        log_head = tk.Label(log_box, text=" LIVE LOG (polled every 5s) ",
-                            font=(FONT, 7, "bold"), fg=BG, bg=AMBER)
-        log_head.pack(side="top", anchor="nw", padx=8, pady=4)
-        self._dash_widgets[("cp_log_head",)] = log_head
-
-        log_frame = tk.Frame(log_box, bg=PANEL)
-        log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
-        scroll = tk.Scrollbar(log_frame, bg=PANEL)
-        scroll.pack(side="right", fill="y")
-        log_text = tk.Text(log_frame, bg=BG, fg=WHITE,
-                           font=(FONT, 8), bd=0, highlightthickness=0,
-                           insertbackground=AMBER, wrap="none",
-                           yscrollcommand=scroll.set)
-        log_text.pack(side="left", fill="both", expand=True)
-        scroll.configure(command=log_text.yview)
-        log_text.insert("1.0", "— waiting for first log fetch —\n")
-        log_text.configure(state="disabled")
-        self._dash_widgets[("cp_log_text",)] = log_text
-
-        self.f_lbl.configure(
-            text="COCKPIT · VPS remote · "
-                 "1=Home 2=Market 3=Portfolio 4=Trades 5=Backtest 6=Cockpit"
+        cockpit_tab_mod.build_tab(
+            self,
+            parent,
+            tk_mod=tk,
+            colors={
+                "BG": BG,
+                "PANEL": PANEL,
+                "BORDER": BORDER,
+                "AMBER": AMBER,
+                "AMBER_B": AMBER_B,
+                "DIM": DIM,
+                "DIM2": DIM2,
+                "WHITE": WHITE,
+                "GREEN": GREEN,
+                "RED": RED,
+            },
+            font_name=FONT,
+            vps_host=_vps_host,
+            vps_project=_vps_project,
         )
-        self.h_path.configure(text="> MARKETS > CRYPTO FUTURES > COCKPIT")
 
     def _dash_cockpit_fetch_async(self):
         """Single SSH round-trip for full status: screen, logs, positions."""
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "") != "cockpit":
-            return
-
-        # Combine multiple checks into one SSH invocation — reduces latency
-        # from ~3 round-trips to 1. Markers let us split stdout into sections.
-        combined = (
-            "echo '---SCREEN---'; screen -ls 2>&1 || true; "
-            "echo '---LOG---'; tail -5 ~/aurum.finance/data/live/*/logs/live.log 2>/dev/null || true; "
-            "echo '---POS---'; cat ~/aurum.finance/data/live/*/state/positions.json 2>/dev/null || true; "
-            "echo '---END---'"
+        cockpit_tab_mod.fetch_async(
+            self,
+            vps_cmd=_vps_cmd,
+            vps_project=_vps_project,
+            vps_live_screen=_vps_live_screen,
+            vps_millennium_screen=_vps_millennium_screen,
         )
 
-        def worker():
-            import time as _time
-            t0 = _time.time()
-            out = _vps_cmd(combined, timeout=8)
-            lat_ms = int((_time.time() - t0) * 1000)
-
-            snap = {"reachable": out is not None, "latency_ms": lat_ms,
-                    "screen_running": False, "screen_raw": "",
-                    "log_lines": [], "positions": [], "positions_raw": "",
-                    "ts": datetime.now().strftime("%H:%M:%S")}
-
-            if out:
-                parts = {"SCREEN": "", "LOG": "", "POS": ""}
-                current = None
-                for line in out.splitlines():
-                    m = line.strip()
-                    if m == "---SCREEN---": current = "SCREEN"; continue
-                    if m == "---LOG---":    current = "LOG";    continue
-                    if m == "---POS---":    current = "POS";    continue
-                    if m == "---END---":    current = None;     continue
-                    if current:
-                        parts[current] += line + "\n"
-
-                snap["screen_raw"] = parts["SCREEN"].strip()
-                snap["screen_running"] = "aurum" in parts["SCREEN"]
-                snap["log_lines"] = [l for l in parts["LOG"].splitlines() if l.strip()]
-                snap["positions_raw"] = parts["POS"].strip()
-                try:
-                    if parts["POS"].strip():
-                        pos_data = json.loads(parts["POS"])
-                        if isinstance(pos_data, list):
-                            snap["positions"] = pos_data
-                        elif isinstance(pos_data, dict):
-                            # Common shape: {"BTCUSDT": {...}, "ETHUSDT": {...}}
-                            snap["positions"] = [
-                                {"symbol": k, **(v if isinstance(v, dict) else {"value": v})}
-                                for k, v in pos_data.items()
-                            ]
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            self._dash_cockpit_snap = snap
-            if getattr(self, "_dash_alive", False):
-                try: self.after(0, self._dash_cockpit_render)
-                except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
-
     def _dash_cockpit_render(self):
-        if not getattr(self, "_dash_alive", False):
-            return
-        if getattr(self, "_dash_tab", "") != "cockpit":
-            return
-
-        snap = getattr(self, "_dash_cockpit_snap", {}) or {}
-
-        # ── reachability ──
-        reach_l = self._dash_widgets.get(("cp_reach",))
-        if reach_l:
-            if snap.get("reachable"):
-                reach_l.configure(
-                    text=f"● reachable  ·  {snap.get('latency_ms', '?')}ms",
-                    fg=GREEN)
-                self.h_stat.configure(text="VPS OK", fg=GREEN)
-            else:
-                reach_l.configure(text="○ unreachable", fg=RED)
-                self.h_stat.configure(text="VPS DOWN", fg=RED)
-
-        check_l = self._dash_widgets.get(("cp_check",))
-        if check_l:
-            check_l.configure(text=f"last check: {snap.get('ts', '—')}")
-
-        # ── engine state ──
-        state_l = self._dash_widgets.get(("cp_engine_state",))
-        sub_l   = self._dash_widgets.get(("cp_engine_sub",))
-        if state_l and sub_l:
-            if not snap.get("reachable"):
-                state_l.configure(text="○ UNKNOWN", fg=DIM)
-                sub_l.configure(text="VPS not reachable", fg=DIM2)
-            elif snap.get("screen_running"):
-                state_l.configure(text="● RUNNING", fg=GREEN)
-                # Extract PID/name from screen -ls output if possible
-                first_line = next(
-                    (l for l in snap.get("screen_raw", "").splitlines()
-                     if "aurum" in l), "")
-                sub_l.configure(
-                    text=f"screen: {first_line.strip() or 'aurum'}",
-                    fg=DIM)
-            else:
-                state_l.configure(text="○ STOPPED", fg=AMBER_D)
-                sub_l.configure(text="no aurum screen session", fg=DIM)
-
-        # ── positions ──
-        pos_head  = self._dash_widgets.get(("cp_pos_head",))
-        pos_inner = self._dash_widgets.get(("cp_pos_inner",))
-        if pos_inner:
-            for w in pos_inner.winfo_children():
-                try: w.destroy()
-                except Exception: pass
-            positions = snap.get("positions") or []
-            if pos_head:
-                pos_head.configure(text=f" OPEN POSITIONS ({len(positions)}) ")
-
-            if not positions:
-                if snap.get("positions_raw") and snap.get("reachable"):
-                    tk.Label(pos_inner,
-                             text="  — state/positions.json parse failed —",
-                             font=(FONT, 8), fg=DIM, bg=PANEL,
-                             anchor="w").pack(fill="x", pady=2)
-                else:
-                    tk.Label(pos_inner, text="  — no open positions —",
-                             font=(FONT, 8), fg=DIM, bg=PANEL,
-                             anchor="w").pack(fill="x", pady=2)
-            else:
-                for p in positions[:10]:
-                    sym  = str(p.get("symbol", "?"))
-                    side = str(p.get("side", p.get("direction", "")))
-                    try:
-                        size  = float(p.get("size", p.get("qty", 0)) or 0)
-                        entry = float(p.get("entry", p.get("entry_price", 0)) or 0)
-                        pnl   = float(p.get("pnl", p.get("unrealized_pnl", 0)) or 0)
-                    except (TypeError, ValueError):
-                        size = entry = pnl = 0
-                    pnl_col = GREEN if pnl >= 0 else RED
-
-                    r = tk.Frame(pos_inner, bg=PANEL); r.pack(fill="x", pady=1)
-                    tk.Label(r, text=sym, font=(FONT, 9, "bold"),
-                             fg=AMBER, bg=PANEL, width=12,
-                             anchor="w").pack(side="left")
-                    tk.Label(r, text=side.upper()[:5], font=(FONT, 8),
-                             fg=WHITE, bg=PANEL, width=6,
-                             anchor="w").pack(side="left")
-                    tk.Label(r, text=f"{size:g}", font=(FONT, 8),
-                             fg=DIM, bg=PANEL, width=10,
-                             anchor="w").pack(side="left")
-                    tk.Label(r, text=f"@ {entry:,.4f}".rstrip("0").rstrip("."),
-                             font=(FONT, 8), fg=DIM, bg=PANEL, width=14,
-                             anchor="w").pack(side="left")
-                    tk.Label(r,
-                             text=f"PnL {'+' if pnl >= 0 else ''}${pnl:,.2f}",
-                             font=(FONT, 9, "bold"), fg=pnl_col, bg=PANEL,
-                             anchor="w").pack(side="left")
-
-        # ── live log (only update when not streaming) ──
-        if not self._dash_cockpit_streaming:
-            log_text = self._dash_widgets.get(("cp_log_text",))
-            if log_text:
-                lines = snap.get("log_lines") or []
-                log_text.configure(state="normal")
-                log_text.delete("1.0", "end")
-                if lines:
-                    log_text.insert("1.0", "\n".join(lines) + "\n")
-                elif snap.get("reachable"):
-                    log_text.insert("1.0", "— log file not found or empty —\n")
-                else:
-                    log_text.insert("1.0", "— VPS unreachable —\n")
-                log_text.configure(state="disabled")
-
-        # ── schedule next tick ──
-        if getattr(self, "_dash_alive", False) and self._dash_tab == "cockpit":
-            aid = getattr(self, "_dash_after_id", None)
-            if aid:
-                try: self.after_cancel(aid)
-                except Exception: pass
-            self._dash_after_id = self.after(5000, self._dash_tick_refresh)
+        cockpit_tab_mod.render(
+            self,
+            tk_mod=tk,
+            colors={
+                "PANEL": PANEL,
+                "AMBER": AMBER,
+                "AMBER_B": AMBER_B,
+                "AMBER_D": AMBER_D,
+                "DIM": DIM,
+                "DIM2": DIM2,
+                "WHITE": WHITE,
+                "GREEN": GREEN,
+                "RED": RED,
+            },
+            font_name=FONT,
+            vps_live_screen=_vps_live_screen,
+            vps_millennium_screen=_vps_millennium_screen,
+        )
 
     def _dash_cockpit_action(self, label: str, cmd: str,
                              success_msg: str = "ok", timeout: int = 15):
         """Run an SSH command in a worker thread, flash a status message."""
-        action_l = self._dash_widgets.get(("cp_action",))
-        if action_l:
-            action_l.configure(text=f"→ {label}...", fg=AMBER_D)
-
-        def worker():
-            out = _vps_cmd(cmd, timeout=timeout)
-            def apply():
-                if not getattr(self, "_dash_alive", False):
-                    return
-                if action_l:
-                    if out is not None:
-                        action_l.configure(text=f"✓ {label}: {success_msg}", fg=GREEN)
-                    else:
-                        action_l.configure(text=f"✗ {label}: failed", fg=RED)
-                # Trigger an immediate status refresh to reflect the action
-                self._dash_cockpit_fetch_async()
-            try: self.after(0, apply)
-            except Exception: pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        cockpit_tab_mod.action(
+            self,
+            label,
+            cmd,
+            vps_cmd=_vps_cmd,
+            colors={"AMBER_D": AMBER_D, "GREEN": GREEN, "RED": RED},
+            success_msg=success_msg,
+            timeout=timeout,
+        )
 
     def _dash_cockpit_start_demo(self):
-        cmd = ("screen -dmS aurum bash -c "
-               "'cd ~/aurum.finance && python3 -m engines.live demo "
+        project = _vps_project()
+        cmd = (f"screen -dmS {_vps_live_screen} bash -c "
+               f"'cd {project} && python3 -m engines.live demo "
                "2>&1 | tee /tmp/aurum.log'")
         self._dash_cockpit_action("START DEMO", cmd, "engine spawned")
 
+    def _dash_cockpit_start_millennium_bootstrap(self):
+        cmd = _build_millennium_bootstrap_launch_command(_vps_project(), mode="diag")
+        self._dash_cockpit_action("START MLN", cmd, "bootstrap spawned")
+
     def _dash_cockpit_stop(self):
-        # $'\003' is bash ANSI-C quoting for Ctrl+C — graceful shutdown
-        cmd = r"screen -S aurum -X stuff $'\003'"
-        self._dash_cockpit_action("STOP", cmd, "Ctrl+C sent")
+        self._dash_cockpit_action("STOP", _build_vps_stop_command(), "Ctrl+C sent")
 
     def _dash_cockpit_deploy(self):
-        cmd = "cd ~/aurum.finance && git pull"
+        cmd = f"cd {_vps_project()} && git pull"
         self._dash_cockpit_action("DEPLOY", cmd, "git pull done", timeout=30)
 
     def _dash_cockpit_toggle_stream(self):
         """Toggle live streaming of the log file via `ssh ... tail -f`."""
-        if self._dash_cockpit_streaming:
-            self._dash_cockpit_kill_stream()
-            btn = self._dash_widgets.get(("cp_stream_btn",))
-            if btn: btn.configure(text="  STREAM LOGS  ", bg=AMBER_B)
-            head = self._dash_widgets.get(("cp_log_head",))
-            if head: head.configure(text=" LIVE LOG (polled every 5s) ")
-            return
+        cockpit_tab_mod.toggle_stream(
+            self,
+            subprocess_mod=subprocess,
+            threading_mod=threading,
+            no_window=_NO_WINDOW,
+            build_vps_ssh_command=_build_vps_ssh_command,
+            build_vps_log_tail_command=_build_vps_log_tail_command,
+            vps_project=_vps_project,
+            colors={"AMBER": AMBER, "AMBER_B": AMBER_B},
+        )
 
-        # Start stream
-        log_text = self._dash_widgets.get(("cp_log_text",))
-        if log_text:
-            log_text.configure(state="normal")
-            log_text.delete("1.0", "end")
-            log_text.insert("1.0", "— starting live stream... —\n")
-            log_text.configure(state="disabled")
+    def _dash_cockpit_attach_stream(self, proc):
+        cockpit_tab_mod.attach_stream(
+            self,
+            proc,
+            colors={"RED": RED},
+            threading_mod=threading,
+        )
 
-        try:
-            self._dash_cockpit_stream = subprocess.Popen(
-                ["ssh", "-o", "StrictHostKeyChecking=no",
-                 "-o", "ConnectTimeout=5",
-                 "-o", "BatchMode=yes",
-                 VPS_HOST,
-                 "tail -f ~/aurum.finance/data/live/*/logs/live.log 2>/dev/null"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-                creationflags=_NO_WINDOW,
-            )
-        except (FileNotFoundError, OSError) as e:
-            if log_text:
-                log_text.configure(state="normal")
-                log_text.insert("end", f"— stream failed: {e} —\n")
-                log_text.configure(state="disabled")
-            return
-
-        self._dash_cockpit_streaming = True
-        btn = self._dash_widgets.get(("cp_stream_btn",))
-        if btn: btn.configure(text="  STOP STREAM  ", bg=RED)
-        head = self._dash_widgets.get(("cp_log_head",))
-        if head: head.configure(text=" LIVE LOG (streaming) ")
-
-        def reader():
-            proc = self._dash_cockpit_stream
-            if proc is None or proc.stdout is None:
-                return
-            try:
-                # readline() instead of `for line in proc.stdout:` because the
-                # iterator buffers aggressively and can hang even after the
-                # process is terminated. readline returns '' on EOF.
-                while self._dash_cockpit_streaming:
-                    try:
-                        line = proc.stdout.readline()
-                    except (ValueError, OSError):
-                        # pipe closed underneath us
-                        break
-                    if not line:  # EOF
-                        break
-                    if not self._dash_cockpit_streaming:
-                        break
-                    def append(l=line):
-                        if not getattr(self, "_dash_alive", False):
-                            return
-                        lt = self._dash_widgets.get(("cp_log_text",))
-                        if lt is None: return
-                        try:
-                            if not lt.winfo_exists(): return
-                            lt.configure(state="normal")
-                            lt.insert("end", l)
-                            # Trim to last 500 lines to prevent memory growth
-                            total = int(lt.index("end-1c").split(".")[0])
-                            if total > 500:
-                                lt.delete("1.0", f"{total - 500}.0")
-                            lt.see("end")
-                            lt.configure(state="disabled")
-                        except tk.TclError:
-                            pass
-                    try: self.after(0, append)
-                    except Exception: return
-            except Exception:
-                pass
-
-        threading.Thread(target=reader, daemon=True).start()
+    def _dash_cockpit_stream_reader(self, proc):
+        cockpit_tab_mod.stream_reader(self, proc, tk_mod=tk)
 
     def _dash_cockpit_kill_stream(self):
         """Idempotent — safe to call multiple times even if no stream exists.
         Explicitly closes stdout to unblock the reader thread."""
-        self._dash_cockpit_streaming = False
-        proc = self._dash_cockpit_stream
-        self._dash_cockpit_stream = None  # clear handle first so kill is idempotent
-        if proc is None:
-            return
-        # Close stdout before terminating — this unblocks any reader
-        # thread that's sitting in readline() waiting for input.
-        if proc.stdout is not None:
-            try: proc.stdout.close()
-            except (OSError, ValueError): pass
-        try:
-            proc.terminate()
-            try: proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                try: proc.wait(timeout=1)
-                except subprocess.TimeoutExpired: pass
-        except (OSError, ValueError):
-            pass
+        cockpit_tab_mod.kill_stream(self, subprocess_mod=subprocess)
 
-    # ── PAPER: edit dialog ────────────────────────────────
     def _dash_paper_edit_dialog(self):
         """Modal-ish dialog to edit the persistent paper account state.
         Lets the user set balance, deposit, withdraw, or reset."""
-        from core.portfolio_monitor import PortfolioMonitor
-        state = PortfolioMonitor.paper_state_load()
-        current = float(state.get("current_balance", 0) or 0)
-        initial = float(state.get("initial_balance", 0) or 0)
-
-        dlg = tk.Toplevel(self)
-        dlg.title("Edit Paper Account")
-        dlg.configure(bg=BG)
-        dlg.transient(self)
-        dlg.grab_set()
-        dlg.resizable(False, False)
-        # Center over parent
-        try:
-            self.update_idletasks()
-            x = self.winfo_rootx() + (self.winfo_width()  // 2) - 220
-            y = self.winfo_rooty() + (self.winfo_height() // 2) - 180
-            dlg.geometry(f"440x360+{max(x, 0)}+{max(y, 0)}")
-        except Exception:
-            dlg.geometry("440x360")
-        try:
-            ico = ROOT / "server" / "logo" / "aurum.ico"
-            if ico.exists(): dlg.iconbitmap(str(ico))
-        except Exception: pass
-
-        # Header
-        tk.Label(dlg, text=" EDIT PAPER ACCOUNT ",
-                 font=(FONT, 9, "bold"), fg=BG, bg=AMBER,
-                 padx=10, pady=6).pack(fill="x", padx=16, pady=(16, 0))
-        tk.Frame(dlg, bg=AMBER_D, height=1).pack(fill="x", padx=16)
-
-        info = tk.Frame(dlg, bg=BG); info.pack(fill="x", padx=16, pady=(10, 6))
-        tk.Label(info, text=f"Current balance:  ${current:,.2f}",
-                 font=(FONT, 9), fg=WHITE, bg=BG,
-                 anchor="w").pack(fill="x")
-        tk.Label(info, text=f"Initial balance:  ${initial:,.2f}",
-                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(fill="x")
-        tk.Label(info,
-                 text=f"Deposits: ${state.get('total_deposits', 0):,.2f}  ·  "
-                      f"Withdraws: ${state.get('total_withdraws', 0):,.2f}",
-                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(fill="x")
-        tk.Label(info,
-                 text=f"Realized PnL: ${state.get('realized_pnl', 0):,.2f}  ·  "
-                      f"Trades: {len(state.get('trades') or [])}",
-                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w").pack(fill="x")
-
-        tk.Frame(dlg, bg=DIM2, height=1).pack(fill="x", padx=16, pady=(8, 6))
-
-        # Input row
-        form = tk.Frame(dlg, bg=BG); form.pack(fill="x", padx=16, pady=(2, 4))
-        tk.Label(form, text="New balance  $", font=(FONT, 9),
-                 fg=AMBER, bg=BG).pack(side="left")
-        entry = tk.Entry(form, font=(FONT, 10, "bold"),
-                         fg=WHITE, bg=BG3, insertbackground=AMBER,
-                         bd=0, relief="flat", width=14)
-        entry.pack(side="left", padx=(4, 0), ipady=4)
-        entry.insert(0, f"{current:.2f}")
-        entry.select_range(0, "end")
-        entry.focus_set()
-
-        note_f = tk.Frame(dlg, bg=BG); note_f.pack(fill="x", padx=16, pady=(2, 8))
-        tk.Label(note_f, text="Note         ", font=(FONT, 8),
-                 fg=DIM, bg=BG).pack(side="left")
-        note_entry = tk.Entry(note_f, font=(FONT, 8),
-                              fg=WHITE, bg=BG3, insertbackground=AMBER,
-                              bd=0, relief="flat")
-        note_entry.pack(side="left", fill="x", expand=True, ipady=3)
-        note_entry.insert(0, "manual adjust")
-
-        # Status line
-        status_l = tk.Label(dlg, text="", font=(FONT, 7),
-                            fg=DIM, bg=BG, anchor="w")
-        status_l.pack(fill="x", padx=16, pady=(0, 6))
-
-        def _invalidate_paper_cache():
-            """Clear stale cached paper snapshot so the next portfolio render
-            re-reads from the (just-updated) paper_state.json file. Avoids a
-            race where a concurrent refresh() would overwrite the edit."""
-            pm = self._get_portfolio_monitor()
-            try:
-                with pm._lock:
-                    pm._cache.pop("paper", None)
-            except Exception:
-                pass
-
-        def _apply():
-            raw = entry.get().strip().replace(",", "").replace("$", "")
-            try:
-                val = float(raw)
-            except ValueError:
-                status_l.configure(text="✗ invalid amount", fg=RED)
-                return
-            if val < 0:
-                status_l.configure(text="✗ balance cannot be negative", fg=RED)
-                return
-            note = note_entry.get().strip() or "manual adjust"
-            PortfolioMonitor.paper_set_balance(val, note=note)
-            _invalidate_paper_cache()
-            delta = val - current
-            status_l.configure(
-                text=f"✓ saved  ·  {'+'  if delta >= 0 else ''}${delta:,.2f}  →  ${val:,.2f}",
-                fg=GREEN)
-            self.after(500, dlg.destroy)
-            # Re-render current tab (portfolio or home) to show fresh data
-            self.after(550, self._dash_force_refresh)
-
-        def _reset():
-            PortfolioMonitor.paper_reset()
-            _invalidate_paper_cache()
-            status_l.configure(text="✓ reset to default $10,000", fg=GREEN)
-            self.after(500, dlg.destroy)
-            self.after(550, self._dash_force_refresh)
-
-        # Buttons
-        btns = tk.Frame(dlg, bg=BG); btns.pack(fill="x", padx=16, pady=(6, 14))
-
-        def _mkbtn(parent, label, color, cmd):
-            b = tk.Label(parent, text=f"  {label}  ",
-                         font=(FONT, 8, "bold"),
-                         fg=BG, bg=color, cursor="hand2",
-                         padx=8, pady=5)
-            b.bind("<Button-1>", lambda e: cmd())
-            b.bind("<Enter>", lambda e: b.configure(bg=AMBER_B))
-            b.bind("<Leave>", lambda e: b.configure(bg=color))
-            return b
-
-        _mkbtn(btns, "APPLY",  GREEN, _apply).pack(side="left", padx=(0, 6))
-        _mkbtn(btns, "RESET",  RED,   _reset).pack(side="left", padx=6)
-        _mkbtn(btns, "CANCEL", DIM2,  dlg.destroy).pack(side="right")
-
-        # Quick-action buttons (deposit/withdraw shortcuts)
-        quick = tk.Frame(dlg, bg=BG); quick.pack(fill="x", padx=16, pady=(0, 10))
-        tk.Label(quick, text="Quick:", font=(FONT, 7),
-                 fg=DIM, bg=BG).pack(side="left", padx=(0, 6))
-        for label, amt in [("+$1K", 1000), ("+$5K", 5000),
-                           ("-$1K", -1000), ("-$5K", -5000)]:
-            def _q(_e=None, a=amt):
-                new = max(0, current + a)
-                entry.delete(0, "end")
-                entry.insert(0, f"{new:.2f}")
-                note_entry.delete(0, "end")
-                note_entry.insert(0, f"quick {'+' if a >= 0 else ''}${a}")
-            qb = tk.Label(quick, text=f" {label} ",
-                          font=(FONT, 7, "bold"),
-                          fg=AMBER, bg=BG3, cursor="hand2",
-                          padx=5, pady=2)
-            qb.pack(side="left", padx=2)
-            qb.bind("<Button-1>", _q)
-
-        dlg.bind("<Return>", lambda e: _apply())
-        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dashboard_controls_mod.dash_paper_edit_dialog(
+            self,
+            tk_mod=tk,
+            colors={
+                "BG": BG,
+                "BG3": BG3,
+                "PANEL": PANEL,
+                "AMBER": AMBER,
+                "AMBER_B": AMBER_B,
+                "AMBER_D": AMBER_D,
+                "WHITE": WHITE,
+                "DIM": DIM,
+                "DIM2": DIM2,
+                "GREEN": GREEN,
+                "RED": RED,
+            },
+            font_name=FONT,
+            root_path=ROOT,
+        )
 
     def _dash_exit_to_markets(self):
-        self._dash_alive = False
-        self._dash_cockpit_kill_stream()
-        aid = getattr(self, "_dash_after_id", None)
-        if aid:
-            try: self.after_cancel(aid)
-            except Exception: pass
-        self._dash_after_id = None
-        self._markets()
+        dashboard_controls_mod.dash_exit_to_markets(self)
 
-    # ─── COMMAND CENTER ──────────────────────────────────
+    # --- COMMAND CENTER ----------------------------------
     def _get_site_runner(self):
         """Lazily instantiate the singleton SiteRunner."""
-        sr = getattr(self, "_site_runner_inst", None)
-        if sr is None:
-            from core.site_runner import SiteRunner
-            sr = SiteRunner()
-            self._site_runner_inst = sr
-        return sr
+        return command_center_mod.get_site_runner(self)
 
     def _command_center(self):
-        self._clr(); self._clear_kb()
-        # Don't clobber the existing nav stack — other screens may have
-        # pushed entries. Only seed it if truly empty.
-        if not self.history:
-            self.history = ["main"]
-        self.h_path.configure(text="> COMMAND CENTER")
-        self.h_stat.configure(text="MANAGE", fg=AMBER_D)
-        self.f_lbl.configure(text="ESC voltar  |  número para selecionar  |  H hub")
-        self._kb("<Escape>", lambda: self._menu("main"))
-        self._kb("<Key-0>", lambda: self._menu("main"))
-        self._bind_global_nav()
-
-        _outer, body = self._ui_page_shell(
-            "COMMAND CENTER",
-            "Administrative routing for local site, deploy and system control",
+        command_center_mod.command_center(
+            self,
+            colors={
+                "AMBER_D": AMBER_D,
+                "DIM": DIM,
+                "BG": BG,
+                "BG2": BG2,
+                "GREEN": GREEN,
+                "AMBER": AMBER,
+                "WHITE": WHITE,
+            },
+            command_roadmaps=COMMAND_ROADMAPS,
         )
-        panel = self._ui_panel_frame(body, "CONTROL SURFACES", "Operational and infrastructure workflows")
-
-        sr = self._get_site_runner()
-        site_running = sr.is_running()
-
-        items = [
-            ("SITE LOCAL", "Dev server (npm/vite/next)",
-             True, self._site_local, "● RUNNING" if site_running else None),
-            ("DEPLOY",     "Push to production",         False,
-             lambda: self._command_coming_soon("DEPLOY"),    None),
-            ("SERVERS",    "VPS status & SSH",           False,
-             lambda: self._command_coming_soon("SERVERS"),   None),
-            ("DATABASES",  "Connections & backups",      False,
-             lambda: self._command_coming_soon("DATABASES"), None),
-            ("SERVICES",   "Background processes",       False,
-             lambda: self._command_coming_soon("SERVICES"),  None),
-            ("SYSTEM",     "CPU, RAM, disk, network",    False,
-             lambda: self._command_coming_soon("SYSTEM"),    None),
-        ]
-
-        self._ui_note(
-            panel,
-            "Local site control is active. Remaining surfaces stay documented until implementation is wired.",
-            fg=DIM,
-        )
-
-        for i, (name, desc, available, cmd, tag) in enumerate(items):
-            num = i + 1
-            row, nl, dl = self._ui_action_row(
-                panel, str(num), name, desc,
-                available=available,
-                tag=tag or ("COMING SOON" if not available else None),
-                tag_fg=BG if tag else DIM,
-                tag_bg=GREEN if tag else BG2,
-                title_width=18,
-            )
-
-            for w in [row, nl, dl]:
-                w.bind("<Button-1>", lambda e, c=cmd: c())
-                if available:
-                    w.bind("<Enter>", lambda e, n=nl: n.configure(fg=AMBER))
-                    w.bind("<Leave>", lambda e, n=nl: n.configure(fg=WHITE))
-            self._kb(f"<Key-{num}>", cmd)
-
-        self._ui_back_row(panel, lambda: self._menu("main"))
 
     def _command_coming_soon(self, name):
-        self._clr(); self._clear_kb()
-        self.h_path.configure(text=f"> COMMAND CENTER > {name}")
-        self.h_stat.configure(text="ROADMAP", fg=DIM)
-        self.f_lbl.configure(text="ESC voltar  |  H hub")
-        self._kb("<Escape>", self._command_center)
-        self._kb("<Key-0>", self._command_center)
-        self._bind_global_nav()
+        command_center_mod.command_coming_soon(
+            self,
+            name,
+            colors={"DIM": DIM},
+            command_roadmaps=COMMAND_ROADMAPS,
+        )
 
-        roadmap = COMMAND_ROADMAPS.get(name, ["Coming soon"])
-
-        _outer, body = self._ui_page_shell(name, "Roadmap placeholder for command-center pipeline")
-        box = self._ui_panel_frame(body, "ROADMAP", f"{name} implementation plan")
-        for item in roadmap:
-            self._ui_note(box, f"[ ] {item}", fg=DIM)
-        self._ui_back_row(box, lambda: self._command_center())
-
-    # ── COMMAND CENTER · SITE LOCAL ──────────────────────
+    # -- COMMAND CENTER · SITE LOCAL ----------------------
     def _site_local(self):
-        self._clr(); self._clear_kb()
-        self.history = ["main", "command"]
-        self.h_path.configure(text="> COMMAND CENTER > SITE LOCAL")
-        self.f_lbl.configure(text="ESC voltar  |  H hub")
-        self._kb("<Escape>", self._command_center)
-        self._bind_global_nav()
-
-        sr = self._get_site_runner()
-        if sr.is_running():
-            self._site_running_screen(sr)
-        else:
-            self._site_config_screen(sr)
+        command_center_mod.site_local(self)
 
     def _site_config_screen(self, sr):
-        self.h_stat.configure(text="● STOPPED", fg=RED)
-
-        _outer, body = self._ui_page_shell(
-            "SITE LOCAL",
-            "Local site runner configuration and launch controls",
-            content_width=860,
+        command_center_mod.site_config_screen(
+            self,
+            sr,
+            tk_mod=tk,
+            colors={
+                "BG": BG,
+                "BG3": BG3,
+                "AMBER": AMBER,
+                "AMBER_D": AMBER_D,
+                "DIM": DIM,
+                "WHITE": WHITE,
+                "GREEN": GREEN,
+                "RED": RED,
+            },
+            font_name=FONT,
         )
-        box = self._ui_panel_frame(body, "SITE RUNNER", "Resolved local app command and operator settings")
-
-        framework_d, command_d = sr.resolved_command()
-        info = [
-            ("Project Dir", sr.config.get("project_dir") or "(not set)"),
-            ("Framework",   f"{sr.config.get('framework','auto')}  →  {framework_d}"),
-            ("Port",        str(sr.config.get("port", 3000))),
-            ("Command",     command_d),
-            ("Auto-open",   "yes" if sr.config.get("auto_open_browser") else "no"),
-        ]
-        for label, value in info:
-            row = tk.Frame(box, bg=BG); row.pack(fill="x", pady=2)
-            tk.Label(row, text=label, font=(FONT, 8, "bold"),
-                     fg=DIM, bg=BG, width=14, anchor="w").pack(side="left")
-            tk.Label(row, text=value, font=(FONT, 9),
-                     fg=WHITE, bg=BG, anchor="w").pack(side="left", padx=4)
-
-        self._ui_note(box, "Status: stopped", fg=RED)
-
-        bf = tk.Frame(box, bg=BG); bf.pack(fill="x", pady=(8, 4))
-        def mkbtn(text, color, fg, cmd):
-            btn = tk.Label(bf, text=text, font=(FONT, 10, "bold"),
-                           fg=fg, bg=color, cursor="hand2", padx=14, pady=5)
-            btn.pack(side="left", padx=4)
-            btn.bind("<Button-1>", lambda e: cmd())
-            return btn
-
-        mkbtn(" START ",        GREEN, BG,    self._site_start)
-        mkbtn(" CONFIG ",       AMBER, BG,    self._site_config_edit)
-        mkbtn(" OPEN BROWSER ", BG3,   AMBER, self._site_open_browser)
-        mkbtn(" VOLTAR ",       BG3,   DIM,   self._command_center)
-
-        if not sr.config.get("project_dir"):
-            self._ui_note(box, "Warning: configure PROJECT_DIR before START.", fg=AMBER_D)
 
     def _site_running_screen(self, sr):
-        self.h_stat.configure(text="● RUNNING", fg=GREEN)
-        framework, command = sr.resolved_command()
-        port = sr.config.get("port", 3000)
-
-        _outer, body = self._ui_page_shell(
-            "SITE LOCAL",
-            "Local runner status, console stream and browser routing",
+        command_center_mod.site_running_screen(
+            self,
+            sr,
+            tk_mod=tk,
+            colors={
+                "BG": BG,
+                "PANEL": PANEL,
+                "AMBER": AMBER,
+                "AMBER_D": AMBER_D,
+                "DIM": DIM,
+                "WHITE": WHITE,
+                "GREEN": GREEN,
+                "RED": RED,
+            },
+            font_name=FONT,
         )
-        top = self._ui_panel_frame(body, "SITE RUNNER", f"Running on {framework}  ·  port {port}")
-        meta = tk.Frame(top, bg=BG)
-        meta.pack(fill="x", pady=(0, 8))
-        tk.Label(meta, text="Status: running", font=(FONT, 8, "bold"),
-                 fg=GREEN, bg=BG).pack(side="left")
-        self._site_uptime_lbl = tk.Label(
-            meta, text=f"PID {sr.proc.pid if sr.proc else '?'}   uptime {sr.uptime()}",
-            font=(FONT, 7), fg=DIM, bg=BG)
-        self._site_uptime_lbl.pack(side="left", padx=12)
-        url_lbl = tk.Label(meta, text=sr.url(), font=(FONT, 7),
-                           fg=AMBER_D, bg=BG, cursor="hand2")
-        url_lbl.pack(side="right", padx=8)
-        url_lbl.bind("<Button-1>", lambda e: self._site_open_browser())
-
-        cf = tk.Frame(body, bg=PANEL)
-        cf.pack(fill="both", expand=True)
-        sb = tk.Scrollbar(cf, bg=BG, troughcolor=BG, highlightthickness=0, bd=0)
-        sb.pack(side="right", fill="y")
-        self.site_con = tk.Text(cf, bg=PANEL, fg=WHITE, font=(FONT, 9), wrap="word",
-                                borderwidth=0, highlightthickness=0,
-                                padx=10, pady=6, state="disabled", cursor="arrow",
-                                yscrollcommand=sb.set)
-        self.site_con.pack(fill="both", expand=True)
-        sb.config(command=self.site_con.yview)
-        self.site_con.tag_configure("a", foreground=AMBER)
-        self.site_con.tag_configure("g", foreground=GREEN)
-        self.site_con.tag_configure("r", foreground=RED)
-        self.site_con.tag_configure("d", foreground=DIM)
-        self.site_con.tag_configure("w", foreground=WHITE)
-
-        bf = tk.Frame(body, bg=BG)
-        bf.pack(fill="x", pady=(8, 0))
-        def mkbtn(text, fg, cmd):
-            btn = tk.Label(bf, text=text, font=(FONT, 9, "bold"),
-                           fg=fg, bg=BG, cursor="hand2", padx=10, pady=5)
-            btn.pack(side="left", padx=2, pady=2)
-            btn.bind("<Button-1>", lambda e: cmd())
-        mkbtn(" STOP ",         RED,   self._site_stop)
-        mkbtn(" OPEN BROWSER ", AMBER, self._site_open_browser)
-        mkbtn(" CLEAR ",        DIM,   self._site_clear_console)
-        mkbtn(" BACK ",         DIM,   self._command_center)
-
-        # Reset poll cursor + start polling. Buffer dump happens on first tick.
-        self._site_seen_idx = 0
-        self._site_screen_alive = True
-        self._site_poll()
 
     def _site_print(self, line, default_tag="w"):
-        if not hasattr(self, "site_con"):
-            return
-        try:
-            if not self.site_con.winfo_exists():
-                return
-        except Exception:
-            return
-        import re
-        clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line)
-        low = clean.lower()
-        tag = default_tag
-        if "✓" in clean or "ready in" in low or "compiled" in low:
-            tag = "g"
-        elif "✗" in clean or "error" in low or "failed" in low or "sigterm" in low:
-            tag = "r"
-        elif "warn" in low:
-            tag = "a"
-        try:
-            self.site_con.configure(state="normal")
-            self.site_con.insert("end", clean, tag)
-            self.site_con.see("end")
-            self.site_con.configure(state="disabled")
-        except Exception:
-            pass
+        command_center_mod.site_print(self, line, default_tag=default_tag)
 
     def _site_poll(self):
-        if not getattr(self, "_site_screen_alive", False):
-            return
-        sr = getattr(self, "_site_runner_inst", None)
-        if sr is None:
-            return
-
-        new_idx, lines = sr.lines_after(getattr(self, "_site_seen_idx", 0))
-        for line in lines:
-            self._site_print(line)
-        self._site_seen_idx = new_idx
-
-        # Refresh uptime/pid line
-        try:
-            if hasattr(self, "_site_uptime_lbl") and self._site_uptime_lbl.winfo_exists():
-                pid = sr.proc.pid if sr.proc else "?"
-                self._site_uptime_lbl.configure(
-                    text=f"PID {pid}   uptime {sr.uptime()}")
-        except Exception:
-            pass
-
-        if not sr.is_running():
-            self._site_print("\n  >> PROCESS EXITED\n", "r")
-            self._site_screen_alive = False
-            self.after(800, self._site_local)
-            return
-
-        self.after(150, self._site_poll)
+        command_center_mod.site_poll(self)
 
     def _site_start(self):
-        sr = self._get_site_runner()
-        if sr.is_running():
-            self.h_stat.configure(text="ALREADY RUNNING", fg=AMBER_D); return
-        if not (sr.config.get("project_dir") or "").strip():
-            self.h_stat.configure(text="DEFINE PROJECT_DIR FIRST", fg=RED)
-            return
-        if not Path(sr.config["project_dir"]).is_dir():
-            self.h_stat.configure(text="DIR NOT FOUND", fg=RED)
-            return
-        ok, msg = sr.start()
-        if not ok:
-            self.h_stat.configure(text=f"FAIL: {msg[:32]}", fg=RED)
-            return
-        if sr.config.get("auto_open_browser"):
-            try:
-                import webbrowser
-                self.after(1500, lambda: webbrowser.open(sr.url()))
-            except Exception:
-                pass
-        # Re-render — picks up the running state and builds the console screen.
-        self._site_local()
+        command_center_mod.site_start(
+            self,
+            path_cls=Path,
+            colors={"AMBER_D": AMBER_D, "RED": RED},
+        )
 
     def _site_stop(self):
-        sr = getattr(self, "_site_runner_inst", None)
-        if sr and sr.is_running():
-            try: sr.stop()
-            except Exception: pass
-        self._site_screen_alive = False
-        self.after(200, self._site_local)
+        command_center_mod.site_stop(self)
 
     def _site_open_browser(self):
-        sr = self._get_site_runner()
-        if not sr.is_running():
-            self.h_stat.configure(text="server not running", fg=AMBER_D)
-            return
-        try:
-            import webbrowser
-            webbrowser.open(sr.url())
-            self.h_stat.configure(text="opened", fg=GREEN)
-        except Exception as e:
-            self.h_stat.configure(text=f"browser fail: {str(e)[:24]}", fg=RED)
+        command_center_mod.site_open_browser(
+            self,
+            colors={"AMBER_D": AMBER_D, "GREEN": GREEN, "RED": RED},
+        )
 
     def _site_clear_console(self):
-        try:
-            if hasattr(self, "site_con") and self.site_con.winfo_exists():
-                self.site_con.configure(state="normal")
-                self.site_con.delete("1.0", "end")
-                self.site_con.configure(state="disabled")
-        except Exception:
-            pass
-        # Skip ahead so we don't redump the buffer that was just cleared.
-        sr = getattr(self, "_site_runner_inst", None)
-        if sr is not None:
-            self._site_seen_idx = sr.total_emitted
+        command_center_mod.site_clear_console(self)
 
     def _site_config_edit(self):
-        sr = self._get_site_runner()
-        def load():
-            return {
-                "project_dir": sr.config.get("project_dir", ""),
-                "framework":   sr.config.get("framework", "auto"),
-                "port":        str(sr.config.get("port", 3000)),
-                "command":     sr.config.get("command", ""),
-                "auto_open":   "yes" if sr.config.get("auto_open_browser", True) else "no",
-            }
-        def save(v):
-            try:
-                raw = (v.get("port") or "").strip()
-                port = int(raw) if raw else 3000
-            except ValueError:
-                port = 3000
-            sr.save_config(
-                project_dir=(v.get("project_dir") or "").strip(),
-                framework=((v.get("framework") or "auto").strip() or "auto"),
-                port=port,
-                command=(v.get("command") or "").strip(),
-                auto_open_browser=((v.get("auto_open") or "").strip().lower()
-                                   in ("yes", "y", "true", "1")),
-            )
-            self.after(1500, self._site_local)
-        self._cfg_edit("SITE LOCAL", [
-            ("project_dir", "PROJECT DIR",  "absolute path",                                 False),
-            ("framework",   "FRAMEWORK",    "auto/next/vite/nuxt/gatsby/django/static/custom", False),
-            ("port",        "PORT",         "default 3000",                                  False),
-            ("command",     "COMMAND",      "override (optional)",                           False),
-            ("auto_open",   "AUTO BROWSER", "yes/no",                                        False),
-        ], load, save, back_fn=self._site_local)
+        command_center_mod.site_config_edit(self)
 
-    # ─── QUIT ────────────────────────────────────────────
+    # --- QUIT --------------------------------------------
     def _quit(self):
+        # Flip the alive flag first so any background worker (warmup thread,
+        # poller tick, log tail reader) checking it can exit promptly.
+        self._ui_alive = False
+        aid = getattr(self, "_ui_task_after_id", None)
+        if aid is not None:
+            try:
+                self.after_cancel(aid)
+            except Exception:
+                pass
+            self._ui_task_after_id = None
+        # User-facing confirmations for running work. User already clicked X;
+        # answering "no" returns without shutdown so we don't freeze their work.
         if self.proc and self.proc.poll() is None:
             r = messagebox.askyesnocancel("AURUM", "Engine running. Stop before closing?")
-            if r is None: return
+            if r is None:
+                return
             if r:
                 self.proc.terminate()
-                try: self.proc.wait(timeout=3)
-                except: self.proc.kill()
+                try:
+                    self.proc.wait(timeout=1)
+                except Exception:
+                    try:
+                        self.proc.kill()
+                    except Exception:
+                        pass
         elif self._exec_managed_info is not None:
             r = messagebox.askyesnocancel("AURUM", "Background backtest running. Stop before closing?")
-            if r is None: return
+            if r is None:
+                return
             if r:
                 try:
-                    from core.proc import stop_proc
+                    from core.ops.proc import stop_proc
                     stop_proc(int(self._exec_managed_info["pid"]), expected=self._exec_managed_info)
                 except Exception:
                     pass
         sr = getattr(self, "_site_runner_inst", None)
         if sr and sr.is_running():
             r = messagebox.askyesnocancel("AURUM", "Dev server running. Stop before closing?")
-            if r is None: return
+            if r is None:
+                return
             if r:
-                try: sr.stop()
-                except Exception: pass
+                try:
+                    sr.stop()
+                except Exception:
+                    pass
+        try:
+            _dump_screen_metrics(reason="quit")
+        except Exception:
+            pass
+        # Everything else (shadow poller, ssh tunnel) is stopped by
+        # destroy() -> _shutdown_runtime. Centralizing avoids the
+        # double-stop path that used to hang on the 3s tunnel timeout.
         self.destroy()
+
+
+def __getattr__(name: str):
+    """Module-level lazy attribute para MAIN_GROUPS / MARKETS / _conn.
+
+    Python 3.7+ chama isto quando `name` nao esta em module.__dict__.
+    Os 3 nomes abaixo foram removidos do escopo top-level pelo commit
+    7532224 (lazy-load pra cortar ~530ms do boot) — mas como o launcher
+    e' importado por varios call-sites externos (launcher_support.screens.*,
+    tests, plans) que ainda esperam `launcher.MARKETS` / `launcher._conn`,
+    interceptamos aqui pra manter retrocompat sem recarregar pandas no boot.
+
+    Incidente 2026-04-23: strategies.render() acessava `_launcher_mod.MARKETS`
+    e o AttributeError engolido pelo Tk callback fazia a tela BACKTEST ficar
+    em branco. Fix local no strategies.py + este hardening defensivo.
+    """
+    if name == "MAIN_GROUPS":
+        _ensure_main_groups()
+        return globals()["MAIN_GROUPS"]
+    if name == "MARKETS":
+        _CM, _MARKETS = _lazy_connections()
+        return _MARKETS
+    if name == "_conn":
+        return _get_conn()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":
     App().mainloop()
+

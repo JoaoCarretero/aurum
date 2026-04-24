@@ -23,18 +23,19 @@ from scipy.special import logsumexp
 log = logging.getLogger("chronos")
 
 # ── Dependency checks ─────────────────────────────────────────
+# hmmlearn is a small pure-Python package — importing eagerly is fine.
+# arch ships a C extension that occasionally crashes during pytest
+# shutdown on Windows+Py3.14; defer to lazy import inside the one
+# function that actually uses it. find_spec gives us the availability
+# flag without touching the extension.
+import importlib.util as _importlib_util
+
 _HAS_HMM = False
-_HAS_ARCH = False
+_HAS_ARCH = _importlib_util.find_spec("arch") is not None
 
 try:
     from hmmlearn.hmm import GaussianHMM
     _HAS_HMM = True
-except ImportError:
-    pass
-
-try:
-    from arch import arch_model
-    _HAS_ARCH = True
 except ImportError:
     pass
 
@@ -178,11 +179,39 @@ class GaussianHMMNp:
             pass
         if X.ndim == 1:
             X = X.reshape(-1, 1)
+
+        # Cache consult — avoid re-fitting across walk-forward folds.
+        from core.hmm_cache import compute_cache_key, cache_get, cache_set
+        _params = {
+            "n_states": self.n_states,
+            "n_iter": self.n_iter,
+            "tol": self.tol,
+            "random_state": self.random_state,
+            "min_covar": self.min_covar,
+        }
+        _key = compute_cache_key(X, _params)
+        _cached = cache_get(_key)
+        if _cached is not None:
+            self.means_ = _cached["means_"].copy()
+            self.covars_ = _cached["covars_"].copy()
+            self.transmat_ = _cached["transmat_"].copy()
+            self.startprob_ = _cached["startprob_"].copy()
+            return self
+
         self._init_params(X)
         n_samples = X.shape[0]
         K = self.n_states
 
         if n_samples < 2 or K == 1:
+            # No .copy() here — cache_get copies on retrieval to protect
+            # cached state from caller mutation, which is the stronger
+            # guarantee. Skipping the copy on set saves 4 allocs per miss.
+            cache_set(_key, {
+                "means_": self.means_,
+                "covars_": self.covars_,
+                "transmat_": self.transmat_,
+                "startprob_": self.startprob_,
+            })
             return self
 
         prev_ll = -np.inf
@@ -227,6 +256,13 @@ class GaussianHMMNp:
                 break
             prev_ll = ll
 
+        # No .copy() here — defensive copy happens on cache_get.
+        cache_set(_key, {
+            "means_": self.means_,
+            "covars_": self.covars_,
+            "transmat_": self.transmat_,
+            "startprob_": self.startprob_,
+        })
         return self
 
     # ── Inference ─────────────────────────────────────────────
@@ -517,6 +553,9 @@ def volatility_forecast(df: pd.DataFrame, horizon: int = 8,
         if len(data) < 100:
             return df
 
+        # Lazy import — keeps the C extension out of the process until
+        # someone actually runs a GARCH fit. See top-of-file note.
+        from arch import arch_model
         model = arch_model(data, vol="Garch", p=1, q=1, mean="Zero", rescale=False)
         res = model.fit(disp="off", show_warning=False)
 

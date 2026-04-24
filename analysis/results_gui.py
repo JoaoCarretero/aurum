@@ -21,7 +21,7 @@ from config.params import ACCOUNT_SIZE
 # UI chrome vem do SSOT (core/ui_palette) — alinha com launcher
 # e demais cockpits. Cores específicas de chart (GOLD, BLUE, TEAL,
 # LGRAY, DGRAY) ficam locais porque são paleta de matplotlib.
-from core.ui_palette import (
+from core.ui.ui_palette import (
     BG as BG_WINDOW, PANEL, AMBER, WHITE, DIM, GREEN, RED, FONT,
 )
 

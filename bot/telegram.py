@@ -13,18 +13,26 @@ Comandos:
 Config em config/keys.json:
   "telegram": {
       "bot_token": "123456:ABC-DEF...",
-      "chat_id":   "987654321"
+      "chat_id":   "987654321",
+      "allowed_user_ids": ["987654321"]   # optional — defaults to [chat_id]
   }
+
+Authorization model:
+  * chat_id identifies the conversation where we *send* notifications.
+  * allowed_user_ids is the allowlist of Telegram user IDs that may
+    *issue commands*. In DMs they coincide, but in groups chat_id is
+    the group's id while any member has their own user id — so the
+    two concepts must not be conflated.
 """
 
 import asyncio, json, logging, time
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from core.failure_policy import BEST_EFFORT, DEGRADE_AND_LOG
-from core.health import runtime_health
-from core.transport import RequestSpec, TransportClient
+from core.risk.failure_policy import BEST_EFFORT, DEGRADE_AND_LOG
+from core.ops.health import runtime_health
+from core.data.transport import RequestSpec, TransportClient
 
 if TYPE_CHECKING:
     from engines.live import LiveEngine
@@ -38,18 +46,28 @@ _POLL_INTERVAL = 2          # segundos entre polls de updates
 _MAX_MSG_LEN   = 4000       # Telegram limit ~4096
 
 
-def _load_telegram_config() -> tuple[str, str]:
-    """Retorna (bot_token, chat_id) ou ('','') se não configurado."""
+def _load_telegram_config() -> tuple[str, str, frozenset[str]]:
+    """Retorna (bot_token, chat_id, allowed_user_ids).
+
+    allowed_user_ids defaults to {chat_id} when the key is absent — preserves
+    the prior DM-only behavior without requiring existing configs to change.
+    Returns ('', '', frozenset()) when telegram is not configured.
+    """
     try:
         with open(_KEYS_PATH) as f:
             cfg = json.load(f)
         tg = cfg.get("telegram", {})
         token = tg.get("bot_token", "")
         chat  = str(tg.get("chat_id", ""))
-        return token, chat
+        raw_ids = tg.get("allowed_user_ids")
+        if raw_ids is None:
+            allowed = frozenset({chat}) if chat else frozenset()
+        else:
+            allowed = frozenset(str(x) for x in raw_ids if str(x))
+        return token, chat, allowed
     except Exception:
         runtime_health.record("telegram.config_load_failure")
-        return "", ""
+        return "", "", frozenset()
 
 
 class TelegramNotifier:
@@ -60,7 +78,7 @@ class TelegramNotifier:
 
     def __init__(self, engine: "LiveEngine"):
         self.engine = engine
-        self.token, self.chat_id = _load_telegram_config()
+        self.token, self.chat_id, self.allowed_user_ids = _load_telegram_config()
         self.enabled = bool(self.token and self.chat_id)
         self._offset = 0
         self._session = None      # aiohttp ou None
@@ -75,7 +93,14 @@ class TelegramNotifier:
         return _API.format(token=self.token, method=method)
 
     async def _post(self, method: str, data: dict) -> dict:
-        """POST assíncrono via thread pool (evita instalar aiohttp)."""
+        """POST assíncrono via thread pool (evita instalar aiohttp).
+
+        Returns the parsed JSON response on success. On transport failure,
+        non-2xx status, non-JSON body, or a Telegram ``ok=false`` payload we
+        return ``{}`` but record a health event and log the reason — the old
+        behavior silently swallowed 403s / rate limits so the operator never
+        noticed when the bot stopped reaching the chat.
+        """
         loop = asyncio.get_event_loop()
         try:
             client = TransportClient()
@@ -90,7 +115,6 @@ class TelegramNotifier:
                     )
                 ),
             )
-            return resp.json()
         except Exception as e:
             runtime_health.record("telegram.api_post_failure")
             log.log(
@@ -98,6 +122,22 @@ class TelegramNotifier:
                 f"Telegram API error ({method}): {e}",
             )
             return {}
+
+        try:
+            payload = resp.json()
+        except ValueError:
+            runtime_health.record("telegram.api_non_json")
+            log.warning(f"Telegram {method} returned non-JSON body")
+            return {}
+
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            runtime_health.record("telegram.api_ok_false")
+            log.warning(
+                f"Telegram {method} ok=false "
+                f"code={payload.get('error_code')} desc={payload.get('description', '')[:120]}"
+            )
+            return {}
+        return payload
 
     # ── SEND ──────────────────────────────────────────────────
     async def send(self, text: str, parse_mode: str = "HTML"):
@@ -158,7 +198,7 @@ class TelegramNotifier:
 
     async def notify_startup(self, mode: str, symbols: list):
         """Notificação de arranque."""
-        from config.params import ACCOUNT_SIZE, MAX_OPEN_POSITIONS, INTERVAL, MACRO_SYMBOL, SYMBOLS
+        from config.params import ACCOUNT_SIZE, MAX_OPEN_POSITIONS, INTERVAL, MACRO_SYMBOL
         from engines.live import LIVE_RUN_ID
         msg = (
             f"☿ <b>AURUM Finance · Live Engine v1.0</b>\n"
@@ -196,7 +236,7 @@ class TelegramNotifier:
         pnl = sum(t["pnl"] for t in e.closed_trades)
         ks = e.kill_sw.status()
 
-        from config.params import MACRO_SYMBOL, SYMBOLS
+        from config.params import MACRO_SYMBOL
         from engines.live import LIVE_MODE, TESTNET_MODE, DEMO_MODE
         mode = "DEMO" if DEMO_MODE else "TESTNET" if TESTNET_MODE else "LIVE" if LIVE_MODE else "PAPER"
 
@@ -319,13 +359,19 @@ class TelegramNotifier:
                     chat_id = str(msg.get("chat", {}).get("id", ""))
                     text = msg.get("text", "").strip()
 
-                    # só responde ao chat configurado
+                    # só responde no chat configurado
                     if chat_id != self.chat_id:
                         continue
 
-                    # user auth: verify sender id matches chat_id
+                    # user auth: sender id must be in the explicit allowlist.
+                    # In a group, chat_id is the group — any member would pass
+                    # a chat-id-only check, so we require per-user authorization.
                     from_id = str(msg.get("from", {}).get("id", ""))
-                    if from_id != self.chat_id:
+                    if not self.allowed_user_ids or from_id not in self.allowed_user_ids:
+                        log.warning(
+                            f"Telegram command from unauthorized user id={from_id} "
+                            f"(chat_id={chat_id}) — rejected"
+                        )
                         continue
 
                     # rate limiting

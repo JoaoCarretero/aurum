@@ -23,7 +23,7 @@ from pathlib import Path
 from tkinter import ttk
 
 # ─── HL2 / Source Engine palette (via SSOT core/ui_palette) ──────────────
-from core.ui_palette import (
+from core.ui.ui_palette import (
     BG, BG3, AMBER, AMBER_D, WHITE, DIM, FONT,
 )
 

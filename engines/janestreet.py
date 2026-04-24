@@ -5,7 +5,7 @@
 # v5.0: +OrderBook Depth +Latency Profiler +Regime Detection +Hedge Monitor
 # v5.0: +Fill Probability +Adversarial Detector +OmegaV2 +Dynamic Sizing +Order Flow
 
-import os,sys,json,time,asyncio,logging,signal,math,hmac,hashlib,statistics
+import os,sys,json,time,asyncio,logging,math,hmac,hashlib,statistics
 # Fase 4-H — engine version stamped on every audit row. Bump when the
 # arbitrage decision logic changes materially so auditing can tell which
 # code produced a given order.
@@ -21,7 +21,7 @@ from pathlib import Path
 from datetime import datetime,timezone
 from urllib.parse import urlencode
 from dataclasses import dataclass,field
-from typing import Dict,List,Optional,Tuple
+from typing import Dict,List,Optional
 from collections import deque
 
 import argparse
@@ -50,13 +50,12 @@ from config.janestreet_defaults import (
     MIN_SPREAD, MIN_APR, MAX_POS, POS_PCT, LEV,
     SCAN_S, EXIT_H, MAX_DD_PCT, KILL_LOSSES,
 )
-from bot.telegram import TelegramNotifier
-from core.audit_trail import AuditTrail, OrderEvent
-from core.fs import atomic_write
-from core.risk_gates import (
+from core.risk.audit_trail import AuditTrail, OrderEvent
+from core.ops.fs import atomic_write
+from core.risk.risk_gates import (
     RiskGateConfig, RiskState, GateDecision, check_gates,
 )
-from core.run_manager import append_to_index, snapshot_config
+from core.ops.run_manager import append_to_index, snapshot_config
 
 # Engine-local (nao runtime-tunaveis): ficam aqui
 ACCT=5000.0;CROSS_MAX=3;MAX_EXPO=3000.0
@@ -95,7 +94,7 @@ def _keys(v):
         pw = os.environ.get("AURUM_KEY_PASSWORD")
         if pw:
             try:
-                from core.key_store import KeyStore, KeyStoreCorruptError
+                from core.risk.key_store import KeyStore, KeyStoreCorruptError
                 ks = KeyStore(
                     encrypted=True,
                     plaintext_path=plaintext_path,
@@ -1544,7 +1543,7 @@ class Engine:
 
     def _write_snapshot(s):
         """Atomic snapshot for the ALCHEMY dashboard. Called at end of each scan cycle."""
-        import os, tempfile
+        import os
         try:
             exposure=sum(p.size_usd for p in s.positions)
             drawdown=((s.account-s.peak)/s.peak*100) if s.peak>0 else 0.0
@@ -1578,9 +1577,7 @@ class Engine:
                 "basis_history":getattr(s,"_latest_basis_history",{}),
             }
             snapshot_file=getattr(s,"_snapshot_file",DIR/"state"/"snapshot.json")
-            fd,tmp=tempfile.mkstemp(dir=str(snapshot_file.parent),prefix=".snap_",suffix=".json")
-            with os.fdopen(fd,"w") as f:json.dump(data,f,default=str)
-            os.replace(tmp,snapshot_file)
+            atomic_write(snapshot_file,json.dumps(data,default=str))
         except Exception as e:log.debug(f"snapshot write failed: {e}")
 
     def _check_reload_params(s):

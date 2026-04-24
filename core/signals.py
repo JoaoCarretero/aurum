@@ -233,6 +233,16 @@ def label_trade(df, entry_idx, direction, entry, stop, target):
     Trailing stop inteligente:
       Fase 1: preço move TRAIL_BE_MULT× risco → stop para breakeven
       Fase 2: preço move TRAIL_ACTIVATE_MULT× risco → trailing a TRAIL_DISTANCE_MULT× risco
+
+    NOTE (2026-04-17 audit): the loop begins at ``entry_idx`` while the
+    actual fill happens at ``df.open[entry_idx + 1]`` (see ``calc_levels``).
+    The signal-bar high/low therefore participate in stop/target checks
+    before the trade is technically open. In practice this is benign
+    because the swing-based stop sits below ``swing_low`` and the target
+    is RR bars away, but with very tight stops in high-volatility bars it
+    can flag a false LOSS on the signal bar. Not fixed here because a
+    range-start change would shift every calibrated backtest; tracked as
+    a separate audit item to re-run walk-forward after.
     """
     end       = min(entry_idx + MAX_HOLD, len(df))
     cur_stop  = stop

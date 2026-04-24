@@ -11,11 +11,9 @@ para paths mais rápidos.
 from __future__ import annotations
 
 import logging
-import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Iterable
 
 from macro_brain.persistence.store import macro_series, recent_events
 

@@ -14,7 +14,7 @@ if __name__ == "__main__":
         print("Example: python analysis/compare_runs.py citadel_2026-04-09_1940 citadel_2026-04-09_2304")
         sys.exit(1)
 
-    from core.run_manager import compare_runs, print_compare
+    from core.ops.run_manager import compare_runs, print_compare
 
     run_a = sys.argv[1]
     run_b = sys.argv[2]

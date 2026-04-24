@@ -30,6 +30,34 @@ Discipline
 - AURUM cost model imported from config.params.
 - Backtest-first; no ENGINE_INTERVALS / FROZEN registration until edge
   validated against the bypass baseline.
+
+Edge status (2026-04-16)
+------------------------
+- 1h (730d, default defaults): no edge. WR ~35-41% with symmetric R:R → EV<0.
+- 4h (1460d bluechip, relaxed η 0.65/0.90): η gate strictly beats baseline
+  on all metrics BUT both are catastrophically negative (baseline ROI
+  -1380%, gated ROI -144%).
+- 4h (1460d layer1, relaxed η 0.50/0.95): same pattern — ALGO alone
+  produces -$2485 in 256 trades. No positive-baseline subset found.
+- 1d (2000d): too few bars vs hawkes warmup (2000); engine skips all
+  symbols. Would need hawkes_window_bars < 500 to even try.
+- H2-INV (mean-reversion in ENDO) already rejected in prior session.
+Conclusion: trend-follow with Hawkes ENDO gate is structurally
+incompatible with crypto 1h/4h in this universe. Engine archived as
+experimental — needs new signal base (not EMA cross) to justify revival.
+Do NOT register in FROZEN_ENGINES.
+
+Revalidation status (2026-04-21)
+--------------------------------
+- Anti-overfit split hardcoded for the reopening round:
+  train ≤ 2024-06-01, test 2024-06-01→2025-04-01, holdout 2025-04-01→2026-04-20.
+- Closed 8-config grid tested only lifecycle coherence around the known
+  mismatch `eta_lower=0.65` vs `eta_exit_lower=0.75`.
+- Result: all 8 variants produced 0 trades in train. Diagnostic showed
+  `eta_smooth` never reached the 0.65 lower gate in the stable 4h universe
+  before 2024-06-01 (best pre-train max: FET 0.6344).
+- Protocol stop rule triggered at step 5: no train trades => no defensible
+  train Sharpe, no DSR pass, no promotion to test/holdout. Archive stands.
 """
 
 from __future__ import annotations
@@ -42,6 +70,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from statistics import NormalDist
 from typing import Optional
 
 import numpy as np
@@ -67,12 +96,24 @@ from config.params import (
     _TF_MINUTES,
 )
 from core.data import fetch_all, validate
-from core.fs import atomic_write
+from core.data.cache import load_frame
+from core.ops.fs import atomic_write
 from core.hawkes import rolling_branching_ratio
 from core.indicators import indicators
 
 log = logging.getLogger("GRAHAM")
 _tl = logging.getLogger("GRAHAM.trades")
+
+
+# Anti-overfit split for the 2026-04-21 heavy recalibration round.
+TRAIN_END = "2024-06-01T00:00:00"
+TEST_END = "2025-04-01T00:00:00"
+HOLDOUT_END = "2026-04-20T20:00:00"
+ANTI_OVERFIT_SYMBOLS = (
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
+    "AVAXUSDT", "LINKUSDT", "DOTUSDT", "ATOMUSDT", "NEARUSDT", "INJUSDT",
+    "ARBUSDT", "OPUSDT", "SUIUSDT", "FETUSDT", "SANDUSDT", "AAVEUSDT",
+)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -635,6 +676,218 @@ def run_backtest(all_dfs: dict[str, pd.DataFrame],
     return all_trades, dict(all_vetos), per_sym
 
 
+def load_cached_universe(symbols: list[str] | tuple[str, ...],
+                         interval: str,
+                         futures: bool = True,
+                         min_rows: int = 300) -> dict[str, pd.DataFrame]:
+    """Offline loader for anti-overfit rounds.
+
+    Reads data/.cache directly instead of using fetch_all(), whose freshness
+    check would otherwise force a network fetch for historical batteries.
+    """
+    out: dict[str, pd.DataFrame] = {}
+    for sym in symbols:
+        path = Path("data") / ".cache" / f"{sym}_{interval}_{'futures' if futures else 'spot'}.pkl.gz"
+        df = load_frame(path)
+        if df is None or len(df) < min_rows:
+            continue
+        out[sym] = df.reset_index(drop=True)
+    return out
+
+
+def _start_scan_index(df: pd.DataFrame, params: GrahamParams,
+                      start_time: Optional[str | pd.Timestamp]) -> int:
+    min_idx = max(
+        params.hawkes_window_bars,
+        params.ema_slow * 5,
+        params.structure_lookback,
+        200,
+    )
+    if start_time is None:
+        return min_idx
+    start_ts = pd.Timestamp(start_time)
+    times = pd.to_datetime(df["time"])
+    pos = int(times.searchsorted(start_ts, side="left"))
+    return max(min_idx, pos - 1)
+
+
+def scan_symbol_window(df: pd.DataFrame, symbol: str,
+                       params: Optional[GrahamParams] = None,
+                       initial_equity: float = ACCOUNT_SIZE,
+                       start_time: Optional[str | pd.Timestamp] = None,
+                       end_time: Optional[str | pd.Timestamp] = None,
+                       ) -> tuple[list, dict]:
+    """Scan one symbol on a fixed evaluation window.
+
+    Features are allowed to use full history up to `end_time`, but new entries
+    only count when their actual entry bar falls inside [`start_time`, end_time].
+    """
+    params = params or GrahamParams()
+    if end_time is not None:
+        end_ts = pd.Timestamp(end_time)
+        df = df[pd.to_datetime(df["time"]) <= end_ts].reset_index(drop=True)
+    if df.empty:
+        return [], {"empty_window": 1}
+
+    trades: list[dict] = []
+    vetos: dict[str, int] = defaultdict(int)
+
+    if len(df) < params.hawkes_window_bars + params.structure_lookback + 10:
+        log.warning("%s: too few bars (%d); skipping", symbol, len(df))
+        return [], {"too_few_bars": 1}
+
+    account = float(initial_equity)
+    n = len(df)
+    start_idx = _start_scan_index(df, params, start_time)
+    start_ts = pd.Timestamp(start_time) if start_time is not None else None
+    funding_periods_per_8h = 8 * 60 / _TF_MINUTES.get(params.interval, 15)
+    open_trade: Optional[dict] = None
+
+    for t in range(start_idx, n - 1):
+        if open_trade is not None:
+            atr_now = float(df["atr"].iloc[t])
+            update_trailing_stop(
+                open_trade,
+                high=float(df["high"].iloc[t]),
+                low=float(df["low"].iloc[t]),
+                atr_now=atr_now,
+                params=params,
+            )
+            resolved = _resolve_exit(df, t, open_trade, params)
+            if resolved is not None:
+                reason, exit_price = resolved
+                duration = t - open_trade["entry_idx"]
+                pnl = _pnl_with_costs(
+                    direction=open_trade["direction"],
+                    entry=open_trade["entry"],
+                    exit_p=exit_price,
+                    size=open_trade["size"],
+                    duration=duration,
+                    funding_periods_per_8h=funding_periods_per_8h,
+                )
+                account = max(account + pnl, 0.0)
+                open_trade.update({
+                    "exit_idx": t,
+                    "exit_time": df["time"].iloc[t] if "time" in df.columns else None,
+                    "exit_price": round(exit_price, 6),
+                    "exit_reason": reason,
+                    "duration": duration,
+                    "pnl": round(pnl, 4),
+                    "result": "WIN" if pnl > 0 else "LOSS",
+                    "account_after": round(account, 2),
+                })
+                trades.append(open_trade)
+                open_trade = None
+            else:
+                continue
+
+        direction = decide_direction(df, t, params)
+        if direction == 0:
+            vetos["no_signal"] += 1
+            continue
+
+        entry_time = pd.Timestamp(df["time"].iloc[t + 1])
+        if start_ts is not None and entry_time < start_ts:
+            vetos["pre_window_signal"] += 1
+            continue
+
+        levels = calc_levels(df, t, direction, params)
+        if levels is None:
+            vetos["levels_unavailable"] += 1
+            continue
+        entry, stop = levels
+
+        size = graham_size(account, entry, stop, target_pct=params.max_pct_equity)
+        if size <= 0:
+            vetos["size_zero"] += 1
+            continue
+
+        max_notional = account * LEVERAGE
+        if size * entry > max_notional and entry > 0:
+            size = round(max_notional / entry, 4)
+            if size <= 0:
+                vetos["size_zero_after_cap"] += 1
+                continue
+
+        atr_at_entry = float(df["atr"].iloc[t])
+        open_trade = {
+            "symbol": symbol,
+            "direction": direction,
+            "entry_idx": t + 1,
+            "entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,
+            "entry": round(entry, 6),
+            "stop": round(stop, 6),
+            "size": round(size, 4),
+            "atr_at_entry": atr_at_entry,
+            "eta_at_entry": float(df["eta_smooth"].iloc[t])
+                            if not pd.isna(df["eta_smooth"].iloc[t]) else None,
+            "slope_at_entry": float(df["graham_slope"].iloc[t]),
+            "hh_count": int(df["graham_hh_count"].iloc[t]),
+            "ll_count": int(df["graham_ll_count"].iloc[t]),
+            "account_at_entry": round(account, 2),
+            "extreme_price": entry,
+            "trail_active": False,
+        }
+
+    if open_trade is not None:
+        exit_idx = len(df) - 1
+        exit_price = float(df["close"].iloc[exit_idx])
+        duration = exit_idx - open_trade["entry_idx"]
+        pnl = _pnl_with_costs(
+            direction=open_trade["direction"],
+            entry=open_trade["entry"],
+            exit_p=exit_price,
+            size=open_trade["size"],
+            duration=duration,
+            funding_periods_per_8h=funding_periods_per_8h,
+        )
+        account = max(account + pnl, 0.0)
+        open_trade.update({
+            "exit_idx": exit_idx,
+            "exit_time": df["time"].iloc[exit_idx] if "time" in df.columns else None,
+            "exit_price": round(exit_price, 6),
+            "exit_reason": "forced_mtm",
+            "duration": duration,
+            "pnl": round(pnl, 4),
+            "result": "WIN" if pnl > 0 else "LOSS",
+            "account_after": round(account, 2),
+            "forced_mtm": True,
+        })
+        trades.append(open_trade)
+
+    return trades, dict(vetos)
+
+
+def run_backtest_window(all_dfs: dict[str, pd.DataFrame],
+                        params: Optional[GrahamParams] = None,
+                        initial_equity: float = ACCOUNT_SIZE,
+                        start_time: Optional[str | pd.Timestamp] = None,
+                        end_time: Optional[str | pd.Timestamp] = None,
+                        ) -> tuple[list, dict, dict]:
+    params = params or GrahamParams()
+    all_trades: list[dict] = []
+    all_vetos: dict[str, int] = defaultdict(int)
+    per_sym: dict[str, dict] = {}
+
+    for sym, df in all_dfs.items():
+        df_feat = compute_features(df, params)
+        trades, vetos = scan_symbol_window(
+            df_feat, sym, params, initial_equity,
+            start_time=start_time, end_time=end_time,
+        )
+        all_trades.extend(trades)
+        for k, v in vetos.items():
+            all_vetos[k] += v
+        wins = sum(1 for t in trades if t["result"] == "WIN")
+        per_sym[sym] = {
+            "n_trades": len(trades),
+            "wins": wins,
+            "losses": len(trades) - wins,
+            "pnl": round(sum(t["pnl"] for t in trades), 2),
+        }
+    return all_trades, dict(all_vetos), per_sym
+
+
 def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE
                     ) -> dict:
     n = len(trades)
@@ -673,6 +926,43 @@ def compute_summary(trades: list[dict], initial_equity: float = ACCOUNT_SIZE
         "sharpe": round(float(sharpe), 3),
         "sortino": round(float(sortino), 3),
     }
+
+
+def compute_distribution_shape(trades: list[dict]) -> tuple[float, float]:
+    """Return sample skew and Pearson kurtosis for trade PnLs."""
+    if len(trades) < 2:
+        return 0.0, 3.0
+    pnls = np.asarray([t["pnl"] for t in trades], dtype=float)
+    mean = float(pnls.mean())
+    centered = pnls - mean
+    m2 = float(np.mean(centered ** 2))
+    if m2 <= 0:
+        return 0.0, 3.0
+    m3 = float(np.mean(centered ** 3))
+    m4 = float(np.mean(centered ** 4))
+    skew = m3 / (m2 ** 1.5)
+    kurt = m4 / (m2 ** 2)
+    return float(skew), float(kurt)
+
+
+def deflated_sharpe_ratio(sharpe_best: float, n_trials: int, sharpe_std: float,
+                          skew: float = 0.0, kurt: float = 3.0,
+                          T: int = 252) -> float:
+    """Simplified DSR proxy from the anti-overfit protocol."""
+    if n_trials <= 0 or T <= 1:
+        return 0.0
+    norm = NormalDist()
+    trials = max(int(n_trials), 1)
+    sigma = float(max(sharpe_std, 1e-9))
+    e_max = sigma * (
+        (1 - 0.5772) * norm.inv_cdf(1 - 1 / trials)
+        + 0.5772 * norm.inv_cdf(1 - 1 / (trials * 2.71828))
+    )
+    denom_term = 1 - skew * sharpe_best + ((kurt - 1) / 4.0) * sharpe_best ** 2
+    if denom_term <= 0:
+        return 0.0
+    dsr_z = (sharpe_best - e_max) * np.sqrt(T - 1) / np.sqrt(denom_term)
+    return float(norm.cdf(float(dsr_z)))
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -717,6 +1007,23 @@ def save_run(run_dir: Path, trades: list[dict], summary: dict,
     }
     atomic_write(run_dir / "summary.json",
                  json.dumps(payload, indent=2, default=str))
+
+    # Registra o run em data/index.json pra aparecer em DATA > BACKTEST
+    # RUNS e no engine picker LAST RUNS (mesmo caminho de KEPOS/MEDALLION).
+    try:
+        from core.ops.run_manager import append_to_index, snapshot_config
+        cfg_snap = snapshot_config()
+        cfg_snap["GRAHAM_PARAMS"] = asdict(params)
+        append_to_index(run_dir, {
+            **summary,
+            "engine": "GRAHAM",
+            "basket": meta.get("basket") or "default",
+            "interval": getattr(params, "interval", None) or "15m",
+            "period_days": meta.get("scan_days") or meta.get("days"),
+            "n_symbols": len(per_sym),
+        }, cfg_snap, overfit_results=None)
+    except Exception as e:  # pragma: no cover
+        logging.getLogger("GRAHAM").warning("append_to_index failed: %s", e)
 
 
 # ════════════════════════════════════════════════════════════════════

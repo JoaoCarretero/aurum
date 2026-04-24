@@ -46,9 +46,13 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     sign_past = np.sign(s200.shift(REGIME_TRANS_WINDOW))
     slope_flip = (sign_now != sign_past) & (sign_past != 0)
 
-    calm           = df["vol_regime"].isin(["LOW", "NORMAL"])
-    hot            = df["vol_regime"].isin(["HIGH", "EXTREME"])
-    vol_escalation = hot & calm.shift(REGIME_TRANS_WINDOW).fillna(True)
+    calm = df["vol_regime"].isin(["LOW", "NORMAL"])
+    hot = df["vol_regime"].isin(["HIGH", "EXTREME"])
+    calm_prev = calm.shift(REGIME_TRANS_WINDOW)
+    # Keep the shifted regime mask explicitly boolean to avoid pandas
+    # object downcasting warnings on fillna(True).
+    calm_prev = calm_prev.where(calm_prev.notna(), True).astype(bool)
+    vol_escalation = hot & calm_prev
 
     atr_ratio = (df["atr_pct"] /
                  df["atr_pct"].shift(REGIME_TRANS_WINDOW).replace(0, np.nan))
@@ -173,4 +177,92 @@ def liquidation_proxy(df: pd.DataFrame, vol_mult: float = 3.0,
         df["liq_proxy"] = vol_spike.astype(float)
 
     return df
+
+
+# ── TREND INDICATORS (SUPERTREND) ───────────────────────────
+
+def supertrend(df: pd.DataFrame, multiplier: float, period: int) -> pd.DataFrame:
+    """ATR-based trailing trend line + up/down state.
+
+    Port do Supertrend freqtrade (FSupertrendStrategy), referência:
+    https://github.com/freqtrade/freqtrade-strategies/issues/30
+
+    Distinto do ``atr`` em :func:`indicators`: esse ATR usa SMA do True
+    Range (SMA-``period``), mantendo a fórmula original da literatura de
+    Supertrend. O ``atr`` do AURUM é EWM pra stops e sizing — não
+    misturar, são usos diferentes.
+
+    Params
+    ------
+    df         : OHLC com colunas 'high', 'low', 'close'. Não modifica df
+                 in-place.
+    multiplier : escala da banda (tipicamente 1–7).
+    period     : janela do SMA do TR (tipicamente 7–21).
+
+    Returns
+    -------
+    DataFrame aligned com df.index, colunas:
+      - 'st'  : linha do Supertrend (float). Zero antes do warmup.
+      - 'stx' : string {'up', 'down', ''} — direção da tendência. String
+                vazia antes do warmup.
+    """
+    high = df["high"].to_numpy(dtype=float)
+    low = df["low"].to_numpy(dtype=float)
+    close = df["close"].to_numpy(dtype=float)
+    n = len(df)
+
+    # True Range (sem dependência do atr EWM do AURUM)
+    prev_close = np.concatenate(([close[0]], close[:-1]))
+    tr = np.maximum.reduce([
+        high - low,
+        np.abs(high - prev_close),
+        np.abs(low - prev_close),
+    ])
+    # ATR = SMA(TR, period) — fórmula original do Supertrend
+    atr_sma = pd.Series(tr).rolling(period, min_periods=period).mean().to_numpy()
+
+    hl2 = (high + low) / 2.0
+    basic_ub = hl2 + multiplier * atr_sma
+    basic_lb = hl2 - multiplier * atr_sma
+
+    final_ub = np.zeros(n, dtype=float)
+    final_lb = np.zeros(n, dtype=float)
+    st = np.zeros(n, dtype=float)
+
+    # Loop sequencial — algoritmo tem dependência temporal (final_ub[i]
+    # depende de final_ub[i-1]). Vetorização pura não captura isso.
+    for i in range(period, n):
+        if np.isnan(basic_ub[i]) or np.isnan(basic_lb[i]):
+            continue
+        final_ub[i] = (
+            basic_ub[i]
+            if (basic_ub[i] < final_ub[i - 1] or close[i - 1] > final_ub[i - 1])
+            else final_ub[i - 1]
+        )
+        final_lb[i] = (
+            basic_lb[i]
+            if (basic_lb[i] > final_lb[i - 1] or close[i - 1] < final_lb[i - 1])
+            else final_lb[i - 1]
+        )
+
+        prev_st = st[i - 1]
+        prev_ub = final_ub[i - 1]
+        prev_lb = final_lb[i - 1]
+        if prev_st == prev_ub and close[i] <= final_ub[i]:
+            st[i] = final_ub[i]
+        elif prev_st == prev_ub and close[i] > final_ub[i]:
+            st[i] = final_lb[i]
+        elif prev_st == prev_lb and close[i] >= final_lb[i]:
+            st[i] = final_lb[i]
+        elif prev_st == prev_lb and close[i] < final_lb[i]:
+            st[i] = final_ub[i]
+        else:
+            st[i] = 0.0
+
+    stx = np.where(
+        st > 0.0,
+        np.where(close < st, "down", "up"),
+        "",
+    )
+    return pd.DataFrame({"st": st, "stx": stx}, index=df.index)
 

@@ -1,10 +1,19 @@
-import sys, math, json, random, logging
-import numpy as np
+"""MILLENNIUM — multi-strategy pod orchestrator.
+
+Architecturally this is the **documented exception** to the rule stated in
+CLAUDE.md that engines must not import from one another. MILLENNIUM's whole
+reason for existence is to run CITADEL (and, lazily, JUMP /
+BRIDGEWATER / TWO SIGMA) through a shared capital-allocation and kill-switch
+layer — it is the "multi-strategy" engine that the coding rule calls out by
+name. The static top-of-file ``from engines.citadel import ...`` below and
+the lazy ``from engines.<x> import ...`` sites further down are therefore
+intentional, not violations to refactor away.
+"""
+import sys, json, random, logging
 import pandas as pd
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -12,16 +21,13 @@ from config.params import *
 from config.params import _tf_params, _TF_MINUTES
 
 from core import (
-    fetch_all, validate, indicators, swing_structure, omega,
-    detect_macro, build_corr_matrix, portfolio_allows,
-    calc_levels, label_trade, position_size,
-    prepare_htf, merge_all_htf_to_ltf,
+    fetch_all, validate, detect_macro, build_corr_matrix, prepare_htf,
 )
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward, walk_forward_by_regime
-from analysis.benchmark import bear_market_analysis, year_by_year_analysis
-from analysis.plots import plot_montecarlo, plot_dashboard
+from analysis.benchmark import year_by_year_analysis
+from analysis.plots import plot_montecarlo
 from engines.citadel import scan_symbol as azoth_scan, setup_run, log
 
 # ── FORÇAR GLOBALS PARA O TF CORRECTO ─────────────────────────
@@ -56,11 +62,114 @@ def setup_multistrategy():
 
 # ── MULTISTRATEGY CONFIG ──────────────────────────────────────
 MAX_OPEN_POSITIONS_MS = 5
-CITADEL_CAPITAL_WEIGHT  = 0.65
-RENAISSANCE_CAPITAL_WEIGHT = 0.35
+
+# LEGADO: pesos usados APENAS pela função ensemble_reweight() (path 2-engine
+# CITADEL+RENAISSANCE, ops legadas). O path CORE OPERATIONAL (op=1) — que é
+# o default "grande dia" — NÃO usa esses valores; usa BASE_CAPITAL_WEIGHTS
+# logo abaixo. Mantidos para não quebrar a função legada ensemble_reweight.
+CITADEL_CAPITAL_WEIGHT  = 0.65  # legacy-only (ensemble_reweight)
+RENAISSANCE_CAPITAL_WEIGHT = 0.35  # legacy-only (ensemble_reweight)
+
 CONFIRM_WINDOW        = 6
 CONFIRM_SIZE_MULT     = 1.25
 CONFLICT_ACTION       = "skip"
+# BRIDGEWATER removida 2026-04-17 (sessão ~15:40): bateria revelou domínio
+# excessivo (88-90% dos trades, 99% shorts, avg R 0.12-0.15). Decisão do
+# João: só pode ser re-julgada quando houver histórico de OI/LS suficiente
+# pra uma janela inteira relevante (cache de sentiment precisa cobrir 180d+
+# em todos os símbolos ativos). Em paralelo, audit rodando pra detectar bug.
+# 2026-04-17 ~20h: 4 bugs corrigidos em core/sentiment.py + bridgewater.py.
+# Pós-fix valida em 90d BTCUSDT com Sharpe 5.18, 5/6 overfit PASS, 50/50
+# direção. Mantida FORA do MILLENNIUM até baterias extras confirmarem.
+OPERATIONAL_ENGINES   = ("CITADEL", "RENAISSANCE", "JUMP")
+ENGINE_NATIVE_INTERVALS = {
+    name: ENGINE_INTERVALS.get(name, INTERVAL)
+    for name in OPERATIONAL_ENGINES
+}
+# Capital weights recalibrados em 2026-04-17 pós-remoção BRIDGEWATER.
+# Base anterior (4 engines): JUMP 0.30 / BW 0.30 / REN 0.25 / CIT 0.15.
+# Redistribuição dos 0.30 que eram BRIDGEWATER:
+#   JUMP:        6/6 PASS Sharpe 4.68, OOS 3 janelas 3.15/3.19/4.27, DSR~1.0 → ganha
+#   RENAISSANCE: 6/6 PASS Sharpe 6.54 mas regime-sensitive (CHOP 2019 -0.04) → ganha mais
+#   CITADEL:     2/6 FAIL 180d recent (edge decay), janela deslocada OK → mantém leve
+BASE_CAPITAL_WEIGHTS  = {
+    "JUMP":        0.40,   # edge mais limpo, DSR~1.0; recebeu +0.10
+    "RENAISSANCE": 0.40,   # alta WR + R positivo, melhor qualidade por trade; recebeu +0.15
+    "CITADEL":     0.20,   # edge decay mas ainda dominante em 360d; recebeu +0.05
+}
+ENGINE_WEIGHT_FLOORS = {
+    "JUMP":        0.20,   # piso garantido
+    "RENAISSANCE": 0.10,   # pode cair em CHOP
+    "CITADEL":     0.05,   # pode quase zerar em decay
+}
+ENGINE_WEIGHT_CAPS = {
+    "JUMP":        0.50,
+    "RENAISSANCE": 0.50,   # antigo 0.30; agora pode liderar em CHOP
+    "CITADEL":     0.25,   # antigo 0.15; leve folga
+}
+ENGINE_ACTIVITY_WINDOW = 120
+ENGINE_ACTIVITY_SOFT_CAP = {
+    "JUMP":        0.55,
+    "RENAISSANCE": 0.45,   # antigo 0.35
+    "CITADEL":     0.35,   # antigo 0.30
+}
+ENGINE_DRAWDOWN_WINDOW = 30
+ENGINE_DRAWDOWN_WARN_R = 2.0
+ENGINE_DRAWDOWN_HARD_R = 4.0
+ENGINE_DRAWDOWN_MIN_FACTOR = 0.45
+PORTFOLIO_EXECUTION_ENABLED = False  # TEMP: F_gate_off diagnostic — revert after
+# Gate config ajustada via tools/batteries/millennium_gate_grid.py 180d (2026-04-17):
+# config "D_liberal" dominou baseline em Sharpe (+1.53), Sortino (+3.17),
+# PnL 2.5x, +19 trades (JUMP +18, CIT +2, REN -1), custo MDD +0.5pp.
+# Pesos + thresholds afrouxados pra deixar JUMP trabalhar em janelas
+# curtas onde score recente ainda nao estabilizou.
+PORTFOLIO_MIN_WEIGHT = {
+    "JUMP":        0.25,   # antes 0.32 — JUMP raramente atingia 0.32 em
+    "RENAISSANCE": 0.22,   # stretches de REN dominante
+    "CITADEL":     0.18,
+}
+PORTFOLIO_CHALLENGER_RATIO = 0.85      # antes 0.92 — menos strict pra
+                                        # challenger passar quando leader
+                                        # tem vantagem marginal
+# CHALLENGER_MAX_GAP compara pontos percentuais de peso (leader - challenger).
+# Com ENGINE_WEIGHT_CAPS permitindo 0.50 pro leader, 0.06 gap era efetivo
+# kill-switch pra CITADEL + JUMP (REN costuma liderar em BULL/BEAR = 0.40-0.50,
+# gap vs CITADEL 0.20 = 0.20-0.30 >> 0.06). Elevado pra 0.25 permite
+# challenger real participar quando ratio passa.
+PORTFOLIO_CHALLENGER_MAX_GAP = 0.25
+PORTFOLIO_GLOBAL_COOLDOWN_BARS = 1
+PORTFOLIO_STRATEGY_COOLDOWN_BARS = {
+    "JUMP":        2,
+    "RENAISSANCE": 2,
+    "CITADEL":     2,
+}
+PORTFOLIO_REGIME_COOLDOWN_MULT = {
+    "BULL": 1.0,
+    "BEAR": 1.5,
+    "CHOP": 1.5,            # antes 2.0 — CHOP cooldown 4 bars matava JUMP
+                            # (sinais order-flow tem validade curta)
+}
+PORTFOLIO_ACCEPTED_WINDOW = 80
+PORTFOLIO_MIN_ACCEPTED_SHARE = {
+    "CITADEL": 0.12,
+    "RENAISSANCE": 0.22,
+    "JUMP": 0.35,           # antes 0.25 — diversity_override mais generoso
+                            # pro JUMP quando fica tempo sem passar
+}
+JUMP_RECENT_QUALITY_WINDOW = 30
+JUMP_MIN_SCORE_BASE = 0.79       # antes 0.80 — 1pp abaixo do p25 histórico
+JUMP_MIN_SCORE_WEAK = 0.80       # antes 0.82 — era kill-switch de facto
+JUMP_MIN_SCORE_STRESSED = 0.81   # antes 0.84 — idem, 2% passage
+
+# ── COOLDOWN GATES (independent of portfolio execution gate) ──────
+# Rodam mesmo com PORTFOLIO_EXECUTION_ENABLED=False. Miram o padrao
+# observado em 360d F_gate_off: CITADEL levou 4 LOSS consecutive em
+# XRP/SUI/RENDER em 2025-07-19..22, contribuindo para o worst_dd.
+SYMBOL_COOLDOWN_ENABLED = True
+SYMBOL_COOLDOWN_BARS_AFTER_LOSS = 24   # 24 × 15m = 6h sem retry no mesmo symbol
+ENGINE_LOSS_STREAK_ENABLED = True
+ENGINE_LOSS_STREAK_THRESHOLD = 3       # N LOSS consecutive na mesma engine
+ENGINE_LOSS_STREAK_SKIPS = 2           # pula proximos M trades da engine
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 ENSEMBLE_WINDOW    = 30    # trades lookback para scoring rolling
@@ -75,9 +184,9 @@ REGIME_LAG         = 5     # lag artificial: usa regime de 5 trades atrás → q
 # Regime-aware: amplifica pesos baseado no macro actual
 # TREND (BULL/BEAR) → CITADEL lidera | RANGE (CHOP) → RENAISSANCE lidera
 REGIME_BOOST = {
-    "BULL": {"CITADEL": 1.25, "RENAISSANCE": 0.75},
-    "BEAR": {"CITADEL": 1.20, "RENAISSANCE": 0.80},
-    "CHOP": {"CITADEL": 0.75, "RENAISSANCE": 1.25},
+    "BULL": {"CITADEL": 1.15, "RENAISSANCE": 0.90, "JUMP": 1.10},
+    "BEAR": {"CITADEL": 1.05, "RENAISSANCE": 0.95, "JUMP": 0.90},
+    "CHOP": {"CITADEL": 0.90, "RENAISSANCE": 1.20, "JUMP": 1.00},
 }
 REGIME_BOOST_WINDOW = 20   # trades para detectar regime actual (probabilístico)
 R_CAP_MAX    =  5.0        # R-multiple máximo (evita outlier distorcer score)
@@ -96,9 +205,30 @@ STRESS_MISS_RATE = 0.15  # % trades que não executam (latência)
 
 # ── RENAISSANCE (extracted to core/harmonics.py) ──────────────────
 from core.harmonics import scan_hermes
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 
 SEP = "─"*80
+
+def _derive_end_time_ms(all_dfs) -> int | None:
+    """Extrai o timestamp do último candle (em ms) a partir de all_dfs.
+
+    Usado para passar end_time_ms para collect_sentiment de BRIDGEWATER e
+    evitar look-ahead em backtest OOS — o sentiment é fetched relativo ao
+    fim da janela de dados, não à hora atual.
+
+    Em runs com janela recente/live-like, retorna ~agora (comportamento
+    idêntico ao antigo sem end_time_ms). Em runs OOS, retorna o fim do
+    backtest → fetch honesto.
+    """
+    try:
+        for df in all_dfs.values():
+            if df is None or len(df) == 0 or "time" not in df.columns:
+                continue
+            return int(df["time"].iloc[-1].timestamp() * 1000)
+    except Exception:
+        pass
+    return None
+
 
 # ── ENSEMBLE WEIGHTING ────────────────────────────────────────
 def _std(lst):
@@ -148,16 +278,18 @@ def _regime_confidence_boost(recent_trades):
     """
     biases = [t.get("macro_bias","CHOP") for t in recent_trades[-REGIME_BOOST_WINDOW:]
               if t.get("macro_bias")]
-    if not biases: return {"CITADEL": 1.0, "RENAISSANCE": 1.0}, "CHOP"
+    if not biases:
+        return {name: 1.0 for name in BASE_CAPITAL_WEIGHTS}, "CHOP"
 
     from collections import Counter
     counts = Counter(biases); total = len(biases)
     p = {r: counts.get(r, 0)/total for r in ("BULL","BEAR","CHOP")}
     dominant = max(p, key=p.get)
 
-    az_b = sum(p[r] * REGIME_BOOST[r]["CITADEL"] for r in ("BULL","BEAR","CHOP"))
-    he_b = sum(p[r] * REGIME_BOOST[r]["RENAISSANCE"] for r in ("BULL","BEAR","CHOP"))
-    return {"CITADEL": round(az_b,3), "RENAISSANCE": round(he_b,3)}, dominant
+    boosts = {}
+    for name in BASE_CAPITAL_WEIGHTS:
+        boosts[name] = round(sum(p[r] * REGIME_BOOST[r][name] for r in ("BULL","BEAR","CHOP")), 3)
+    return boosts, dominant
 
 def _decay_score(r_hist):
     """
@@ -239,6 +371,230 @@ def _ensemble_score(r_hist):
     score *= confidence
 
     return max(0.0, score), False
+
+
+def _recent_drawdown_penalty(r_hist):
+    """Soft-cap a strategy when recent closed-trade drawdown in R is widening."""
+    if len(r_hist) < max(6, ENGINE_DRAWDOWN_WINDOW // 3):
+        return 1.0, 0.0
+    equity = 0.0
+    peak = 0.0
+    max_dd_r = 0.0
+    for r in r_hist[-ENGINE_DRAWDOWN_WINDOW:]:
+        equity += float(r)
+        peak = max(peak, equity)
+        max_dd_r = max(max_dd_r, peak - equity)
+    if max_dd_r <= ENGINE_DRAWDOWN_WARN_R:
+        return 1.0, max_dd_r
+    if max_dd_r >= ENGINE_DRAWDOWN_HARD_R:
+        return ENGINE_DRAWDOWN_MIN_FACTOR, max_dd_r
+    span = max(ENGINE_DRAWDOWN_HARD_R - ENGINE_DRAWDOWN_WARN_R, 1e-9)
+    slope = (max_dd_r - ENGINE_DRAWDOWN_WARN_R) / span
+    factor = 1.0 - (1.0 - ENGINE_DRAWDOWN_MIN_FACTOR) * slope
+    return max(ENGINE_DRAWDOWN_MIN_FACTOR, min(1.0, factor)), max_dd_r
+
+
+def _bar_minutes() -> int:
+    return max(int(_TF_MINUTES.get(INTERVAL, 15)), 1)
+
+
+def _n_candles_for_interval(days: int, interval: str, *, with_buffer: bool = False) -> int:
+    minutes = max(int(_TF_MINUTES.get(interval, _TF_MINUTES.get(INTERVAL, 15))), 1)
+    candles = int(days * 24 * 60 / minutes)
+    if not with_buffer:
+        return candles
+    if interval == "1h":
+        return candles + 300
+    if interval == "4h":
+        return candles + 200
+    if interval == "1d":
+        return candles + 200
+    return candles
+
+
+def _load_interval_context(interval: str) -> dict:
+    interval = str(interval or INTERVAL)
+    n_candles = _n_candles_for_interval(SCAN_DAYS, interval)
+    print(f"\n{SEP}\n  DADOS   {interval}   {n_candles:,} candles\n{SEP}")
+    _fetch_syms = list(SYMBOLS)
+    if MACRO_SYMBOL not in _fetch_syms:
+        _fetch_syms.insert(0, MACRO_SYMBOL)
+    all_dfs = fetch_all(_fetch_syms, interval=interval, n_candles=n_candles)
+    for sym, df in all_dfs.items():
+        validate(df, sym)
+    if not all_dfs:
+        raise RuntimeError(f"sem dados para intervalo {interval}")
+
+    htf_stack_by_sym = {}
+    if MTF_ENABLED:
+        for tf in HTF_STACK:
+            nc = _n_candles_for_interval(SCAN_DAYS, tf, with_buffer=True)
+            print(f"\n{SEP}\n  HTF   {interval}->{tf}   {nc:,} candles\n{SEP}")
+            tf_dfs = fetch_all(list(all_dfs.keys()), interval=tf, n_candles=nc)
+            for sym, df_h in tf_dfs.items():
+                df_h = prepare_htf(df_h, htf_interval=tf)
+                htf_stack_by_sym.setdefault(sym, {})[tf] = df_h
+
+    print(f"\n{SEP}\n  PRE-PROCESSAMENTO [{interval}]\n{SEP}")
+    macro_series = detect_macro(all_dfs)
+    if macro_series is not None:
+        bull_n = (macro_series == "BULL").sum()
+        bear_n = (macro_series == "BEAR").sum()
+        chop_n = (macro_series == "CHOP").sum()
+        total = bull_n + bear_n + chop_n
+        print(
+            f"  Macro ({MACRO_SYMBOL})    BULL {bull_n}c ({bull_n/max(total,1)*100:.0f}%)   "
+            f"BEAR {bear_n}c ({bear_n/max(total,1)*100:.0f}%)   CHOP {chop_n}c ({chop_n/max(total,1)*100:.0f}%)"
+        )
+    corr = build_corr_matrix(all_dfs)
+    return {
+        "interval": interval,
+        "n_candles": n_candles,
+        "all_dfs": all_dfs,
+        "htf_stack_by_sym": htf_stack_by_sym,
+        "macro_series": macro_series,
+        "corr": corr,
+    }
+
+
+def _load_operational_contexts() -> dict[str, dict]:
+    interval_cache: dict[str, dict] = {}
+    contexts: dict[str, dict] = {}
+    print(f"\n{SEP}\n  CORE OPERATIONAL · TF NATIVO POR ESTRATÉGIA\n{SEP}")
+    for engine_name in OPERATIONAL_ENGINES:
+        interval = ENGINE_NATIVE_INTERVALS.get(engine_name, INTERVAL)
+        if interval not in interval_cache:
+            interval_cache[interval] = _load_interval_context(interval)
+        ctx = interval_cache[interval]
+        contexts[engine_name] = {
+            "engine": engine_name,
+            "interval": interval,
+            "n_candles": ctx["n_candles"],
+            "all_dfs": ctx["all_dfs"],
+            "htf_stack_by_sym": ctx["htf_stack_by_sym"],
+            "macro_series": ctx["macro_series"],
+            "corr": ctx["corr"],
+        }
+        print(f"  {engine_name:12s}  ->  {interval}")
+    return contexts
+
+
+def _bars_since(prev_ts, cur_ts) -> float:
+    if prev_ts is None or cur_ts is None:
+        return float("inf")
+    try:
+        prev = pd.Timestamp(prev_ts)
+        cur = pd.Timestamp(cur_ts)
+    except Exception:
+        return float("inf")
+    delta_m = (cur - prev).total_seconds() / 60.0
+    if delta_m < 0:
+        return 0.0
+    return delta_m / _bar_minutes()
+
+
+def _portfolio_execution_gate(trade, strat, final_w, dominant, last_portfolio_ts,
+                              last_strategy_ts, accepted_history, history):
+    """Decide whether the portfolio should actually take this trade."""
+    if not PORTFOLIO_EXECUTION_ENABLED:
+        return True, "disabled", {}
+
+    ts = trade.get("timestamp")
+    dyn_w = float(final_w.get(strat, 0.0))
+    leader = max(final_w, key=final_w.get)
+    leader_w = float(final_w.get(leader, dyn_w))
+    leader_gap = max(0.0, leader_w - dyn_w)
+
+    if strat == "JUMP":
+        score = float(trade.get("score") or 0.0)
+        recent_r = history.get("JUMP", [])[-JUMP_RECENT_QUALITY_WINDOW:]
+        avg_recent_r = (sum(recent_r) / len(recent_r)) if recent_r else 0.0
+        min_score = JUMP_MIN_SCORE_BASE
+        if recent_r and avg_recent_r < 0.0:
+            min_score = JUMP_MIN_SCORE_STRESSED
+        elif recent_r and avg_recent_r < 0.08:
+            min_score = JUMP_MIN_SCORE_WEAK
+        if min_score > 0.0 and score <= min_score:
+            return False, "jump_quality_floor", {
+                "leader": leader,
+                "leader_w": leader_w,
+                "dyn_w": dyn_w,
+                "leader_gap": leader_gap,
+                "jump_avg_recent_r": round(avg_recent_r, 3),
+                "jump_min_score": round(min_score, 3),
+                "score": round(score, 3),
+            }
+
+    min_w = float(PORTFOLIO_MIN_WEIGHT.get(strat, 0.0))
+    if dyn_w < min_w:
+        return False, "min_weight", {
+            "leader": leader,
+            "leader_w": leader_w,
+            "dyn_w": dyn_w,
+            "leader_gap": leader_gap,
+        }
+
+    if strat != leader:
+        ratio = dyn_w / max(leader_w, 1e-9)
+        if ratio < PORTFOLIO_CHALLENGER_RATIO or leader_gap > PORTFOLIO_CHALLENGER_MAX_GAP:
+            recent = accepted_history[-PORTFOLIO_ACCEPTED_WINDOW:]
+            total_recent = len(recent)
+            accepted_share = (
+                sum(1 for name in recent if name == strat) / total_recent
+                if total_recent > 0 else 0.0
+            )
+            min_share = PORTFOLIO_MIN_ACCEPTED_SHARE.get(strat, 0.0)
+            strategy_need = max(0.0, PORTFOLIO_STRATEGY_COOLDOWN_BARS.get(strat, 0))
+            strategy_bars = _bars_since(last_strategy_ts.get(strat), ts)
+            if total_recent >= 12 and accepted_share < min_share and strategy_bars >= strategy_need:
+                return True, "diversity_override", {
+                    "leader": leader,
+                    "leader_w": leader_w,
+                    "dyn_w": dyn_w,
+                    "leader_gap": leader_gap,
+                    "accepted_share": round(accepted_share, 3),
+                    "min_share": round(min_share, 3),
+                }
+            return False, f"not_leader:{leader}", {
+                "leader": leader,
+                "leader_w": leader_w,
+                "dyn_w": dyn_w,
+                "leader_gap": leader_gap,
+                "accepted_share": round(accepted_share, 3),
+                "min_share": round(min_share, 3),
+            }
+
+    regime_mult = float(PORTFOLIO_REGIME_COOLDOWN_MULT.get(dominant, 1.0))
+    global_need = max(0.0, PORTFOLIO_GLOBAL_COOLDOWN_BARS * regime_mult)
+    global_bars = _bars_since(last_portfolio_ts, ts)
+    if global_bars < global_need:
+        return False, "portfolio_cooldown", {
+            "leader": leader,
+            "leader_w": leader_w,
+            "dyn_w": dyn_w,
+            "leader_gap": leader_gap,
+            "bars_since_portfolio": round(global_bars, 2),
+        }
+
+    strategy_need = max(0.0, PORTFOLIO_STRATEGY_COOLDOWN_BARS.get(strat, 0) * regime_mult)
+    strategy_bars = _bars_since(last_strategy_ts.get(strat), ts)
+    if strategy_bars < strategy_need:
+        return False, f"strategy_cooldown:{strat}", {
+            "leader": leader,
+            "leader_w": leader_w,
+            "dyn_w": dyn_w,
+            "leader_gap": leader_gap,
+            "bars_since_strategy": round(strategy_bars, 2),
+        }
+
+    return True, "accepted", {
+        "leader": leader,
+        "leader_w": leader_w,
+        "dyn_w": dyn_w,
+        "leader_gap": leader_gap,
+        "bars_since_portfolio": round(global_bars, 2),
+        "bars_since_strategy": round(strategy_bars, 2),
+    }
 
 def ensemble_reweight(all_trades):
     """
@@ -334,6 +690,279 @@ def ensemble_reweight(all_trades):
     if out: out[-1]["_kill_log"] = kill_log
     return sorted(out, key=lambda t: t["timestamp"])
 
+def operational_core_reweight(all_trades):
+    """Generic ensemble weighting for the engines in OPERATIONAL_ENGINES.
+
+    Filters dinamicamente — qualquer engine listado em OPERATIONAL_ENGINES
+    é processado; os demais pass-through. Originalmente 4 engines, reduzido
+    para 3 (CITADEL + RENAISSANCE + JUMP) em 2026-04-17 após remoção do
+    BRIDGEWATER pendente histórico OI/LS.
+    """
+    sorted_t = sorted(all_trades, key=lambda t: t["timestamp"])
+    active_strats = [name for name in OPERATIONAL_ENGINES if any(t.get("strategy") == name for t in sorted_t)]
+    if not active_strats:
+        return sorted_t
+
+    history = {name: [] for name in active_strats}
+    kill_log = {name: [] for name in active_strats}
+    gate_blocked = Counter()
+    gate_accepted = Counter()
+    gate_leaders = Counter()
+    accepted_history = []
+    out = []
+    last_portfolio_ts = None
+    last_strategy_ts = {}
+    # Cooldown trackers (funcionam com ou sem portfolio gate).
+    last_symbol_loss_ts: dict[str, object] = {}
+    engine_loss_streak: dict[str, int] = {}
+    engine_cooldown_skips: dict[str, int] = {}
+
+    for idx, t in enumerate(sorted_t):
+        strat = t.get("strategy", "CITADEL")
+        if strat not in active_strats:
+            out.append(dict(t))
+            continue
+
+        score_map = {}
+        killed_map = {}
+        for name in active_strats:
+            sc, killed = _ensemble_score(history[name])
+            score_map[name] = 0.0 if killed else sc
+            killed_map[name] = killed
+
+        total = sum(score_map.values())
+        if total < 0.001:
+            raw_w = {name: BASE_CAPITAL_WEIGHTS[name] for name in active_strats}
+        else:
+            raw_w = {name: score_map[name] / total for name in active_strats}
+
+        killed_names = [name for name, killed in killed_map.items() if killed]
+        if killed_names and len(killed_names) < len(active_strats):
+            survivors = [name for name in active_strats if name not in killed_names]
+            survivor_mass = 1.0 - ENSEMBLE_MIN_W * len(killed_names)
+            survivor_total = sum(raw_w[name] for name in survivors)
+            adj_w = {}
+            for name in survivors:
+                base = raw_w[name] / survivor_total if survivor_total > 0 else 1.0 / len(survivors)
+                adj_w[name] = base * survivor_mass
+            for name in killed_names:
+                adj_w[name] = ENSEMBLE_MIN_W
+            raw_w = adj_w
+
+        max_window = max((_adaptive_window(history[name]) if history[name] else ENSEMBLE_WINDOW) for name in active_strats)
+        dyn_lag = int(max(3, min(10, max_window / 10)))
+        lag_idx = max(0, idx - dyn_lag)
+        boost, dominant = _regime_confidence_boost(sorted_t[:lag_idx+1])
+        boosted_w = {name: raw_w[name] * boost.get(name, 1.0) for name in active_strats}
+        # Gate CHOP — RENAISSANCE colapsou em CHOP 2019 OOS (Sharpe -0.04 com 16 trades).
+        # Zera o peso quando o regime dominante detectado é CHOP.
+        if dominant == "CHOP" and "RENAISSANCE" in boosted_w:
+            boosted_w["RENAISSANCE"] = ENSEMBLE_MIN_W
+        recent_window = [
+            tt for tt in sorted_t[max(0, idx - ENGINE_ACTIVITY_WINDOW):idx]
+            if tt.get("strategy") in active_strats and tt.get("result") in ("WIN", "LOSS")
+        ]
+        if recent_window:
+            total_recent = len(recent_window)
+            for name in active_strats:
+                share = sum(1 for tt in recent_window if tt.get("strategy") == name) / max(total_recent, 1)
+                soft_cap = ENGINE_ACTIVITY_SOFT_CAP.get(name, 1.0)
+                if share > soft_cap:
+                    boosted_w[name] *= max(0.35, soft_cap / max(share, 1e-9))
+        dd_penalties = {}
+        dd_levels = {}
+        for name in active_strats:
+            dd_penalty, dd_r = _recent_drawdown_penalty(history[name])
+            dd_penalties[name] = dd_penalty
+            dd_levels[name] = round(dd_r, 2)
+            boosted_w[name] *= dd_penalty
+        total_r = sum(boosted_w.values())
+        final_w = {name: (boosted_w[name] / total_r if total_r > 0 else BASE_CAPITAL_WEIGHTS[name]) for name in active_strats}
+        final_w = _apply_engine_weight_caps(final_w, active_strats)
+        leader = max(final_w, key=final_w.get)
+
+        # Symbol + engine-streak cooldowns rodam INDEPENDENTE do portfolio
+        # gate. Miram cluster de losses (ex: 4 LOSS em XRP em 48h) sem
+        # re-enable o gate inteiro.
+        sym = t.get("symbol")
+        cooldown_reason = None
+        if (SYMBOL_COOLDOWN_ENABLED and sym
+                and sym in last_symbol_loss_ts):
+            bars = _bars_since(last_symbol_loss_ts[sym], t["timestamp"])
+            if bars < SYMBOL_COOLDOWN_BARS_AFTER_LOSS:
+                cooldown_reason = "symbol_cooldown"
+        if (cooldown_reason is None and ENGINE_LOSS_STREAK_ENABLED
+                and engine_loss_streak.get(strat, 0) >= ENGINE_LOSS_STREAK_THRESHOLD
+                and engine_cooldown_skips.get(strat, 0) < ENGINE_LOSS_STREAK_SKIPS):
+            cooldown_reason = "engine_loss_streak"
+            engine_cooldown_skips[strat] = engine_cooldown_skips.get(strat, 0) + 1
+
+        if cooldown_reason is not None:
+            gate_blocked[cooldown_reason] += 1
+            if t["result"] in ("WIN", "LOSS"):
+                history[strat].append(_r_multiple(t))
+                if t["result"] == "LOSS":
+                    if sym:
+                        last_symbol_loss_ts[sym] = t["timestamp"]
+                    engine_loss_streak[strat] = engine_loss_streak.get(strat, 0) + 1
+                else:
+                    engine_loss_streak[strat] = 0
+                    engine_cooldown_skips[strat] = 0
+            continue
+
+        allow_trade, gate_reason, gate_ctx = _portfolio_execution_gate(
+            t, strat, final_w, dominant, last_portfolio_ts, last_strategy_ts,
+            accepted_history, history,
+        )
+        if not allow_trade:
+            gate_blocked[gate_reason] += 1
+            for s, killed in killed_map.items():
+                log = kill_log[s]
+                if killed and (not log or len(log) % 2 == 0):
+                    log.append(t["timestamp"])
+                elif not killed and log and len(log) % 2 == 1:
+                    log.append(t["timestamp"])
+            if t["result"] in ("WIN", "LOSS"):
+                history[strat].append(_r_multiple(t))
+                if t["result"] == "LOSS":
+                    if sym:
+                        last_symbol_loss_ts[sym] = t["timestamp"]
+                    engine_loss_streak[strat] = engine_loss_streak.get(strat, 0) + 1
+                else:
+                    engine_loss_streak[strat] = 0
+                    engine_cooldown_skips[strat] = 0
+            continue
+
+        static_w = BASE_CAPITAL_WEIGHTS.get(strat, 1.0)
+        dynamic_w = final_w.get(strat, static_w)
+        scale = dynamic_w / static_w if static_w > 0 else 1.0
+
+        out.append({**t,
+            "pnl": round(t["pnl"] * scale, 2),
+            "pnl_pre_ensemble": t["pnl"],
+            "ensemble_w": round(dynamic_w, 3),
+            "ensemble_weights": {name: round(final_w[name], 3) for name in active_strats},
+            "kill_states": dict(killed_map),
+            "regime_at_trade": dominant,
+            "portfolio_gate": gate_reason,
+            "portfolio_leader": leader,
+            "portfolio_leader_w": round(gate_ctx.get("leader_w", final_w.get(leader, 0.0)), 3),
+            "portfolio_weight_gap": round(gate_ctx.get("leader_gap", 0.0), 3),
+            "portfolio_bars_since_trade": gate_ctx.get("bars_since_portfolio"),
+            "portfolio_bars_since_strategy": gate_ctx.get("bars_since_strategy"),
+            "decay_scores": {name: round(_decay_score(history[name]), 3) for name in active_strats},
+            "drawdown_penalties": {name: round(dd_penalties[name], 3) for name in active_strats},
+            "recent_drawdown_r": dd_levels,
+        })
+        gate_accepted[strat] += 1
+        gate_leaders[leader] += 1
+        accepted_history.append(strat)
+        last_portfolio_ts = t.get("timestamp")
+        last_strategy_ts[strat] = t.get("timestamp")
+
+        for s, killed in killed_map.items():
+            log = kill_log[s]
+            if killed and (not log or len(log) % 2 == 0):
+                log.append(t["timestamp"])
+            elif not killed and log and len(log) % 2 == 1:
+                log.append(t["timestamp"])
+
+        if t["result"] in ("WIN", "LOSS"):
+            history[strat].append(_r_multiple(t))
+            if t["result"] == "LOSS":
+                if sym:
+                    last_symbol_loss_ts[sym] = t["timestamp"]
+                engine_loss_streak[strat] = engine_loss_streak.get(strat, 0) + 1
+            else:
+                engine_loss_streak[strat] = 0
+                engine_cooldown_skips[strat] = 0
+
+    if out:
+        out[-1]["_kill_log"] = kill_log
+        out[-1]["_portfolio_gate_stats"] = {
+            "accepted_by_strategy": dict(gate_accepted),
+            "leader_by_strategy": dict(gate_leaders),
+            "blocked": dict(gate_blocked),
+        }
+    return sorted(out, key=lambda t: t["timestamp"])
+
+
+def _apply_engine_weight_caps(weight_map, active_strats):
+    if not active_strats:
+        return {}
+    weights = {name: max(0.0, float(weight_map.get(name, 0.0))) for name in active_strats}
+    floors = {name: ENGINE_WEIGHT_FLOORS.get(name, 0.0) for name in active_strats}
+    caps = {name: ENGINE_WEIGHT_CAPS.get(name, 1.0) for name in active_strats}
+    floor_total = sum(floors.values())
+    if floor_total >= 1.0:
+        return {name: floors[name] / floor_total for name in active_strats}
+
+    total = sum(weights.values())
+    if total <= 0:
+        weights = {name: 1.0 / len(active_strats) for name in active_strats}
+    else:
+        weights = {name: weights[name] / total for name in active_strats}
+
+    projected = dict(weights)
+    for _ in range(16):
+        clamped = {
+            name: min(caps[name], max(floors[name], projected[name]))
+            for name in active_strats
+        }
+        locked = {
+            name
+            for name in active_strats
+            if abs(clamped[name] - floors[name]) <= 1e-12
+            or abs(clamped[name] - caps[name]) <= 1e-12
+        }
+        target_mass = 1.0 - sum(clamped[name] for name in locked)
+        free = [name for name in active_strats if name not in locked]
+        if not free:
+            projected = clamped
+            break
+        seed_total = sum(weights[name] for name in free)
+        if seed_total <= 0:
+            free_seed = {name: 1.0 / len(free) for name in free}
+        else:
+            free_seed = {name: weights[name] / seed_total for name in free}
+        projected = dict(clamped)
+        for name in free:
+            projected[name] = target_mass * free_seed[name]
+        if all(abs(projected[name] - clamped[name]) <= 1e-12 for name in active_strats):
+            break
+
+    final_weights = {
+        name: min(caps[name], max(floors[name], projected[name]))
+        for name in active_strats
+    }
+    residual = 1.0 - sum(final_weights.values())
+    if abs(residual) > 1e-12:
+        if residual > 0:
+            receivers = [
+                name for name in active_strats
+                if final_weights[name] < caps[name] - 1e-12
+            ]
+            capacity = sum(caps[name] - final_weights[name] for name in receivers)
+            if receivers and capacity > 0:
+                for name in receivers:
+                    room = caps[name] - final_weights[name]
+                    final_weights[name] += residual * (room / capacity)
+        else:
+            donors = [
+                name for name in active_strats
+                if final_weights[name] > floors[name] + 1e-12
+            ]
+            removable = sum(final_weights[name] - floors[name] for name in donors)
+            if donors and removable > 0:
+                for name in donors:
+                    slack = final_weights[name] - floors[name]
+                    final_weights[name] += residual * (slack / removable)
+
+    total = sum(final_weights.values())
+    if total <= 0:
+        return {name: 1.0 / len(active_strats) for name in active_strats}
+    return {name: final_weights[name] / total for name in active_strats}
+
 def print_ensemble_stats(original, reweighted):
     """Compara métricas antes e depois do ensemble reweighting."""
     def _m(trades):
@@ -393,8 +1022,34 @@ def print_ensemble_stats(original, reweighted):
             for start, end in pairs:
                 end_s = str(end)[:16] if end != "ainda pausado" else end
                 print(f"    {strat:8s}  pausado {str(start)[:16]}  →  recuperado {end_s}")
-    if not any_kill:
-        print(f"    Nenhum — Sortino(R) manteve-se > {KILL_SWITCH_SORTINO} durante todo o período")
+
+
+def print_portfolio_gate_stats(reweighted):
+    gate_stats = {}
+    for t in reversed(reweighted):
+        gate_stats = t.get("_portfolio_gate_stats") or {}
+        if gate_stats:
+            break
+    if not gate_stats:
+        return
+
+    accepted = gate_stats.get("accepted_by_strategy") or {}
+    leaders = gate_stats.get("leader_by_strategy") or {}
+    blocked = gate_stats.get("blocked") or {}
+    total_live = sum(accepted.values())
+    if total_live <= 0:
+        return
+
+    print(f"\n{SEP}\n  PORTFOLIO EXECUTION GATE\n{SEP}")
+    print(f"  Live selection enabled  ·  accepted {total_live} trades")
+    for name in OPERATIONAL_ENGINES:
+        if name in accepted:
+            lead_n = leaders.get(name, 0)
+            print(f"  {name:12s}  accepted={accepted[name]:>4d}  leader={lead_n:>4d}")
+    if blocked:
+        print(f"\n  Blocked:")
+        for reason, n in sorted(blocked.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+            print(f"    {reason:24s} {n:>5d}")
 
     # decay events
     decay_events = {"CITADEL": [], "RENAISSANCE": []}
@@ -412,7 +1067,7 @@ def print_ensemble_stats(original, reweighted):
             max_decay = max(e[1] for e in evs)
             print(f"    {strat:8s}  {len(evs)} trades em decay  |  máx decay score: {max_decay:.2f}")
     if not any_decay:
-        print(f"    Nenhum — edge estrutural manteve-se estável em ambas as estratégias")
+        print(f"    Nenhum — edge estrutural manteve-se estável nas estratégias activas")
 
 # ── STRESS TEST ───────────────────────────────────────────────
 def stress_test(pnl_list):
@@ -757,20 +1412,26 @@ def aggregate_signals(azoth_trades, hermes_trades):
     return result
 
 def metrics_by_strategy(all_trades):
-    by_s={"CITADEL":[],"RENAISSANCE":[],"CONFIRMED":[]}
+    by_s=defaultdict(list)
     for t in all_trades:
         s=t.get("strategy","CITADEL"); by_s[s].append(t)
         if t.get("confirmed"): by_s["CONFIRMED"].append(t)
     print(f"\n{SEP}\n  PERFORMANCE POR ESTRATEGIA\n{SEP}")
     print(f"  {'Estrategia':12s}  {'N':>4s}  {'WR':>6s}  {'Sharpe':>7s}  {'MaxDD':>6s}  {'ROI':>7s}  {'PnL':>12s}")
     print(f"  {'─'*72}")
-    for name,ts in [("CITADEL",by_s["CITADEL"]),("RENAISSANCE",by_s["RENAISSANCE"]),("CONFIRMADOS",by_s["CONFIRMED"])]:
+    ordered = [name for name in OPERATIONAL_ENGINES if by_s.get(name)]
+    ordered += [name for name in by_s.keys() if name not in OPERATIONAL_ENGINES and name != "CONFIRMED"]
+    if by_s.get("CONFIRMED"):
+        ordered.append("CONFIRMED")
+    for name in ordered:
+        ts = by_s[name]
+        display = "CONFIRMADOS" if name == "CONFIRMED" else name
         closed=[t for t in ts if t["result"] in ("WIN","LOSS")]
-        if not closed: print(f"  {name:12s}  sem trades"); continue
+        if not closed: print(f"  {display:12s}  sem trades"); continue
         w=sum(1 for t in closed if t["result"]=="WIN"); wr=w/len(closed)*100
         pnl_s=[t["pnl"] for t in closed]
         r=calc_ratios(pnl_s,n_days=SCAN_DAYS); _,_,mdd,_=equity_stats(pnl_s)
-        print(f"  {name:12s}  {len(closed):>4d}  {wr:>5.1f}%  {str(r['sharpe'] or '—'):>7s}  {mdd:>5.1f}%  {r['ret']:>+6.1f}%  ${sum(pnl_s):>+10,.0f}")
+        print(f"  {display:12s}  {len(closed):>4d}  {wr:>5.1f}%  {str(r['sharpe'] or '—'):>7s}  {mdd:>5.1f}%  {r['ret']:>+6.1f}%  ${sum(pnl_s):>+10,.0f}")
 
 def metrics_confirmations(all_trades):
     conf=[t for t in all_trades if t.get("confirmed") and t["result"] in ("WIN","LOSS")]
@@ -809,6 +1470,7 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
     closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
     wr=sum(1 for t in closed if t["result"]=="WIN")/max(len(closed),1)*100
     exp=sum(t["pnl"] for t in closed)/max(len(closed),1)
+    n_strats=len({t.get("strategy") for t in closed if t.get("strategy")})
     bear_stab=(wf_regime or {}).get("BEAR",{}).get("stable_pct")
     wf_ok=bear_stab>=60 if bear_stab else False
     wf_label=f"BEAR {bear_stab:.0f}%" if bear_stab else "global"
@@ -820,7 +1482,7 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
         ("Sharpe >= 1.0",ratios["sharpe"] and ratios["sharpe"]>=1.0),
         ("Monte Carlo >= 70% positivo",mc and mc["pct_pos"]>=70),
         (f"Walk-Forward estavel ({wf_label})",wf_ok),
-        ("RENAISSANCE tem trades",any(t.get("strategy")=="RENAISSANCE" for t in closed)),
+        ("Diversificacao real (>=2 estrategias)",n_strats>=2),
     ]
     passou=sum(1 for _,v in checks if v)
     print(f"\n{SEP}\n  VEREDITO\n{SEP}")
@@ -831,28 +1493,43 @@ def print_veredito_ms(all_trades, eq, mdd_pct, mc, wf, ratios, wf_regime=None):
     print(f"\n  {passou}/8  ·  {verdict}\n{SEP}\n")
     log.info(f"MS Veredito: {passou}/8  ROI={ratios['ret']:.2f}%  WR={wr:.1f}%  MaxDD={mdd_pct:.1f}%")
 
-def export_ms_json(all_trades, eq, mc, ratios):
+def export_ms_json(all_trades, eq, mc, ratios, mdd_pct=None):
     closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
     wr=sum(1 for t in closed if t["result"]=="WIN")/max(len(closed),1)*100
-    azoth_t=[t for t in closed if t.get("strategy")=="CITADEL"]
-    hermes_t=[t for t in closed if t.get("strategy")=="RENAISSANCE"]
     confirmed_t=[t for t in closed if t.get("confirmed")]
+    by_strategy={}
+    for name in sorted({t.get("strategy") for t in closed if t.get("strategy")}):
+        ts=[t for t in closed if t.get("strategy")==name]
+        by_strategy[name]={
+            "n":len(ts),
+            "wr":round(sum(1 for t in ts if t["result"]=="WIN")/max(len(ts),1)*100,1),
+            "pnl":round(sum(t["pnl"] for t in ts),2),
+        }
+    gate_stats = {}
+    for t in reversed(all_trades):
+        gate_stats = t.get("_portfolio_gate_stats") or {}
+        if gate_stats:
+            break
     payload={
         "version":"multistrategy-1.0","run_id":RUN_ID,
         "timestamp":datetime.now().isoformat(),
-        "config":{"azoth_weight":CITADEL_CAPITAL_WEIGHT,"hermes_weight":RENAISSANCE_CAPITAL_WEIGHT,
-                  "max_open_ms":MAX_OPEN_POSITIONS_MS,"confirm_window":CONFIRM_WINDOW,
-                  "confirm_size_mult":CONFIRM_SIZE_MULT,"h_tol":H_TOL,
-                  "h_min_score":H_MIN_SCORE,"h_min_rr":H_MIN_RR},
-        "summary":{"total":len(closed),"azoth_n":len(azoth_t),"hermes_n":len(hermes_t),
+        "config":{"base_weights":BASE_CAPITAL_WEIGHTS,
+                  "max_open_ms":MAX_OPEN_POSITIONS_MS,
+                  "confirm_window":CONFIRM_WINDOW,
+                  "confirm_size_mult":CONFIRM_SIZE_MULT,
+                  "portfolio_execution_enabled": PORTFOLIO_EXECUTION_ENABLED,
+                  "portfolio_min_weight": PORTFOLIO_MIN_WEIGHT,
+                  "portfolio_challenger_ratio": PORTFOLIO_CHALLENGER_RATIO,
+                  "portfolio_challenger_max_gap": PORTFOLIO_CHALLENGER_MAX_GAP,
+                  "portfolio_global_cooldown_bars": PORTFOLIO_GLOBAL_COOLDOWN_BARS,
+                  "portfolio_strategy_cooldown_bars": PORTFOLIO_STRATEGY_COOLDOWN_BARS},
+        "summary":{"total":len(closed),
                    "confirmed_n":len(confirmed_t),"win_rate":round(wr,2),
                    "total_pnl":round(sum(t["pnl"] for t in closed),2),
                    "final_equity":round(eq[-1],2),
                    **{k:ratios.get(k) for k in ("sharpe","sortino","calmar","ret")}},
-        "by_strategy":{
-            "CITADEL":{"n":len(azoth_t),"wr":round(sum(1 for t in azoth_t if t["result"]=="WIN")/max(len(azoth_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in azoth_t),2)},
-            "RENAISSANCE":{"n":len(hermes_t),"wr":round(sum(1 for t in hermes_t if t["result"]=="WIN")/max(len(hermes_t),1)*100,1),"pnl":round(sum(t["pnl"] for t in hermes_t),2)},
-        },
+        "by_strategy":by_strategy,
+        "portfolio_gate": gate_stats,
         "monte_carlo":{k:v for k,v in (mc or {}).items() if k not in ("paths","finals","dds")},
         "trades":[{k:(str(v) if k=="timestamp" else v) for k,v in t.items()} for t in all_trades],
         "equity":eq,
@@ -860,9 +1537,39 @@ def export_ms_json(all_trades, eq, mc, ratios):
     fname=str(MS_RUN_DIR/"reports"/f"multistrategy_{INTERVAL}_v1.json")
     atomic_write(Path(fname), json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     print(f"  JSON -> {fname}")
+    # Persist into canonical run index so MILLENNIUM shows up alongside
+    # directional engines in data/index.json.
+    try:
+        from core.ops.run_manager import append_to_index
+        index_summary = {
+            "engine":       "MILLENNIUM",
+            "run_id":       RUN_ID,
+            "interval":     INTERVAL,
+            "period_days":  SCAN_DAYS,
+            "basket":       globals().get("BASKET_NAME", "default"),
+            "n_symbols":    len(globals().get("SYMBOLS", [])),
+            "n_candles":    globals().get("N_CANDLES"),
+            "n_trades":     len(closed),
+            "win_rate":     round(wr, 2),
+            "pnl":          round(sum(t["pnl"] for t in closed), 2),
+            "roi_pct":      ratios.get("ret"),
+            "sharpe":       ratios.get("sharpe"),
+            "sortino":      ratios.get("sortino"),
+            "max_dd_pct":   mdd_pct,
+        }
+        index_config = {
+            "INTERVAL":     INTERVAL,
+            "SCAN_DAYS":    SCAN_DAYS,
+            "N_CANDLES":    globals().get("N_CANDLES"),
+            "BASE_WEIGHTS": BASE_CAPITAL_WEIGHTS,
+            "BASKET_EFFECTIVE": globals().get("BASKET_NAME", "default"),
+        }
+        append_to_index(MS_RUN_DIR, index_summary, index_config)
+    except Exception as _e:
+        print(f"  index: {_e}")
     # Auto-persist to DB
     try:
-        from core.db import save_run
+        from core.ops.db import save_run
         save_run("multi", fname)
         print(f"  DB: run persistido")
     except Exception as _e:
@@ -929,7 +1636,10 @@ def _load_dados(generate_plots):
     print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
     _fetch_syms=list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms: _fetch_syms.insert(0,MACRO_SYMBOL)
-    all_dfs=fetch_all(_fetch_syms)
+    # Use local INTERVAL/N_CANDLES (updated by _ask_periodo) instead of
+    # falling back to config.params defaults. Without this, changing the
+    # scan period in the menu had no effect on fetched data.
+    all_dfs=fetch_all(_fetch_syms, interval=INTERVAL, n_candles=N_CANDLES)
     for sym,df in all_dfs.items(): validate(df,sym)
     if not all_dfs: print("  Sem dados."); sys.exit(1)
     htf_stack_by_sym={}
@@ -987,7 +1697,8 @@ def _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr):
     return hermes_all, hermes_vetos
 
 def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
-    closed=[t for t in all_trades if t["result"] in ("WIN","LOSS")]
+    portfolio_trades = operational_core_reweight(all_trades) if label == "CORE OPERATIONAL" else all_trades
+    closed=[t for t in portfolio_trades if t["result"] in ("WIN","LOSS")]
     if not closed: print("  Sem trades fechados."); return
     pnl_s=[t["pnl"] for t in closed]; eq,mdd,mdd_pct,ms=equity_stats(pnl_s)
     ratios=calc_ratios(pnl_s,n_days=SCAN_DAYS)
@@ -997,14 +1708,14 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
     print(f"  ROI      {ratios['ret']:>6.2f}%     MaxDD    {mdd_pct:>6.2f}%     Streak  {ms:>5d} perdas")
     print(f"  Capital  ${ACCOUNT_SIZE:>8,.0f}  ->  ${eq[-1]:>10,.0f}   (+${eq[-1]-ACCOUNT_SIZE:,.0f})")
     if label!="CITADEL":
-        metrics_by_strategy(all_trades); metrics_confirmations(all_trades); print_hermes_patterns(all_trades)
+        metrics_by_strategy(portfolio_trades); metrics_confirmations(portfolio_trades); print_hermes_patterns(portfolio_trades)
     mc=monte_carlo(pnl_s)
     print(f"\n{SEP}\n  MONTE CARLO   {MC_N}x   bloco={MC_BLOCK}\n{SEP}")
     if mc:
         rlb="SEGURO" if mc["ror"]<1 else "ATENCAO" if mc["ror"]<5 else "RISCO"
         print(f"  Positivos {mc['pct_pos']:>5.1f}%   p5 ${mc['p5']:>9,.0f}   Mediana ${mc['median']:>9,.0f}   p95 ${mc['p95']:>9,.0f}")
         print(f"  RoR       {mc['ror']:>5.1f}%   [{rlb}]   DD medio {mc['avg_dd']:.1f}%   pior {mc['worst_dd']:.1f}%")
-    wf=walk_forward(all_trades)
+    wf=walk_forward(portfolio_trades)
     print(f"\n{SEP}\n  WALK-FORWARD GLOBAL   {len(wf)} janelas\n{SEP}")
     if wf:
         ok=sum(1 for w in wf if abs(w["test"]["wr"]-w["train"]["wr"])<=15); pct=ok/len(wf)*100
@@ -1012,7 +1723,7 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
         for w in wf[-10:]:
             d=w["test"]["wr"]-w["train"]["wr"]
             print(f"  {w['w']:>3d}  treino {w['train']['wr']:>5.1f}%  fora {w['test']['wr']:>5.1f}%  D {d:>+5.1f}%  {'ok' if abs(d)<=15 else 'xx'}")
-    wf_regime=walk_forward_by_regime(all_trades)
+    wf_regime=walk_forward_by_regime(portfolio_trades)
     print(f"\n{SEP}\n  WALK-FORWARD POR REGIME\n{SEP}")
     for regime,d in wf_regime.items():
         if d["stable_pct"] is None: print(f"  {regime:5s}  n={d['n']:>3d}  insuficiente"); continue
@@ -1032,20 +1743,24 @@ def _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE"):
     robustness_test(pnl_s)
 
     # ── AUTO-DIAGNÓSTICO ─────────────────────────────────────
-    diag = auto_diagnostic(all_trades)
-    conflict_mult = all_trades[0].get("_conflict_mult", 1.0) if all_trades else 1.0
+    diag = auto_diagnostic(portfolio_trades)
+    conflict_mult = portfolio_trades[0].get("_conflict_mult", 1.0) if portfolio_trades else 1.0
     print_auto_diagnostic(diag, conflict_mult)
 
     # ── ENSEMBLE WEIGHTING ────────────────────────────────────
     if label not in ("CITADEL", "RENAISSANCE"):
-        rew = ensemble_reweight(all_trades)
-        print_ensemble_stats(all_trades, rew)
+        if label == "CORE OPERATIONAL":
+            print_ensemble_stats(all_trades, portfolio_trades)
+            print_portfolio_gate_stats(portfolio_trades)
+        else:
+            rew = operational_core_reweight(all_trades)
+            print_ensemble_stats(all_trades, rew)
 
     # ── STRESS TEST ───────────────────────────────────────────
     stress_test(pnl_s)
 
-    print_veredito_ms(all_trades,eq,mdd_pct,mc,wf,ratios,wf_regime)
-    export_ms_json(all_trades,eq,mc,ratios)
+    print_veredito_ms(portfolio_trades,eq,mdd_pct,mc,wf,ratios,wf_regime)
+    export_ms_json(portfolio_trades,eq,mc,ratios,mdd_pct=mdd_pct)
 
     # ── CHARTS ────────────────────────────────────────────────
     if GENERATE_PLOTS:
@@ -1093,17 +1808,148 @@ def _resultados_por_simbolo(all_trades, show_he=True):
         else:
             print(f"  {sym:12s}  {len(c):>4d}  {wr:>5.1f}%  ${sum(t['pnl'] for t in c):>+10,.0f}")
 
+def _collect_operational_trades(all_dfs=None, htf_stack_by_sym=None, macro_series=None, corr=None, engine_contexts=None):
+    # BRIDGEWATER removida 2026-04-17: ver nota em OPERATIONAL_ENGINES.
+    # Até a re-habilitação, op=1 roda só CITADEL + RENAISSANCE + JUMP.
+    engine_trades = {}
+    if engine_contexts is None:
+        shared_ctx = {
+            "all_dfs": all_dfs,
+            "htf_stack_by_sym": htf_stack_by_sym or {},
+            "macro_series": macro_series,
+            "corr": corr or {},
+        }
+        engine_contexts = {name: shared_ctx for name in OPERATIONAL_ENGINES}
+
+    citadel_ctx = engine_contexts["CITADEL"]
+    azoth_all, _ = _scan_azoth(
+        citadel_ctx["all_dfs"],
+        citadel_ctx.get("htf_stack_by_sym", {}),
+        citadel_ctx.get("macro_series"),
+        citadel_ctx.get("corr", {}),
+    )
+    engine_trades["CITADEL"] = azoth_all
+
+    renaissance_ctx = engine_contexts["RENAISSANCE"]
+    hermes_all, _ = _scan_hermes_all(
+        renaissance_ctx["all_dfs"],
+        renaissance_ctx.get("htf_stack_by_sym", {}),
+        renaissance_ctx.get("macro_series"),
+        renaissance_ctx.get("corr", {}),
+    )
+    engine_trades["RENAISSANCE"] = hermes_all
+
+    from engines.jump import scan_mercurio
+    mercurio_all = []
+    jump_ctx = engine_contexts["JUMP"]
+    for sym, df in jump_ctx["all_dfs"].items():
+        trades, _ = scan_mercurio(df.copy(), sym, jump_ctx.get("macro_series"), jump_ctx.get("corr", {}))
+        mercurio_all.extend(trades)
+    engine_trades["JUMP"] = mercurio_all
+
+    all_trades = []
+    for eng, trades in engine_trades.items():
+        for t in trades:
+            tt = t.copy()
+            tt.setdefault("strategy", eng)
+            all_trades.append(tt)
+    all_trades.sort(key=lambda t: t["timestamp"])
+    return engine_trades, all_trades
+
+
+def _collect_live_signals(all_dfs=None, htf_stack_by_sym=None,
+                          macro_series=None, corr=None):
+    """Live-only scan: runs each operational engine with live_mode=True.
+
+    Unlike :func:`_collect_operational_trades` (backtest-oriented, scans
+    the labelable region and skips the tail), this function scans the
+    tail bars — exactly where signals fire on new candles arriving in
+    real time. Each engine emits trades with ``result="LIVE"`` and no
+    path-dependent labeling; paper/shadow runtime handles the outcome.
+
+    Returns ``(engine_trades, all_trades_sorted_by_ts)``.
+    """
+    engine_trades: dict[str, list] = {}
+    shared_ctx = {
+        "all_dfs": all_dfs or {},
+        "htf_stack_by_sym": htf_stack_by_sym or {},
+        "macro_series": macro_series,
+        "corr": corr or {},
+    }
+
+    # CITADEL
+    azoth_live = []
+    for sym, df in shared_ctx["all_dfs"].items():
+        if sym not in SYMBOLS:
+            continue
+        trades, _ = azoth_scan(
+            df, sym, shared_ctx["macro_series"], shared_ctx["corr"],
+            shared_ctx["htf_stack_by_sym"].get(sym) if MTF_ENABLED else None,
+            live_mode=True,
+        )
+        for t in trades:
+            t["strategy"] = "CITADEL"
+            t.setdefault("confirmed", False)
+        azoth_live.extend(trades)
+    engine_trades["CITADEL"] = azoth_live
+
+    # RENAISSANCE
+    hermes_live = []
+    for sym, df in shared_ctx["all_dfs"].items():
+        if sym not in SYMBOLS:
+            continue
+        trades, _ = scan_hermes(
+            df, sym, shared_ctx["macro_series"], shared_ctx["corr"],
+            shared_ctx["htf_stack_by_sym"].get(sym) if MTF_ENABLED else None,
+            live_mode=True,
+        )
+        for t in trades:
+            t["strategy"] = "RENAISSANCE"
+        hermes_live.extend(trades)
+    engine_trades["RENAISSANCE"] = hermes_live
+
+    # JUMP
+    from engines.jump import scan_mercurio
+    mercurio_live = []
+    for sym, df in shared_ctx["all_dfs"].items():
+        if sym not in SYMBOLS:
+            continue
+        trades, _ = scan_mercurio(
+            df.copy(), sym,
+            shared_ctx["macro_series"], shared_ctx["corr"],
+            live_mode=True,
+        )
+        for t in trades:
+            t["strategy"] = "JUMP"
+        mercurio_live.extend(trades)
+    engine_trades["JUMP"] = mercurio_live
+
+    all_trades = []
+    for eng, trades in engine_trades.items():
+        for t in trades:
+            tt = t.copy()
+            tt.setdefault("strategy", eng)
+            all_trades.append(tt)
+    all_trades.sort(key=lambda t: t["timestamp"])
+    return engine_trades, all_trades
+
+
 def _menu():
     W = 50
     print(f"\n  {'─'*W}")
     print(f"  MILLENNIUM  ·  Multistrategy Backtest")
     print(f"  {'─'*W}")
+    # Guard anti-infinite-loop: quando spawnado pelo launcher, stdin recebe
+    # alguns inputs auto-respondidos e depois fecha. safe_input() captura
+    # EOFError e retorna "" — sem este contador, o loop imprimia
+    # "opcao invalida" a milhoes de iter/s (742MB de log em 7 min no
+    # incidente de 2026-04-22). 12 tentativas inuteis = aborta.
+    _empty_streak = 0
     while True:
         print()
-        print(f"  [1]  CITADEL + RENAISSANCE")
+        print(f"  [1]  CORE OPERATIONAL (CITADEL + RENAISSANCE + JUMP)")
         print(f"  [2]  CITADEL")
         print(f"  [3]  RENAISSANCE")
-        print(f"  [4]  NEWTON")
         print(f"  [5]  MERCURIO")
         print(f"  [6]  THOTH")
         print(f"  [7]  ALL")
@@ -1112,15 +1958,59 @@ def _menu():
         print()
         op = safe_input("  > ").strip()
         if op == "0": sys.exit(0)
-        if op in ("1","2","3","4","5","6","7","8"): return op
+        if op in ("1","2","3","5","6","7","8"): return op
+        if op == "":
+            _empty_streak += 1
+            if _empty_streak >= 12:
+                print("  stdin fechou sem opcao valida — abortando pra nao loopar infinitamente")
+                sys.exit(2)
+        else:
+            _empty_streak = 0
         print("  opcao invalida")
+
+
+def _parse_cli_args():
+    """CLI args pro launcher — --no-menu pula o _menu interativo e usa
+    argumentos em vez de stdin. Ver CITADEL / JUMP pro padrao. Defaults:
+    CORE OPERATIONAL (op=1), days=SCAN_DAYS, leverage=1.
+    """
+    import argparse
+    ap = argparse.ArgumentParser(description="MILLENNIUM — multistrategy backtest")
+    ap.add_argument("--no-menu", action="store_true",
+                    help="Pula menu interativo, usa defaults ou flags")
+    ap.add_argument("--op", type=str, default="1",
+                    choices=["1","2","3","4","5","6","7","8"],
+                    help="1=CORE OPERATIONAL default")
+    ap.add_argument("--days", type=int, default=None)
+    ap.add_argument("--basket", type=str, default=None)
+    ap.add_argument("--leverage", type=float, default=None)
+    ap.add_argument("--plots", action="store_true")
+    return ap.parse_known_args()[0]
+
 
 if __name__ == "__main__":
     setup_multistrategy()
-    op = _menu()
+    _cli_args = _parse_cli_args()
+    if _cli_args.no_menu:
+        op = _cli_args.op
+        # Apply --days / --basket / --leverage to globals the backtest
+        # reads later. Mirrors the effect of _ask_periodo / _ask_config.
+        if _cli_args.days and 7 <= _cli_args.days <= 1500:
+            from engines import citadel as _bt
+            d = _cli_args.days
+            _bt.SCAN_DAYS = d; _bt.N_CANDLES = d*24*4
+            _bt.HTF_N_CANDLES_MAP = {"1h":d*24+200,"4h":d*6+100,"1d":d+100}
+            SCAN_DAYS = d; N_CANDLES = d*24*4
+            HTF_N_CANDLES_MAP = {"1h":d*24+200,"4h":d*6+100,"1d":d+100}
+        if _cli_args.leverage and 0.1 <= _cli_args.leverage <= 20:
+            from engines import citadel as _bt
+            _bt.LEVERAGE = float(_cli_args.leverage)
+            LEVERAGE = _bt.LEVERAGE
+    else:
+        op = _menu()
     LABELS = {
-        "1":"CITADEL + RENAISSANCE", "2":"CITADEL", "3":"RENAISSANCE",
-        "4":"DE SHAW", "5":"JUMP", "6":"BRIDGEWATER",
+        "1":"CORE OPERATIONAL", "2":"CITADEL", "3":"RENAISSANCE",
+        "5":"JUMP", "6":"BRIDGEWATER",
         "7":"ALL", "8":"TWO SIGMA (ML)",
     }
     days = _ask_periodo()
@@ -1149,23 +2039,6 @@ if __name__ == "__main__":
         _resultados_por_simbolo(hermes_all, show_he=False)
         _metricas_e_export(hermes_all, label="RENAISSANCE")
 
-    elif op == "4":
-        from engines.deshaw import find_cointegrated_pairs, scan_pair
-        print(f"\n{SEP}\n  COINTEGRATION ANALYSIS\n{SEP}")
-        pairs = find_cointegrated_pairs(all_dfs)
-        newton_all = []
-        for pair in pairs:
-            df_a = all_dfs.get(pair["sym_a"])
-            df_b = all_dfs.get(pair["sym_b"])
-            if df_a is None or df_b is None: continue
-            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
-                                  pair, macro_series, corr)
-            newton_all.extend(trades)
-        newton_all.sort(key=lambda t: t["timestamp"])
-        if not newton_all: print("  Sem trades."); sys.exit(1)
-        _resultados_por_simbolo(newton_all, show_he=False)
-        _metricas_e_export(newton_all, label="DE SHAW")
-
     elif op == "5":
         from engines.jump import scan_mercurio
         mercurio_all = []
@@ -1180,7 +2053,11 @@ if __name__ == "__main__":
     elif op == "6":
         from engines.bridgewater import scan_thoth, collect_sentiment
         print(f"\n{SEP}\n  SENTIMENT DATA\n{SEP}")
-        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        sentiment_data = collect_sentiment(
+            list(all_dfs.keys()),
+            end_time_ms=_derive_end_time_ms(all_dfs),
+            window_days=SCAN_DAYS,
+        )
         thoth_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
@@ -1201,18 +2078,6 @@ if __name__ == "__main__":
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         engine_trades["RENAISSANCE"] = hermes_all
 
-        from engines.deshaw import find_cointegrated_pairs, scan_pair
-        pairs = find_cointegrated_pairs(all_dfs)
-        newton_all = []
-        for pair in pairs:
-            df_a = all_dfs.get(pair["sym_a"])
-            df_b = all_dfs.get(pair["sym_b"])
-            if df_a is None or df_b is None: continue
-            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
-                                  pair, macro_series, corr)
-            newton_all.extend(trades)
-        engine_trades["DE SHAW"] = newton_all
-
         from engines.jump import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
@@ -1221,7 +2086,11 @@ if __name__ == "__main__":
         engine_trades["JUMP"] = mercurio_all
 
         from engines.bridgewater import scan_thoth, collect_sentiment
-        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        sentiment_data = collect_sentiment(
+            list(all_dfs.keys()),
+            end_time_ms=_derive_end_time_ms(all_dfs),
+            window_days=SCAN_DAYS,
+        )
         thoth_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
@@ -1242,7 +2111,7 @@ if __name__ == "__main__":
 
         # summary per engine
         print(f"\n{SEP}\n  RESULTADOS POR ENGINE\n{SEP}")
-        for eng in ["CITADEL", "RENAISSANCE", "DE SHAW", "JUMP", "BRIDGEWATER"]:
+        for eng in ["CITADEL", "RENAISSANCE", "JUMP", "BRIDGEWATER"]:
             ts = [t for t in all_trades if t.get("strategy") == eng and t["result"] in ("WIN","LOSS")]
             if not ts: print(f"  {eng:12s}  sem trades"); continue
             w = sum(1 for t in ts if t["result"] == "WIN")
@@ -1261,18 +2130,6 @@ if __name__ == "__main__":
         hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
         engine_trades["RENAISSANCE"] = hermes_all
 
-        from engines.deshaw import find_cointegrated_pairs, scan_pair
-        pairs = find_cointegrated_pairs(all_dfs)
-        newton_all = []
-        for pair in pairs:
-            df_a = all_dfs.get(pair["sym_a"])
-            df_b = all_dfs.get(pair["sym_b"])
-            if df_a is None or df_b is None: continue
-            trades, _ = scan_pair(df_a.copy(), df_b, pair["sym_a"], pair["sym_b"],
-                                  pair, macro_series, corr)
-            newton_all.extend(trades)
-        engine_trades["DE SHAW"] = newton_all
-
         from engines.jump import scan_mercurio
         mercurio_all = []
         for sym, df in all_dfs.items():
@@ -1281,7 +2138,11 @@ if __name__ == "__main__":
         engine_trades["JUMP"] = mercurio_all
 
         from engines.bridgewater import scan_thoth, collect_sentiment
-        sentiment_data = collect_sentiment(list(all_dfs.keys()))
+        sentiment_data = collect_sentiment(
+            list(all_dfs.keys()),
+            end_time_ms=_derive_end_time_ms(all_dfs),
+            window_days=SCAN_DAYS,
+        )
         thoth_all = []
         for sym, df in all_dfs.items():
             trades, _ = scan_thoth(df.copy(), sym, macro_series, corr,
@@ -1296,11 +2157,15 @@ if __name__ == "__main__":
         _metricas_e_export(all_trades, label="TWO SIGMA ML")
 
     else:
-        # op == "1" — original CITADEL + RENAISSANCE
-        azoth_all, _ = _scan_azoth(all_dfs, htf_stack_by_sym, macro_series, corr)
-        hermes_all, _ = _scan_hermes_all(all_dfs, htf_stack_by_sym, macro_series, corr)
-        print(f"\n{SEP}\n  SIGNAL AGGREGATOR\n{SEP}")
-        all_trades = aggregate_signals(azoth_all, hermes_all)
+        # op == "1" — operational multi-strategy core
+        engine_contexts = _load_operational_contexts()
+        _, all_trades = _collect_operational_trades(engine_contexts=engine_contexts)
         if not all_trades: print("  Sem trades."); sys.exit(1)
-        _resultados_por_simbolo(all_trades, show_he=True)
-        _metricas_e_export(all_trades, label="CITADEL + RENAISSANCE")
+        print(f"\n{SEP}\n  RESULTADOS POR ENGINE\n{SEP}")
+        for eng in OPERATIONAL_ENGINES:
+            ts = [t for t in all_trades if t.get("strategy") == eng and t["result"] in ("WIN","LOSS")]
+            if not ts: print(f"  {eng:12s}  sem trades"); continue
+            w = sum(1 for t in ts if t["result"] == "WIN")
+            pnl = sum(t["pnl"] for t in ts)
+            print(f"  {eng:12s}  n={len(ts):>4d}  WR={w/len(ts)*100:>5.1f}%  ${pnl:>+10,.0f}")
+        _metricas_e_export(all_trades, label="CORE OPERATIONAL")

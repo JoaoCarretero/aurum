@@ -16,13 +16,11 @@ Phase 2 additions:
 """
 from __future__ import annotations
 
-import json as _json
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Iterable
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from macro_brain.data_ingestion.base import Collector

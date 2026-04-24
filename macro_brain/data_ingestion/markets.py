@@ -20,7 +20,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Iterable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
