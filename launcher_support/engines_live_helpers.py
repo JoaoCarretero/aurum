@@ -239,16 +239,33 @@ def _safe_float(value):
 
 
 def _uptime_seconds(proc: dict) -> float | None:
+    """Compute uptime for a cockpit row.
+
+    Prefer precomputed numeric fields; fall back to a timestamp.
+    Timestamps may come in 3 flavours — pick whichever we have:
+      - ``started_at``: ISO with ``+00:00`` suffix (from the VPS cockpit API)
+      - ``started``: naive ISO from ``summary_to_engine_log_row`` (UTC)
+      - local proc manager: naive ISO from ``datetime.now().isoformat()``
+
+    Parsing must treat naive timestamps as UTC (since both VPS runs and
+    proc manager write in UTC), and the subtraction reference must also
+    be UTC — otherwise a Brazil-local ``datetime.now()`` subtracts 3h
+    of timezone drift from the uptime (bug 2026-04-24: cockpit showed
+    ``-3h`` / blank durations for services that had been up <30min).
+    """
     for key in ("uptime_seconds", "uptime_s", "uptime"):
         value = _safe_float(proc.get(key))
         if value is not None:
             return value
-    started = proc.get("started")
+    started = proc.get("started_at") or proc.get("started")
     if not started:
         return None
     try:
-        from datetime import datetime as _dt
-        return (_dt.now() - _dt.fromisoformat(str(started))).total_seconds()
+        from datetime import datetime as _dt, timezone as _tz
+        parsed = _dt.fromisoformat(str(started).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_tz.utc)
+        return (_dt.now(_tz.utc) - parsed).total_seconds()
     except Exception:
         return None
 

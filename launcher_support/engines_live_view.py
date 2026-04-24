@@ -1503,11 +1503,18 @@ def _live_subtitle(meta: dict, proc: dict) -> str:
     mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
     if mode_key in _MODE_ORDER:
         parts.append(mode_key.upper())
-    started = proc.get("started")
+    # Uptime parsing mirrors _uptime_seconds: treat naive timestamps as
+    # UTC (VPS + local proc manager both emit UTC) and subtract from
+    # now-in-UTC, not now-local — otherwise Brazil-local drift wipes
+    # out short uptimes (bug 2026-04-24).
+    started = proc.get("started_at") or proc.get("started")
     if started:
         try:
-            from datetime import datetime as _dt
-            secs = (_dt.now() - _dt.fromisoformat(started)).total_seconds()
+            from datetime import datetime as _dt, timezone as _tz
+            parsed = _dt.fromisoformat(str(started).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=_tz.utc)
+            secs = (_dt.now(_tz.utc) - parsed).total_seconds()
             parts.append(format_uptime(seconds=secs))
         except Exception:
             pass

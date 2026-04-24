@@ -213,6 +213,66 @@ class TestFormatUptime:
         assert format_uptime(seconds=None) == "—"
 
 
+class TestUptimeSecondsTimezoneHandling:
+    """Regression: cockpit uptime was off by Brazil-local TZ offset because
+    ``_dt.now()`` returned naive local time while ``started_at`` from the
+    VPS API is tz-aware UTC. Users saw negative / blank uptimes for
+    services started <30min ago (bug 2026-04-24).
+    """
+
+    def test_tz_aware_started_at_from_vps_api(self, monkeypatch):
+        from datetime import datetime, timezone
+        from launcher_support import engines_live_helpers as h
+
+        frozen = datetime(2026, 4, 24, 18, 0, 0, tzinfo=timezone.utc)
+
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen if tz is None else frozen.astimezone(tz)
+
+        monkeypatch.setattr(h, "_safe_float", h._safe_float)  # anchor module
+        import datetime as _dt_mod
+        monkeypatch.setattr(_dt_mod, "datetime", _FixedDatetime)
+
+        proc = {"started_at": "2026-04-24T17:40:00+00:00"}
+        seconds = h._uptime_seconds(proc)
+        assert seconds == 20 * 60, (
+            f"expected 1200s (20min), got {seconds}. Bug repro means tz "
+            f"drift or silent exception swallowing aware timestamps."
+        )
+
+    def test_naive_iso_is_treated_as_utc(self, monkeypatch):
+        """``core/ops/run_catalog.summary_to_engine_log_row`` writes a naive
+        ``"YYYY-MM-DD HH:MM"`` string. Must be treated as UTC, not local,
+        or Brazil drift wipes out the uptime."""
+        from datetime import datetime, timezone
+        from launcher_support import engines_live_helpers as h
+
+        frozen = datetime(2026, 4, 24, 18, 0, 0, tzinfo=timezone.utc)
+
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen if tz is None else frozen.astimezone(tz)
+
+        import datetime as _dt_mod
+        monkeypatch.setattr(_dt_mod, "datetime", _FixedDatetime)
+
+        proc = {"started": "2026-04-24 17:30"}
+        seconds = h._uptime_seconds(proc)
+        assert seconds == 30 * 60
+
+    def test_precomputed_uptime_takes_priority(self):
+        from launcher_support.engines_live_helpers import _uptime_seconds
+
+        proc = {
+            "uptime_seconds": 900,
+            "started_at": "2026-04-24T00:00:00+00:00",  # ignored
+        }
+        assert _uptime_seconds(proc) == 900.0
+
+
 class TestRunningEnginesByBucket:
     def test_maps_citadel_proc_to_citadel_slug(self):
         from launcher_support.engines_live_view import running_slugs_from_procs
