@@ -343,9 +343,6 @@ def _signal_age_seconds(trade: dict) -> float | None:
     return signal_age_seconds(trade)
 
 
-def _is_live_signal(trade: dict, tick_sec: int,
-                    tolerance_mult: float = 2.0) -> bool:
-    return is_live_signal(trade, tick_sec=tick_sec, tolerance_mult=tolerance_mult)
 
 
 def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
@@ -470,7 +467,25 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 continue
             state.seen_keys.add(key)
 
-            if not _is_live_signal(t, state.tick_sec):
+            # Feature snapshot from scan — shared across every signals.jsonl
+            # record (opened / skipped) so every decision carries the same
+            # diagnostic payload. Without this the skipped branches lose the
+            # raw features we need to reconstruct divergences with backtest.
+            sig_features = {
+                "signal_ts": str(signal_timestamp(t)),
+                "pattern": t.get("pattern"),
+                "entropy": t.get("entropy"),
+                "entropy_norm": t.get("entropy_norm"),
+                "hurst": t.get("hurst"),
+                "h_regime": t.get("h_regime"),
+                "score": t.get("score"),
+                "rr": t.get("rr"),
+                "fractal_align": t.get("fractal_align"),
+                "macro_bias": t.get("macro_bias"),
+                "vol_regime": t.get("vol_regime"),
+            }
+
+            if not is_live_signal(t, tick_sec=state.tick_sec):
                 stale_skips += 1
                 if priming:
                     primed_count += 1
@@ -480,7 +495,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "direction": t.get("direction"),
                     "decision": "skipped",
                     "reason": "stale_bar",
-                    "signal_ts": str(signal_timestamp(t)),
+                    **sig_features,
                 })
                 continue
             state.novel_total += 1
@@ -500,6 +515,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "direction": t.get("direction"),
                     "decision": "skipped",
                     "reason": "max_open_positions",
+                    **sig_features,
                 })
                 continue
 
@@ -521,6 +537,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "direction": t.get("direction"),
                     "decision": "skipped",
                     "reason": "direction_conflict",
+                    **sig_features,
                 })
                 continue
 
@@ -545,21 +562,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "entry": pos.entry_price, "stop": pos.stop,
                 "target": pos.target, "decision": "opened",
                 "pos_id": pos.id,
-                # Feature snapshot from the scan record — enables
-                # post-hoc diagnosis of live↔backtest divergence
-                # (e.g. 2026-04-24 RENDERUSDT LONG passed live with
-                # entropy=RANDOM vs. backtest replay rejecting it).
-                "signal_ts": str(signal_timestamp(t)),
-                "pattern": t.get("pattern"),
-                "entropy": t.get("entropy"),
-                "entropy_norm": t.get("entropy_norm"),
-                "hurst": t.get("hurst"),
-                "h_regime": t.get("h_regime"),
-                "score": t.get("score"),
-                "rr": t.get("rr"),
-                "fractal_align": t.get("fractal_align"),
-                "macro_bias": t.get("macro_bias"),
-                "vol_regime": t.get("vol_regime"),
+                **sig_features,
             })
             if notify:
                 _tg_send(

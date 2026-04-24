@@ -114,8 +114,11 @@ def _h_entropy_norm(df, idx):
     return H / math.log(H_ENTROPY_BINS)
 
 
-def _h_entropy(df, idx):
-    norm = _h_entropy_norm(df, idx)
+def _h_entropy_label(norm):
+    """Map a normalized entropy value to a label. Extracted so
+    ``scan_hermes`` and ``_h_entropy`` always stay in lockstep — a
+    threshold tweak in one place propagates everywhere.
+    """
     if norm is None:
         return "STRUCTURED"
     if norm > 0.92:
@@ -123,6 +126,10 @@ def _h_entropy(df, idx):
     if norm < 0.50:
         return "STRUCTURED"
     return "TRANSITION"
+
+
+def _h_entropy(df, idx):
+    return _h_entropy_label(_h_entropy_norm(df, idx))
 
 
 def _h_hurst(df, idx):
@@ -299,10 +306,7 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                 fractal_score=round(aligned/n_htf,2) if n_htf>0 else 1.0
                 if aligned==0: vetos["hermes_fractal_misalign"]+=1; continue
             ent_norm=_h_entropy_norm(df,idx)
-            if ent_norm is None: ent="STRUCTURED"
-            elif ent_norm>0.92: ent="RANDOM"
-            elif ent_norm<0.50: ent="STRUCTURED"
-            else: ent="TRANSITION"
+            ent=_h_entropy_label(ent_norm)
             if ent=="RANDOM": vetos["hermes_entropy_random"]+=1; continue
             hurst=_h_hurst(df,idx)
             ent_w=1.2 if ent=="STRUCTURED" else 0.8
