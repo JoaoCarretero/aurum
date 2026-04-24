@@ -153,3 +153,63 @@ def test_validate_empty_description_ok() -> None:
     assert result.ok is True
     assert draft is not None
     assert draft.description == ""
+
+
+def test_validate_accepts_optional_run_id():
+    result, draft = validate_draft(
+        title="Investigate phi overfit",
+        description="",
+        assignee_key="AUDIT",
+        priority="medium",
+        run_id="phi/2026-04-23_1403",
+    )
+    assert result.ok is True
+    assert draft.run_id == "phi/2026-04-23_1403"
+
+
+def test_validate_without_run_id_default_none():
+    _, draft = validate_draft(
+        title="title ok",
+        description="",
+        assignee_key="RESEARCH",
+        priority="low",
+    )
+    assert draft.run_id is None
+
+
+def test_validate_rejects_malformed_run_id():
+    result, _ = validate_draft(
+        title="title ok",
+        description="",
+        assignee_key="RESEARCH",
+        priority="low",
+        run_id="x y z",  # espaço rejeita
+    )
+    assert result.ok is False
+    assert any("run_id" in e for e in result.errors)
+
+
+def test_payload_injects_run_id_into_description_and_labels():
+    _, draft = validate_draft(
+        title="Audit phi",
+        description="Check regime selection bias",
+        assignee_key="AUDIT",
+        priority="high",
+        run_id="phi/2026-04-23_1403",
+    )
+    payload = draft_to_api_payload(draft)
+    assert "**run_id:** phi/2026-04-23_1403" in payload["description"]
+    assert "Check regime selection bias" in payload["description"]
+    assert "run:phi/2026-04-23_1403" in payload.get("labels", [])
+
+
+def test_payload_without_run_id_unchanged():
+    _, draft = validate_draft(
+        title="title ok",
+        description="body",
+        assignee_key="RESEARCH",
+        priority="medium",
+    )
+    payload = draft_to_api_payload(draft)
+    assert payload["description"] == "body"
+    assert "labels" not in payload or payload["labels"] == []

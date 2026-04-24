@@ -14,9 +14,10 @@ API separada do Screen pra permitir testing sem Tk render real
 """
 from __future__ import annotations
 
+import re
 import tkinter as tk
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 
 from core.ui.ui_palette import (
     AMBER,
@@ -46,6 +47,8 @@ _PRIORITY_COLORS = {"low": DIM2, "medium": AMBER, "high": RED}
 _TITLE_MIN = 5
 _TITLE_MAX = 120
 
+_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_/.-]{3,}$")
+
 
 @dataclass(frozen=True)
 class TicketDraft:
@@ -53,6 +56,7 @@ class TicketDraft:
     description: str
     assignee: AgentIdentity
     priority: str  # "low" | "medium" | "high"
+    run_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,7 @@ def validate_draft(
     description: str,
     assignee_key: str,
     priority: str,
+    run_id: str | None = None,
 ) -> tuple[ValidationResult, TicketDraft | None]:
     """Valida entrada. Retorna (resultado, draft) — draft e None se invalido."""
     errors: list[str] = []
@@ -80,6 +85,14 @@ def validate_draft(
     priority_clean = (priority or "").strip().lower()
     if priority_clean not in _PRIORITIES:
         errors.append(f"priority invalida: {priority_clean!r}")
+
+    run_id_clean: str | None = None
+    if run_id and run_id.strip():
+        candidate = run_id.strip()
+        if not _RUN_ID_PATTERN.match(candidate):
+            errors.append(f"run_id invalido: {candidate!r}")
+        else:
+            run_id_clean = candidate
 
     assignee_key_clean = (assignee_key or "").strip().upper()
     from launcher_support.research_desk.agents import BY_KEY
@@ -96,19 +109,33 @@ def validate_draft(
         description=(description or "").strip(),
         assignee=assignee,
         priority=priority_clean,
+        run_id=run_id_clean,
     )
     return ValidationResult(ok=True, errors=()), draft
 
 
 def draft_to_api_payload(draft: TicketDraft) -> dict:
-    """Converte TicketDraft em payload aceito por POST /issues."""
-    return {
+    """Converte TicketDraft em payload aceito por POST /issues.
+
+    Se draft.run_id presente, prefixa no description + adiciona label
+    'run:<id>' para detecção posterior pelo artifact_scanner._detect_origin.
+    """
+    body = draft.description
+    labels: list[str] = []
+    if draft.run_id:
+        body = f"**run_id:** {draft.run_id}\n\n{body}".rstrip()
+        labels.append(f"run:{draft.run_id}")
+
+    payload: dict = {
         "title": draft.title,
-        "description": draft.description,
+        "description": body,
         "assigned_agent_id": draft.assignee.uuid,
         "priority": draft.priority,
         "status": "todo",
     }
+    if labels:
+        payload["labels"] = labels
+    return payload
 
 
 # ── UI ───────────────────────────────────────────────────────────
@@ -139,6 +166,7 @@ class NewTicketModal:
         self._assignee_var = tk.StringVar(
             value=(default_assignee or AGENTS[0]).key,
         )
+        self._run_id_var = tk.StringVar(value="")
         self._desc_widget: tk.Text | None = None
         self._error_label: tk.Label | None = None
         self._submit_btn: tk.Label | None = None
@@ -217,6 +245,18 @@ class NewTicketModal:
             )
             rb.pack(side="left", padx=(0, 10))
 
+        # ── Run ID (optional) ──────────────────
+        tk.Label(
+            wrap, text="RUN ID (optional)",
+            font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w",
+        ).pack(anchor="w", pady=(4, 2))
+        import tkinter.ttk as ttk
+        self._run_id_cb = ttk.Combobox(
+            wrap, textvariable=self._run_id_var, state="normal", width=50,
+        )
+        self._run_id_cb.pack(anchor="w", pady=(0, 10))
+        self._populate_run_ids()
+
         # ── Description ──────────────────────────
         tk.Label(
             wrap, text="DESCRICAO",
@@ -262,6 +302,25 @@ class NewTicketModal:
 
         title_entry.focus_set()
 
+    def _populate_run_ids(self) -> None:
+        """Auto-complete com runs recentes de data/*/. Best-effort."""
+        try:
+            from pathlib import Path
+            from launcher_support.research_desk.artifact_scanner import (
+                list_backtest_runs,
+            )
+            # Procura root do repo subindo até achar 'data' ou 'pyproject.toml'
+            here = Path(__file__).resolve()
+            root = here
+            for _ in range(6):
+                if (root / "data").is_dir() or (root / "pyproject.toml").exists():
+                    break
+                root = root.parent
+            values = [f"{eng}/{rid}" for eng, rid, _ in list_backtest_runs(root, limit=30)]
+            self._run_id_cb.configure(values=values)
+        except Exception:
+            self._run_id_cb.configure(values=[])
+
     # ── Submit flow ───────────────────────────────────────────────
 
     def _on_submit(self) -> None:
@@ -271,6 +330,7 @@ class NewTicketModal:
             description=self._desc_widget.get("1.0", "end").rstrip(),
             assignee_key=self._assignee_var.get(),
             priority=self._priority_var.get(),
+            run_id=self._run_id_var.get() or None,
         )
         if not result.ok or draft is None:
             self._show_error(" · ".join(result.errors))
