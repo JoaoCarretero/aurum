@@ -68,13 +68,37 @@ def _engine_from_dir(run_dir: Path) -> tuple[str, str]:
 def _effective_status(hb: Heartbeat, now: datetime | None = None):
     """Derive a status that accounts for zombie runs.
 
-    A runner killed by SIGKILL never writes status=stopped; its heartbeat
-    stays frozen at 'running' until an operator hand-edits the file.
-    Treat any 'running' heartbeat whose last_tick_at is older than
-    ``max(tick_sec * 3, 600s)`` as effectively stopped. The underlying
-    heartbeat file is not modified — this is purely the API-level view.
+    A runner killed by SIGKILL or stopped via systemctl never writes
+    status=stopped to its own heartbeat file; the file stays frozen at
+    'running' until an operator hand-edits it. We have two signals to
+    defeat the zombie:
+
+    1. DB row with ``ended_at != NULL`` — authoritative: the runner's
+       shutdown hook (or ``aurum_cleanup_stale_runs``) marked the row
+       ended. Trust this even when the heartbeat is "fresh".
+    2. Staleness of ``last_tick_at`` — fallback when DB is unreachable:
+       a heartbeat claiming 'running' whose tick is older than
+       ``max(tick_sec * 3, 600s)`` is effectively stopped.
+
+    The underlying heartbeat file is never mutated here — this is purely
+    the API-level view.
     """
-    if hb.status != "running" or hb.last_tick_at is None:
+    if hb.status != "running":
+        return hb.status
+
+    # DB cross-check — authoritative when available.
+    try:
+        from core.ops import db_live_runs
+        db_row = db_live_runs.get_live_run(str(hb.run_id or ""))
+    except Exception:  # noqa: BLE001
+        db_row = None
+    if db_row is not None:
+        db_status = str(db_row.get("status") or "").lower()
+        db_ended = db_row.get("ended_at")
+        if db_status == "stopped" or db_ended:
+            return "stopped"
+
+    if hb.last_tick_at is None:
         return hb.status
     now = now or datetime.now(timezone.utc)
     staleness_threshold = max((hb.tick_sec or 900) * 3, 600)
