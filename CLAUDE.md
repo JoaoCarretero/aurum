@@ -1,6 +1,21 @@
 # AURUM Finance — CLAUDE.md
 # O disco lê a si mesmo. O universo roda em um CD. AURUM é o laser.
 
+---
+
+## 📍 LEIA PRIMEIRO — hub de orientação
+
+Antes de qualquer trabalho sério, leia (nesta ordem):
+
+1. **`MEMORY.md`** — fatos permanentes, CORE protegido, keys.json intocável, incidentes fundadores, status engines, anti-overfit
+2. **`AGENTS.md`** — quem opera o repo (humanos, Codex, subagents, RESEARCH DESK), padrão de paralelismo
+3. **`CONTEXT.md`** — mapa de diretórios, pipeline canônico, parâmetros, comandos essenciais
+4. **`SKILLS.md`** — quando invocar cada workflow (brainstorming, TDD, debugging, parallel agents)
+
+Os 4 arquivos + este CLAUDE.md são a base. Tudo mais é detalhe.
+
+---
+
 ## Filosofia
 
 O mercado é um CD — informação codificada em espiral de preço e volume,
