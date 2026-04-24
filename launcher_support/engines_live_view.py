@@ -1173,9 +1173,40 @@ def _render_master_list(state, launcher):
             allow_sync=cache_is_empty,
         )
         if vps_running:
-            running = {**running, **{slug: {"status": "running", "alive": True,
-                                            "source": "vps"}
-                                     for slug in vps_running}}
+            # Enrich each VPS proc with started_at (earliest among instances
+            # of the same engine) so the sidebar row can show uptime. Without
+            # started_at the _row_metric helper short-circuits to "" and the
+            # right-edge column reads blank even though the engine is up.
+            cockpit_rows = _COCKPIT_RUNS_CACHE.get("runs") or []
+            earliest_started: dict[str, str] = {}
+            for row in cockpit_rows:
+                slug = str(row.get("engine") or "").lower()
+                if not slug or slug not in vps_running:
+                    continue
+                if row.get("status") != "running":
+                    continue
+                if current_mode and row.get("mode") != current_mode:
+                    continue
+                started = row.get("started_at")
+                if not started:
+                    continue
+                prev = earliest_started.get(slug)
+                if prev is None or str(started) < str(prev):
+                    earliest_started[slug] = str(started)
+            running = {
+                **running,
+                **{
+                    slug: {
+                        "status": "running",
+                        "alive": True,
+                        "source": "vps",
+                        "started_at": earliest_started.get(slug),
+                        "engine_mode": current_mode,
+                        "mode": current_mode,
+                    }
+                    for slug in vps_running
+                },
+            }
 
     # No modo SHADOW, so engines com shadow run visivel no poller
     # aparecem. Agora lê _COCKPIT_RUNS_CACHE (populado acima) pra cobrir
@@ -1345,9 +1376,13 @@ def _render_bucket(parent, title, items, state):
                       highlightbackground=BORDER, highlightthickness=1)
     # padx=0 — bucket headers align with nav rows (no dangling 2px gutter).
     header.pack(fill="x", pady=(8, 4), padx=0)
-    tk.Frame(header, bg=AMBER, width=3).pack(side="left", fill="y")
+    # 4px accent strip matches the nav-row accent so header and rows
+    # align per-pixel on the left edge (rows use width=4 in _row_base).
+    tk.Frame(header, bg=AMBER, width=4).pack(side="left", fill="y")
     inner = tk.Frame(header, bg=BG2)
-    inner.pack(side="left", fill="x", expand=True, padx=8, pady=5)
+    # padx=(8, 7) matches the badge padding in _render_nav_row so the
+    # bucket title sits at the same x as the badge text on the rows.
+    inner.pack(side="left", fill="x", expand=True, padx=(8, 7), pady=5)
     if collapsible:
         chevron = "▸" if collapsed else "▾"
         tk.Label(inner, text=(">" if collapsed else "v"), font=(FONT, 7, "bold"),
