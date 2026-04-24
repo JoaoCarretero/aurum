@@ -842,6 +842,32 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
                 )
         except Exception:
             log.exception("db_live_runs final upsert failed")
+        # Also flush heartbeat.json with status=stopped so the filesystem
+        # path (/v1/runs in cockpit_api) reports the right status without
+        # waiting for the 45min staleness threshold to expire. Without
+        # this, /v1/runs consumers kept showing the run as "running" for
+        # ~45min after systemctl stop (bug 2026-04-24: 2 citadel_paper
+        # rows in launcher when only 1 was actually alive).
+        try:
+            _write_heartbeat({
+                "run_id": RUN_ID, "status": "stopped",
+                "label": LABEL, "engine": "millennium",
+                "started_at": RUN_TS.isoformat(),
+                "tick_sec": state.tick_sec, "ticks_ok": state.ticks_ok,
+                "ticks_fail": state.ticks_fail,
+                "novel_total": state.novel_total,
+                "last_tick_at": state.last_novel_at or datetime.now(timezone.utc).isoformat(),
+                "stopped_at": datetime.now(timezone.utc).isoformat(),
+                "stopped_reason": stop["reason"] or "clean_exit",
+                "mode": "paper",
+                "primed": state.primed,
+                "account_size": state.account_size,
+                "equity": round(state.account.equity, 2),
+                "drawdown_pct": round(state.account.drawdown_pct, 3),
+                "ks_state": state.ks.state.value,
+            })
+        except Exception:
+            log.exception("final heartbeat write failed")
         _tg_send(
             f"<b>MILLENNIUM paper STOP</b>\n"
             f"equity ${state.account.equity:,.2f} · "
