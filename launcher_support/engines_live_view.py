@@ -3454,7 +3454,12 @@ def _paper_content_sig(state, launcher=None) -> tuple:
 
 
 def _fetch_paper_trades(run_id: str) -> list[dict]:
-    """Fetch recent paper trades via cockpit API. Empty list on error."""
+    """Fetch recent paper trades via cockpit API. Empty list on error.
+
+    Only returns CLOSED trades (written to reports/trades.jsonl). Open
+    positions live in state/positions.json and are surfaced via
+    _position_to_live_trade() below.
+    """
     client = _get_cockpit_client()
     if client is None:
         return []
@@ -3464,6 +3469,39 @@ def _fetch_paper_trades(run_id: str) -> list[dict]:
         return []
     raw = (payload or {}).get("trades") or []
     return [t for t in raw if isinstance(t, dict)]
+
+
+def _position_to_live_trade(pos: dict) -> dict:
+    """Normalize paper positions.json record to the trade history schema.
+
+    Position fields from cockpit /positions: id, engine, symbol, direction
+    (already LONG/SHORT), entry_price, stop, target, size, notional,
+    opened_at, opened_at_idx, unrealized_pnl, mtm_price, bars_held.
+
+    Mapped to trade schema so trade_history_panel + TradeChartPopup treat
+    it like a LIVE trade (result=LIVE). exit_p defaults to mtm_price
+    when the tick has marked the position; falls back to entry_price for
+    freshly-opened positions (no mark yet).
+    """
+    entry_price = pos.get("entry_price")
+    mtm = pos.get("mtm_price")
+    return {
+        "symbol": pos.get("symbol"),
+        "strategy": pos.get("engine"),
+        "direction": pos.get("direction"),
+        "timestamp": pos.get("opened_at"),
+        "entry": entry_price,
+        "stop": pos.get("stop"),
+        "target": pos.get("target"),
+        "exit_p": mtm if mtm is not None else entry_price,
+        "size": pos.get("size"),
+        "duration": int(pos.get("bars_held") or 0),
+        "result": "LIVE",
+        "exit_reason": "live",
+        "pnl": pos.get("unrealized_pnl") or 0.0,
+        "r_multiple": 0.0,
+        "_position_id": pos.get("id"),  # preserved for popup registry dedup
+    }
 
 
 def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
@@ -3530,10 +3568,18 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     )
 
     # Trade history block — clickable rows open matplotlib chart popup.
-    # Trades come from cockpit API (reports/trades.jsonl served for paper runs).
-    trades = _fetch_paper_trades(run_id)
-    # Newest first for display.
-    trades_display = list(reversed(trades)) if trades else []
+    # Merges LIVE positions (from state/positions.json, still open) with
+    # closed trades (from reports/trades.jsonl via cockpit API). LIVE rows
+    # appear first so they're immediately clickable; closed rows follow
+    # newest-first.
+    live_trades = [
+        _position_to_live_trade(p) for p in (positions or [])
+        if isinstance(p, dict)
+    ]
+    closed_trades = _fetch_paper_trades(run_id)
+    trades_display = live_trades + (
+        list(reversed(closed_trades)) if closed_trades else []
+    )
 
     _engine_for_tf = (
         (trades_display[0].get("strategy") if trades_display else None) or slug
