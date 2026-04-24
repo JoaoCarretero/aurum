@@ -138,8 +138,11 @@ def build_marker_specs(trade: dict, *, tf_sec: int) -> list[dict[str, Any]]:
                       "style": "dashed", "color": "#44FF88", "linewidth": 1.0})
 
     if trade.get("result") == "LIVE":
-        cur_px = trade.get("exit_p") or trade.get("entry")
-        if cur_px:
+        # Only render a "current" marker if we have a real last-seen price
+        # distinct from entry. Falling back to entry would plot the green
+        # dot on top of the yellow entry line (visual collision).
+        cur_px = trade.get("exit_p")
+        if cur_px and float(cur_px) != float(entry or 0):
             specs.append({"kind": "current", "price": float(cur_px),
                           "style": "scatter", "marker": "o",
                           "color": "#44FF88", "size": 100})
@@ -206,7 +209,10 @@ def fetch_binance_candles(
             return parse_klines_to_df([])
         return parse_klines_to_df(data)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-            OSError, ValueError, json.JSONDecodeError):
+            OSError, ValueError, json.JSONDecodeError,
+            IndexError, KeyError, TypeError):
+        # IndexError/KeyError/TypeError catch malformed kline rows if
+        # Binance ever changes the schema — empty DF instead of crash.
         return parse_klines_to_df([])
 
 

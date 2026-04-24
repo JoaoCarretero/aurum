@@ -131,13 +131,25 @@ class TestBuildMarkerSpecs:
         assert "exit" in levels
         assert levels["entry"]["price"] == 0.0776
 
-    def test_live_trade_no_exit_marker(self):
+    def test_live_trade_with_mark_price_shows_current(self):
+        # exit_p populated and distinct from entry → green current dot
+        specs = build_marker_specs(
+            self._trade(result="LIVE", exit_p=0.0780, duration=0),
+            tf_sec=900,
+        )
+        kinds = {s.get("kind") for s in specs}
+        assert "current" in kinds
+        assert "exit" not in kinds
+
+    def test_live_trade_no_mark_price_omits_current(self):
+        # exit_p missing → no current marker (avoids visual collision
+        # with yellow entry horizontal line)
         specs = build_marker_specs(
             self._trade(result="LIVE", exit_p=None, duration=0),
             tf_sec=900,
         )
         kinds = {s.get("kind") for s in specs}
-        assert "current" in kinds  # pulsing current price instead
+        assert "current" not in kinds
         assert "exit" not in kinds
 
     def test_missing_stop_omitted(self):
