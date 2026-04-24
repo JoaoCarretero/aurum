@@ -1223,25 +1223,43 @@ def _render_detail_probe(parent: tk.Widget, r: RunSummary) -> None:
 
 
 def _render_detail_header(parent: tk.Widget, r: RunSummary) -> None:
+    """Detail pane header — dot + ENGINE (H1) + MODE/STATUS/SRC (H2) +
+    run_id (BODY).
+
+    MODE color uses the semantic palette (paper=CYAN, demo=GREEN,
+    testnet=AMBER, live=RED); shadow/unknown fall back to DIM. Status
+    and SRC keep their existing semantic mappings. Divider below is
+    BORDER (structural).
+    """
+    from core.ui.ui_palette import MODE_PAPER, MODE_DEMO, MODE_TESTNET, MODE_LIVE
     bar = tk.Frame(parent, bg=BG)
     bar.pack(fill="x")
     inner = tk.Frame(bar, bg=BG)
     inner.pack(fill="x", padx=10, pady=7)
     dot_color = GREEN if r.status == "running" else (
         RED if r.status == "failed" else DIM2)
+    mode_map = {
+        "paper": MODE_PAPER, "demo": MODE_DEMO,
+        "testnet": MODE_TESTNET, "live": MODE_LIVE,
+    }
+    mode_color = mode_map.get(r.mode, DIM)
+    src_color = GREEN if r.source == "vps" else (
+        AMBER_D if r.source == "db" else CYAN)
     tk.Label(inner, text="●", fg=dot_color, bg=BG,
-             font=(FONT, 12)).pack(side="left", padx=(0, 6))
+             font=(FONT, 10)).pack(side="left", padx=(0, 6))
     tk.Label(inner, text=r.engine, fg=WHITE, bg=BG,
-             font=(FONT, 11, "bold")).pack(side="left")
+             font=(FONT, 10, "bold")).pack(side="left")
     tk.Label(inner, text=f"  {r.mode.upper()}",
-             fg=AMBER, bg=BG, font=(FONT, 8, "bold")).pack(side="left")
+             fg=mode_color, bg=BG,
+             font=(FONT, 8, "bold")).pack(side="left")
     tk.Label(inner, text=f"  ·  {r.status.upper()}",
-             fg=dot_color, bg=BG, font=(FONT, 7, "bold")).pack(side="left")
+             fg=dot_color, bg=BG,
+             font=(FONT, 8, "bold")).pack(side="left")
     tk.Label(inner, text=f"  ·  run {r.run_id}", fg=DIM, bg=BG,
              font=(FONT, 7)).pack(side="left")
     tk.Label(inner, text=f"  ·  {r.source.upper()}",
-             fg=(GREEN if r.source == "vps" else (AMBER_D if r.source == "db" else CYAN)), bg=BG,
-             font=(FONT, 7, "bold")).pack(side="left")
+             fg=src_color, bg=BG,
+             font=(FONT, 8, "bold")).pack(side="left")
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
 
 

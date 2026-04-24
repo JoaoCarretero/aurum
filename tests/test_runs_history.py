@@ -780,3 +780,20 @@ def test_detail_section_optional_rows(gui_root):
     _detail_section(frame, "TRADES", extra="last 3", rows=None)
     # Just the header row + divider.
     assert len(frame.winfo_children()) == 2
+
+
+@pytest.mark.parametrize("mode", ["paper", "demo", "testnet", "live", "shadow", "unknown"])
+def test_render_detail_header_mode_colors(gui_root, mode):
+    """_render_detail_header paints without exception for every mode value."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_detail_header, RunSummary
+    frame = tk.Frame(gui_root)
+    r = RunSummary(
+        run_id="test", engine="CITADEL", mode=mode, status="running",
+        started_at=None, stopped_at=None, last_tick_at=None,
+        ticks_ok=0, ticks_fail=0, novel=0,
+        equity=None, initial_balance=None, roi_pct=None,
+        trades_closed=None, source="vps", run_dir=None, heartbeat={},
+    )
+    _render_detail_header(frame, r)
+    assert frame.winfo_children()
