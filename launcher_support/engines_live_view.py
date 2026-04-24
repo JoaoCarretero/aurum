@@ -1461,21 +1461,23 @@ def _open_selected_backtest(state, launcher):
         _go_to_backtest(launcher, state.get("selected_slug"))
 
 
-# Master-list row layout — all three bucket types (LIVE / READY / RESEARCH)
-# share this 5-column grid so badges, names, actions and chevrons align
-# across rows. Character widths are fixed on the labels (not just grid
-# minsize) because every row is its own Frame with its own grid — grid
-# columns don't share widths across separate frames, so only explicit
-# label widths guarantee per-pixel alignment in the right-hand gutter.
+# Master-list row layout — single-line 4-column grid shared across
+# LIVE / READY / RESEARCH so badges, names, and right-edge metrics
+# align per-pixel across buckets. Character widths are fixed on the
+# labels because each row is its own Frame with its own grid — grid
+# columns don't share widths across separate frames.
 #
 #   col 0  accent strip       4px       sticky="nsw"
-#   col 1  status badge       width=3   RUN / RDY / LAB
-#   col 2  name + subtitle    flex      display on top row, meta below
-#   col 3  action label       width=9   MONITOR / LAUNCH / BACKTEST / ...
-#   col 4  chevron            width=2   ">" visual cue
-_ROW_BADGE_W = 3
-_ROW_ACTION_W = 9
-_ROW_CHEV_W = 2
+#   col 1  status badge       width=2   RN / RD / LB (bucket-colored)
+#   col 2  display name       flex      up to 18ch, bold WHITE/DIM
+#   col 3  right-edge metric  width=7   uptime (LIVE) / stage (READY/RES)
+#
+# Pre 2026-04-24 this row had a subtitle line, an action label column
+# (MONITOR/LAUNCH/BACKTEST), and a chevron — all removed when the
+# operator asked for a denser, single-line sidebar. The row-click
+# handler covers what the action word used to spell out.
+_ROW_BADGE_W = 2
+_ROW_METRIC_W = 7
 
 
 def _row_base(parent, slug, state, is_selected):
@@ -1484,20 +1486,10 @@ def _row_base(parent, slug, state, is_selected):
                    highlightbackground=AMBER_B if is_selected else BORDER,
                    highlightthickness=1)
     tk.Frame(row, bg=(AMBER_B if is_selected else BORDER), width=4).grid(
-        row=0, column=0, rowspan=2, sticky="nsw")
+        row=0, column=0, sticky="nsw")
     row.grid_columnconfigure(2, weight=1)
-    # padx=0 — rows stretch edge-to-edge of the master_host. The 2px
-    # right gutter used to leave a visible stripe against the amber
-    # selected-border on the adjacent column (operator feedback
-    # 2026-04-24).
     row.pack(fill="x", pady=(0, 3), padx=0)
     return row
-
-
-def _subtitle_for(slug, meta) -> str:
-    """Tagline fallback — extended later to read DB / BRIEFINGS."""
-    desc = meta.get("desc") or ""
-    return desc[:32]
 
 
 def _bind_nav_row(row: tk.Widget, slug: str, bucket: str, state: dict) -> None:
@@ -1511,91 +1503,62 @@ def _bind_nav_row(row: tk.Widget, slug: str, bucket: str, state: dict) -> None:
             pass
 
 
-def _live_subtitle(meta: dict, proc: dict) -> str:
-    """Bottom-line meta for a LIVE row: MODE / UPTIME / STAGE."""
-    stage_label, _ = _stage_badge(meta)
-    parts: list[str] = []
-    mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
-    if mode_key in _MODE_ORDER:
-        parts.append(mode_key.upper())
-    # Uptime parsing mirrors _uptime_seconds: treat naive timestamps as
-    # UTC (VPS + local proc manager both emit UTC) and subtract from
-    # now-in-UTC, not now-local — otherwise Brazil-local drift wipes
-    # out short uptimes (bug 2026-04-24).
-    started = proc.get("started_at") or proc.get("started")
-    if started:
-        try:
-            from datetime import datetime as _dt, timezone as _tz
-            parsed = _dt.fromisoformat(str(started).replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=_tz.utc)
-            secs = (_dt.now(_tz.utc) - parsed).total_seconds()
-            parts.append(format_uptime(seconds=secs))
-        except Exception:
-            pass
-    parts.append(stage_label)
-    return "  /  ".join(parts)
+def _row_metric(bucket: str, meta: dict, proc: dict | None) -> tuple[str, str]:
+    """Right-edge metric for a master-list row.
+
+    LIVE rows show uptime ("2h15m" / "45m"); READY and RESEARCH rows
+    show the stage label ("PROD" / "STAG" / "LAB" / "ARQV") so the
+    column reads consistently across buckets. Returns (text, color).
+    """
+    if bucket == "LIVE" and proc is not None:
+        secs = _uptime_seconds(proc)
+        if secs is not None:
+            return (format_uptime(seconds=secs), WHITE)
+        return ("", DIM2)
+    stage_label, stage_color = _stage_badge(meta)
+    return (stage_label, stage_color)
 
 
 def _render_nav_row(parent, *, bucket: str, slug: str, meta: dict,
                     proc: dict | None, state: dict) -> None:
-    """Unified master-list row for LIVE / READY / RESEARCH buckets.
+    """Single-line master-list row shared across LIVE / READY / RESEARCH.
 
-    Same 5-column grid across buckets — only badge style, subtitle
-    source, and action label differ. Single renderer = aligned rows.
+    Only the badge text/color and the right-edge metric differ per
+    bucket; the 4-column grid is identical so rows align per-pixel.
     """
     sel = state.get("selected_slug") == slug
     row = _row_base(parent, slug, state, is_selected=sel)
     bg = row["bg"]
-    stage_label, stage_color = _stage_badge(meta)
+    _stage_text, stage_color = _stage_badge(meta)
 
-    # Column 1 — status badge (fixed 3-char width → same pixel column
-    # across every row, regardless of badge text).
+    # Col 1 — 2-char badge, bucket-colored. GREEN = LIVE running;
+    # stage color = READY/RESEARCH readiness verdict.
     if bucket == "LIVE":
-        badge_text, badge_bg = "RUN", GREEN
+        badge_text, badge_bg = "RN", GREEN
     elif bucket == "READY":
-        badge_text, badge_bg = "RDY", stage_color
+        badge_text, badge_bg = "RD", stage_color
     else:
-        badge_text, badge_bg = "LAB", stage_color
+        badge_text, badge_bg = "LB", stage_color
     tk.Label(row, text=badge_text, fg=BG, bg=badge_bg,
-             font=(FONT, 6, "bold"), padx=4, pady=1,
+             font=(FONT, 6, "bold"), padx=3, pady=1,
              width=_ROW_BADGE_W).grid(
-                 row=0, column=1, rowspan=2, padx=(8, 7), pady=7, sticky="n")
+                 row=0, column=1, padx=(8, 7), pady=6, sticky="n")
 
-    # Column 2 — display name on top, subtitle underneath. Research rows
-    # get a dimmer name to read as "locked / not runnable".
+    # Col 2 — display name (up to 18ch). RESEARCH rows are dimmed when
+    # unselected to read as "locked / not runnable".
     name_fg = DIM if (bucket == "RESEARCH" and not sel) else WHITE
-    tk.Label(row, text=str(meta.get("display", slug.upper()))[:16],
+    tk.Label(row, text=str(meta.get("display", slug.upper()))[:18],
              fg=name_fg, bg=bg, font=(FONT, 8, "bold"),
-             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
+             anchor="w").grid(row=0, column=2, sticky="ew", pady=6)
 
-    if bucket == "LIVE" and proc is not None:
-        subtitle = _live_subtitle(meta, proc)
-    else:
-        subtitle = _subtitle_for(slug, meta) or stage_label
-    tk.Label(row, text=subtitle[:22],
-             fg=AMBER_B if sel else DIM2, bg=bg, font=(FONT, 7),
-             anchor="w").grid(row=1, column=2, sticky="ew", pady=(0, 6))
-
-    # Column 3 — action label. Fixed 9-char width forces the same right
-    # edge on every row so the column reads as a column across buckets.
-    # RESEARCH falls back to stage label (readiness verdict) instead of
-    # a runnable action.
-    if bucket == "RESEARCH":
-        action_text, action_color = stage_label, DIM2
-    else:
-        action_label, action_color = row_action_label(bucket, meta)
-        action_text = action_label.upper()
-    tk.Label(row, text=action_text[:9], fg=action_color, bg=bg,
-             font=(FONT, 6, "bold"), anchor="e",
-             width=_ROW_ACTION_W).grid(
-                 row=0, column=3, rowspan=2, padx=(6, 2), pady=7, sticky="e")
-
-    # Column 4 — chevron (fixed 2-char width → consistent right gutter).
-    tk.Label(row, text=">", fg=DIM if sel else DIM2, bg=bg,
-             font=(FONT, 8, "bold"), anchor="e",
-             width=_ROW_CHEV_W).grid(
-                 row=0, column=4, rowspan=2, padx=(0, 6), pady=7, sticky="e")
+    # Col 3 — right-edge metric. 7-char fixed width keeps the right
+    # gutter aligned even when a row has no metric to show.
+    metric_text, metric_color = _row_metric(bucket, meta, proc)
+    metric_fg = AMBER_B if (sel and bucket == "LIVE") else metric_color
+    tk.Label(row, text=metric_text[:7], fg=metric_fg, bg=bg,
+             font=(FONT, 7, "bold"), anchor="e",
+             width=_ROW_METRIC_W).grid(
+                 row=0, column=3, padx=(6, 8), pady=6, sticky="e")
 
     _bind_nav_row(row, slug, bucket, state)
 
