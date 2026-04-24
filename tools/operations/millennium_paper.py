@@ -53,6 +53,7 @@ from tools.operations.paper_position_manager import (  # noqa: E402
 from tools.operations.paper_ks_gate import KSLiveGate, KSState  # noqa: E402
 from tools.operations.paper_metrics import MetricsStreamer  # noqa: E402
 from tools.operations.run_id import build_run_id, sanitize_label  # noqa: E402
+from tools.operations.tick_schedule import seconds_until_next_tick_boundary  # noqa: E402
 
 RUN_TS = datetime.now(timezone.utc)
 # Module-level LABEL reads from env at import (systemd path). CLI --label
@@ -800,11 +801,12 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
             # this, user clicking STOP waits up to tick_sec (15min default)
             # for the runner to notice the .kill flag — feels like the button
             # is broken even though the flag is dropped immediately.
+            sleep_for = seconds_until_next_tick_boundary(time.time(), tick_sec)
             sliced = 0.0
-            while sliced < tick_sec:
+            while sliced < sleep_for:
                 if KILL_FLAG.exists() or stop["flag"]:
                     break
-                chunk = min(2.0, tick_sec - sliced)
+                chunk = min(2.0, sleep_for - sliced)
                 time.sleep(chunk)
                 sliced += chunk
     finally:
