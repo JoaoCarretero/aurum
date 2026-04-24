@@ -8,7 +8,10 @@ Design spec: docs/superpowers/specs/2026-04-24-cockpit-trade-history-chart-desig
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
+
+_log = logging.getLogger(__name__)
 
 
 def normalize_direction(direction: str | None) -> str:
@@ -189,8 +192,13 @@ def render(
         row.pack(fill="x", pady=1)
 
         direction = row_fields["direction"]
+        # DIM fallback: normalize_direction guarantees LONG/SHORT/em-dash
+        # or uppercase-other (e.g. NEUTRAL) — non-trade directions fall
+        # through to dim intentionally, no green/red signal.
         arrow_color = GREEN if direction == "LONG" else (
             RED if direction == "SHORT" else DIM)
+        r_text, r_color = _color_for_r(
+            row_fields["r_mult"], GREEN, RED, AMBER_D, DIM)
 
         # Column specs: (text, color, width, font_size, bold?)
         cols = [
@@ -199,16 +207,12 @@ def render(
             (row_fields["engine"], DIM, 10, 8, False),
             (direction, arrow_color, 7, 8, True),
             (row_fields["levels"], WHITE, 18, 8, False),
-            (_color_for_r(row_fields["r_mult"], GREEN, RED, AMBER_D, DIM),
-             None, 8, 8, True),
+            (r_text, r_color, 8, 8, True),
         ]
         for text, color, width, fsize, bold in cols:
-            # Two-tuple override: when color=None, text is actually a tuple
-            if isinstance(text, tuple):
-                text, color = text
             weight = "bold" if bold else "normal"
             tk.Label(
-                row, text=str(text), fg=color or WHITE, bg=PANEL,
+                row, text=str(text), fg=color, bg=PANEL,
                 font=(font_name, fsize, weight),
                 width=width, anchor="w",
             ).pack(side="left", padx=(2, 0))
@@ -234,22 +238,24 @@ def render(
             for child in r.winfo_children():
                 try:
                     child.configure(bg=BG2)
-                except Exception:
-                    pass
+                except tk.TclError:
+                    pass  # ttk widgets or labels w/o bg option
 
         def _hover_out(_e, r=row):
             r.configure(bg=PANEL)
             for child in r.winfo_children():
                 try:
                     child.configure(bg=PANEL)
-                except Exception:
+                except tk.TclError:
                     pass
 
         def _click(_e, t=trade):
             try:
                 on_click(t)
             except Exception:
-                pass
+                # Swallow so a buggy consumer can't kill the Tk mainloop,
+                # but log the traceback so the operator can diagnose.
+                _log.exception("trade_history_panel click handler failed")
 
         for widget in (row,) + tuple(row.winfo_children()):
             widget.bind("<Enter>", _hover_in)
