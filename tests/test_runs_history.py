@@ -703,3 +703,17 @@ def test_render_runs_history_smoke(tmp_path, monkeypatch, gui_root):
     frame = rh.render_runs_history(gui_root, gui_root, client_factory=lambda: None)
     gui_root.update_idletasks()
     assert frame is not None
+
+
+def test_columns_schema():
+    """_COLUMNS defines 11 cells in a fixed order. Widths fit the longest
+    realistic value (RENAISSANCE for engine, +999.99% for roi, LOCAL for src)."""
+    from launcher_support.runs_history import _COLUMNS
+    labels = [c[0] for c in _COLUMNS]
+    assert labels == ["ST", "ENGINE", "MODE", "STARTED", "DUR",
+                      "TICKS", "SIG", "EQUITY", "ROI", "TRADES", "SRC"]
+    widths = dict(_COLUMNS)
+    assert widths["ENGINE"] == 11
+    assert widths["ROI"] == 8
+    assert widths["SRC"] == 5
+    assert widths["TRADES"] == 6

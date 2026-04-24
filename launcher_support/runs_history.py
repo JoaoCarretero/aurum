@@ -643,17 +643,17 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
 
 
 _COLUMNS = [
-    ("ST",      3),
-    ("ENGINE",  8),
+    ("ST",      2),
+    ("ENGINE",  11),
     ("MODE",    6),
     ("STARTED", 13),
     ("DUR",     7),
     ("TICKS",   6),
     ("SIG",     5),
-    ("EQ",      9),
-    ("ROI",     7),
-    ("TR",      4),
-    ("SRC",     4),
+    ("EQUITY",  9),
+    ("ROI",     8),
+    ("TRADES",  6),
+    ("SRC",     5),
 ]
 
 
