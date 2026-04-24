@@ -5144,6 +5144,54 @@ class App(tk.Tk):
         ("6", "engine",  "ENGINE",           "#00ff80"),
     ]
 
+    # Which tab_ids are "type" (scanner-driven) vs. "meta" (engine-driven).
+    # Consumed by Task 7's render to place the category separator before
+    # POSITIONS/HISTORY. Covers BOTH the current 6-tab layout AND the future
+    # 8-tab layout so Task 7 can swap _ARB_TAB_DEFS without touching this.
+    _ARB_TAB_CATEGORIES = {
+        # v1 tab ids (current):
+        "cex-cex": "type", "dex-dex": "type", "cex-dex": "type",
+        "basis": "type", "spot": "type", "engine": "meta",
+        # v2 tab ids (future, will be valid after Task 7):
+        "perp-perp": "type", "spot-spot": "type",
+        "positions": "meta", "history": "meta",
+    }
+
+    # Legacy tab ids kept for backward-compat. Callers elsewhere in launcher.py
+    # still pass "spot" and "engine"; when Task 7 flips _ARB_TAB_DEFS to v2,
+    # _arbitrage_hub will translate them via this map. Task 6 just declares it
+    # (not consumed yet).
+    _ARB_LEGACY_TAB_MAP = {
+        "opps":   "cex-cex",
+        "engine": "positions",
+        "spot":   "spot-spot",
+    }
+
+    # Column layout for the v2 density opps table. Not consumed by the
+    # current render (Task 9 will wire it). 8 columns: VIAB + SYM + VENUES
+    # + APR + PROFIT$ + LIFE + BKEVN + DEPTH$1k.
+    _ARB_OPPS_COLS = [
+        ("VIAB",     5,  "w"),
+        ("SYM",      14, "w"),   # includes TYPE suffix "(P-P)"/"(P-S)"/"(S-S)"
+        ("VENUES",   24, "w"),
+        ("APR",      8,  "e"),
+        ("PROFIT$",  11, "e"),   # $ on $1k 24h after fees_rt
+        ("LIFE",     7,  "e"),
+        ("BKEVN",    7,  "e"),
+        ("DEPTH$1k", 9,  "e"),   # slippage bps on $1k notional
+    ]
+
+    # Per-instance LifetimeTracker. Lazily created on first access via
+    # _arb_lifetime_tracker(). Persists across scan ticks, drops on relaunch.
+    _arb_lifetime_tracker_cached = None
+
+    def _arb_lifetime_tracker(self):
+        """Lazy accessor to the per-launcher LifetimeTracker."""
+        from core.arb_lifetime import LifetimeTracker
+        if self._arb_lifetime_tracker_cached is None:
+            self._arb_lifetime_tracker_cached = LifetimeTracker()
+        return self._arb_lifetime_tracker_cached
+
     def _arbitrage_hub(self, tab: str = "cex-cex"):
         """Unified arbitrage desk with 6 internal tabs.
 
@@ -5518,6 +5566,13 @@ class App(tk.Tk):
     _ARB_FILTER_DEFAULTS = {
         "min_apr": 5.0, "min_volume": 0, "min_oi": 0,
         "risk_max": "HIGH", "grade_min": "SKIP",
+        # v2 density filters (2026-04-23) — declared for Task 10 to wire.
+        # Defaults = off / permissive so existing behavior is unchanged.
+        "exclude_risky_venues": False,
+        "realistic_only":       True,
+        "profit_min_usd":       0.0,     # cut opps with net <$X per $1k per 24h
+        "life_min_seconds":     0,       # require pair seen for ≥X seconds
+        "venues_allow":         None,    # None = all venues OK; list = allowlist
     }
 
     def _arb_filter_state(self) -> dict:
