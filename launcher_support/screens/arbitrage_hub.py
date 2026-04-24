@@ -35,7 +35,7 @@ def render(app, tab: str = "cex-cex"):
     app.history.append("main")
     app.h_path.configure(text=f"> ARBITRAGE > {tab.upper()}")
     app.h_stat.configure(text="DESK", fg=AMBER_D)
-    app.f_lbl.configure(text="1-3 switch tab  |  R refresh  |  ESC back")
+    app.f_lbl.configure(text="1-8 switch tab  |  R refresh  |  ESC back")
     app._kb("<Escape>", lambda: app._menu("main"))
     app._bind_global_nav()
 
@@ -99,65 +99,88 @@ def render(app, tab: str = "cex-cex"):
     except Exception:
         pass
 
-    # -- Tab strip --
-    # Phase 1 redesign (2026-04-22): 3 tabs in a single row, no groups.
-    # Simpler info architecture: OPPS (all opportunities, unified) /
-    # POSITIONS (paper engine live) / HISTORY (closed trades).
-    # Keys 1-3 only.
-    grouped_tabs: list[tuple[str, list[tuple[str, str, str]]]] = [
-        ("", [(key, tid, label) for key, tid, label, _ in app._ARB_TAB_DEFS])
-    ]
-
+    # -- Tab strip (v2 density 2026-04-23: 8 tabs, type category + meta category)
+    # Layout:  [1 CEX-CEX] [2 DEX-DEX] ... [6 BASIS]  |  [7 POSITIONS] [8 HISTORY]
+    # The `|` separator lives between type tabs (6) and meta tabs (2).
     tabs_frame = tk.Frame(outer, bg=BG)
     tabs_frame.pack(fill="x", padx=16, pady=(0, 0))
     app._arb_tab = tab
     app._arb_tab_labels = {}
 
-    first_group = True
-    for group_name, group_items in grouped_tabs:
-        if not first_group:
-            tk.Frame(tabs_frame, bg=BORDER, width=1).pack(
-                side="left", fill="y", padx=8, pady=(16, 2))
-        first_group = False
+    # Partition into type and meta groups for the separator.
+    type_items: list[tuple[str, str, str, str]] = []
+    meta_items: list[tuple[str, str, str, str]] = []
+    for key, tid, label, color in app._ARB_TAB_DEFS:
+        cat = app._ARB_TAB_CATEGORIES.get(tid, "type")
+        (type_items if cat == "type" else meta_items).append(
+            (key, tid, label, color))
 
-        g_box = tk.Frame(tabs_frame, bg=BG)
-        g_box.pack(side="left", padx=(0, 2))
-        if group_name:
-            tk.Label(
-                g_box, text=group_name,
-                font=(FONT, 6, "bold"), fg=AMBER, bg=BG,
-                anchor="w", padx=4,
-            ).pack(fill="x", pady=(0, 2))
+    # Compaction level chosen on first render; subsequent re-renders bump
+    # up if the strip overflows. Counters default to 0 until a scan lands.
+    counts = {tid: 0 for _, tid, _, _ in app._ARB_TAB_DEFS}
+    level = getattr(app, "_arb_tab_compact_level", 0)
 
-        g_row = tk.Frame(g_box, bg=BG)
-        g_row.pack(fill="x")
+    from core.arb.tab_matrix import compact_labels
 
-        for key, tid, label in group_items:
-            is_active = (tid == tab)
-            if is_active:
-                fg, bg = BG, AMBER
-            else:
-                fg, bg = DIM, BG
-            lbl = tk.Label(
-                g_row,
-                text=f"  [{key}]  {label}  ",
-                font=(FONT, 9, "bold"),
-                fg=fg, bg=bg, cursor="hand2",
-                padx=10, pady=4, bd=0, highlightthickness=0,
-            )
-            lbl.pack(side="left", padx=(0, 1))
-            lbl.bind("<Button-1>",
-                     lambda _e, _t=tid: app._arbitrage_hub(_t))
-            if not is_active:
-                lbl.bind(
-                    "<Enter>",
-                    lambda _e, w=lbl: w.config(bg=BG3, fg=WHITE),
+    def _render_strip(_level: int):
+        for w in tabs_frame.winfo_children():
+            w.destroy()
+        app._arb_tab_labels = {}
+
+        for grp_idx, grp in enumerate((type_items, meta_items)):
+            if grp_idx == 1 and type_items and meta_items:
+                tk.Frame(tabs_frame, bg=BORDER, width=1).pack(
+                    side="left", fill="y", padx=8, pady=(4, 2))
+            labelled = compact_labels(grp, counts=counts, level=_level)
+            for key, tid, display_label, color in labelled:
+                is_active = (tid == tab)
+                if is_active:
+                    fg, bg = BG, AMBER
+                else:
+                    fg, bg = DIM, BG
+                lbl = tk.Label(
+                    tabs_frame,
+                    text=f"  {display_label}  ",
+                    font=(FONT, 9, "bold"),
+                    fg=fg, bg=bg, cursor="hand2",
+                    padx=8, pady=4, bd=0, highlightthickness=0,
                 )
-                lbl.bind(
-                    "<Leave>",
-                    lambda _e, w=lbl: w.config(bg=BG, fg=DIM),
-                )
-            app._arb_tab_labels[tid] = lbl
+                lbl.pack(side="left", padx=(0, 1))
+                lbl.bind("<Button-1>",
+                         lambda _e, _t=tid: app._arbitrage_hub(_t))
+                if not is_active:
+                    lbl.bind(
+                        "<Enter>",
+                        lambda _e, w=lbl: w.config(bg=BG3, fg=WHITE),
+                    )
+                    lbl.bind(
+                        "<Leave>",
+                        lambda _e, w=lbl: w.config(bg=BG, fg=DIM),
+                    )
+                app._arb_tab_labels[tid] = lbl
+
+    _render_strip(level)
+
+    # After first layout pass, check for overflow. If the strip is wider than
+    # the outer frame, bump the compact level up to 3 and re-render once.
+    def _maybe_compact():
+        try:
+            outer.update_idletasks()
+            strip_w = tabs_frame.winfo_reqwidth()
+            avail_w = outer.winfo_width() - 32  # minus padx
+            if avail_w <= 0:
+                return
+            lv = level
+            while strip_w > avail_w and lv < 3:
+                lv += 1
+                _render_strip(lv)
+                tabs_frame.update_idletasks()
+                strip_w = tabs_frame.winfo_reqwidth()
+            app._arb_tab_compact_level = lv
+        except Exception:
+            pass
+
+    app.main.after_idle(_maybe_compact)
 
     tk.Frame(outer, bg=BORDER, height=1).pack(
         fill="x", padx=16, pady=(2, 3))
@@ -174,14 +197,20 @@ def render(app, tab: str = "cex-cex"):
     app._kb("<Key-r>",
             lambda: app._arbitrage_hub(app._arb_tab))
 
-    # Route to the tab renderer (Phase 1 redesign: 3-tab layout)
-    render_map = {
-        "opps":      app._arb_render_opps,
-        "positions": app._arb_render_positions,
-        "history":   app._arb_render_history,
-    }
-    render_fn = render_map.get(tab, app._arb_render_opps)
-    render_fn(content)
+    # Route to the tab renderer. Type tabs (6) all share the generic filtered
+    # renderer — filtering by tab_id is applied in paint_opps (Task 9). For
+    # Task 7+8, stash the active type tab on the app and dispatch to the
+    # existing opps renderer; full filter logic lands in Task 9.
+    if tab in ("cex-cex", "dex-dex", "cex-dex",
+               "perp-perp", "spot-spot", "basis"):
+        app._arb_render_tab_filtered(content, tab)
+    elif tab == "positions":
+        app._arb_render_positions(content)
+    elif tab == "history":
+        app._arb_render_history(content)
+    else:
+        # Defensive fallback: unknown tab → CEX-CEX (the default first tab).
+        app._arb_render_tab_filtered(content, "cex-cex")
 
     # If we have cached scan data from the previous tab visit, repaint
     # immediately instead of waiting ~2s for the next scan to finish.
@@ -528,6 +557,42 @@ def build_viab_toolbar(app, parent):
     real_btn.pack(side="left", padx=(6, 0))
     real_btn.bind("<Button-1>", lambda _e: app._arb_toggle_realistic())
     app._arb_viab_btns["realistic"] = (real_btn, None)
+
+    # Divider between Phase-1 chips and v2 density chips
+    tk.Frame(bar, bg=BORDER, width=1, height=18).pack(
+        side="left", fill="y", padx=(10, 10))
+
+    # v2 density chips — PROFIT$, LIFE, VENUES
+    pm = float(state.get("profit_min_usd", 0.0) or 0.0)
+    pm_label = f" PROFIT$ ≥ {pm:.0f} " if pm > 0 else " PROFIT$ OFF "
+    pm_btn = tk.Label(bar, text=pm_label,
+                       font=(FONT, 8, "bold"),
+                       fg=AMBER if pm > 0 else DIM, bg=BG,
+                       cursor="hand2", padx=6, pady=3)
+    pm_btn.pack(side="left", padx=(0, 4))
+    pm_btn.bind("<Button-1>", lambda _e: app._arb_open_profit_popover(pm_btn))
+    app._arb_viab_btns["profit"] = (pm_btn, None)
+
+    lm = int(state.get("life_min_seconds", 0) or 0)
+    lm_label = (f" LIFE ≥ {lm // 60}m " if lm > 0 else " LIFE OFF ")
+    lm_btn = tk.Label(bar, text=lm_label,
+                       font=(FONT, 8, "bold"),
+                       fg=AMBER if lm > 0 else DIM, bg=BG,
+                       cursor="hand2", padx=6, pady=3)
+    lm_btn.pack(side="left", padx=(0, 4))
+    lm_btn.bind("<Button-1>", lambda _e: app._arb_open_life_popover(lm_btn))
+    app._arb_viab_btns["life"] = (lm_btn, None)
+
+    va = state.get("venues_allow")
+    va_label = (" VENUES ALL " if va is None
+                else f" VENUES {len(va)} SEL ")
+    va_btn = tk.Label(bar, text=va_label,
+                       font=(FONT, 8, "bold"),
+                       fg=AMBER if va else DIM, bg=BG,
+                       cursor="hand2", padx=6, pady=3)
+    va_btn.pack(side="left")
+    va_btn.bind("<Button-1>", lambda _e: app._arb_open_venues_popover(va_btn))
+    app._arb_viab_btns["venues"] = (va_btn, None)
 
 
 # ─── extracted from launcher.App._arb_build_filter_bar (Fase 3) ───
@@ -1221,12 +1286,38 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
             pp.get("volume_b", 0) or 0))
         tagged.append(pp)
 
+    # v2 density: filter by active type tab (if one of the 6 type tabs is
+    # active). Positions/history tabs don't call paint_opps. Unknown or
+    # None active tab means no filter (shows everything).
+    active_tab = getattr(app, "_arb_active_type_tab", None)
+    if active_tab in ("cex-cex", "dex-dex", "cex-dex",
+                       "perp-perp", "spot-spot", "basis"):
+        from core.arb.tab_matrix import matches_type
+        tagged = [p for p in tagged if matches_type(p, active_tab)]
+
+    # v2 density: observe pairs so the LIFE column shows persistence.
+    import time as _time
+    _now = _time.time()
+    try:
+        tracker = app._arb_lifetime_tracker()
+        tracker.observe_pairs(tagged, now=_now)
+        # Occasional cleanup to cap memory (drop pairs unseen for 24h).
+        if getattr(app, "_arb_lifetime_gc_counter", 0) % 100 == 0:
+            tracker.cleanup(now=_now, max_age=24 * 3600)
+        app._arb_lifetime_gc_counter = getattr(app, "_arb_lifetime_gc_counter", 0) + 1
+    except Exception:
+        tracker = None
+
     # Apply filter+score (with cache) and render cap
     filtered = app._arb_filter_and_score(tagged)[:50]
     app._arb_opps_selected = [p for p, _ in filtered]
 
+    # Pre-compute stable keys once per row so LIFE lookups are O(1).
+    from core.arb.lifetime import stable_key as _stable_key, fmt_duration as _fmt_duration
+
     rows = []
     for a, sr in filtered:
+        # VIAB column — prefer v2 viab field, fall back to grade.
         viab = getattr(sr, "viab", sr.grade)
         if viab == "GO":
             viab_fg = GREEN
@@ -1234,27 +1325,68 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
             viab_fg = AMBER
         else:
             viab_fg = DIM
+
+        # SYM column — include _type suffix so the user can see at a glance
+        # which "flavor" a row is when viewing aggregate tabs.
+        type_suffix = {
+            "CC": "(P-P)", "DD": "(P-P)", "CD": "(P-P)",
+            "BS": "(P-S)", "SP": "(S-S)",
+        }.get(a.get("_type", ""), "")
+        sym_full = f"{a.get('symbol', '') or '—'}{type_suffix}"[:14]
+
+        # VENUES column — long → short direction.
+        short_v = (a.get("short_venue") or "")[:10].lower()
+        long_v = (a.get("long_venue") or "")[:10].lower()
+        venues = f"{long_v} → {short_v}"[:24]
+
+        # APR column — colored by magnitude.
         net_apr = float(a.get("net_apr", 0) or 0)
         apr_fg = GREEN if abs(net_apr) >= 50 else (
             AMBER if abs(net_apr) >= 20 else DIM)
+
+        # PROFIT$ column — net $ on $1k, 24h.
+        profit = getattr(sr, "profit_usd_per_1k_24h", None)
+        if profit is None:
+            profit_txt, profit_fg = "—", DIM
+        else:
+            profit_txt = f"${profit:+.2f}"
+            profit_fg = GREEN if profit > 0 else (AMBER if profit > -1 else DIM)
+
+        # LIFE column — age in stream via LifetimeTracker.
+        life_txt, life_fg = "—", DIM
+        if tracker is not None:
+            try:
+                age = tracker.age(_stable_key(a), now=_now)
+                if age is not None:
+                    life_txt = _fmt_duration(age)
+                    # Color: fresh = dim, 5m+ = amber, 1h+ = green (more trust).
+                    life_fg = GREEN if age >= 3600 else (AMBER if age >= 300 else DIM)
+            except Exception:
+                pass
+
+        # BKEVN column — hours to cover fees.
         be = getattr(sr, "breakeven_h", None)
         be_txt = f"{be:.1f}h" if be is not None and be < 999 else "—"
         be_fg = GREEN if (be is not None and be <= 24) else (
             AMBER if (be is not None and be <= 72) else DIM)
-        short_v = (a.get("short_venue") or "")[:10].lower()
-        long_v = (a.get("long_venue") or "")[:10].lower()
-        # Long leg goes first (the one you BUY), then short. Arrow
-        # direction (→) reads naturally as "take long from here,
-        # short to there". Width 22 fits "binance → bybit" plus
-        # slack for longer venue names.
-        venues = f"{long_v} → {short_v}"[:22]
+
+        # DEPTH$1k column — slippage bps on $1k notional.
+        depth = getattr(sr, "depth_pct_at_1k", None)
+        if depth is None:
+            depth_txt, depth_fg = "—", DIM
+        else:
+            depth_txt = f"{depth:.0f}bps"
+            depth_fg = GREEN if depth <= 10 else (AMBER if depth <= 50 else RED)
+
         rows.append([
             (viab, viab_fg),
-            ((a.get("symbol", "") or "—")[:11], WHITE),
+            (sym_full, WHITE),
             (venues, AMBER_D),
             (f"{net_apr:+.1f}%", apr_fg),
+            (profit_txt, profit_fg),
+            (life_txt, life_fg),
             (be_txt, be_fg),
-            (f"{int(sr.score):>3}", DIM),
+            (depth_txt, depth_fg),
         ])
     repaint(rows)
 
@@ -1708,6 +1840,63 @@ def hub_telem_update(app, stats, top, opps, arb_cc, arb_dd, arb_cd,
     except Exception:
         pass
 
+    # v2 density: update per-tab counters on the strip labels. Compute
+    # match counts across all 6 type tabs against the tagged pair list,
+    # so the user sees (N) for each tab. Positions/history counters are
+    # populated downstream by the engine snapshot.
+    try:
+        from core.arb.tab_matrix import matches_type
+        # Rebuild the tagged list the same way paint_opps does.
+        _all_tagged: list[dict] = []
+        for _lst, _ty in ((arb_cc or [], "CC"), (arb_dd or [], "DD"),
+                          (arb_cd or [], "CD"), (basis or [], "BS"),
+                          (spot or [], "SP")):
+            for _p in _lst:
+                _pp = dict(_p); _pp["_type"] = _ty
+                if _ty == "BS":
+                    _pp.setdefault("short_venue", _pp.get("venue_perp"))
+                    _pp.setdefault("long_venue", _pp.get("venue_spot"))
+                elif _ty == "SP":
+                    _pp.setdefault("short_venue", _pp.get("venue_a"))
+                    _pp.setdefault("long_venue", _pp.get("venue_b"))
+                _all_tagged.append(_pp)
+
+        counts = {}
+        for tab_id in ("cex-cex", "dex-dex", "cex-dex",
+                       "perp-perp", "spot-spot", "basis"):
+            counts[tab_id] = sum(1 for p in _all_tagged if matches_type(p, tab_id))
+
+        # Positions/history are meta — their counts come from the engine.
+        eng = getattr(app, "_arb_simple_engine", None)
+        if eng is not None and hasattr(eng, "snapshot"):
+            try:
+                snap = eng.snapshot()
+                counts["positions"] = len(snap.get("positions", []) or [])
+                counts["history"] = len(snap.get("closed", []) or [])
+            except Exception:
+                counts["positions"] = 0
+                counts["history"] = 0
+        else:
+            counts["positions"] = 0
+            counts["history"] = 0
+
+        # Update label text with counter — only if level 0 is active (full + counters).
+        level = getattr(app, "_arb_tab_compact_level", 0)
+        if level == 0:
+            labels = getattr(app, "_arb_tab_labels", {}) or {}
+            defs = getattr(app, "_ARB_TAB_DEFS", [])
+            for _key, tid, full_label, _color in defs:
+                lbl = labels.get(tid)
+                if lbl is None:
+                    continue
+                try:
+                    n = counts.get(tid, 0)
+                    lbl.configure(text=f"  {full_label} ({n})  ")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     # Route to the repaint callback for the active tab.
     # Phase 1 redesign: unified OPPS table consolidates 5 old tabs.
     tab = getattr(app, "_arb_tab", "opps")
@@ -1771,6 +1960,19 @@ def filter_and_score(app, pairs: list) -> list[tuple[dict, object]]:
     apr_max = app._ARB_REALISTIC_APR_MAX
     vol_min_realistic = app._ARB_REALISTIC_VOL_MIN
     risky_venues = app._ARB_RISKY_VENUES
+
+    profit_min   = float(state.get("profit_min_usd", 0.0) or 0.0)
+    life_min     = float(state.get("life_min_seconds", 0) or 0)
+    venues_allow = state.get("venues_allow")  # None OR list[str]
+    venues_allow_set = None
+    if venues_allow is not None:
+        venues_allow_set = frozenset(str(v).lower() for v in venues_allow)
+
+    # Lifetime tracker — only needed if life_min > 0.
+    import time as _t2
+    _now = _t2.time()
+    tracker = app._arb_lifetime_tracker() if life_min > 0 else None
+
     out = []
     for p in (pairs or []):
         # Cheap filters first
@@ -1806,6 +2008,24 @@ def filter_and_score(app, pairs: list) -> list[tuple[dict, object]]:
             if sv in risky_venues or lv in risky_venues:
                 continue
 
+        # v2: venue allowlist
+        if venues_allow_set is not None:
+            sv = (p.get("short_venue") or p.get("venue_perp")
+                  or p.get("venue_a") or "").lower()
+            lv = (p.get("long_venue") or p.get("venue_spot")
+                  or p.get("venue_b") or "").lower()
+            if sv and sv not in venues_allow_set:
+                continue
+            if lv and lv not in venues_allow_set:
+                continue
+
+        # v2: minimum lifetime
+        if life_min > 0:
+            from core.arb.lifetime import stable_key as _sk
+            age = tracker.age(_sk(p), now=_now) if tracker is not None else None
+            if age is None or age < life_min:
+                continue
+
         # Cache key: symbol + venues + apr rounded to 1dp (the only
         # field that changes meaningfully between scans).
         ckey = (
@@ -1828,16 +2048,16 @@ def filter_and_score(app, pairs: list) -> list[tuple[dict, object]]:
 
         if _G.get(sr.grade, 2) > grade_cap:
             continue
+
+        # v2: minimum $ profit per $1k per 24h
+        if profit_min > 0:
+            pf = getattr(sr, "profit_usd_per_1k_24h", None)
+            if pf is None or pf < profit_min:
+                continue
+
         out.append((p, sr))
-    # Sort: grade bucket (GO first), then BKEVN asc (fastest payback),
-    # then SCORE desc as tiebreaker. Fastest-to-breakeven is what
-    # actually matters — high score with 80h bkevn is a trap.
-    def _key(t):
-        _p, _sr = t
-        be = getattr(_sr, "breakeven_h", None)
-        be_val = be if be is not None else 9999.0
-        return (_G.get(_sr.grade, 2), be_val, -_sr.score)
-    out.sort(key=_key)
+    from core.arb.tab_matrix import opps_sort_key
+    out.sort(key=opps_sort_key)
     return out
 
 # -- Tab renderers ------------------------------------------
@@ -2337,4 +2557,132 @@ def refresh_viab_toolbar(app) -> None:
                 fg=AMBER if on else DIM, bg=BG)
         except Exception:
             pass
+
+
+# ─── Generic filtered tab renderer (v2 density 2026-04-23) ────────────
+
+def render_tab_filtered(app, parent, tab_id: str):
+    """Render one of the 6 type tabs.
+
+    Identical surface to ``render_opps`` (legend + filter bar + opps table +
+    detail pane). The only difference is that the active type tab id is
+    stashed on the app so ``paint_opps`` can apply the matches_type
+    predicate when Task 9 wires it. For Task 7+8, the painter ignores the
+    tab id and shows the full opps list.
+    """
+    app._arb_active_type_tab = tab_id
+    # Delegate to the existing unified opps renderer — filtering is added
+    # in Task 9 inside paint_opps by keying off app._arb_active_type_tab.
+    render_opps(app, parent)
+
+
+# ─── v2 filter popovers (Task 10, 2026-04-23) ────────────────────────
+
+def open_profit_popover(app, anchor):
+    """Numeric entry popover for PROFIT$ ≥ threshold. Commits on <Return>."""
+    _open_numeric_popover(app, anchor, key="profit_min_usd",
+                           title="PROFIT$ ≥", suffix="$",
+                           parse=lambda s: float(s))
+
+
+def open_life_popover(app, anchor):
+    """Entry popover with m/h suffix for LIFE ≥. Commits on <Return>."""
+    def _parse(s: str) -> float:
+        s = s.strip().lower()
+        if s.endswith("h"):
+            return float(s[:-1]) * 3600
+        if s.endswith("m"):
+            return float(s[:-1]) * 60
+        return float(s) * 60  # bare number = minutes
+    _open_numeric_popover(app, anchor, key="life_min_seconds",
+                           title="LIFE ≥", suffix="m/h",
+                           parse=lambda s: int(_parse(s)))
+
+
+def open_venues_popover(app, anchor):
+    """Checkbox popover listing known venues. None=allow all, list=allowlist."""
+    import json as _json
+    from pathlib import Path as _P
+
+    venues = []
+    try:
+        path = _P("config") / "connections.json"
+        if path.exists():
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                venues = sorted(str(k).lower() for k in data.keys())
+    except Exception:
+        pass
+    if not venues:
+        from core.arb.tab_matrix import CEX_VENUES
+        venues = sorted(CEX_VENUES)
+
+    pop = tk.Toplevel(anchor)
+    pop.overrideredirect(True)
+    pop.configure(bg=BG)
+    x = anchor.winfo_rootx()
+    y = anchor.winfo_rooty() + anchor.winfo_height()
+    pop.geometry(f"+{x}+{y}")
+
+    current = app._arb_filter_state().get("venues_allow")
+    chk_vars: dict[str, tk.BooleanVar] = {}
+    for v in venues:
+        bv = tk.BooleanVar(value=(current is None or v in current))
+        chk_vars[v] = bv
+        cb = tk.Checkbutton(pop, text=v, variable=bv,
+                             fg=WHITE, bg=BG, selectcolor=BG3,
+                             font=(FONT, 8), anchor="w")
+        cb.pack(fill="x", padx=4)
+
+    def _commit(_e=None):
+        picked = [v for v, bv in chk_vars.items() if bv.get()]
+        new_val = None if len(picked) == len(venues) else picked
+        app._arb_filter_state()["venues_allow"] = new_val
+        if hasattr(app, "_arb_save_filters"):
+            app._arb_save_filters()
+        pop.destroy()
+        if hasattr(app, "_arb_rerender_current_tab"):
+            app._arb_rerender_current_tab()
+        app._arb_tab_labels = None
+        app._arbitrage_hub(app._arb_tab)
+
+    btn = tk.Label(pop, text=" OK ", font=(FONT, 8, "bold"),
+                    fg=BG, bg=AMBER, cursor="hand2", padx=8, pady=3)
+    btn.pack(pady=(4, 4))
+    btn.bind("<Button-1>", _commit)
+
+
+def _open_numeric_popover(app, anchor, *, key: str, title: str,
+                            suffix: str, parse):
+    """Shared numeric-entry popover. Commits on <Return>."""
+    pop = tk.Toplevel(anchor)
+    pop.overrideredirect(True)
+    pop.configure(bg=BG)
+    x = anchor.winfo_rootx()
+    y = anchor.winfo_rooty() + anchor.winfo_height()
+    pop.geometry(f"+{x}+{y}")
+    tk.Label(pop, text=f"{title} ({suffix})",
+             font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(padx=6, pady=(4, 2))
+    ent = tk.Entry(pop, width=10, font=(FONT, 9),
+                    fg=WHITE, bg=BG3, insertbackground=WHITE)
+    ent.pack(padx=6, pady=(0, 4))
+    ent.focus_set()
+
+    def _commit(_e=None):
+        raw = ent.get().strip()
+        try:
+            val = parse(raw) if raw else 0
+        except Exception:
+            val = 0
+        app._arb_filter_state()[key] = val
+        if hasattr(app, "_arb_save_filters"):
+            app._arb_save_filters()
+        pop.destroy()
+        if hasattr(app, "_arb_rerender_current_tab"):
+            app._arb_rerender_current_tab()
+        app._arb_tab_labels = None
+        app._arbitrage_hub(app._arb_tab)
+
+    ent.bind("<Return>", _commit)
+    ent.bind("<Escape>", lambda _e: pop.destroy())
 

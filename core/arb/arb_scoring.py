@@ -266,6 +266,46 @@ def _breakeven_hours(opp: dict, rt_fee_bps: float = _DEFAULT_RT_FEE_BPS) -> floa
     return round(rt_fee_bps * 87.6 / a, 2)
 
 
+def _profit_usd_per_1k_24h(opp: dict, rt_fee_bps: float = _DEFAULT_RT_FEE_BPS) -> float | None:
+    """Net 24h profit on a $1,000 notional, after round-trip fees.
+
+    gross = apr/100 * $1000 * 24/8760
+    fees_rt_usd = rt_fee_bps/10_000 * $1000  (= $3 at 30 bps default)
+    net = gross - fees_rt_usd
+
+    Returns None if APR is missing. Can be negative (signals the edge
+    doesn't cover fees at this size).
+    """
+    apr = opp.get("net_apr") or opp.get("apr") or opp.get("basis_apr")
+    if apr is None:
+        return None
+    gross = abs(float(apr)) / 100.0 * 1000.0 * (24.0 / 8760.0)
+    fees_usd = rt_fee_bps / 10_000.0 * 1000.0
+    return round(gross - fees_usd, 4)
+
+
+def _depth_pct_at_1k(opp: dict) -> float | None:
+    """Slippage bps for a $1,000 notional against the shallowest leg book.
+
+    Expects ``book_depth_usd`` (min of both legs) in the pair record.
+    Returns None if absent — the UI shows ``—`` and the DEPTH column
+    stays empty until the scanner enriches records.
+
+    Linear model: bps = 10_000 / (book_depth_usd / 1_000). A book of
+    $1k matches 100% slippage (10_000 bps); $50k → 200 bps; $10M → 1 bps.
+    """
+    depth = opp.get("book_depth_usd")
+    if depth is None:
+        return None
+    try:
+        d = float(depth)
+    except (TypeError, ValueError):
+        return None
+    if d <= 0:
+        return None
+    return round(10_000.0 / (d / 1000.0), 4)
+
+
 def _viab(score: float, breakeven_h: float | None, vol_score: float | None) -> str:
     """GO / WAIT / SKIP from composite signal.
 
@@ -289,6 +329,9 @@ class ScoreResult:
     grade:   str            # GO / MAYBE / SKIP (legacy)
     viab:    str = "SKIP"   # GO / WAIT / SKIP (new — viability flag)
     breakeven_h: float | None = None
+    # v2 density columns (2026-04-23):
+    profit_usd_per_1k_24h: float | None = None   # net $ on $1k over 24h (fees_rt = _DEFAULT_RT_FEE_BPS)
+    depth_pct_at_1k: float | None = None         # slippage bps for $1k notional, from book_depth_usd
     factors: dict = field(default_factory=dict)  # per-factor raw scores (0-100 or None)
 
 
@@ -321,12 +364,16 @@ def score_opp(opp: dict, cfg: dict | None = None) -> ScoreResult:
     grade = _grade(score, thresholds)
     be = _breakeven_hours(opp)
     viab = _viab(score, be, factor_scores.get("volume"))
+    profit = _profit_usd_per_1k_24h(opp)
+    depth = _depth_pct_at_1k(opp)
 
     return ScoreResult(
         score=round(score, 2),
         grade=grade,
         viab=viab,
         breakeven_h=be,
+        profit_usd_per_1k_24h=profit,
+        depth_pct_at_1k=depth,
         factors=factor_scores,
     )
 

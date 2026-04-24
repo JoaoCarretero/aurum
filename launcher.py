@@ -4227,21 +4227,73 @@ class App(tk.Tk):
     # --------------------------------------------------------------
 
     _ARB_TAB_DEFS = [
-        # (key, tab_id, label, color) — collapsed 6→3 tabs in Phase 1
-        # redesign (2026-04-22). All legacy tab ids route into these.
-        ("1", "opps",      "OPPS",       "#ffd700"),
-        ("2", "positions", "POSITIONS",  "#00ff80"),
-        ("3", "history",   "HISTORY",    "#c084fc"),
+        # (key, tab_id, label_full, color)
+        # Type tabs (category="type") — filtered views over the same unified
+        # opp set emitted by the scanner. Overlap is expected and documented
+        # (ex. binance-perp↔bybit-perp BTC appears in both CEX-CEX and PERP-PERP).
+        ("1", "cex-cex",   "1 CEX-CEX",   "#ffd700"),
+        ("2", "dex-dex",   "2 DEX-DEX",   "#8ae6a2"),
+        ("3", "cex-dex",   "3 CEX-DEX",   "#c084fc"),
+        ("4", "perp-perp", "4 PERP-PERP", "#60a5fa"),
+        ("5", "spot-spot", "5 SPOT-SPOT", "#fb923c"),
+        ("6", "basis",     "6 BASIS",     "#f472b6"),
+        # Meta tabs (category="meta") — render from SimpleArbEngine, not
+        # the scanner. Separator `|` is inserted between 6 and 7 by the
+        # render function.
+        ("7", "positions", "7 POSITIONS", "#00ff80"),
+        ("8", "history",   "8 HISTORY",   "#c084fc"),
     ]
 
-    # Legacy 6-tab ids routed into the new 3-tab layout (Phase 1 redesign).
-    _ARB_LEGACY_TAB_MAP = {
-        "cex-cex": "opps", "dex-dex": "opps", "cex-dex": "opps",
-        "basis": "opps", "spot": "opps",
-        "engine": "positions",
+    # Which tab_ids are "type" (scanner-driven) vs. "meta" (engine-driven).
+    # Consumed by v2-density render (Task 7) to place the category separator
+    # before POSITIONS/HISTORY. Covers chore's 3-tab Phase-1 layout AND the
+    # future 8-tab v2-density layout so the swap in Task 7 doesn't touch this.
+    _ARB_TAB_CATEGORIES = {
+        # Phase-1 tab ids (chore/repo-cleanup current):
+        "opps": "type", "positions": "meta", "history": "meta",
+        # v2 density tab ids (will be valid after Task 7):
+        "cex-cex": "type", "dex-dex": "type", "cex-dex": "type",
+        "perp-perp": "type", "spot-spot": "type", "basis": "type",
     }
 
-    def _arbitrage_hub(self, tab: str = "opps"):
+    # Legacy tab ids kept for backward-compat. Callers elsewhere in launcher.py
+    # pass "engine" (3 callers), "basis" (1 caller), "spot" (1 caller), and
+    # "opps" can come from the URL history. Map each to the v2 tab id that
+    # serves the same role. "basis", "cex-cex", "dex-dex", "cex-dex" are v2
+    # tab ids themselves — no entry needed (passthrough).
+    _ARB_LEGACY_TAB_MAP = {
+        "opps":   "cex-cex",
+        "engine": "positions",
+        "spot":   "spot-spot",
+    }
+
+    # Column layout for the v2 density opps table (Task 9 will wire it into
+    # the painter). 8 columns: VIAB + SYM + VENUES + APR + PROFIT$ + LIFE +
+    # BKEVN + DEPTH$1k. Declared here so Task 9 can consume without touching
+    # class-level defs.
+    _ARB_OPPS_COLS = [
+        ("VIAB",     5,  "w"),
+        ("SYM",      14, "w"),   # includes TYPE suffix "(P-P)"/"(P-S)"/"(S-S)"
+        ("VENUES",   24, "w"),
+        ("APR",      8,  "e"),
+        ("PROFIT$",  11, "e"),   # $ on $1k 24h after fees_rt
+        ("LIFE",     7,  "e"),
+        ("BKEVN",    7,  "e"),
+        ("DEPTH$1k", 9,  "e"),   # slippage bps on $1k notional
+    ]
+
+    # Per-instance LifetimeTracker. Lazily created on first access via
+    # _arb_lifetime_tracker(). Persists across scan ticks, drops on relaunch.
+    _arb_lifetime_tracker_cached = None
+
+    def _arb_lifetime_tracker(self):
+        """Lazy accessor to the per-launcher LifetimeTracker."""
+        from core.arb.lifetime import LifetimeTracker
+        if self._arb_lifetime_tracker_cached is None:
+            self._arb_lifetime_tracker_cached = LifetimeTracker()
+        return self._arb_lifetime_tracker_cached
+
+    def _arbitrage_hub(self, tab: str = "cex-cex"):
         from launcher_support.screens.arbitrage_hub import render_hub
         return render_hub(self, tab)
 
@@ -4276,6 +4328,11 @@ class App(tk.Tk):
         "risk_max": "HIGH", "grade_min": "MAYBE",
         "exclude_risky_venues": False,
         "realistic_only": True,
+        # v2 density filters (2026-04-23) — declared for Task 10 to wire.
+        # Defaults = off / permissive so existing behavior is unchanged.
+        "profit_min_usd":   0.0,     # cut opps with net <$X per $1k per 24h
+        "life_min_seconds": 0,       # require pair seen for ≥X seconds
+        "venues_allow":     None,    # None = all venues OK; list = allowlist
     }
 
     # Venues considered "risky" for the [NO RISKY VENUES] toggle —
@@ -4315,6 +4372,18 @@ class App(tk.Tk):
     def _arb_toggle_risky_venues(self) -> None:
         from launcher_support.screens.arbitrage_hub import toggle_risky_venues
         return toggle_risky_venues(self)
+    def _arb_open_profit_popover(self, anchor):
+        from launcher_support.screens.arbitrage_hub import open_profit_popover
+        return open_profit_popover(self, anchor)
+
+    def _arb_open_life_popover(self, anchor):
+        from launcher_support.screens.arbitrage_hub import open_life_popover
+        return open_life_popover(self, anchor)
+
+    def _arb_open_venues_popover(self, anchor):
+        from launcher_support.screens.arbitrage_hub import open_venues_popover
+        return open_venues_popover(self, anchor)
+
     def _arb_toggle_realistic(self) -> None:
         from launcher_support.screens.arbitrage_hub import toggle_realistic
         return toggle_realistic(self)
@@ -4406,20 +4475,9 @@ class App(tk.Tk):
         return render_engine(self, parent)
     # ═══════════════════════════════════════════════════════════
     # Phase 1 redesign (2026-04-22): 3-tab layout
-    # ═══════════════════════════════════════════════════════════
-    # 6-column layout after organize pass (2026-04-22):
-    # Dropped TYPE (~always PERP_PERP, goes in detail) and VOL
-    # (REALISTIC filter already gates anything uninvestable, and the
-    # detail pane shows vol ratio at the actual trade size). Left with
-    # the 6 columns that actually drive the "take this or not?" call.
-    _ARB_OPPS_COLS = [
-        ("VIAB",    5,  "w"),
-        ("SYM",    11,  "w"),
-        ("VENUES", 22,  "w"),
-        ("APR",     9,  "e"),
-        ("BKEVN",   7,  "e"),
-        ("SCORE",   5,  "e"),
-    ]
+    # (Phase-1 6-column _ARB_OPPS_COLS removed 2026-04-24 — v2 density
+    # supersedes it with the 8-column layout declared above at class-level
+    # near the other _ARB_* data defs. Task 9 will wire the painter to use it.)
 
     def _arb_render_opps(self, parent):
         from launcher_support.screens.arbitrage_hub import render_opps
@@ -4430,6 +4488,9 @@ class App(tk.Tk):
     def _arb_render_history(self, parent):
         from launcher_support.screens.arbitrage_hub import render_history
         return render_history(self, parent)
+    def _arb_render_tab_filtered(self, parent, tab_id: str):
+        from launcher_support.screens.arbitrage_hub import render_tab_filtered
+        return render_tab_filtered(self, parent, tab_id)
     def _arb_paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot):
         from launcher_support.screens.arbitrage_hub import paint_opps
         return paint_opps(self, arb_cc, arb_dd, arb_cd, basis, spot)
