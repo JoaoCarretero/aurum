@@ -194,11 +194,58 @@ via `superpowers:code-reviewer` subagent e aprovaram com "Ready to merge".
 Arbitrage Hub v2 density está **operacional em código**, merged em
 `feat/research-desk`, pushed origin. Acceptance criteria do plano foram
 cumpridos exceto Step 5 (manual GUI walkthrough) que só o Joao pode
-executar. Suite 1998/2006 pass (env-flakes conhecidos), CORE trading
-intacto, backtests calibrados não invalidados, zero deps novas.
+executar. Suite 331 pass em tests/core + tests/contracts + tests/integration
+(env-flakes tkinter conhecidos, passam isoladamente), CORE trading intacto,
+backtests calibrados não invalidados, zero deps novas.
 
-**Próximo passo:** Joao abrir `python launcher.py` e clicar pelos 8
-checklist items. Se tudo funcional, v2 density fecha o ciclo.
+## 🐛 Bug pendente em produção (tracking aberto)
+
+**Sintoma (reportado por Joao 2026-04-24):** ao abrir ARBITRAGE no
+launcher do parent (após merge em feat/research-desk), nenhum dado
+aparece na tabela. 8 tabs visíveis, mas linhas vazias.
+
+**Investigação headless confirma pipeline de dados 100% sã:**
+- `tools/diagnose_arb_hub.py` rodado: scanner fetch 4060 pairs, 3777
+  matches em cex-cex, filter_and_score com filtros default produz 86
+  pairs GO/WAIT. Com filtros salvos do Joao (permissivos), 206 pairs.
+- Top samples mostram MOVR, ZAMA, BSB, RAVE com grade=GO, viab=GO,
+  profit=$3-$7 por $1k 24h.
+
+**Localização do bug:** runtime-only na UI wiring. 49 blocos
+`except Exception: pass` em arbitrage_hub.py. Um deles tá suprimindo a
+exceção real. Hipóteses ordenadas por probabilidade:
+1. hub_scan_async worker thread dying silently
+2. paint_opps exception entre a pipeline e `repaint(rows)`
+3. `_arb_opps_repaint` callback não registrado quando telem_update fires
+4. Tk-side rendering blowing up após paint_opps
+
+**Diagnóstico instalado (commit `2eb4823`):**
+- `launcher_support/_test_mode.py::arb_debug()` — env-gated debug print
+- Instrumentação em hub_scan_async (8 sites) + paint_opps (5 sites) +
+  traceback.format_exc() em exception handlers críticos
+- `tools/diagnose_arb_hub.py` — script standalone que roda pipeline
+  headless e prova saúde independente da GUI
+
+**Como diagnosticar (próxima sessão):**
+```bash
+AURUM_ARB_DEBUG=1 python launcher.py 2>&1 | tee arb_debug.log
+# Abrir ARBITRAGE, esperar 10s, fechar launcher
+# Colar últimas ~50 linhas de arb_debug.log
+```
+
+A linha [ARB_DEBUG] que NÃO aparece identifica o ponto de quebra:
+- Para em "entry" → thread não dispara (launcher UI bloqueia async?)
+- Para em "scan OK" → arb_pairs trava (scanner state)
+- Para em "scheduling telem_update" → UI thread rejeita
+- Aparece "calling repaint" mas UI vazia → `_arb_opps_repaint` é no-op ou Tk error
+
+**Próximo passo:** Joao abrir `python launcher.py` e (a) executar
+checklist manual acima SE dados aparecerem; (b) rodar com
+`AURUM_ARB_DEBUG=1` e enviar log SE dados não aparecerem. Com log, fix
+cirúrgico em <5min.
+
+Se bug for fixado, v2 density fecha o ciclo. Até lá, o trabalho de
+código ficou "operacional em código, pendente de validação UI".
 
 ---
 
