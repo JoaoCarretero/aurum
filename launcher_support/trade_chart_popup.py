@@ -19,6 +19,10 @@ from typing import Any
 import pandas as pd
 
 from config.params import ENGINE_INTERVALS, INTERVAL
+from launcher_support.trade_history_panel import (
+    normalize_direction,
+    format_r_multiple,
+)
 
 
 _ENGINE_ALIASES: dict[str, str] = {
@@ -216,4 +220,331 @@ def fetch_binance_candles(
         return parse_klines_to_df([])
 
 
-# TradeChartPopup class added in Task 5 below.
+# ─── Tk popup ────────────────────────────────────────────────────
+
+_POPUP_WIDTH = 900
+_POPUP_HEIGHT = 600
+_LIVE_REFRESH_MS = 5000
+_LIVE_FAIL_LIMIT = 3
+
+
+class TradeChartPopup:
+    """Toplevel window showing candlestick chart for a single trade.
+
+    Live trades (result=LIVE) refresh every 5s. Closed trades render once.
+    """
+
+    def __init__(self, master, trade: dict, run_id: str, *,
+                 colors: dict[str, str], font_name: str):
+        import tkinter as tk
+
+        self.trade = trade
+        self.run_id = run_id
+        self.colors = colors
+        self.font_name = font_name
+        self.engine = str(trade.get("strategy") or "").upper()
+        self.tf = resolve_tf(self.engine)
+        self.tf_sec = tf_to_seconds(self.tf)
+        self.symbol = str(trade.get("symbol") or "").upper()
+
+        self._after_id: str | None = None
+        self._live_fail_count = 0
+        self._destroyed = False
+
+        self.top = tk.Toplevel(master)
+        self.top.title(f"{self.symbol} · {self.engine}")
+        self.top.geometry(f"{_POPUP_WIDTH}x{_POPUP_HEIGHT}")
+        self.top.configure(bg=colors["BG"])
+        self.top.transient(master)
+        self.top.bind("<Escape>", lambda _e: self.destroy())
+        self.top.protocol("WM_DELETE_WINDOW", self.destroy)
+
+        self._build_header()
+        self._chart_frame = tk.Frame(self.top, bg=colors["BG"])
+        self._chart_frame.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        self._footer_frame = tk.Frame(self.top, bg=colors["BG"])
+        self._footer_frame.pack(fill="x", padx=8, pady=(0, 6))
+
+        self._render_chart()
+        self._render_footer()
+
+        if self.trade.get("result") == "LIVE":
+            self._schedule_live_refresh()
+
+    # ── header ──────────────────────────────────────────────────
+
+    def _build_header(self):
+        import tkinter as tk
+
+        c = self.colors
+        head = tk.Frame(self.top, bg=c["AMBER"], height=28)
+        head.pack(fill="x", padx=0, pady=(0, 6))
+        head.pack_propagate(False)
+
+        direction = normalize_direction(self.trade.get("direction"))
+        r_mult_text = format_r_multiple(
+            self.trade.get("r_multiple"),
+            result=str(self.trade.get("result", "")),
+        )
+        pnl = self.trade.get("pnl", 0.0)
+        pnl_str = f"{'+' if pnl >= 0 else '-'}${abs(pnl):.2f}"
+
+        text = (
+            f"  {self.symbol}  ·  {self.engine}  ·  {direction}  "
+            f"·  {r_mult_text}  ·  {pnl_str}"
+        )
+        tk.Label(
+            head, text=text, font=(self.font_name, 9, "bold"),
+            fg=c["BG"], bg=c["AMBER"], anchor="w",
+        ).pack(side="left", fill="y")
+        tk.Label(
+            head, text="  [ESC]  ", font=(self.font_name, 7, "bold"),
+            fg=c["BG"], bg=c["AMBER"], cursor="hand2",
+        ).pack(side="right", padx=(0, 8))
+
+    # ── footer ──────────────────────────────────────────────────
+
+    def _render_footer(self):
+        import tkinter as tk
+
+        for widget in self._footer_frame.winfo_children():
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+
+        t = self.trade
+        entry = t.get("entry")
+        stop = t.get("stop")
+        target = t.get("target")
+        exit_p = t.get("exit_p")
+        size = t.get("size")
+        exit_marker = resolve_exit_marker_local(t)
+
+        entry_ts = _ts_to_unix(t.get("timestamp"))
+        duration = int(t.get("duration", 0) or 0)
+        exit_ts = (entry_ts + duration * self.tf_sec) if entry_ts else None
+
+        def _fmt_ts(unix_ts):
+            if unix_ts is None:
+                return "—"
+            return datetime.fromtimestamp(unix_ts, tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M UTC")
+
+        line1 = (
+            f"  entry {_fmtp(entry)} · stop {_fmtp(stop)} · "
+            f"tp {_fmtp(target)} · exit {_fmtp(exit_p)} ({exit_marker})"
+        )
+        dur_text = format_duration_local(duration, self.tf_sec)
+        line2 = (
+            f"  size {size if size is not None else '—'} · {dur_text} · "
+            f"{_fmt_ts(entry_ts)} → {_fmt_ts(exit_ts)}"
+        )
+        tk.Label(
+            self._footer_frame, text=line1, font=(self.font_name, 7),
+            fg=self.colors["DIM"], bg=self.colors["BG"], anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            self._footer_frame, text=line2, font=(self.font_name, 7),
+            fg=self.colors["DIM2"], bg=self.colors["BG"], anchor="w",
+        ).pack(fill="x")
+
+    # ── chart ───────────────────────────────────────────────────
+
+    def _render_chart(self):
+        import tkinter as tk
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        import mplfinance as mpf
+
+        for widget in self._chart_frame.winfo_children():
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+
+        entry_ts = _ts_to_unix(self.trade.get("timestamp")) or int(time.time())
+        duration = int(self.trade.get("duration", 0) or 0)
+        exit_ts = (entry_ts + duration * self.tf_sec
+                   if self.trade.get("result") != "LIVE" else None)
+        start_ts, end_ts = derive_candle_window(
+            entry_ts, exit_ts, tf_sec=self.tf_sec)
+
+        df = fetch_binance_candles(self.symbol, self.tf,
+                                   start_ts=start_ts, end_ts=end_ts)
+
+        if len(df) == 0:
+            tk.Label(
+                self._chart_frame,
+                text="— candles indisponíveis (Binance offline ou símbolo inválido) —",
+                font=(self.font_name, 10),
+                fg=self.colors["DIM"], bg=self.colors["BG"],
+            ).pack(expand=True)
+            retry = tk.Label(
+                self._chart_frame, text="  ↻ retry  ",
+                font=(self.font_name, 8, "bold"),
+                fg=self.colors["BG"], bg=self.colors["AMBER"],
+                cursor="hand2", padx=10, pady=4,
+            )
+            retry.pack()
+            retry.bind("<Button-1>", lambda _e: self._render_chart())
+            return
+
+        fig = Figure(figsize=(9, 4.5), facecolor=self.colors["BG"])
+        ax = fig.add_subplot(111)
+        style = mpf.make_mpf_style(
+            base_mpf_style="nightclouds",
+            rc={"axes.facecolor": self.colors["BG"],
+                "figure.facecolor": self.colors["BG"],
+                "axes.labelcolor": self.colors["DIM"],
+                "xtick.color": self.colors["DIM"],
+                "ytick.color": self.colors["DIM"],
+                "axes.edgecolor": self.colors["BORDER"]},
+        )
+        mpf.plot(df, type="candle", ax=ax, style=style,
+                 volume=False, xrotation=0, datetime_format="%m-%d %H:%M",
+                 update_width_config={"candle_linewidth": 0.7})
+
+        specs = build_marker_specs(self.trade, tf_sec=self.tf_sec)
+        for spec in specs:
+            kind = spec.get("kind")
+            if kind in ("entry", "stop", "target"):
+                linestyle = "-" if spec["style"] == "line" else "--"
+                ax.axhline(
+                    y=spec["price"], color=spec["color"],
+                    linestyle=linestyle, linewidth=spec["linewidth"],
+                    alpha=0.9, zorder=3)
+            elif kind in ("exit", "current"):
+                # Scatter at last candle x-position (approx — keeps it
+                # minimal; TradingView-grade x-positioning is v2)
+                x_pos = df.index[-1]
+                ax.scatter([x_pos], [spec["price"]],
+                           marker=spec["marker"], color=spec["color"],
+                           s=spec["size"], zorder=5)
+
+        fig.tight_layout(pad=0.5)
+        canvas = FigureCanvasTkAgg(fig, master=self._chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+        self._canvas = canvas
+        self._fig = fig
+
+    # ── live refresh ────────────────────────────────────────────
+
+    def _schedule_live_refresh(self):
+        if self._destroyed:
+            return
+        try:
+            self._after_id = self.top.after(_LIVE_REFRESH_MS, self._live_tick)
+        except Exception:
+            pass
+
+    def _live_tick(self):
+        if self._destroyed or not self.top.winfo_exists():
+            return
+        try:
+            self._render_chart()
+            self._render_footer()
+            self._live_fail_count = 0
+        except Exception:
+            self._live_fail_count += 1
+        if self._live_fail_count < _LIVE_FAIL_LIMIT:
+            self._schedule_live_refresh()
+
+    # ── destroy ─────────────────────────────────────────────────
+
+    def destroy(self):
+        self._destroyed = True
+        if self._after_id:
+            try:
+                self.top.after_cancel(self._after_id)
+            except Exception:
+                pass
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+
+# ─── helpers (local aliases to avoid panel ↔ popup coupling) ────────
+
+def resolve_exit_marker_local(trade: dict) -> str:
+    """Local copy of resolve_exit_marker semantics — keeps popup standalone."""
+    if trade.get("result") == "LIVE":
+        return "—"
+    m = {
+        "target": "TP_HIT", "stop": "STOP", "trail": "TRAIL",
+        "time": "TIME", "manual": "MANUAL",
+    }
+    return m.get(str(trade.get("exit_reason", "")).lower(), "—")
+
+
+def format_duration_local(candles: int | None, tf_sec: int) -> str:
+    """Local copy of format_duration to keep popup standalone."""
+    if candles is None:
+        return "—"
+    total_sec = int(candles) * int(tf_sec)
+    if total_sec < 60:
+        return "<1m"
+    days, rem = divmod(total_sec, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days >= 1:
+        return f"{days}d" if hours == 0 else f"{days}d{hours}h"
+    if hours >= 1:
+        return f"{hours}h" if minutes == 0 else f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
+
+
+def _fmtp(p):
+    if p is None or p == 0:
+        return "—"
+    try:
+        f = float(p)
+    except (TypeError, ValueError):
+        return str(p)
+    if abs(f) >= 1000:
+        return f"{f:,.2f}"
+    if abs(f) >= 1:
+        return f"{f:.4f}".rstrip("0").rstrip(".")
+    return f"{f:.6g}"
+
+
+# ─── popup registry / factory ───────────────────────────────────
+
+def _trade_key(trade: dict, run_id: str) -> str:
+    return (
+        f"{run_id}:{trade.get('symbol', '?')}:"
+        f"{trade.get('timestamp', trade.get('entry_idx', '?'))}"
+    )
+
+
+def open_trade_chart(launcher, trade: dict, run_id: str, *,
+                     colors: dict[str, str], font_name: str) -> TradeChartPopup:
+    """Factory: open a new popup, or lift an existing one for this trade."""
+    registry: dict = getattr(launcher, "_trade_popups", None)
+    if registry is None:
+        registry = {}
+        launcher._trade_popups = registry
+
+    key = _trade_key(trade, run_id)
+    existing = registry.get(key)
+    if existing is not None and not getattr(existing, "_destroyed", True):
+        try:
+            existing.top.lift()
+            existing.top.focus_force()
+            return existing
+        except Exception:
+            pass
+
+    popup = TradeChartPopup(launcher, trade, run_id,
+                            colors=colors, font_name=font_name)
+    registry[key] = popup
+    original_destroy = popup.destroy
+
+    def _destroy_and_evict():
+        original_destroy()
+        registry.pop(key, None)
+
+    popup.destroy = _destroy_and_evict  # type: ignore[assignment]
+    return popup
