@@ -253,6 +253,11 @@ def render_detail(
                         open_positions or [], equity_series or [],
                         trades, on_row_click, selected_trade,
                         on_close_detail)
+        # Paper mode's body packs every sub-section with fill="x" only —
+        # without this trailing spacer, empty PANEL below the last
+        # metric/signal card reads as a dead cut-off zone. The spacer
+        # absorbs that leftover vertical space so the pane fills cleanly.
+        tk.Frame(frame, bg=PANEL).pack(fill="both", expand=True)
     else:
         _hl2_shadow_body(frame, trades, on_row_click, selected_trade,
                          on_close_detail)

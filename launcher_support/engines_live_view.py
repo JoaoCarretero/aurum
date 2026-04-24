@@ -2584,8 +2584,12 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     # foram removidos do cockpit pra não ocupar espaço: controle pesado
     # vive via SSH/systemctl no VPS quando preciso. REFRESH fica porque
     # força re-fetch do cache local quando dados parecem stale.
+    # Pinned to the bottom of detail_frame so the signal feed above can
+    # stretch into the middle — without side="bottom" the actions row
+    # glues itself to the end of the content and leaves a dead zone
+    # between the signal feed and the footer.
     actions = tk.Frame(detail_frame, bg=PANEL)
-    actions.pack(fill="x", padx=8, pady=(4, 10))
+    actions.pack(side="bottom", fill="x", padx=8, pady=(4, 10))
     if not (status == "RUNNING" and run_dir is not None):
         start_btn = tk.Label(actions, text=" START SHADOW ON VPS ",
                              fg=BG, bg=GREEN, font=(FONT, 7, "bold"),
