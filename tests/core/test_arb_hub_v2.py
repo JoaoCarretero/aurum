@@ -220,3 +220,81 @@ def test_filter_and_score_applies_life_min(tk_root, monkeypatch):
     symbols = [p["symbol"] for p, _ in out]
     assert "OLD" in symbols
     assert "NEW" not in symbols
+
+
+# ─── hub_telem_update dispatch regression (fix 1168d7f, 2026-04-24) ──────────
+# Guards against reverting the paint_opps gate to Phase-1's `== "opps"` check.
+# Without this fix, ANY of the 6 v2 type tabs left the table stuck on the
+# "scanning venues, hold on —" placeholder because paint_opps was never called.
+
+@pytest.mark.parametrize("active_tab", [
+    "cex-cex", "dex-dex", "cex-dex",
+    "perp-perp", "spot-spot", "basis",
+    "opps",  # legacy Phase-1 alias kept working
+])
+def test_hub_telem_update_dispatches_paint_opps_for_type_tabs(
+    tk_root, monkeypatch, active_tab
+):
+    """hub_telem_update must call paint_opps for every v2 type tab."""
+    from launcher_support.screens import arbitrage_hub as ah
+
+    app = _StubApp(tk_root)
+    app._arb_tab = active_tab
+    # Status strip stubs
+    app._arb_live_dot = None
+    import tkinter as _tk
+    app._arb_sum_cex = _tk.Label(tk_root)
+    app._arb_sum_dex = _tk.Label(tk_root)
+    app._arb_sum_best = _tk.Label(tk_root)
+    app._arb_tab_compact_level = 0
+    app._arb_simple_engine = None
+
+    paint_calls = []
+    def fake_paint(*args, **kwargs):
+        paint_calls.append((args, kwargs))
+    monkeypatch.setattr(app, "_arb_paint_opps", fake_paint, raising=False)
+
+    ah.hub_telem_update(
+        app,
+        {"cex_online": 5, "dex_online": 3, "total": 100},
+        None, [], [], [], [], [], [],
+    )
+
+    assert len(paint_calls) == 1, (
+        f"paint_opps must be dispatched for tab={active_tab!r} "
+        f"(got {len(paint_calls)} calls)"
+    )
+
+
+@pytest.mark.parametrize("meta_tab", ["positions", "history"])
+def test_hub_telem_update_skips_paint_opps_for_meta_tabs(
+    tk_root, monkeypatch, meta_tab
+):
+    """Positions + history render from engine snapshot, not paint_opps."""
+    from launcher_support.screens import arbitrage_hub as ah
+
+    app = _StubApp(tk_root)
+    app._arb_tab = meta_tab
+    app._arb_live_dot = None
+    import tkinter as _tk
+    app._arb_sum_cex = _tk.Label(tk_root)
+    app._arb_sum_dex = _tk.Label(tk_root)
+    app._arb_sum_best = _tk.Label(tk_root)
+    app._arb_tab_compact_level = 0
+    app._arb_simple_engine = None
+
+    paint_calls = []
+    def fake_paint(*args, **kwargs):
+        paint_calls.append((args, kwargs))
+    monkeypatch.setattr(app, "_arb_paint_opps", fake_paint, raising=False)
+
+    ah.hub_telem_update(
+        app,
+        {"cex_online": 5, "dex_online": 3, "total": 100},
+        None, [], [], [], [], [], [],
+    )
+
+    assert len(paint_calls) == 0, (
+        f"paint_opps must NOT fire for meta tab {meta_tab!r} "
+        f"(got {len(paint_calls)} calls)"
+    )
