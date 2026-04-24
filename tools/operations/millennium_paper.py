@@ -351,18 +351,6 @@ def _signal_age_seconds(trade: dict) -> float | None:
     return signal_age_seconds(trade)
 
 
-def _is_live_signal(trade: dict, tick_sec: int,
-                    tolerance_mult: float = 2.0) -> bool:
-    """True if signal is from the most recent bar(s).
-
-    A signal is 'live' when its timestamp is within ``tolerance_mult×tick_sec``
-    of now. Default tolerance is 2× — for a 15m tick, accepts signals whose
-    bar opened in the last 30 minutes. Protects paper from treating 90d of
-    backscan history as novel opens (bug 2026-04-19).
-    """
-    return is_live_signal(trade, tick_sec=tick_sec, tolerance_mult=tolerance_mult)
-
-
 def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
     """Close every open position at MTM or entry price. Records ClosedTrade
     per position, appends to trades.jsonl and fills.jsonl."""
@@ -503,10 +491,26 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 continue
             state.seen_keys.add(key)
 
+            # Feature snapshot from scan — every signals.jsonl entry
+            # (opened or skipped) carries the same diagnostic payload.
+            sig_features = {
+                "signal_ts": str(signal_timestamp(t)),
+                "pattern": t.get("pattern"),
+                "entropy": t.get("entropy"),
+                "entropy_norm": t.get("entropy_norm"),
+                "hurst": t.get("hurst"),
+                "h_regime": t.get("h_regime"),
+                "score": t.get("score"),
+                "rr": t.get("rr"),
+                "fractal_align": t.get("fractal_align"),
+                "macro_bias": t.get("macro_bias"),
+                "vol_regime": t.get("vol_regime"),
+            }
+
             # Live-bar filter: only open on signals from the most recent
             # bar(s). Rejects 90d backscan residue and most "future-ts"
             # artifacts from incomplete tail candles.
-            if not _is_live_signal(t, state.tick_sec):
+            if not is_live_signal(t, tick_sec=state.tick_sec):
                 stale_skips += 1
                 if priming:
                     primed_count += 1
@@ -516,7 +520,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "direction": t.get("direction"),
                     "decision": "skipped",
                     "reason": "stale_bar",
-                    "signal_ts": str(signal_timestamp(t)),
+                    **sig_features,
                 })
                 continue
             state.novel_total += 1
@@ -536,6 +540,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "direction": t.get("direction"),
                     "decision": "skipped",
                     "reason": "max_open_positions",
+                    **sig_features,
                 })
                 continue
 
@@ -559,6 +564,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "direction": t.get("direction"),
                     "decision": "skipped",
                     "reason": "direction_conflict",
+                    **sig_features,
                 })
                 continue
 
@@ -583,19 +589,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "entry": pos.entry_price, "stop": pos.stop,
                 "target": pos.target, "decision": "opened",
                 "pos_id": pos.id,
-                # Feature snapshot from the scan — enables post-hoc
-                # diagnosis of live↔backtest divergence.
-                "signal_ts": str(signal_timestamp(t)),
-                "pattern": t.get("pattern"),
-                "entropy": t.get("entropy"),
-                "entropy_norm": t.get("entropy_norm"),
-                "hurst": t.get("hurst"),
-                "h_regime": t.get("h_regime"),
-                "score": t.get("score"),
-                "rr": t.get("rr"),
-                "fractal_align": t.get("fractal_align"),
-                "macro_bias": t.get("macro_bias"),
-                "vol_regime": t.get("vol_regime"),
+                **sig_features,
             })
             if notify:
                 _tg_send(
