@@ -197,14 +197,14 @@ def test_sort_handles_none_bkevn_and_profit():
 # ─── compact_labels ────────────────────────────────────────────────
 
 _FULL_LABELS = [
-    ("1", "cex-cex",   "1 CEX-CEX",   ("1 CC", "CEX-CEX")),
-    ("2", "dex-dex",   "1 DEX-DEX",   ("2 DD", "DEX-DEX")),
-    ("3", "cex-dex",   "1 CEX-DEX",   ("3 CD", "CEX-DEX")),
-    ("4", "perp-perp", "4 PERP-PERP", ("4 PP", "PERP-PERP")),
-    ("5", "spot-spot", "5 SPOT-SPOT", ("5 SS", "SPOT-SPOT")),
-    ("6", "basis",     "6 BASIS",     ("6 BAS", "BASIS")),
-    ("7", "positions", "7 POS",       ("7 POS", "POSITIONS")),
-    ("8", "history",   "8 HIST",      ("8 HIS", "HISTORY")),
+    ("1", "cex-cex",   "1 CEX-CEX",   "#ffd700"),
+    ("2", "dex-dex",   "1 DEX-DEX",   "#00eaff"),
+    ("3", "cex-dex",   "1 CEX-DEX",   "#c084fc"),
+    ("4", "perp-perp", "4 PERP-PERP", "#32bcad"),
+    ("5", "spot-spot", "5 SPOT-SPOT", "#ff00a0"),
+    ("6", "basis",     "6 BASIS",     "#00ff80"),
+    ("7", "positions", "7 POS",       "#888888"),
+    ("8", "history",   "8 HIST",      "#666666"),
 ]
 
 
