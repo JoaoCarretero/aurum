@@ -62,6 +62,10 @@ from launcher_support.research_desk.artifacts_panel import (
     ArtifactsPanel,
     open_markdown_viewer,
 )
+from launcher_support.research_desk.markdown_editor import (
+    open_markdown_editor,
+    persona_path,
+)
 from launcher_support.research_desk.issue_view import IssueView
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.paperclip_client import (
@@ -106,6 +110,15 @@ def _count_tickets_for(agent_uuid: str, issues_raw: list[dict]) -> tuple[int, in
         elif status in ("todo", "in_progress", "review"):
             active += 1
     return done, active
+
+
+def _on_configure_click_pure(parent, agent, root_path) -> None:
+    """Resolve persona + abre editor. Fn pura pra testar sem Tk real."""
+    target = persona_path(agent.key, root_path)
+    open_markdown_editor(
+        parent, path=target,
+        title_hint=f"{agent.key} persona · {target.name}",
+    )
 
 
 class ResearchDeskScreen(Screen):
@@ -243,7 +256,7 @@ class ResearchDeskScreen(Screen):
                 agent=agent,
                 palette=AGENT_COLORS[agent.key],
                 on_assign=self._stub_action("assign"),
-                on_configure=self._stub_action("configure"),
+                on_configure=lambda a=agent: self._on_configure_click(a),
                 on_history=self._stub_action("history"),
                 on_inspect=self._open_agent_detail,
             )
@@ -288,6 +301,9 @@ class ResearchDeskScreen(Screen):
             submit_callback=self._submit_ticket,
             default_assignee=agent,
         )
+
+    def _on_configure_click(self, agent: AgentIdentity) -> None:
+        _on_configure_click_pure(self, agent, self.root_path)
 
     def _open_agent_detail(self, agent: AgentIdentity) -> None:
         """Click no hero area de um card abre o detail modal."""
