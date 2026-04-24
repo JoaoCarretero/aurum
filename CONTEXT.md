@@ -113,7 +113,7 @@ aurum.finance/
 │   ├── graham.py                ← endogenous momentum 🗄️ archived
 │   ├── supertrend_futures.py    ← supertrend strategy
 │   ├── live.py                  ← paper/demo/testnet/live execution
-│   └── _archive/                ← deshaw, kepos, medallion, ornstein (deleted 2026-04-23)
+│   └── _archive/                ← apenas meanrev.py (deshaw/kepos/medallion/ornstein foram DELETADOS na Fase 1 em 2026-04-23, não movidos)
 │
 ├── analysis/                    ANALYTICS
 │   ├── stats.py                 ← equity stats, ratios, conditional

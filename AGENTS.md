@@ -3,6 +3,12 @@
 > **Propósito:** mapa de quem opera neste repo — humanos, agentes
 > persistentes, subagents dispatcháveis, e os operativos do RESEARCH DESK.
 > Lido antes de qualquer orquestração pra não pisar em lane alheio.
+>
+> ⚠️ **NÃO é persona file.** Este arquivo é o hub de orientação do repo.
+> As personas editáveis dos operativos SCRYER/ARBITER/ARTIFEX/CURATOR vivem
+> em `docs/agents/<key>.md`. O `markdown_editor` do research_desk usa este
+> AGENTS.md só como fallback se a persona específica não existir — então
+> mantenha `docs/agents/` populado pra evitar edit acidental.
 
 ---
 

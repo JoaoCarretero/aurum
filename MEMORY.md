@@ -73,11 +73,11 @@ Um agente (Codex ou script de setup) executou "criar keys.json do template" sem 
 | **RENAISSANCE** | ⚠️ inflado 2× | Real ~2.4 Sharpe |
 | **BRIDGEWATER** | ⚠️ episódico (quarentena) | Cascade harvester confirmado WF 10d×8 janelas (W3 +5.08, W6 +23.90). Aguarda cache OI/LS ≥90d (ETA 2026-06-19) pra re-abrir grid formal |
 | **PHI** | 🆕 em overfit_audit | stagec_like displaced Sharpe ~9.1 |
-| **DE SHAW** | 🗄️ ARQUIVADO 2026-04-22 | NO_EDGE |
-| **KEPOS** | 🗄️ ARQUIVADO 2026-04-22 | INSUFFICIENT_SAMPLE |
-| **MEDALLION** | 🗄️ ARQUIVADO 2026-04-22 | NO_EDGE |
-| **GRAHAM** | 🗄️ ARQUIVADO | Overfit honesto 4h value |
-| **ORNSTEIN** | 🗄️ ARQUIVADO 2026-04-22 | Mean-reversion O-U/Hurst — archive verdict |
+| **DE SHAW** | 🗑️ DELETADO 2026-04-23 (Fase 1) | NO_EDGE — arquivo fonte removido |
+| **KEPOS** | 🗑️ DELETADO 2026-04-23 (Fase 1) | INSUFFICIENT_SAMPLE — arquivo fonte removido |
+| **MEDALLION** | 🗑️ DELETADO 2026-04-23 (Fase 1) | NO_EDGE — arquivo fonte removido |
+| **ORNSTEIN** | 🗑️ DELETADO 2026-04-23 (Fase 1) | Mean-reversion — arquivo fonte removido |
+| **GRAHAM** | 🗄️ experimental (stage registry) | Overfit honesto 4h value — ainda existe em `engines/graham.py` mas flag = archived informalmente |
 | **JANE STREET** | ⚪ arb live | Scanner, não direcional |
 | **MILLENNIUM/TWO SIGMA/AQR/WINTON** | orquestradores | meta-engines, não testados standalone |
 
