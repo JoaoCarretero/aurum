@@ -16,8 +16,11 @@ Nao joga se um dir nao existe — retorna lista vazia daquele agente.
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,7 @@ def _scan_experiment_branches(root: Path) -> list[ArtifactEntry]:
             timeout=3.0,
             encoding="utf-8",
             errors="replace",
+            creationflags=_NO_WINDOW,
         )
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
         return []
