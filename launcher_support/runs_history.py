@@ -828,7 +828,7 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     is_sel = state.get("selected_run_id") == r.run_id
     bg = BG2 if is_sel else BG
     row = tk.Frame(parent, bg=bg, cursor="hand2")
-    row.pack(fill="x", padx=10, pady=0)
+    row.pack(fill="x", padx=10, pady=(1, 1))
 
     running = str(r.status).lower() == "running"
     dot = "●" if running else "○"
@@ -845,24 +845,29 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     mode_color = AMBER if r.mode == "paper" else (
         CYAN if r.mode == "shadow" else DIM)
 
+    # Cells: (text, color, width, weight, anchor).
+    # Weight rule: bold only on identity + outcome — ENGINE, ROI, SRC,
+    # and SIG when > 0. Anchor rule: right-align numerics for decimal
+    # alignment, left-align text for readability.
     cells = [
-        (dot, dot_color, 3, "bold"),
-        (r.engine[:8], WHITE, 8, "bold"),
-        (r.mode[:6], mode_color, 6, "normal"),
-        (fmt_started(r.started_at), DIM, 13, "normal"),
-        (dur, WHITE, 7, "normal"),
-        (ticks, WHITE if (r.ticks_ok or 0) > 0 else DIM2, 6, "normal"),
-        (sig, AMBER_B if (r.novel or 0) > 0 else DIM2, 5, "bold"),
-        (fmt_equity(r.equity), WHITE, 9, "normal"),
-        (roi_txt, roi_color, 7, "bold"),
-        (tr, WHITE, 4, "normal"),
-        (r.source.upper(), src_color, 4, "bold"),
+        (dot, dot_color, 2, "bold", "w"),
+        (r.engine[:11], WHITE, 11, "bold", "w"),
+        (r.mode[:6], mode_color, 6, "normal", "w"),
+        (fmt_started(r.started_at), DIM, 13, "normal", "w"),
+        (dur, WHITE, 7, "normal", "w"),
+        (ticks, WHITE if (r.ticks_ok or 0) > 0 else DIM2, 6, "normal", "e"),
+        (sig, AMBER_B if (r.novel or 0) > 0 else DIM2, 5,
+         "bold" if (r.novel or 0) > 0 else "normal", "e"),
+        (fmt_equity(r.equity), WHITE, 9, "normal", "e"),
+        (roi_txt, roi_color, 8, "bold", "e"),
+        (tr, WHITE, 6, "normal", "e"),
+        (r.source.upper(), src_color, 5, "bold", "w"),
     ]
     labels = []
-    for text, color, w, weight in cells:
+    for text, color, w, weight, anchor in cells:
         lbl = tk.Label(row, text=text, fg=color, bg=bg,
                        font=(FONT, 7, weight), width=w,
-                       anchor="w")
+                       anchor=anchor)
         lbl.pack(side="left", padx=(2, 0))
         labels.append(lbl)
 

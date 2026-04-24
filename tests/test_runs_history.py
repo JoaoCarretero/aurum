@@ -741,3 +741,24 @@ def test_render_list_section_header_smoke(gui_root):
     children = frame.winfo_children()
     # hdr row + divider
     assert len(children) == 2
+
+
+def test_render_run_row_smoke(gui_root):
+    """_render_run_row paints without exception. Verifies cell count
+    matches _COLUMNS (11 cells, no drift after polish)."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_run_row, _COLUMNS, RunSummary
+    frame = tk.Frame(gui_root)
+    r = RunSummary(
+        run_id="test-1", engine="RENAISSANCE", mode="shadow",
+        status="running", started_at="2026-04-20T10:00:00+00:00",
+        stopped_at=None, last_tick_at="2026-04-20T10:30:00+00:00",
+        ticks_ok=120, ticks_fail=0, novel=3,
+        equity=1050.0, initial_balance=1000.0, roi_pct=5.0,
+        trades_closed=2, source="vps", run_dir=None, heartbeat={},
+    )
+    _render_run_row(frame, r, {"selected_run_id": None})
+    rows = frame.winfo_children()
+    assert len(rows) == 1  # one row frame
+    cells = rows[0].winfo_children()
+    assert len(cells) == len(_COLUMNS)  # 11 cells, matches column schema
