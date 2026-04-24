@@ -1313,12 +1313,38 @@ def _render_master_list(state, launcher):
         canvas = tk.Canvas(host, bg=PANEL, highlightthickness=0)
         vbar = tk.Scrollbar(host, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=PANEL)
-        inner.bind("<Configure>",
-                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=vbar.set)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        # Stretch inner to the canvas's actual width so rows packed with
+        # fill="x" reach the right edge — without this, inner sits at the
+        # widest child's natural width and the cards leave a gap on the
+        # right.
+        canvas.bind(
+            "<Configure>",
+            lambda e, _cid=inner_id: canvas.itemconfigure(_cid, width=e.width),
+        )
+        # Auto-hide vbar when content fits. The default scrollbar always
+        # reserves a ~17px slot — with the bucket list shorter than the
+        # viewport, that empty slot reads as a misaligned gap vs the
+        # full-width "ENGINES" header bar above (operator screenshot
+        # 2026-04-24).
+        def _yscroll(first, last, _vbar=vbar):
+            try:
+                f, l = float(first), float(last)
+            except (TypeError, ValueError):
+                return
+            if f <= 0.0 and l >= 1.0:
+                if _vbar.winfo_ismapped():
+                    _vbar.pack_forget()
+            else:
+                if not _vbar.winfo_ismapped():
+                    _vbar.pack(side="right", fill="y")
+            _vbar.set(first, last)
+        canvas.configure(yscrollcommand=_yscroll)
         canvas.pack(side="left", fill="both", expand=True)
-        vbar.pack(side="right", fill="y")
 
         _render_bucket(inner, "LIVE", live_items, state)
         _render_bucket(inner, "READY LIVE", ready_items, state)
