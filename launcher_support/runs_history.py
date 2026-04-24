@@ -810,14 +810,18 @@ def _paint_rows(state: dict) -> None:
 
 def _render_list_section_header(parent: tk.Widget, title: str,
                                  count: int, color: str) -> None:
-    """Section header separando LIVE / FINISHED no list pane."""
+    """Section header separating LIVE / STALE / FINISHED in the list pane.
+
+    Title is H2 (8pt bold, semantic color). Count is BODY (7pt normal
+    DIM2). Divider below is BORDER (structural — marks new block).
+    """
     hdr = tk.Frame(parent, bg=BG)
-    hdr.pack(fill="x", padx=10, pady=(6, 2))
-    tk.Label(hdr, text=title, font=(FONT, 7, "bold"),
+    hdr.pack(fill="x", padx=10, pady=(10, 3))
+    tk.Label(hdr, text=title, font=(FONT, 8, "bold"),
              fg=color, bg=BG).pack(side="left")
     tk.Label(hdr, text=f"  ·  {count}", font=(FONT, 7),
              fg=DIM2, bg=BG).pack(side="left")
-    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(1, 2))
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(1, 2))
 
 
 def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:

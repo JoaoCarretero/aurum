@@ -730,3 +730,14 @@ def test_render_left_header_smoke(gui_root):
     # Sanity: at least the chip row and the column header row were packed.
     children = frame.winfo_children()
     assert len(children) >= 3  # chip row + divider + col header row (+ optional divider)
+
+
+def test_render_list_section_header_smoke(gui_root):
+    import tkinter as tk
+    from launcher_support.runs_history import _render_list_section_header
+    from core.ui.ui_palette import GREEN
+    frame = tk.Frame(gui_root)
+    _render_list_section_header(frame, "● LIVE", 7, color=GREEN)
+    children = frame.winfo_children()
+    # hdr row + divider
+    assert len(children) == 2
