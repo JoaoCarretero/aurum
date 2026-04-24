@@ -222,7 +222,6 @@ def build_linked_work(
     agent: AgentIdentity,
     chains: list[LinkedChain],
     root_path: Path,
-    client: Any,
 ) -> BuilderHandles:
     """Lista chains filtradas do agent. COPY CMD + OPEN buttons.
     Se chains vazia → label stub '(sem artifacts deste agent)'."""
@@ -246,7 +245,7 @@ def build_linked_work(
         return handles
 
     for chain in chains[:8]:  # max 8 pra nao estourar modal
-        _render_chain_row(section, chain, palette=palette, root_path=root_path, client=client)
+        _render_chain_row(section, chain, palette=palette, root_path=root_path)
 
     handles.widgets["section"] = section
     return handles
@@ -258,7 +257,6 @@ def _render_chain_row(
     *,
     palette: Any,
     root_path: Path,
-    client: Any,
 ) -> None:
     row = tk.Frame(parent, bg=BG)
     row.pack(fill="x", pady=2)
@@ -568,7 +566,7 @@ def build_persona_stats(
         fg=WHITE, bg=BG3, cursor="hand2",
         padx=8, pady=4,
     )
-    edit_btn.pack(side="left", padx=(0, 0), pady=(6, 0))
+    edit_btn.pack(anchor="w", pady=(10, 0))
     edit_btn.bind(
         "<Button-1>",
         lambda _e: _open_persona_editor(toplevel, agent=agent, root_path=root_path),
@@ -618,10 +616,6 @@ def _open_persona_editor(
     uses transient(parent) but has no internal instance tracking. If
     double-click becomes an issue, reintroduce guard via module-level dict
     keyed by (agent.key, root_path) tuple, or add grab_set() to editor."""
-    from launcher_support.research_desk.markdown_editor import (
-        open_markdown_editor,
-        persona_path,
-    )
     target = persona_path(agent.key, root_path)
     open_markdown_editor(
         toplevel, path=target,
@@ -789,7 +783,6 @@ class AgentDetailModal:
                 agent=self.agent,
                 chains=self._chains,
                 root_path=self.root_path,
-                client=None,
             )
 
         # Live runs
