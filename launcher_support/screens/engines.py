@@ -38,13 +38,13 @@ class EnginesScreen(Screen):
         outer.pack(fill="both", expand=True, padx=20, pady=14)
 
         head = tk.Frame(outer, bg=BG); head.pack(fill="x")
-        tk.Label(head, text="ENGINES", font=(FONT, 14, "bold"),
+        tk.Label(head, text="ENGINES", font=(FONT, 10, "bold"),
                  fg=AMBER, bg=BG, anchor="w").pack(anchor="w")
         tk.Label(head,
                  text="Timeline unificada de runs — local + VPS merged. "
                       "Click row pra heartbeat, scan funnel, health, probe, "
                       "log tail e trades — tudo num so detail pane.",
-                 font=(FONT, 8), fg=DIM, bg=BG, anchor="w"
+                 font=(FONT, 7), fg=DIM, bg=BG, anchor="w"
                  ).pack(anchor="w", pady=(3, 8))
         tk.Frame(outer, bg=DIM2, height=1).pack(fill="x", pady=(0, 8))
 

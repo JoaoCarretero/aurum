@@ -703,3 +703,134 @@ def test_render_runs_history_smoke(tmp_path, monkeypatch, gui_root):
     frame = rh.render_runs_history(gui_root, gui_root, client_factory=lambda: None)
     gui_root.update_idletasks()
     assert frame is not None
+
+
+def test_columns_schema():
+    """_COLUMNS defines 11 cells in a fixed order. Widths fit the longest
+    realistic value (RENAISSANCE for engine, +999.99% for roi, LOCAL for src)."""
+    from launcher_support.runs_history import _COLUMNS
+    labels = [c[0] for c in _COLUMNS]
+    assert labels == ["ST", "ENGINE", "MODE", "STARTED", "DUR",
+                      "TICKS", "SIG", "EQUITY", "ROI", "TRADES", "SRC"]
+    widths = dict(_COLUMNS)
+    assert widths["ENGINE"] == 11
+    assert widths["ROI"] == 8
+    assert widths["SRC"] == 5
+    assert widths["TRADES"] == 6
+
+
+def test_render_left_header_smoke(gui_root):
+    """_render_left_header paints chips + column header without exception.
+    Validates the structural contract post-polish: no crash, widgets created."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_left_header
+    frame = tk.Frame(gui_root)
+    state = {"filter_mode": "all", "refresh_fn": lambda: None}
+    _render_left_header(frame, state, None)
+    # Sanity: at least the chip row and the column header row were packed.
+    children = frame.winfo_children()
+    assert len(children) >= 3  # chip row + divider + col header row (+ optional divider)
+
+
+def test_render_list_section_header_smoke(gui_root):
+    import tkinter as tk
+    from launcher_support.runs_history import _render_list_section_header
+    from core.ui.ui_palette import GREEN
+    frame = tk.Frame(gui_root)
+    _render_list_section_header(frame, "● LIVE", 7, color=GREEN)
+    children = frame.winfo_children()
+    # hdr row + divider
+    assert len(children) == 2
+
+
+def test_render_run_row_smoke(gui_root):
+    """_render_run_row paints without exception. Verifies cell count
+    matches _COLUMNS (11 cells, no drift after polish)."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_run_row, _COLUMNS, RunSummary
+    frame = tk.Frame(gui_root)
+    r = RunSummary(
+        run_id="test-1", engine="RENAISSANCE", mode="shadow",
+        status="running", started_at="2026-04-20T10:00:00+00:00",
+        stopped_at=None, last_tick_at="2026-04-20T10:30:00+00:00",
+        ticks_ok=120, ticks_fail=0, novel=3,
+        equity=1050.0, initial_balance=1000.0, roi_pct=5.0,
+        trades_closed=2, source="vps", run_dir=None, heartbeat={},
+    )
+    _render_run_row(frame, r, {"selected_run_id": None})
+    rows = frame.winfo_children()
+    assert len(rows) == 1  # one row frame
+    cells = rows[0].winfo_children()
+    assert len(cells) == len(_COLUMNS)  # 11 cells, matches column schema
+
+
+def test_section_helper_deleted():
+    """_section is replaced by the polyvalent _detail_section."""
+    import launcher_support.runs_history as rh
+    assert not hasattr(rh, "_section"), \
+        "_section should be deleted — _detail_section replaces it"
+    assert callable(rh._detail_section)
+
+
+def test_detail_section_optional_rows(gui_root):
+    """_detail_section(rows=None) emits header only, no crash."""
+    import tkinter as tk
+    from launcher_support.runs_history import _detail_section
+    frame = tk.Frame(gui_root)
+    _detail_section(frame, "TRADES", extra="last 3", rows=None)
+    # Just the header row + divider.
+    assert len(frame.winfo_children()) == 2
+
+
+@pytest.mark.parametrize("mode", ["paper", "demo", "testnet", "live", "shadow", "unknown"])
+def test_render_detail_header_mode_colors(gui_root, mode):
+    """_render_detail_header paints without exception for every mode value."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_detail_header, RunSummary
+    frame = tk.Frame(gui_root)
+    r = RunSummary(
+        run_id="test", engine="CITADEL", mode=mode, status="running",
+        started_at=None, stopped_at=None, last_tick_at=None,
+        ticks_ok=0, ticks_fail=0, novel=0,
+        equity=None, initial_balance=None, roi_pct=None,
+        trades_closed=None, source="vps", run_dir=None, heartbeat={},
+    )
+    _render_detail_header(frame, r)
+    assert frame.winfo_children()
+
+
+def test_render_block_header_smoke(gui_root):
+    import tkinter as tk
+    from launcher_support.runs_history import _render_block_header
+    frame = tk.Frame(gui_root)
+    _render_block_header(frame, "RUNTIME")
+    # The helper should create one row frame with 2 children (label + divider).
+    outer = frame.winfo_children()
+    assert len(outer) == 1
+    row = outer[0]
+    assert len(row.winfo_children()) == 2
+
+
+def test_render_detail_trades_smoke(gui_root, tmp_path):
+    """_render_detail_trades paints a trades table for a run with a
+    reports/trades.jsonl file, using the COL tier header."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_detail_trades, RunSummary
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "trades.jsonl").write_text(
+        '{"symbol":"BTCUSDT","direction":"LONG","entry_price":65000,'
+        '"exit_price":66000,"pnl_after_fees":100,"r_multiple":1.5,'
+        '"exit_reason":"target"}\n',
+        encoding="utf-8",
+    )
+    r = RunSummary(
+        run_id="t", engine="CITADEL", mode="paper", status="stopped",
+        started_at=None, stopped_at=None, last_tick_at=None,
+        ticks_ok=0, ticks_fail=0, novel=0,
+        equity=1100, initial_balance=1000, roi_pct=10,
+        trades_closed=1, source="local", run_dir=tmp_path, heartbeat={},
+    )
+    frame = tk.Frame(gui_root)
+    _render_detail_trades(frame, r)
+    assert frame.winfo_children()

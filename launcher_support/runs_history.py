@@ -598,18 +598,16 @@ def pause_runs_history(root: tk.Widget, launcher) -> None:
 
 
 def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
-    # Titulo "RUNS HISTORY" removido daqui — quando dentro do wrapper
-    # /engines, o header ENGINES + chip bar HISTORY/LIVE/LOGS ja deixa
-    # claro o que a tela mostra. O subtitulo "local + VPS, newest first"
-    # tambem vira obvio pelos valores da coluna SRC (local/db/vps).
-    #
-    # Ordem reorganizada: filter chips primeiro (mesmo estilo visual
-    # de LIVE/LOGS pra consistencia cross-aba), dai column headers
-    # direto — sem labels redundantes ("MODE" label apagado, chips
-    # "ALL/SHADOW/PAPER" sao auto-explicativos).
+    """Filter chips + column header for the runs table.
+
+    Chips are 1px BORDER boxes when active (H2 8pt bold). Column headers
+    are COL tier (7pt bold) to preserve pixel-accurate width alignment
+    with 7pt rows. Numeric columns right-aligned to match rows.
+    Divider rule: BORDER between blocks, DIM2 for sub-divisions.
+    """
     current = state.get("filter_mode", "all")
     f_row = tk.Frame(parent, bg=BG)
-    f_row.pack(fill="x", padx=10, pady=(8, 6))
+    f_row.pack(fill="x", padx=10, pady=(10, 8))
     for idx, label in enumerate(("ALL", "SHADOW", "PAPER"), start=1):
         key = label.lower()
         is_active = (current == "all" and key == "all") or (current == key)
@@ -621,39 +619,45 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
                 fn()
         chip = tk.Label(
             f_row, text=f" {idx}:{label} ",
-            font=(FONT, 7, "bold"),
+            font=(FONT, 8, "bold"),
             fg=AMBER_D if is_active else DIM,
             bg=BG3 if is_active else BG,
-            cursor="hand2", padx=5, pady=2,
+            cursor="hand2", padx=8, pady=4,
+            highlightbackground=BORDER if is_active else BG,
+            highlightthickness=1,
         )
-        chip.pack(side="left", padx=(0, 3))
+        chip.pack(side="left", padx=(0, 6))
         chip.bind("<Button-1>", _pick)
 
-    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
+    # Divider between filter block and table block — BORDER (structural).
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10)
 
-    # Column header
-    cols = _COLUMNS
+    # Column header — 7pt bold (COL tier, preserves alignment with rows).
+    # Numeric columns right-aligned.
+    numeric = {"TICKS", "SIG", "EQUITY", "ROI", "TRADES"}
     col_hdr = tk.Frame(parent, bg=BG)
     col_hdr.pack(fill="x", padx=10, pady=(6, 2))
-    for label, w in cols:
+    for label, w in _COLUMNS:
+        anchor = "e" if label in numeric else "w"
         tk.Label(col_hdr, text=label, fg=DIM, bg=BG,
                  font=(FONT, 7, "bold"), width=w,
-                 anchor="w").pack(side="left", padx=(2, 0))
+                 anchor=anchor).pack(side="left", padx=(2, 0))
+    # Divider below column header — DIM2 (sub-division within table block).
     tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
 
 
 _COLUMNS = [
-    ("ST",      3),
-    ("ENGINE",  8),
+    ("ST",      2),
+    ("ENGINE",  11),
     ("MODE",    6),
     ("STARTED", 13),
     ("DUR",     7),
     ("TICKS",   6),
     ("SIG",     5),
-    ("EQ",      9),
-    ("ROI",     7),
-    ("TR",      4),
-    ("SRC",     4),
+    ("EQUITY",  9),
+    ("ROI",     8),
+    ("TRADES",  6),
+    ("SRC",     5),
 ]
 
 
@@ -751,9 +755,9 @@ def _paint_rows(state: dict) -> None:
 
     if not rows:
         tk.Label(wrap,
-                 text="   — nenhum run visível (local ou VPS) —",
+                 text="— nenhum run visível (local ou VPS) —",
                  fg=DIM2, bg=BG,
-                 font=(FONT, 7, "italic")).pack(anchor="w", pady=8, padx=12)
+                 font=(FONT, 7, "italic")).pack(pady=16)
         return
 
     # Split: LIVE (status='running' com tick recente), STALE (status claims
@@ -806,21 +810,25 @@ def _paint_rows(state: dict) -> None:
 
 def _render_list_section_header(parent: tk.Widget, title: str,
                                  count: int, color: str) -> None:
-    """Section header separando LIVE / FINISHED no list pane."""
+    """Section header separating LIVE / STALE / FINISHED in the list pane.
+
+    Title is H2 (8pt bold, semantic color). Count is BODY (7pt normal
+    DIM2). Divider below is BORDER (structural — marks new block).
+    """
     hdr = tk.Frame(parent, bg=BG)
-    hdr.pack(fill="x", padx=10, pady=(6, 2))
-    tk.Label(hdr, text=title, font=(FONT, 7, "bold"),
+    hdr.pack(fill="x", padx=10, pady=(10, 3))
+    tk.Label(hdr, text=title, font=(FONT, 8, "bold"),
              fg=color, bg=BG).pack(side="left")
     tk.Label(hdr, text=f"  ·  {count}", font=(FONT, 7),
              fg=DIM2, bg=BG).pack(side="left")
-    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10, pady=(1, 2))
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(1, 2))
 
 
 def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     is_sel = state.get("selected_run_id") == r.run_id
     bg = BG2 if is_sel else BG
     row = tk.Frame(parent, bg=bg, cursor="hand2")
-    row.pack(fill="x", padx=10, pady=0)
+    row.pack(fill="x", padx=10, pady=(1, 1))
 
     running = str(r.status).lower() == "running"
     dot = "●" if running else "○"
@@ -837,24 +845,29 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     mode_color = AMBER if r.mode == "paper" else (
         CYAN if r.mode == "shadow" else DIM)
 
+    # Cells: (text, color, width, weight, anchor).
+    # Weight rule: bold only on identity + outcome — ENGINE, ROI, SRC,
+    # and SIG when > 0. Anchor rule: right-align numerics for decimal
+    # alignment, left-align text for readability.
     cells = [
-        (dot, dot_color, 3, "bold"),
-        (r.engine[:8], WHITE, 8, "bold"),
-        (r.mode[:6], mode_color, 6, "normal"),
-        (fmt_started(r.started_at), DIM, 13, "normal"),
-        (dur, WHITE, 7, "normal"),
-        (ticks, WHITE if (r.ticks_ok or 0) > 0 else DIM2, 6, "normal"),
-        (sig, AMBER_B if (r.novel or 0) > 0 else DIM2, 5, "bold"),
-        (fmt_equity(r.equity), WHITE, 9, "normal"),
-        (roi_txt, roi_color, 7, "bold"),
-        (tr, WHITE, 4, "normal"),
-        (r.source.upper(), src_color, 4, "bold"),
+        (dot, dot_color, 2, "bold", "w"),
+        (r.engine[:11], WHITE, 11, "bold", "w"),
+        (r.mode[:6], mode_color, 6, "normal", "w"),
+        (fmt_started(r.started_at), DIM, 13, "normal", "w"),
+        (dur, WHITE, 7, "normal", "w"),
+        (ticks, WHITE if (r.ticks_ok or 0) > 0 else DIM2, 6, "normal", "e"),
+        (sig, AMBER_B if (r.novel or 0) > 0 else DIM2, 5,
+         "bold" if (r.novel or 0) > 0 else "normal", "e"),
+        (fmt_equity(r.equity), WHITE, 9, "normal", "e"),
+        (roi_txt, roi_color, 8, "bold", "e"),
+        (tr, WHITE, 6, "normal", "e"),
+        (r.source.upper(), src_color, 5, "bold", "w"),
     ]
     labels = []
-    for text, color, w, weight in cells:
+    for text, color, w, weight, anchor in cells:
         lbl = tk.Label(row, text=text, fg=color, bg=bg,
                        font=(FONT, 7, weight), width=w,
-                       anchor="w")
+                       anchor=anchor)
         lbl.pack(side="left", padx=(2, 0))
         labels.append(lbl)
 
@@ -1015,26 +1028,37 @@ def _load_detail(r: RunSummary, state: dict) -> None:
     body = tk.Frame(host, bg=PANEL)
     body.pack(fill="both", expand=True, padx=10, pady=(4, 0))
 
+    # RUNTIME — what the engine is doing right now.
+    _render_block_header(body, "RUNTIME")
     _render_detail_telemetry(body, r)
     _render_detail_scan(body, r)
     _render_detail_health(body, r)
     _render_detail_probe(body, r)
+
+    # PERFORMANCE — how it's doing.
+    _render_block_header(body, "PERFORMANCE")
     _render_detail_equity_metrics(body, r)
     _render_detail_trades(body, r)
+
+    # LOG — raw engine output.
+    _render_block_header(body, "LOG")
     _render_detail_log_tail(body, r)
 
 
 def _render_error_banner(parent: tk.Widget, err: str) -> None:
-    """Banner vermelho compacto pra last_error do heartbeat."""
+    """Red banner shown when the last heartbeat carries `last_error`.
+    Label is H2 (8pt bold RED) so the operator registers the alert at
+    first glance; text stays BODY (7pt RED) with wraplength tuned for
+    the wider panes used by the cockpit-class displays."""
     bar = tk.Frame(parent, bg=BG)
     bar.pack(fill="x")
     inner = tk.Frame(bar, bg=BG)
     inner.pack(fill="x", padx=10, pady=(4, 6))
-    tk.Label(inner, text="LAST ERROR", font=(FONT, 6, "bold"),
+    tk.Label(inner, text="LAST ERROR", font=(FONT, 8, "bold"),
              fg=RED, bg=BG, anchor="w").pack(anchor="w")
     tk.Label(inner, text=err[:300], font=(FONT, 7),
              fg=RED, bg=BG, anchor="w", justify="left",
-             wraplength=260).pack(anchor="w", pady=(1, 0))
+             wraplength=380).pack(anchor="w", pady=(1, 0))
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
 
 
@@ -1209,26 +1233,60 @@ def _render_detail_probe(parent: tk.Widget, r: RunSummary) -> None:
     _detail_section(parent, "PROBE DIAGNOSTIC", rows)
 
 
+def _render_block_header(parent: tk.Widget, label: str) -> None:
+    """Block header separating RUNTIME / PERFORMANCE / LOG in the right pane.
+
+    H2 (8pt bold DIM) label followed by a 1px BORDER line that fills
+    the remaining width. Same size as section titles inside the block,
+    but DIM (not AMBER_D) to distinguish structural container from
+    content title.
+    """
+    row = tk.Frame(parent, bg=PANEL)
+    row.pack(fill="x", pady=(14, 2))
+    tk.Label(row, text=label, font=(FONT, 8, "bold"),
+             fg=DIM, bg=PANEL, anchor="w").pack(side="left", padx=(0, 6))
+    tk.Frame(row, bg=BORDER, height=1).pack(
+        side="left", fill="x", expand=True, pady=(6, 0))
+
+
 def _render_detail_header(parent: tk.Widget, r: RunSummary) -> None:
+    """Detail pane header — dot + ENGINE (H1) + MODE/STATUS/SRC (H2) +
+    run_id (BODY).
+
+    MODE color uses the semantic palette (paper=CYAN, demo=GREEN,
+    testnet=AMBER, live=RED); shadow/unknown fall back to DIM. Status
+    and SRC keep their existing semantic mappings. Divider below is
+    BORDER (structural).
+    """
+    from core.ui.ui_palette import MODE_PAPER, MODE_DEMO, MODE_TESTNET, MODE_LIVE
     bar = tk.Frame(parent, bg=BG)
     bar.pack(fill="x")
     inner = tk.Frame(bar, bg=BG)
     inner.pack(fill="x", padx=10, pady=7)
     dot_color = GREEN if r.status == "running" else (
         RED if r.status == "failed" else DIM2)
+    mode_map = {
+        "paper": MODE_PAPER, "demo": MODE_DEMO,
+        "testnet": MODE_TESTNET, "live": MODE_LIVE,
+    }
+    mode_color = mode_map.get(r.mode, DIM)
+    src_color = GREEN if r.source == "vps" else (
+        AMBER_D if r.source == "db" else CYAN)
     tk.Label(inner, text="●", fg=dot_color, bg=BG,
-             font=(FONT, 12)).pack(side="left", padx=(0, 6))
+             font=(FONT, 10)).pack(side="left", padx=(0, 6))
     tk.Label(inner, text=r.engine, fg=WHITE, bg=BG,
-             font=(FONT, 11, "bold")).pack(side="left")
+             font=(FONT, 10, "bold")).pack(side="left")
     tk.Label(inner, text=f"  {r.mode.upper()}",
-             fg=AMBER, bg=BG, font=(FONT, 8, "bold")).pack(side="left")
+             fg=mode_color, bg=BG,
+             font=(FONT, 8, "bold")).pack(side="left")
     tk.Label(inner, text=f"  ·  {r.status.upper()}",
-             fg=dot_color, bg=BG, font=(FONT, 7, "bold")).pack(side="left")
+             fg=dot_color, bg=BG,
+             font=(FONT, 8, "bold")).pack(side="left")
     tk.Label(inner, text=f"  ·  run {r.run_id}", fg=DIM, bg=BG,
              font=(FONT, 7)).pack(side="left")
     tk.Label(inner, text=f"  ·  {r.source.upper()}",
-             fg=(GREEN if r.source == "vps" else (AMBER_D if r.source == "db" else CYAN)), bg=BG,
-             font=(FONT, 7, "bold")).pack(side="left")
+             fg=src_color, bg=BG,
+             font=(FONT, 8, "bold")).pack(side="left")
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
 
 
@@ -1255,18 +1313,33 @@ def _render_detail_telemetry(parent: tk.Widget, r: RunSummary) -> None:
 
 
 def _detail_section(parent: tk.Widget, title: str,
-                    rows: list[tuple[str, str, str]]) -> None:
-    """Section com header AMBER_D 7 bold + divider + linhas label/value."""
-    tk.Label(parent, text=title,
-             font=(FONT, 7, "bold"), fg=AMBER_D, bg=PANEL,
-             anchor="w").pack(anchor="w", pady=(8, 2))
+                    rows: list[tuple[str, str, str]] | None = None,
+                    extra: str | None = None) -> None:
+    """Section header + optional label/value rows.
+
+    Title is H2 (8pt bold AMBER_D). `extra` is a discreet annotation
+    (e.g. 'last 10') shown in BODY (7pt normal DIM) next to the title.
+    If `rows` is None, the caller builds a custom body below — useful
+    for tables (TRADES) and streamed text (LOG TAIL).
+    """
+    hdr_row = tk.Frame(parent, bg=PANEL)
+    hdr_row.pack(fill="x", pady=(10, 2))
+    tk.Label(hdr_row, text=title,
+             font=(FONT, 8, "bold"), fg=AMBER_D, bg=PANEL,
+             anchor="w").pack(side="left")
+    if extra:
+        tk.Label(hdr_row, text=f"  ·  {extra}",
+                 font=(FONT, 7), fg=DIM, bg=PANEL,
+                 anchor="w").pack(side="left")
     tk.Frame(parent, bg=DIM2, height=1).pack(fill="x")
+    if rows is None:
+        return
     for k, v, color in rows:
         row = tk.Frame(parent, bg=PANEL)
         row.pack(fill="x", pady=0)
-        tk.Label(row, text=k, font=(FONT, 7, "bold"),
+        tk.Label(row, text=k, font=(FONT, 7),
                  fg=DIM, bg=PANEL, anchor="w", width=10).pack(side="left")
-        tk.Label(row, text=str(v), font=(FONT, 8),
+        tk.Label(row, text=str(v), font=(FONT, 7),
                  fg=color, bg=PANEL, anchor="w").pack(side="left")
 
 
@@ -1314,16 +1387,18 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
         return
     box = tk.Frame(parent, bg=PANEL)
     box.pack(fill="x", pady=(6, 2))
-    _section(box, "TRADES", extra=f"last {len(lines)}")
+    _detail_section(box, "TRADES", extra=f"last {len(lines)}")
     tbl = tk.Frame(box, bg=PANEL)
     tbl.pack(fill="x", pady=(1, 4))
     hdr = tk.Frame(tbl, bg=BG)
     hdr.pack(fill="x")
+    numeric_trade = {"ENTRY", "EXIT", "PNL", "R"}
     for lbl, w in [("SYMBOL", 9), ("DIR", 5), ("ENTRY", 9), ("EXIT", 9),
                    ("PNL", 9), ("R", 5), ("REASON", 8)]:
-        tk.Label(hdr, text=lbl, fg=DIM2, bg=BG,
-                 font=(FONT, 6, "bold"), width=w,
-                 anchor="w").pack(side="left", padx=(3, 0))
+        anchor = "e" if lbl in numeric_trade else "w"
+        tk.Label(hdr, text=lbl, fg=DIM, bg=BG,
+                 font=(FONT, 7, "bold"), width=w,
+                 anchor=anchor).pack(side="left", padx=(3, 0))
     tk.Frame(box, bg=BORDER, height=1).pack(fill="x")
     for t in lines:
         pnl = float(t.get("pnl_after_fees") or t.get("pnl") or 0.0)
@@ -1334,22 +1409,22 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
         xp = t.get("exit_price") if t.get("exit_price") is not None else t.get("exit_p")
         r_mul = t.get("r_multiple")
         cells = [
-            (str(t.get("symbol", "?"))[:9], WHITE, 9, "bold"),
+            (str(t.get("symbol", "?"))[:9], WHITE, 9, "bold", "w"),
             (direction, (GREEN if direction.startswith(("L", "B"))
-                          else RED), 5, "bold"),
-            (f"{float(ep):.5g}" if ep is not None else "—", WHITE, 9, "normal"),
-            (f"{float(xp):.5g}" if xp is not None else "—", WHITE, 9, "normal"),
-            (f"{pnl:+.2f}", pnl_color, 9, "bold"),
+                          else RED), 5, "bold", "w"),
+            (f"{float(ep):.5g}" if ep is not None else "—", WHITE, 9, "normal", "e"),
+            (f"{float(xp):.5g}" if xp is not None else "—", WHITE, 9, "normal", "e"),
+            (f"{pnl:+.2f}", pnl_color, 9, "bold", "e"),
             (f"{float(r_mul):+.2f}" if r_mul is not None else "—",
-             pnl_color, 5, "normal"),
-            (reason, DIM, 8, "normal"),
+             pnl_color, 5, "normal", "e"),
+            (reason, DIM, 8, "normal", "w"),
         ]
         row = tk.Frame(tbl, bg=PANEL)
         row.pack(fill="x")
-        for text, color, w, weight in cells:
+        for text, color, w, weight, anchor in cells:
             tk.Label(row, text=text, fg=color, bg=PANEL,
                      font=(FONT, 7, weight), width=w,
-                     anchor="w").pack(side="left", padx=(3, 0))
+                     anchor=anchor).pack(side="left", padx=(3, 0))
 
 
 def _render_detail_log_tail(parent: tk.Widget, r: RunSummary) -> None:
@@ -1378,7 +1453,7 @@ def _render_detail_log_tail(parent: tk.Widget, r: RunSummary) -> None:
         return
     box = tk.Frame(parent, bg=PANEL)
     box.pack(fill="both", expand=True, pady=(6, 6))
-    _section(box, "LOG TAIL", extra=log_path.name)
+    _detail_section(box, "LOG TAIL", extra=log_path.name)
     txt = tk.Text(box, wrap="word", bg=BG, fg=WHITE,
                   font=(FONT, 7), padx=6, pady=4,
                   borderwidth=0, highlightthickness=0, height=10)
@@ -1386,17 +1461,6 @@ def _render_detail_log_tail(parent: tk.Widget, r: RunSummary) -> None:
     txt.insert("end", "\n".join(lines) + "\n")
     txt.see("end")
     txt.config(state="disabled")
-
-
-def _section(parent: tk.Widget, title: str, extra: str | None = None) -> None:
-    row = tk.Frame(parent, bg=PANEL)
-    row.pack(fill="x")
-    tk.Label(row, text=title.upper(), fg=AMBER, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left")
-    if extra:
-        tk.Label(row, text=f"  ·  {extra}", fg=DIM, bg=PANEL,
-                 font=(FONT, 7)).pack(side="left")
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
 
 
 def _schedule_refresh(launcher, state: dict,
