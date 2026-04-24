@@ -404,8 +404,18 @@ class TradeChartPopup:
 
         fig = Figure(figsize=(9, 4.5), facecolor=self.colors["BG"])
         ax = fig.add_subplot(111)
+        # nightclouds base paints candles solid cyan — override with the
+        # launcher's green-up / red-down palette so bull/bear direction
+        # reads at a glance.
+        market_colors = mpf.make_marketcolors(
+            up=self.colors["GREEN"], down=self.colors["RED"],
+            edge="inherit",
+            wick={"up": self.colors["GREEN"], "down": self.colors["RED"]},
+            ohlc="inherit",
+        )
         style = mpf.make_mpf_style(
             base_mpf_style="nightclouds",
+            marketcolors=market_colors,
             rc={"axes.facecolor": self.colors["BG"],
                 "figure.facecolor": self.colors["BG"],
                 "axes.labelcolor": self.colors["DIM"],
