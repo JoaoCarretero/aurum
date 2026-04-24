@@ -1,4 +1,4 @@
-# 📚 CURATOR — Curadoria
+# 📚 CURATE — Curadoria
 
 **Foco:** docs, audits, consolidação de findings, session/daily logs.
 

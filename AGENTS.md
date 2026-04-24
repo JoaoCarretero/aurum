@@ -5,7 +5,7 @@
 > Lido antes de qualquer orquestração pra não pisar em lane alheio.
 >
 > ⚠️ **NÃO é persona file.** Este arquivo é o hub de orientação do repo.
-> As personas editáveis dos operativos SCRYER/ARBITER/ARTIFEX/CURATOR vivem
+> As personas editáveis dos operativos RESEARCH/REVIEW/BUILD/CURATE/AUDIT vivem
 > em `docs/agents/<key>.md`. O `markdown_editor` do research_desk usa este
 > AGENTS.md só como fallback se a persona específica não existir — então
 > mantenha `docs/agents/` populado pra evitar edit acidental.
@@ -78,11 +78,11 @@ Cinco personas configuráveis via Paperclip API (porta 3100), gerenciadas pelo `
 
 | Sigil | Operativo | Foco | Model | Budget/mês |
 |---|---|---|---|---|
-| 👁️ | **SCRYER** | Detecção / observação — scanning de mercado, anomaly flags, regime shifts, **research specs** | sonnet-4-6 | $80 |
-| ⚖️ | **ARBITER** | Julgamento — validação de hipóteses, scoring de edges, ship/iterate/kill calls em **TIPO 1 (spec) e TIPO 2 (code)** reviews | opus-4-7 | $100 |
-| 🔨 | **ARTIFEX** | Construção — geração de código/engine novos, implementação de features em `experiment/*` branches | opus-4-7 | $250 |
-| 📚 | **CURATOR** | Curadoria — docs, audits, consolidação de findings, session logs, **alignment drift** (Fase 2) | sonnet-4-6 | $50 |
-| 🔮 | **ORACLE** | Integridade — **gate final** entre `stage=research` e `live_ready`, protocolo 6-block de audit forense | opus-4-7 | $80 |
+| 👁️ | **RESEARCH** | Detecção / observação — scanning de mercado, anomaly flags, regime shifts, **research specs** | sonnet-4-6 | $80 |
+| ⚖️ | **REVIEW** | Julgamento — validação de hipóteses, scoring de edges, ship/iterate/kill calls em **TIPO 1 (spec) e TIPO 2 (code)** reviews | opus-4-7 | $100 |
+| 🔨 | **BUILD** | Construção — geração de código/engine novos, implementação de features em `experiment/*` branches | opus-4-7 | $250 |
+| 📚 | **CURATE** | Curadoria — docs, audits, consolidação de findings, session logs, **alignment drift** (Fase 2) | sonnet-4-6 | $50 |
+| 🔮 | **AUDIT** | Integridade — **gate final** entre `stage=research` e `live_ready`, protocolo 6-block de audit forense | opus-4-7 | $80 |
 
 Cada operativo tem:
 - **Persona editável**: `docs/agents/{key}.md` (markdown inline editor no launcher)
@@ -91,7 +91,7 @@ Cada operativo tem:
 - **Cost tracking**: sparklines + alert row quando >80% budget
 - **Pause/Resume**: POST `/api/agents/:id/pause|/resume`
 
-**Pipeline típico**: SCRYER (spec TIPO 1) → ARBITER (review TIPO 1) → ARTIFEX (implementa) → ARBITER (review TIPO 2, loop ITERATE possível) → ORACLE (AUDIT 6-block) → merge. Detalhes em `docs/agents/WORKFLOWS.md`.
+**Pipeline típico**: RESEARCH (spec TIPO 1) → REVIEW (TIPO 1) → BUILD (implementa) → REVIEW (TIPO 2, loop ITERATE possível) → AUDIT (6-block) → merge. Detalhes em `docs/agents/WORKFLOWS.md`.
 
 **Acesso humano:** tecla `n` cria ticket, click no card abre detail modal 720x720, tecla `c` abre cost dashboard. Branch `feat/research-desk` — ver daily 2026-04-23.
 

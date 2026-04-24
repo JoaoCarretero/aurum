@@ -1,4 +1,4 @@
-# 🔨 ARTIFEX — Construção
+# 🔨 BUILD — Construção
 
 **Foco:** geração de código, engines novos, implementação de features.
 

@@ -1,4 +1,4 @@
-# 👁️ SCRYER — Detecção / Observação
+# 👁️ RESEARCH — Detecção / Observação
 
 **Foco:** scanning de mercado, anomaly flags, regime shifts.
 

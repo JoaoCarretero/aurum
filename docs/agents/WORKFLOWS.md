@@ -1,7 +1,7 @@
 # WORKFLOWS.md — RESEARCH DESK pipeline
 
 > **Propósito:** workflows operacionais da mesa de 5 agents do RESEARCH DESK
-> (SCRYER, ARBITER, ARTIFEX, CURATOR, ORACLE) sobre a Paperclip API local
+> (RESEARCH, REVIEW, BUILD, CURATE, AUDIT) sobre a Paperclip API local
 > (`127.0.0.1:3100`). Referenciado por cada `docs/agents/<key>.md` e pelos
 > instruction files Paperclip (`~/.paperclip/instances/.../AGENTS.md`).
 >
@@ -12,43 +12,43 @@
 
 ## 1. Tipos de workflow
 
-### TIPO 1 — Spec Review (SCRYER → ARBITER gate)
-1. SCRYER pesquisa e escreve spec em `docs/superpowers/specs/YYYY-MM-DD-<slug>-design.md`
-2. SCRYER fecha ticket (ver §3 closure)
-3. Ticket novo atribuído ao ARBITER: "Review spec X"
-4. ARBITER aplica critérios §4.1, escreve review em `docs/reviews/YYYY-MM-DD_spec_{NAME}_review.md`
-5. Veredito: SHIP (→ ARTIFEX) / ITERATE (→ SCRYER volta) / KILL (arquiva)
-6. ARBITER fecha ticket
+### TIPO 1 — Spec Review (RESEARCH → REVIEW gate)
+1. RESEARCH pesquisa e escreve spec em `docs/superpowers/specs/YYYY-MM-DD-<slug>-design.md`
+2. RESEARCH fecha ticket (ver §3 closure)
+3. Ticket novo atribuído ao REVIEW: "Review spec X"
+4. REVIEW aplica critérios §4.1, escreve review em `docs/reviews/YYYY-MM-DD_spec_{NAME}_review.md`
+5. Veredito: SHIP (→ BUILD) / ITERATE (→ RESEARCH volta) / KILL (arquiva)
+6. REVIEW fecha ticket
 
-### TIPO 2 — Code Review (ARTIFEX → ARBITER gate, com loop ITERATE)
-1. ARTIFEX implementa em branch `experiment/<engine>` + testes TDD
-2. ARTIFEX commit + push + fecha ticket com branch, commits, N/M testes
-3. Ticket novo para ARBITER: "Review code X em experiment/X"
-4. ARBITER aplica critérios §4.2, escreve review em `docs/reviews/YYYY-MM-DD_code_{NAME}_review.md`
+### TIPO 2 — Code Review (BUILD → REVIEW gate, com loop ITERATE)
+1. BUILD implementa em branch `experiment/<engine>` + testes TDD
+2. BUILD commit + push + fecha ticket com branch, commits, N/M testes
+3. Ticket novo para REVIEW: "Review code X em experiment/X"
+4. REVIEW aplica critérios §4.2, escreve review em `docs/reviews/YYYY-MM-DD_code_{NAME}_review.md`
 5. Veredito SHIP / ITERATE (issues classificados BLOCKER/MAJOR/MINOR) / KILL
-6. Se ITERATE → novo ticket para ARTIFEX "Fix X"; após fix, re-review (TIPO 2 post-iterate)
-7. ARBITER fecha ticket a cada ciclo
+6. Se ITERATE → novo ticket para BUILD "Fix X"; após fix, re-review (TIPO 2 post-iterate)
+7. REVIEW fecha ticket a cada ciclo
 
-### AUDIT — ORACLE gate final (pós ARBITER SHIP)
-1. Após ARBITER SHIP, ticket para ORACLE: "Audit integridade de <engine> em <branch>"
-2. ORACLE executa protocolo 6-block no worktree (§4.3)
+### AUDIT — integrity gate (pós REVIEW SHIP)
+1. Após REVIEW SHIP, ticket para AUDIT: "Audit integridade de <engine> em <branch>"
+2. AUDIT executa protocolo 6-block no worktree (§4.3)
 3. Escreve relatório em `docs/audits/engines/YYYY-MM-DD_audit_{engine}.md`
 4. Veredito VALIDATED (→ merge + flag `live_ready: True` em `config/engines.py`)
    / REJECTED (→ volta `stage=research`, blockers listados)
    / CONDITIONAL (→ VALIDATED com restrições: bluechip only, notional cap, paper-only 30d)
-5. ORACLE fecha ticket
+5. AUDIT fecha ticket
 
-### CURATION — CURATOR sob demanda
+### CURATION — CURATE sob demanda
 1. Joao abre ticket: "Audit {scope}" (dead code, stale branches, dependency bloat, alignment drift, etc.)
-2. CURATOR gera relatório em `docs/audits/repo/YYYY-MM-DD_{scope}_audit.md`
+2. CURATE gera relatório em `docs/audits/repo/YYYY-MM-DD_{scope}_audit.md`
 3. Propostas classificadas SAFE_TO_DELETE / NEEDS_REVIEW / KEEP
 4. **NÃO executa limpeza — só propõe.** Execução exige aprovação explícita do Joao:
-   → branch `chore/cleanup-<scope>` → ARBITER review → Joao merge
-5. CURATOR fecha ticket
+   → branch `chore/cleanup-<scope>` → REVIEW review → Joao merge
+5. CURATE fecha ticket
 
 ---
 
-## 2. Spec template (SCRYER — 9 secções obrigatórias)
+## 2. Spec template (RESEARCH — 9 secções obrigatórias)
 
 Formato exato de `docs/superpowers/specs/YYYY-MM-DD-<slug>-design.md`:
 
@@ -120,7 +120,7 @@ Ao concluir qualquer ticket, nesta ordem:
 
 ## 4. Critérios de review e audit
 
-### 4.1 ARBITER TIPO 1 — spec review
+### 4.1 REVIEW TIPO 1 — spec review
 1. **Edge plausibility** — estrutural (mecanismo causal) ou só estatístico? Rejeita "funciona em backtest" sem POR QUÊ.
 2. **Literature quality** — refs existem? Tenta verificar 3+ via WebFetch.
 3. **Falsifiability** — critério específico e mensurável? "Sharpe <0.5 em 2 anos → matar" é válido; "se não performar bem" não é.
@@ -131,7 +131,7 @@ Scores 1-5 por critério. Veredito SHIP / ITERATE / KILL.
 
 **Novidade não é critério.** Duas implementações funcionais > uma stub. Foco: essa spec, sozinha, é sólida?
 
-### 4.2 ARBITER TIPO 2 — code review
+### 4.2 REVIEW TIPO 2 — code review
 1. **Padrão AURUM** — engine nova é indistinguível de engines validated (citadel.py, jump.py, janestreet.py, renaissance.py)? Estrutura, nomenclatura, interface, docstrings.
 2. **Protected files tocados → KILL IMEDIATO** (ver `MEMORY.md §1-2`): core/indicators.py, core/signals.py, core/portfolio.py, config/params.py, config/keys.json, launcher.py, engines/*.py existentes.
 3. **Core reuse** — usa `core/indicators`, `core/signals`, `core/portfolio` em vez de reimplementar?
@@ -141,7 +141,7 @@ Scores 1-5 por critério. Veredito SHIP / ITERATE / KILL.
 
 Issues classificados BLOCKER / MAJOR / MINOR. Veredito SHIP / ITERATE / KILL.
 
-### 4.3 ORACLE AUDIT — 6-block protocol (gates numéricos)
+### 4.3 AUDIT — 6-block protocol (gates numéricos)
 
 | Bloco | Gate |
 |---|---|
@@ -152,7 +152,7 @@ Issues classificados BLOCKER / MAJOR / MINOR. Veredito SHIP / ITERATE / KILL.
 | 5. Cost stress (fees 2× + slippage 2×) | Ratio stress/normal ≥ 0.5 |
 | 6. Lookahead bias scan | Zero bugs não-justificados |
 
-Template completo de output: mantido no `AGENTS.md` do ORACLE (`~/.paperclip/.../AGENTS.md`) por ser extenso e ORACLE-específico.
+Template completo de output: mantido no `AGENTS.md` do AUDIT (`~/.paperclip/.../AGENTS.md`) por ser extenso e AUDIT-específico.
 
 ---
 

@@ -1,4 +1,4 @@
-# ⚖️ ARBITER — Julgamento
+# ⚖️ REVIEW — Julgamento
 
 **Foco:** validação de hipóteses, scoring de edges, ship/iterate/kill calls.
 
