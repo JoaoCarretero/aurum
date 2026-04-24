@@ -4,12 +4,12 @@ All route groups organized with APIRouter.
 """
 import json
 import asyncio
+import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, status
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket
+from pydantic import BaseModel
 
 from api.models import get_conn
 from api.auth import (
@@ -17,7 +17,7 @@ from api.auth import (
     hash_password,
     verify_password,
     create_token,
-    decode_token,
+    get_current_user_from_token,
     get_current_user,
     require_admin,
 )
@@ -144,14 +144,14 @@ async def login(req: LoginRequest):
 async def refresh(req: RefreshRequest):
     """Refresh an existing token (returns a new one with extended expiry)."""
     try:
-        payload = decode_token(req.token)
+        user = get_current_user_from_token(req.token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     new_token = create_token({
-        "sub": payload["sub"],
-        "email": payload.get("email"),
-        "role": payload.get("role"),
+        "sub": user["id"],
+        "email": user.get("email"),
+        "role": user.get("role"),
     })
     return {"token": new_token}
 
@@ -180,13 +180,13 @@ async def get_account(user: dict = Depends(get_current_user)):
         available_balance = acct_dict["balance"] - pending_withdrawals
         pnl = acct_dict["balance"] - acct_dict["total_deposited"] + acct_dict["total_withdrawn"]
 
-        # Engine allocations from engine_state
-        engines = conn.execute("SELECT engine, status, fitness_score FROM engine_state").fetchall()
         allocations = []
-        for e in engines:
-            row = dict(e)
-            row["engine"] = _canonical_engine_key(row.get("engine", ""))
-            allocations.append(row)
+        if user.get("role") == "admin":
+            engines = conn.execute("SELECT engine, status, fitness_score FROM engine_state").fetchall()
+            for e in engines:
+                row = dict(e)
+                row["engine"] = _canonical_engine_key(row.get("engine", ""))
+                allocations.append(row)
 
         return {
             "balance": acct_dict["balance"],
@@ -285,9 +285,18 @@ async def account_history(
 trading_router = APIRouter(prefix="/api/trading", tags=["trading"])
 
 
+_STATUS_CACHE: dict = {"ts": 0.0, "payload": None}
+_STATUS_TTL_SEC = 2.0
+
+
 @trading_router.get("/status")
 async def trading_status(user: dict = Depends(require_admin)):
-    """Get all engine states."""
+    """Get all engine states. Cached 2s to absorb cockpit polling bursts."""
+    now = time.monotonic()
+    cached = _STATUS_CACHE["payload"]
+    if cached is not None and (now - _STATUS_CACHE["ts"]) < _STATUS_TTL_SEC:
+        return cached
+
     conn = get_conn()
     try:
         rows = conn.execute("SELECT * FROM engine_state").fetchall()
@@ -316,12 +325,29 @@ async def trading_status(user: dict = Depends(require_admin)):
             "process": proc_map.get(eng, {"alive": False, "status": "stopped"}),
         }
 
-    return {"engines": result}
+    payload = {"engines": result}
+    _STATUS_CACHE["ts"] = now
+    _STATUS_CACHE["payload"] = payload
+    return payload
+
+
+_POSITIONS_CACHE: dict = {"ts": 0.0, "payload": None}
+_POSITIONS_TTL_SEC = 2.0
 
 
 @trading_router.get("/positions")
 async def open_positions(user: dict = Depends(require_admin)):
-    """Get open positions from proc state files."""
+    """Get open positions from proc state files.
+
+    Cached in-memory for ``_POSITIONS_TTL_SEC`` seconds to collapse bursts
+    of admin polls — each call otherwise does a directory glob plus N
+    JSON parses.
+    """
+    now = time.monotonic()
+    cached_payload = _POSITIONS_CACHE["payload"]
+    if cached_payload is not None and (now - _POSITIONS_CACHE["ts"]) < _POSITIONS_TTL_SEC:
+        return cached_payload
+
     positions = []
     state_dir = DATA_DIR
     if state_dir.exists():
@@ -353,7 +379,10 @@ async def open_positions(user: dict = Depends(require_admin)):
         except (json.JSONDecodeError, OSError):
             pass
 
-    return {"positions": positions}
+    payload = {"positions": positions}
+    _POSITIONS_CACHE["ts"] = now
+    _POSITIONS_CACHE["payload"] = payload
+    return payload
 
 
 @trading_router.get("/trades")
@@ -365,29 +394,15 @@ async def trade_history(
     date_to: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
 ):
-    """Get trade history with filters. Reads from core/db.py trade data."""
-    runs = trade_db.list_runs(engine=engine, limit=limit)
-
-    all_trades = []
-    for run in runs:
-        trades = trade_db.get_trades(run["run_id"])
-        for t in trades:
-            # Apply symbol filter
-            if symbol and t.get("symbol") != symbol:
-                continue
-            # Apply date filters
-            trade_time = t.get("trade_time", "")
-            if date_from and trade_time < date_from:
-                continue
-            if date_to and trade_time > date_to:
-                continue
-            t["engine"] = run.get("engine")
-            t["run_id"] = run["run_id"]
-            all_trades.append(t)
-
-    # Sort by trade time descending and apply limit
-    all_trades.sort(key=lambda x: x.get("trade_time", ""), reverse=True)
-    return {"trades": all_trades[:limit]}
+    """Get trade history with filters. Single JOIN query on core.db."""
+    trades = trade_db.get_filtered_trades(
+        engine=engine,
+        symbol=symbol,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+    return {"trades": trades}
 
 
 @trading_router.post("/start")

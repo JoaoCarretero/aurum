@@ -238,7 +238,7 @@ def run(quiet: bool = False) -> int:
 
     # ── CORE MODULE IMPORTS ──
     section("CORE imports")
-    call("import core.arb_scoring", lambda: __import__("core.arb_scoring"))
+    call("import core.arb.arb_scoring", lambda: __import__("core.arb.arb_scoring"))
 
     # ── ROUND-TRIP BACK TO SPLASH ──
     section("roundtrip splash")

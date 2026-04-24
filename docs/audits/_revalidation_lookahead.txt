@@ -1,0 +1,39 @@
+# Look-ahead scan — 2026-04-17
+
+## engines/citadel.py  — 1 hits
+
+- line 868 `idx_plus_read`: `right = sym_rows[i+1] if i+1 < len(sym_rows) else ""`
+
+## engines/renaissance.py  — clean
+
+## engines/jump.py  — clean
+
+## engines/deshaw.py  — clean
+
+## engines/bridgewater.py  — clean
+
+## engines/kepos.py  — 4 hits
+
+- line 232 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
+- line 276 `iloc_plus`: `entry = float(df["open"].iloc[t + 1])`
+- line 300 `iloc_plus`: `window = df["eta_smooth"].iloc[t + 1 - need : t + 1].values`
+- line 460 `iloc_plus`: `"entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,`
+
+## engines/medallion.py  — 2 hits
+
+- line 438 `iloc_plus`: `entry = float(df["open"].iloc[t + 1])`
+- line 615 `iloc_plus`: `"entry_time": df["time"].iloc[t + 1] if "time" in df.columns else None,`
+
+## core/signals.py  — 2 hits
+
+- line 185 `iloc_plus`: `raw   = df["open"].iloc[idx+1]`
+- line 210 `iloc_plus`: `raw  = df["open"].iloc[idx+1]`
+
+## core/indicators.py  — clean
+
+## core/portfolio.py  — clean
+
+## core/htf.py  — clean
+
+## core/harmonics.py  — clean
+

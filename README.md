@@ -2,6 +2,10 @@
 
 Plataforma quantitativa de trading algorítmico para crypto futures.
 
+> **Para agentes (Claude/Codex/outros):** antes de tocar em código, leia
+> `CLAUDE.md`, `AGENTS.md`, `MEMORY.md`, `CONTEXT.md`, `SKILLS.md` no root.
+> Esses 5 arquivos são o hub de orientação do projeto.
+
 ## Arquitectura
 
 ```
@@ -33,23 +37,30 @@ aurum.finance/
 │   ├── benchmark.py           ← BTC/SPY/XAU comparison, bear market analysis
 │   ├── diagnostics.py         ← execution realism, score calibration
 │   └── plots.py               ← matplotlib dashboard, MC, trade charts
-├── engines/                    EXECUTION ENGINES (10 no total)
-│   ├── citadel.py             ← CITADEL systematic momentum (Ω fractal 5D)
-│   ├── jump.py                ← JUMP order flow (CVD divergence, microstructure)
-│   ├── bridgewater.py         ← BRIDGEWATER macro sentiment (funding/OI/LS)
-│   ├── renaissance.py         ← RENAISSANCE harmonic patterns (entrypoint)
-│   ├── deshaw.py              ← DE SHAW pair cointegration
+├── engines/                    EXECUTION ENGINES (12 no registry — config/engines.py)
+│   ├── citadel.py             ← CITADEL systematic momentum (Ω fractal 5D) — validated
+│   ├── jump.py                ← JUMP order flow (CVD divergence, microstructure) — validated
+│   ├── bridgewater.py         ← BRIDGEWATER macro sentiment (funding/OI/LS) — quarantined
+│   ├── renaissance.py         ← RENAISSANCE harmonic patterns
 │   ├── twosigma.py            ← TWO SIGMA ML meta-ensemble (LightGBM)
 │   ├── aqr.py                 ← AQR evolutionary allocation
-│   ├── janestreet.py          ← JANE STREET cross-venue arbitrage
-│   ├── millennium.py          ← MILLENNIUM ensemble orchestrator
+│   ├── janestreet.py          ← JANE STREET cross-venue arbitrage — validated live
+│   ├── millennium.py          ← MILLENNIUM ensemble orchestrator (live bootstrap staged)
+│   ├── millennium_live.py     ← MILLENNIUM live bootstrap infra
+│   ├── graham.py              ← GRAHAM endogenous momentum — experimental (arquivado informalmente)
+│   ├── phi.py                 ← PHI Fibonacci confluence (0.618 retracement)
+│   ├── supertrend_futures.py  ← SUPERTREND strategy
 │   └── live.py                ← LIVE execution (paper/demo/testnet/live)
+│   (DE SHAW / KEPOS / MEDALLION / ORNSTEIN deletados na Fase 1 em 2026-04-23)
+├── api/                        ← REST server (auth, routes, risk_check, models)
 ├── bot/
 │   └── telegram.py            ← notificações + comandos Telegram
 ├── server/website/             ← React landing + dashboard (Vite)
-├── macro_brain/                ← Macro brain cockpit (TkInter)
+├── macro_brain/                ← Macro brain cockpit standalone (TkInter, ML, thesis)
+├── launcher_support/           ← Módulos do launcher (bootstrap, engines_live_view, execution, menu_data)
+├── deploy/                     ← Scripts de deploy VPS (shadow service)
 ├── aurum_cli.py                ← terminal entry point
-├── launcher.py                 ← desktop launcher / dashboard
+├── launcher.py                 ← desktop launcher / dashboard (~13k linhas, TkInter)
 ├── run_api.py                  ← API entry point
 ├── __main__.py                 ← python -m support
 └── data/                       ← output de runs (gitignored)
@@ -63,12 +74,20 @@ aurum.finance/
 | **JUMP** | `python engines/jump.py` | Order flow microstructure: CVD divergence + volume imbalance |
 | **BRIDGEWATER** | `python engines/bridgewater.py` | Macro sentiment contrarian: funding + OI + long/short ratio |
 | **RENAISSANCE** | `python engines/renaissance.py` | Harmonic patterns (Gartley, Bat, Butterfly) + Bayesian scoring |
-| **DE SHAW** | `python engines/deshaw.py` | Statistical arb: Engle-Granger cointegration pairs |
 | **TWO SIGMA** | `python engines/twosigma.py` | ML meta-ensemble (LightGBM walk-forward) |
 | **AQR** | `python engines/aqr.py` | Evolutionary fitness allocation |
 | **JANE STREET** | `python engines/janestreet.py --mode paper` | Delta-neutral cross-venue funding/basis arbitrage |
-| **MILLENNIUM** | `python engines/millennium.py` | Multi-strategy pod — orchestrates CITADEL + RENAISSANCE |
+| **MILLENNIUM** | `python engines/millennium.py` | Multi-strategy pod — orquestra ensemble + live bootstrap |
+| **GRAHAM** | `python engines/graham.py` | Endogenous momentum w/ Hawkes regime gate (arquivado informalmente) |
+| **PHI** | `python engines/phi.py` | Fibonacci confluence em 0.618 retracement |
+| **WINTON** | `python core/chronos.py` | Time-series regime suite (HMM, GARCH, Hurst) — toolkit |
 | **LIVE** | `python engines/live.py` | Paper/Demo/Testnet/Live via Binance USDT Futures WebSocket |
+
+> DE SHAW / KEPOS / MEDALLION / ORNSTEIN foram **deletados** na Fase 1 em
+> 2026-04-23 (ver `docs/days/2026-04-23.md`). Status histórico em
+> `MEMORY.md` seção 4 e veredict em `docs/audits/2026-04-16_oos_verdict.md`.
+
+> Lista canônica completa em `config/engines.py`. Status OOS de cada engine em `docs/audits/2026-04-16_oos_verdict.md`.
 
 ## Setup
 

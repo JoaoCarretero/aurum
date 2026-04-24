@@ -16,7 +16,10 @@ PROC_BY_KEY = {
 
 
 def script_to_proc_key(script: str) -> str | None:
-    canon_key = canonical_engine_key(SCRIPT_TO_KEY.get(script.replace("\\", "/"), ""))
+    norm = script.replace("\\", "/")
+    if norm == "engines/millennium_live.py":
+        return "multi"
+    canon_key = canonical_engine_key(SCRIPT_TO_KEY.get(norm, ""))
     return PROC_BY_KEY.get(canon_key)
 
 
@@ -52,6 +55,21 @@ def live_launch_plan(script: str, mode_preset: str, cfg: dict | None) -> dict:
             "script": script,
             "stdin_inputs": [arb_mode_map.get(mode_preset, "1")],
             "cli_args": [],
+            "uses_dedicated_runner": True,
+        }
+    script_l = (script or "").replace("\\", "/").lower()
+    if script_l.endswith("/millennium.py") or script_l == "engines/millennium.py":
+        if mode_preset == "paper":
+            return {
+                "script": "tools/operations/millennium_paper.py",
+                "stdin_inputs": [],
+                "cli_args": ["--tick-sec", "900", "--run-hours", "0"],
+                "uses_dedicated_runner": True,
+            }
+        return {
+            "script": "engines/millennium_live.py",
+            "stdin_inputs": [],
+            "cli_args": [mode_preset],
             "uses_dedicated_runner": True,
         }
 

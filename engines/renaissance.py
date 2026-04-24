@@ -24,8 +24,8 @@ from config.params import ACCOUNT_SIZE, BASKETS, ENGINE_BASKETS, ENGINE_INTERVAL
 INTERVAL = ENGINE_INTERVALS.get("RENAISSANCE", INTERVAL)
 from core import build_corr_matrix, detect_macro, fetch_all, validate
 from core.harmonics import scan_hermes
-from core.run_manager import append_to_index, save_run_artifacts, snapshot_config
-from core.fs import atomic_write
+from core.ops.run_manager import append_to_index, save_run_artifacts, snapshot_config
+from core.ops.fs import atomic_write
 
 
 RUN_ID = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -120,8 +120,14 @@ def main() -> int:
     parser.add_argument("--basket", default=None)
     parser.add_argument("--leverage", type=float, default=LEVERAGE)
     parser.add_argument("--no-menu", action="store_true")
+    parser.add_argument("--end", type=str, default=None,
+                        help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
     args, _ = parser.parse_known_args()
     LEVERAGE = float(args.leverage)
+    end_time_ms = None
+    if args.end:
+        import pandas as _pd_tmp
+        end_time_ms = int(_pd_tmp.Timestamp(args.end).timestamp() * 1000)
 
     args.basket = args.basket or ENGINE_BASKETS.get("RENAISSANCE", "default")
     symbols = list(BASKETS.get(args.basket, SYMBOLS))
@@ -137,7 +143,7 @@ def main() -> int:
     _fetch_syms = list(symbols)
     if MACRO_SYMBOL not in _fetch_syms:
         _fetch_syms.insert(0, MACRO_SYMBOL)
-    all_dfs = fetch_all(_fetch_syms, interval=INTERVAL, n_candles=n_candles, futures=True)
+    all_dfs = fetch_all(_fetch_syms, interval=INTERVAL, n_candles=n_candles, futures=True, end_time_ms=end_time_ms)
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:

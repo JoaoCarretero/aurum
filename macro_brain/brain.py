@@ -17,7 +17,6 @@ import logging
 import time
 import traceback
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from config.macro_params import (
     MACRO_DATA_DIR,

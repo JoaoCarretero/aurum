@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 from macro_brain.persistence.store import macro_series
 

@@ -1,0 +1,36 @@
+# DSR Inputs — 2026-04-17
+
+Objetivo: deixar explícito que `n_trials` é uma estimativa conservadora, não
+um número exato.
+
+## CITADEL
+
+- `n_trials = 50`
+- Base da inferência:
+  - `docs/sessions/2026-04-14_1410_autonomous_FINAL.md`: 22 runs de CITADEL
+  - `docs/sessions/2026-04-14_2205.md`: pelo menos 3 tuning commits explícitos
+    de CITADEL (`holdout`, `STOP_ATR_M`, `TRAIL_DISTANCE_MULT`)
+  - há sweep adicional implícito em grids anteriores e ajustes globais que
+    impactaram CITADEL
+- Leitura: 50 é haircut conservador; provavelmente acima do número de winners
+  manuais efetivamente promovidos.
+
+## JUMP
+
+- `n_trials = 35`
+- Base da inferência:
+  - `docs/sessions/2026-04-15_2300.md`: sessão registra explicitamente
+    "19 iters JUMP"
+  - a mesma sessão marca `iter13 winner` e `iter19 winner`
+  - `docs/sessions/2026-04-14_2205.md`: tuning adicional de `MERCURIO_SIZE_MULT`
+- Leitura: 35 é maior que o trail explícito visível nas notas e serve como
+  penalidade conservadora de multiple testing.
+
+## Uso
+
+- Fórmula: `analysis/dsr.py`
+- Suposição de momentos: `skew=0.0`, `kurtosis=3.0`
+- Regra de interpretação para este audit:
+  - `DSR > 0.95` = robusto
+  - `0.50 < DSR <= 0.95` = evidência moderada
+  - `DSR <= 0.50` = claim enfraquecido

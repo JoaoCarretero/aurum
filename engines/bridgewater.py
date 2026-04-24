@@ -15,7 +15,6 @@ Pipeline:
 import sys
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-import math
 import logging
 import numpy as np
 import pandas as pd
@@ -38,8 +37,9 @@ from core import (
 from core.sentiment import (
     fetch_funding_rate, fetch_open_interest, fetch_long_short_ratio,
     funding_zscore, oi_delta_signal, ls_ratio_signal, composite_sentiment,
+    cached_coverage, _load_cached_frame,
 )
-from core.fs import atomic_write
+from core.ops.fs import atomic_write
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward
@@ -54,7 +54,7 @@ if not log.handlers:
 SEP = "─" * 80
 
 # ── RUN IDENTITY ─────────────────────────────────────────────
-RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+RUN_ID  = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
 RUN_DIR = Path(f"data/bridgewater/{RUN_ID}")
 (RUN_DIR / "reports").mkdir(parents=True, exist_ok=True)
 (RUN_DIR / "logs").mkdir(parents=True, exist_ok=True)
@@ -63,23 +63,172 @@ _fh = logging.FileHandler(RUN_DIR / "logs" / "thoth.log", encoding="utf-8")
 _fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s"))
 log.addHandler(_fh)
 
+RUNTIME_PRESET_NAME = "legacy"
+RUNTIME_STRICT_DIRECTION = False
+RUNTIME_MIN_COMPONENTS = 0
+RUNTIME_MIN_DIR_THRESH = None
+RUNTIME_DISABLE_OI = False
+RUNTIME_ALLOWED_MACRO_REGIMES = None
+RUNTIME_POST_TRADE_COOLDOWN_BARS = 0
+RUNTIME_REGIME_THRESHOLDS = None
+RUNTIME_SYMBOL_HEALTH = None
+RUNTIME_MIN_COVERAGE_FRACTION = 0.70
+
 
 # ══════════════════════════════════════════════════════════════
 #  SENTIMENT DATA COLLECTION
 # ══════════════════════════════════════════════════════════════
 
-def collect_sentiment(symbols: list) -> dict:
+def _sentiment_limits(window_days: int | None, *, historical: bool = False) -> tuple[int, int, int]:
+    """Return (funding_limit, oi_limit, ls_limit) sized to cover ``window_days``.
+
+    Historical Binance Futures coverage:
+      * Funding rate: emitted every 8h → 3 ticks/day. /fundingRate capped at 1000.
+      * Open interest (15m period): 96 ticks/day. /openInterestHist capped at 500.
+      * Long/short ratio (15m period): 96 ticks/day. Same cap as OI.
+
+    With a 20% buffer for weekends/outages. When ``window_days`` is None the
+    function falls back to the legacy 100/200/200 defaults (which cover
+    roughly a live session, not an OOS window).
+    """
+    if window_days is None or window_days <= 0:
+        return 100, 200, 200
+    funding = min(1000, max(100, int(window_days * 3 * 1.2)))
+    oi_need = max(200, int(window_days * 96 * 1.1))
+    ls_need = max(200, int(window_days * 96 * 1.1))
+    if historical:
+        oi = oi_need
+        ls = ls_need
+    else:
+        oi = min(500, oi_need)
+        ls = min(500, ls_need)
+    return funding, oi, ls
+
+
+def _scan_warmup_bars() -> int:
+    return max(200, W_NORM, PIVOT_N * 3) + 10
+
+
+def _scan_window_can_close_trades(n_candles: int) -> bool:
+    return int(n_candles) > (MAX_HOLD + 2)
+
+
+def _series_first_timestamp(series: pd.Series | None) -> pd.Timestamp | None:
+    if series is None or len(series) == 0:
+        return None
+    idx = getattr(series, "index", None)
+    if idx is None or len(idx) == 0:
+        return None
+    if pd.api.types.is_datetime64_any_dtype(idx):
+        return pd.Timestamp(idx.min())
+    return None
+
+
+def _sentiment_coverage_start(sent: dict | None) -> pd.Timestamp | None:
+    sent = sent or {}
+    starts: list[pd.Timestamp] = []
+
+    funding_z = sent.get("funding_z")
+    funding_start = _series_first_timestamp(funding_z)
+    if funding_start is not None:
+        starts.append(funding_start)
+
+    oi_df = sent.get("oi_df")
+    if oi_df is not None and len(oi_df):
+        starts.append(pd.to_datetime(oi_df["time"]).min())
+
+    ls_signal = sent.get("ls_signal")
+    ls_start = _series_first_timestamp(ls_signal)
+    if ls_start is not None:
+        starts.append(ls_start)
+
+    return max(starts) if starts else None
+
+
+def _coverage_scan_start_idx(df: pd.DataFrame, sent: dict | None, base_start_idx: int) -> int:
+    start_ts = _sentiment_coverage_start(sent)
+    if start_ts is None:
+        return int(base_start_idx)
+    candle_times = pd.to_datetime(df["time"])
+    coverage_idx = int(candle_times.searchsorted(start_ts, side="left"))
+    return max(int(base_start_idx), coverage_idx)
+
+
+def _coverage_eligibility(
+    df: pd.DataFrame,
+    sent: dict | None,
+    base_start_idx: int,
+    *,
+    min_fraction: float,
+) -> dict[str, object]:
+    scan_start_idx = _coverage_scan_start_idx(df, sent, base_start_idx)
+    total_scan_candles = max(0, len(df) - int(base_start_idx))
+    covered_scan_candles = max(0, len(df) - int(scan_start_idx))
+    coverage_fraction = (
+        covered_scan_candles / total_scan_candles
+        if total_scan_candles > 0 else 0.0
+    )
+    closeable = _scan_window_can_close_trades(covered_scan_candles)
+    eligible = closeable and coverage_fraction >= float(min_fraction)
+    return {
+        "scan_start_idx": int(scan_start_idx),
+        "covered_scan_candles": int(covered_scan_candles),
+        "total_scan_candles": int(total_scan_candles),
+        "coverage_fraction": float(round(coverage_fraction, 4)),
+        "closeable": bool(closeable),
+        "eligible": bool(eligible),
+    }
+
+
+def _load_partial_cached_sentiment(
+    kind: str,
+    symbol: str,
+    period: str,
+    *,
+    end_time_ms: int,
+) -> pd.DataFrame | None:
+    columns_by_kind = {
+        "open_interest": ["time", "oi", "oi_value"],
+        "long_short_ratio": ["time", "ls_ratio", "long_pct", "short_pct"],
+    }
+    cols = columns_by_kind.get(kind)
+    if cols is None:
+        return None
+    cached = _load_cached_frame(kind, symbol, period, cols)
+    if cached is None or cached.empty:
+        return None
+    end_ts = pd.to_datetime(end_time_ms, unit="ms")
+    subset = cached[cached["time"] <= end_ts].sort_values("time").reset_index(drop=True)
+    if subset.empty:
+        return None
+    return subset
+
+
+def collect_sentiment(symbols: list, end_time_ms: int | None = None,
+                      window_days: int | None = None) -> dict:
     """
     Fetch all sentiment data for each symbol.
+
+    Se `end_time_ms` é passado (backtest OOS), todas as 3 chamadas ao
+    Binance respeitam o fim da janela — evita look-ahead. Sem isso, as
+    chamadas voltam com a série mais recente encerrando AGORA, mesmo em
+    backtest histórico.
+
     Returns dict[symbol] = {funding_z: Series, oi_signal: Series, ls_signal: Series}
     """
+    funding_limit, oi_limit, ls_limit = _sentiment_limits(
+        window_days,
+        historical=end_time_ms is not None,
+    )
     sentiment = {}
+    missing_historical: list[str] = []
     for sym in symbols:
-        log.info(f"  fetching sentiment  ·  {sym}")
+        log.info(f"  fetching sentiment  ·  {sym}  "
+                 f"(funding={funding_limit} oi={oi_limit} ls={ls_limit})")
         data = {}
 
         # Funding rate
-        fr_df = fetch_funding_rate(sym, limit=100)
+        fr_df = fetch_funding_rate(sym, limit=funding_limit, end_time_ms=end_time_ms)
         if fr_df is not None and len(fr_df) >= 10:
             data["funding_df"] = fr_df
             data["funding_z"] = funding_zscore(fr_df, window=THOTH_FUNDING_WINDOW)
@@ -87,31 +236,289 @@ def collect_sentiment(symbols: list) -> dict:
             data["funding_z"] = None
 
         # Open Interest
-        oi_df = fetch_open_interest(sym, period="15m", limit=200)
+        oi_df = fetch_open_interest(sym, period="15m", limit=oi_limit, end_time_ms=end_time_ms)
+        if oi_df is None and end_time_ms is not None:
+            oi_df = _load_partial_cached_sentiment(
+                "open_interest",
+                sym,
+                "15m",
+                end_time_ms=end_time_ms,
+            )
         data["oi_df"] = oi_df
+        data["oi_ready"] = oi_df is not None and len(oi_df) >= 10
 
         # Long/Short ratio
-        ls_df = fetch_long_short_ratio(sym, period="15m", limit=200)
+        ls_df = fetch_long_short_ratio(sym, period="15m", limit=ls_limit, end_time_ms=end_time_ms)
+        if ls_df is None and end_time_ms is not None:
+            ls_df = _load_partial_cached_sentiment(
+                "long_short_ratio",
+                sym,
+                "15m",
+                end_time_ms=end_time_ms,
+            )
         if ls_df is not None and len(ls_df) >= 5:
             data["ls_signal"] = ls_ratio_signal(ls_df)
             data["ls_df"] = ls_df
+            data["ls_ready"] = True
         else:
             data["ls_signal"] = None
+            data["ls_ready"] = False
 
         sentiment[sym] = data
+        if end_time_ms is not None:
+            reasons = []
+            if data.get("funding_z") is None:
+                reasons.append("funding")
+            if not data.get("oi_ready"):
+                cov = cached_coverage("open_interest", sym, "15m")
+                reasons.append(
+                    "oi(cache=empty)"
+                    if cov is None
+                    else f"oi(cache_end={cov['end']}, rows={cov['rows']})"
+                )
+            if not data.get("ls_ready"):
+                cov = cached_coverage("long_short_ratio", sym, "15m")
+                reasons.append(
+                    "ls(cache=empty)"
+                    if cov is None
+                    else f"ls(cache_end={cov['end']}, rows={cov['rows']})"
+                )
+            if reasons:
+                missing_historical.append(f"{sym}: {', '.join(reasons)}")
         log.info(f"    funding={'✓' if data.get('funding_z') is not None else '✗'}  "
                  f"oi={'✓' if oi_df is not None else '✗'}  "
                  f"ls={'✓' if data.get('ls_signal') is not None else '✗'}")
 
+    if end_time_ms is not None and missing_historical:
+        details = "; ".join(missing_historical[:5])
+        if len(missing_historical) > 5:
+            details += f"; ... (+{len(missing_historical) - 5} symbols)"
+        log.warning(
+            "historical sentiment partially unavailable for OOS window; "
+            "continuing with per-symbol eligibility/coverage gating. "
+            "Missing coverage: %s",
+            details,
+        )
+
     return sentiment
+
+
+def _parse_symbols_override(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    symbols = []
+    for token in raw.split(","):
+        sym = token.strip().upper()
+        if not sym:
+            continue
+        if not sym.endswith("USDT"):
+            sym += "USDT"
+        symbols.append(sym)
+    return symbols or None
+
+
+def _filter_stale_market_data(all_dfs: dict[str, pd.DataFrame], interval: str) -> tuple[dict[str, pd.DataFrame], list[str]]:
+    if not all_dfs:
+        return all_dfs, []
+    tf_minutes = max(1, _TF_MINUTES.get(interval, 60))
+    freshest = max(pd.to_datetime(df["time"]).max() for df in all_dfs.values() if df is not None and len(df))
+    cutoff = freshest - pd.Timedelta(minutes=tf_minutes * 24)
+    kept: dict[str, pd.DataFrame] = {}
+    dropped: list[str] = []
+    for sym, df in all_dfs.items():
+        last_ts = pd.to_datetime(df["time"]).max()
+        if last_ts < cutoff:
+            dropped.append(sym)
+            continue
+        kept[sym] = df
+    return kept, dropped
+
+
+def _trade_sentiment_diagnostics(closed: list[dict]) -> dict:
+    if not closed:
+        return {
+            "oi_zero_pct": 0.0,
+            "oi_nonzero_trades": 0,
+            "ls_zero_pct": 0.0,
+            "ls_distribution": {},
+            "funding_positive_pct": 0.0,
+            "funding_negative_pct": 0.0,
+        }
+
+    oi_values = pd.Series([float(t.get("oi_signal", 0.0) or 0.0) for t in closed], dtype=float)
+    ls_values = pd.Series([float(t.get("ls_signal", 0.0) or 0.0) for t in closed], dtype=float)
+    funding_values = pd.Series([float(t.get("funding_z", 0.0) or 0.0) for t in closed], dtype=float)
+
+    ls_distribution = {
+        str(round(float(k), 3)): int(v)
+        for k, v in ls_values.value_counts().sort_index().to_dict().items()
+    }
+
+    return {
+        "oi_zero_pct": round(float((oi_values == 0.0).mean() * 100), 2),
+        "oi_nonzero_trades": int((oi_values != 0.0).sum()),
+        "ls_zero_pct": round(float((ls_values == 0.0).mean() * 100), 2),
+        "ls_distribution": ls_distribution,
+        "funding_positive_pct": round(float((funding_values > 0.0).mean() * 100), 2),
+        "funding_negative_pct": round(float((funding_values < 0.0).mean() * 100), 2),
+    }
+
+
+def _runtime_sentiment_view(
+    sentiment_data: dict[str, dict],
+    *,
+    disable_oi: bool,
+) -> dict[str, dict]:
+    if not disable_oi:
+        return sentiment_data
+    out: dict[str, dict] = {}
+    for sym, rec in sentiment_data.items():
+        item = dict(rec)
+        item["oi_df"] = None
+        item["oi_ready"] = True
+        out[sym] = item
+    return out
+
+
+def _resolve_runtime_preset(
+    preset: str,
+    *,
+    strict_direction: bool,
+    min_components: int,
+    min_dir_thresh: float | None,
+    disable_oi: bool,
+    enable_symbol_health: bool,
+    allowed_regimes: str | None,
+    post_trade_cooldown_bars: int,
+) -> dict:
+    """Resolve effective runtime gates for a named preset."""
+    name = (preset or "robust").strip().lower()
+    parsed_regimes = None
+    if allowed_regimes:
+        parsed_regimes = {
+            token.strip().upper()
+            for token in str(allowed_regimes).split(",")
+            if token.strip()
+        } or None
+    if name == "legacy":
+        return {
+            "preset": "legacy",
+            "strict_direction": bool(strict_direction),
+            "min_components": int(min_components),
+            "min_dir_thresh": min_dir_thresh,
+            "disable_oi": bool(disable_oi),
+            "allowed_macro_regimes": parsed_regimes,
+            "post_trade_cooldown_bars": max(0, int(post_trade_cooldown_bars)),
+            "regime_thresholds": None,
+            "symbol_health": None,
+            "min_coverage_fraction": 0.70,
+        }
+    if name not in {"robust", "oi_research"}:
+        raise ValueError(f"unknown preset: {preset}")
+    robust_symbol_health = {
+        "lookback": 8,
+        "block_min_trades": 5,
+        "block_expectancy": -0.35,
+        "block_loss_rate": 0.80,
+        "saturation_start": 6,
+        "saturation_full": 10,
+        "min_multiplier": 0.45,
+    }
+    robust_disable_oi = True if name == "robust" else bool(disable_oi)
+    max_active_components = 2 if robust_disable_oi else 3
+    return {
+        "preset": name,
+        "strict_direction": True if not strict_direction else bool(strict_direction),
+        "min_components": min(max_active_components, max(2, int(min_components))),
+        "min_dir_thresh": 0.35 if min_dir_thresh is None else float(min_dir_thresh),
+        "disable_oi": robust_disable_oi,
+        "allowed_macro_regimes": parsed_regimes if parsed_regimes is not None else {"BEAR", "CHOP"},
+        "post_trade_cooldown_bars": max(0, int(post_trade_cooldown_bars)),
+        "regime_thresholds": {"BEAR": 0.35, "BULL": 0.45, "CHOP": 0.55},
+        "symbol_health": robust_symbol_health if enable_symbol_health else None,
+        "min_coverage_fraction": 0.85 if name == "oi_research" else 0.70,
+    }
+
+
+def _resolve_direction_threshold(
+    macro_bias: str,
+    default_threshold: float,
+    regime_thresholds: dict[str, float] | None,
+) -> float:
+    if not regime_thresholds:
+        return float(default_threshold)
+    regime = str(macro_bias or "CHOP").upper()
+    return float(regime_thresholds.get(regime, default_threshold))
+
+
+def _symbol_health_controls(
+    recent_closed: list[dict],
+    config: dict | None,
+) -> tuple[float, str | None]:
+    if not config:
+        return 1.0, None
+
+    lookback = max(1, int(config.get("lookback", 8)))
+    block_min_trades = max(1, int(config.get("block_min_trades", 5)))
+    saturation_start = max(1, int(config.get("saturation_start", 8)))
+    saturation_full = max(saturation_start, int(config.get("saturation_full", 14)))
+    min_multiplier = float(config.get("min_multiplier", 0.45))
+    block_expectancy = float(config.get("block_expectancy", -12.0))
+    block_loss_rate = float(config.get("block_loss_rate", 0.80))
+
+    sample = recent_closed[-lookback:]
+    if not sample:
+        return 1.0, None
+
+    quality_values = [
+        float(
+            t.get("r_multiple")
+            if t.get("r_multiple") is not None
+            else t.get("pnl", 0.0)
+        ) or 0.0
+        for t in sample
+    ]
+    expectancy = sum(quality_values) / len(sample)
+    losses = sum(1 for q in quality_values if q < 0)
+
+    loss_rate = losses / len(sample)
+
+    if len(sample) >= block_min_trades and expectancy <= block_expectancy and loss_rate >= block_loss_rate:
+        return 0.0, "symbol_health_block"
+
+    mult = 1.0
+    if len(sample) >= block_min_trades and expectancy < 0:
+        mult *= 0.65
+    if len(sample) > saturation_start:
+        span = max(1, saturation_full - saturation_start)
+        progress = min(1.0, (len(sample) - saturation_start) / span)
+        mult *= 1.0 - (1.0 - min_multiplier) * progress
+    if len(sample) >= block_min_trades and loss_rate >= 0.70:
+        mult *= 0.75
+
+    return max(min_multiplier, round(mult, 4)), None
+
+
+_SENTIMENT_MAX_STALENESS_NS = 2 * 60 * 60 * 1_000_000_000  # 2h in ns
 
 
 def _align_series_to_candles(
     candle_times: pd.Series,
     series: pd.Series | None,
     default: float = 0.0,
+    max_staleness_ns: int = _SENTIMENT_MAX_STALENESS_NS,
 ) -> np.ndarray:
-    """Align a series to candle timestamps once to avoid per-bar lookups."""
+    """Align a series to candle timestamps, with a staleness guard.
+
+    For each candle we take the most recent sentiment tick at or before the
+    candle time. If that tick is older than ``max_staleness_ns``, the candle
+    gets ``default`` instead — propagating a stale value across a long gap
+    fabricates deterministic signal (Bug 4, 2026-04-17).
+
+    Cache files can have large internal gaps (e.g. a BTCUSDT row from
+    2023-11-14 followed by rows from 2026-04-12). Without a staleness guard,
+    searchsorted propagates the 2023 value across 2.5 years of candles.
+    """
     aligned = np.full(len(candle_times), default, dtype=float)
     if series is None or len(series) == 0:
         return aligned
@@ -120,25 +527,21 @@ def _align_series_to_candles(
         hasattr(series.index, "dtype")
         and pd.api.types.is_datetime64_any_dtype(series.index)
     ):
-        values = pd.to_numeric(series, errors="coerce").fillna(default).to_numpy(dtype=float)
-        n = min(len(values), len(aligned))
-        aligned[:n] = values[:n]
-        if n and n < len(aligned):
-            aligned[n:] = values[n - 1]
+        # Fallback: the caller supplied a Series without a DatetimeIndex. We
+        # cannot align temporally — return ``default`` everywhere rather than
+        # fake a positional mapping (Bug 1, 2026-04-17).
         return aligned
 
     values = pd.to_numeric(series, errors="coerce").fillna(default).to_numpy(dtype=float)
-    idx_ns = series.index.view("int64")
-    candle_ns = pd.to_datetime(candle_times).view("int64")
+    idx_ns = np.asarray(series.index, dtype="datetime64[ns]").view("int64")
+    candle_ns = np.asarray(pd.to_datetime(candle_times), dtype="datetime64[ns]").view("int64")
     pos = np.searchsorted(idx_ns, candle_ns, side="right") - 1
     valid = pos >= 0
     if valid.any():
-        aligned[valid] = values[pos[valid]]
-        first_valid = int(np.flatnonzero(valid)[0])
-        if first_valid > 0:
-            aligned[:first_valid] = values[0]
-    else:
-        aligned[:] = values[0]
+        safe_pos = np.clip(pos, 0, len(values) - 1)
+        gaps = candle_ns - idx_ns[safe_pos]
+        fresh = valid & (gaps <= max_staleness_ns)
+        aligned[fresh] = values[safe_pos[fresh]]
     return aligned
 
 
@@ -146,7 +549,12 @@ def _align_oi_signal_to_candles(
     candle_times: pd.Series,
     oi_signal_df: pd.DataFrame | None,
 ) -> np.ndarray:
-    """Align OI signal to candles with a single asof merge."""
+    """Align OI signal to candles with a staleness-guarded asof merge.
+
+    Bug 4 fix (2026-04-17): ``tolerance`` rejects candles whose most-recent OI
+    tick is older than 2h. Without it, a cache row from 2023 could propagate
+    forward across years of 2026 candles, fabricating deterministic signal.
+    """
     aligned = np.zeros(len(candle_times), dtype=float)
     if oi_signal_df is None or oi_signal_df.empty:
         return aligned
@@ -163,9 +571,8 @@ def _align_oi_signal_to_candles(
         on="time",
         direction="backward",
         allow_exact_matches=True,
+        tolerance=pd.Timedelta("2h"),
     )
-    if merged["oi_signal"].isna().any():
-        merged["oi_signal"] = merged["oi_signal"].bfill()
     return pd.to_numeric(merged["oi_signal"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
 
 
@@ -176,9 +583,48 @@ def _align_oi_signal_to_candles(
 def scan_thoth(df: pd.DataFrame, symbol: str,
                macro_bias_series, corr: dict,
                htf_stack_dfs: dict | None = None,
-               sentiment_data: dict | None = None) -> tuple[list, dict]:
+               sentiment_data: dict | None = None,
+               scan_start_idx: int = 0,
+               *,
+               disable_oi: bool = False,
+               allowed_macro_regimes: set[str] | None = None,
+               post_trade_cooldown_bars: int = 0,
+               regime_thresholds: dict[str, float] | None = None,
+               symbol_health: dict | None = None,
+               strict_direction: bool = False,
+               min_components: int = 0,
+               min_dir_thresh: float | None = None,
+               exit_on_reversal: bool = False) -> tuple[list, dict]:
     """
     Scan a symbol using sentiment + technical confirmation.
+
+    Optional research gates (all default OFF — preserve calibrated baseline):
+
+    strict_direction (bool):
+        Require EXPLICIT match with structure or macro_bias. Removes the
+        permissive fallback at scan_thoth:498-505 that accepted neutral
+        struct as confirmation. Rationale (2026-04-17 audit): 20/20 Late
+        losers in 31d BTC window had struct=NEUTRAL and macro opposing
+        their direction — the fallback was the direct cause.
+
+    min_components (int):
+        Require at least N of {funding, oi, ls} signals to be non-zero
+        simultaneously. Rationale: multi-signal convergence is a canonical
+        quant pattern (Lo 2004, Asness 2013). Filters single-channel
+        marginal setups. Default 0 = off.
+
+    min_dir_thresh (float | None):
+        Override THOTH_DIRECTION_THRESHOLD for this run. The calibrated
+        default (0.20) is liberal. Raising to 0.35-0.40 filters marginal
+        sentiment (|score|<0.35 were the 20 Late losers). None = use config.
+
+    exit_on_reversal (bool):
+        Close open position if composite sentiment reverses past
+        -min_dir_thresh (for longs) or +min_dir_thresh (for shorts).
+        Rationale: contrarian thesis assumes transient mispricing; if the
+        crowd keeps building the wrong way, the thesis is invalidated and
+        the trade should exit before the stop. NOT YET implemented in
+        label_trade path — accepted as the gate param for future wiring.
     """
     # ── prepare indicators ──
     df = indicators(df)
@@ -189,23 +635,34 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     trades  = []
     vetos   = defaultdict(int)
     account = ACCOUNT_SIZE
-    min_idx = max(200, W_NORM, PIVOT_N * 3) + 10
+    min_idx = max(_scan_warmup_bars(), int(scan_start_idx))
 
     # Get sentiment data for this symbol
     sent = (sentiment_data or {}).get(symbol, {})
     funding_z_series = sent.get("funding_z")
-    oi_df = sent.get("oi_df")
+    oi_df = None if disable_oi else sent.get("oi_df")
     ls_signal_series = sent.get("ls_signal")
 
     # Build OI signal if available
     oi_signal_df = None
     _oi_available = False
+    _oi_build_error = None
     if oi_df is not None and len(oi_df) >= 10:
         try:
             oi_signal_df = oi_delta_signal(oi_df, df, window=THOTH_OI_WINDOW)
             _oi_available = True
-        except Exception:
-            pass
+        except Exception as exc:
+            _oi_build_error = exc
+
+    # BRIDGEWATER's thesis is funding + OI + LS. If OI history exists but the
+    # engine cannot transform it into a usable signal, skipping the symbol is
+    # safer than silently degrading to a different strategy.
+    if oi_df is not None and len(oi_df) >= 10 and not _oi_available:
+        if _oi_build_error is not None:
+            log.warning("OI signal build failed for %s: %s", symbol, _oi_build_error)
+        else:
+            log.warning("OI signal unavailable for %s despite ready OI history", symbol)
+        return [], {"oi_signal_unavailable": 1}
 
     # Renormalize weights when OI is unavailable so composite score
     # can still reach [-1, 1] range using funding + LS only.
@@ -248,6 +705,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
     consecutive_losses = 0
     cooldown_until     = -1
     sym_cooldown_until: dict[str, int] = {}
+    recent_closed: list[dict] = []
 
     log.info(f"\n{'─'*60}\n  {symbol}\n{'─'*60}")
 
@@ -258,6 +716,9 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         macro_b = "CHOP"
         if macro_bias_series is not None:
             macro_b = macro_bias_series.iloc[min(idx, len(macro_bias_series) - 1)]
+        if allowed_macro_regimes and str(macro_b).upper() not in allowed_macro_regimes:
+            vetos[f"macro_block:{str(macro_b).upper()}"] += 1
+            continue
 
         peak_equity = max(peak_equity, account)
         current_dd = (peak_equity - account) / peak_equity if peak_equity > 0 else 0.0
@@ -301,18 +762,28 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         direction = None
         struct = _str[idx]
 
-        _dir_thresh = THOTH_DIRECTION_THRESHOLD
+        _dir_thresh_base = min_dir_thresh if min_dir_thresh is not None else THOTH_DIRECTION_THRESHOLD
+        _dir_thresh = _resolve_direction_threshold(macro_b, _dir_thresh_base, regime_thresholds)
+
+        # Optional: multi-component convergence gate (research, default OFF).
+        if min_components > 0:
+            active_channels = int(f_z != 0) + int(oi_sig != 0) + int(ls_sig != 0)
+            if active_channels < min_components:
+                vetos["components_weak"] += 1
+                continue
+
         if sent_score > _dir_thresh:
-            # bullish sentiment — confirm with struct or macro
+            # bullish sentiment
             if struct == "UP" or macro_b == "BULL":
                 direction = "BULLISH"
-            elif struct != "DOWN":
-                direction = "BULLISH"  # neutral struct is ok
+            elif not strict_direction and struct != "DOWN":
+                # permissive fallback — default path; --strict-direction disables this.
+                direction = "BULLISH"
         elif sent_score < -_dir_thresh:
-            # bearish sentiment — confirm with struct or macro
+            # bearish sentiment
             if struct == "DOWN" or macro_b == "BEAR":
                 direction = "BEARISH"
-            elif struct != "UP":
+            elif not strict_direction and struct != "UP":
                 direction = "BEARISH"
 
         if direction is None:
@@ -329,6 +800,10 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         score_reported = 0.50 + score * 0.50
 
         # Extra check: sentiment must be strong enough
+        # Respect the strategy thesis: do not run as funding-only when both
+        # positioning channels are flat.
+        if oi_sig == 0.0 and ls_sig == 0.0:
+            vetos["positioning_absent"] += 1; continue
         if abs(f_z) < 1.0 and abs(oi_sig) < 0.3 and abs(ls_sig) < 0.3:
             vetos["sentiment_fraco"] += 1; continue
 
@@ -347,7 +822,13 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
         size = position_size(account, entry, stop, max(score, 0.53),
                              macro_b, direction, vol_r, dd_scale,
                              peak_equity=peak_equity)
-        size = round(size * corr_size_mult * trans_mult * THOTH_SIZE_MULT, 4)
+        health_mult, health_block = _symbol_health_controls(recent_closed, symbol_health)
+        if health_block is not None:
+            vetos[health_block] += 1
+            continue
+        if health_mult < 1.0:
+            vetos["symbol_health_scale"] += 1
+        size = round(size * corr_size_mult * trans_mult * THOTH_SIZE_MULT * health_mult, 4)
 
         # [L6] Aggregate notional cap.
         if size > 0:
@@ -359,14 +840,15 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
 
         # ── PnL ──
         ep = float(exit_p)
+        slip_entry = SLIPPAGE + SPREAD
         slip_exit = SLIPPAGE + SPREAD
         if direction == "BULLISH":
-            entry_cost = entry * (1 + COMMISSION)
+            entry_cost = entry * (1 + COMMISSION + slip_entry)
             ep_net = ep * (1 - COMMISSION - slip_exit)
             funding = -(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl = size * (ep_net - entry_cost) + funding
         else:
-            entry_cost = entry * (1 - COMMISSION)
+            entry_cost = entry * (1 - COMMISSION - slip_entry)
             ep_net = ep * (1 + COMMISSION + slip_exit)
             funding = +(size * entry * FUNDING_PER_8H * duration / _funding_periods_per_8h)
             pnl = size * (entry_cost - ep_net) + funding
@@ -387,6 +869,11 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             sym_cooldown_until[symbol] = idx + SYM_LOSS_COOLDOWN
         else:
             consecutive_losses = 0
+        if post_trade_cooldown_bars > 0:
+            sym_cooldown_until[symbol] = max(
+                sym_cooldown_until.get(symbol, -1),
+                idx + int(post_trade_cooldown_bars),
+            )
 
         open_pos.append((idx + 1 + duration, symbol, size, entry))
 
@@ -410,6 +897,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             "vol_regime": vol_r,
             "dd_scale":   round(dd_scale, 2),
             "corr_mult":  round(corr_size_mult, 2),
+            "health_mult": round(health_mult, 3),
             "in_transition": in_transition,
             "trans_mult":    round(trans_mult, 2),
             "entry":      entry, "stop": stop, "target": target,
@@ -445,6 +933,7 @@ def scan_thoth(df: pd.DataFrame, symbol: str,
             "hmm_prob_chop":   (None if pd.isna(_hmm_pc[idx])  else round(float(_hmm_pc[idx]),  4)),
         }
         trades.append(t)
+        recent_closed.append(t)
         icon = "✓" if result == "WIN" else "✗"
         log.info(f"  {ts}  {icon}  {direction:8s}  sent={sent_score:+.2f}  "
                  f"fz={f_z:+.1f}  oi={oi_sig:+.1f}  ls={ls_sig:+.1f}  ${pnl:+.2f}")
@@ -465,6 +954,11 @@ def print_header():
     print(f"  BRIDGEWATER v1.0  ·  {RUN_ID}")
     print(f"  {len(SYMBOLS)} ativos  ·  {INTERVAL}  ·  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
     print(f"  funding w={THOTH_WEIGHT_FUNDING}  oi w={THOTH_WEIGHT_OI}  ls w={THOTH_WEIGHT_LS}")
+    print(f"  preset={RUNTIME_PRESET_NAME}  disable_oi={RUNTIME_DISABLE_OI}  strict_direction={RUNTIME_STRICT_DIRECTION}  min_components={RUNTIME_MIN_COMPONENTS}  min_dir_thresh={RUNTIME_MIN_DIR_THRESH}")
+    print(f"  allowed_macro_regimes={sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else 'ALL'}  post_trade_cooldown={RUNTIME_POST_TRADE_COOLDOWN_BARS}")
+    print(f"  regime_thresholds={RUNTIME_REGIME_THRESHOLDS or 'flat'}")
+    print(f"  symbol_health={RUNTIME_SYMBOL_HEALTH or 'off'}")
+    print(f"  min_coverage_fraction={RUNTIME_MIN_COVERAGE_FRACTION:.2f}")
     print(f"  {RUN_DIR}/")
     print(SEP)
 
@@ -492,6 +986,7 @@ def export_json(all_trades, eq, mc, ratios):
     import json
     closed = [t for t in all_trades if t["result"] in ("WIN", "LOSS")]
     wr = sum(1 for t in closed if t["result"] == "WIN") / max(len(closed), 1) * 100
+    diagnostics = _trade_sentiment_diagnostics(closed)
 
     data = {
         "engine": "BRIDGEWATER",
@@ -502,12 +997,23 @@ def export_json(all_trades, eq, mc, ratios):
         "n_symbols": len(SYMBOLS),
         "account_size": ACCOUNT_SIZE,
         "leverage": LEVERAGE,
+        "preset": RUNTIME_PRESET_NAME,
+        "disable_oi": RUNTIME_DISABLE_OI,
+        "strict_direction": RUNTIME_STRICT_DIRECTION,
+        "min_components": RUNTIME_MIN_COMPONENTS,
+        "min_dir_thresh": RUNTIME_MIN_DIR_THRESH,
+        "allowed_macro_regimes": sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else None,
+        "post_trade_cooldown_bars": RUNTIME_POST_TRADE_COOLDOWN_BARS,
+        "regime_thresholds": RUNTIME_REGIME_THRESHOLDS,
+        "symbol_health": RUNTIME_SYMBOL_HEALTH,
+        "min_coverage_fraction": RUNTIME_MIN_COVERAGE_FRACTION,
         "n_trades": len(closed),
         "win_rate": round(wr, 2),
         "roi": round(ratios["ret"], 2),
         "sharpe": ratios["sharpe"],
         "sortino": ratios.get("sortino"),
         "final_equity": round(eq[-1], 2) if eq else ACCOUNT_SIZE,
+        "sentiment_diagnostics": diagnostics,
         "trades": [{k: (v.isoformat() if isinstance(v, pd.Timestamp) else
                         float(v) if isinstance(v, (np.floating, np.integer)) else v)
                     for k, v in t.items()} for t in closed],
@@ -518,7 +1024,7 @@ def export_json(all_trades, eq, mc, ratios):
     print(f"  json  ·  {out}")
 
     try:
-        from core.db import save_run
+        from core.ops.db import save_run
         save_run("bridgewater", str(out))
     except Exception as e:
         log.warning(f"DB register failed: {e}")
@@ -536,13 +1042,67 @@ if __name__ == "__main__":
     )
     _ap.add_argument("--days", type=int, default=None, help="Lookback window in days.")
     _ap.add_argument("--basket", type=str, default=None, help="Universe preset from BASKETS.")
+    _ap.add_argument("--symbols", default=None, help="Optional comma-separated symbols; overrides --basket.")
     _ap.add_argument("--interval", type=str, default=INTERVAL, help="Execution timeframe override for this run.")
     _ap.add_argument("--leverage", type=float, default=None, help="Leverage override for this run.")
     _ap.add_argument("--no-menu", action="store_true")
+    _ap.add_argument("--end", type=str, default=None,
+                     help="End date YYYY-MM-DD for backtest window (pre-calibration OOS).")
+    _ap.add_argument("--preset", choices=["robust", "legacy", "oi_research"], default="robust",
+                     help="Runtime preset. robust=funding+LS main path with BEAR,CHOP filter; legacy=historical baseline; oi_research=OI-enabled research path with harder coverage.")
+    _ap.add_argument("--disable-oi", action="store_true",
+                     help="Disable OI channel for this run. Automatically enabled by preset=robust.")
+    _ap.add_argument("--enable-symbol-health", action="store_true",
+                     help="Enable adaptive per-symbol health control (research gate; default off).")
+    _ap.add_argument("--allowed-regimes", default=None,
+                     help="Optional comma-separated macro regimes to allow, e.g. BEAR or BEAR,BULL.")
+    _ap.add_argument("--min-coverage-fraction", type=float, default=None,
+                     help="Minimum fraction of the requested scan window that must have usable sentiment coverage. Defaults by preset.")
+    _ap.add_argument("--post-trade-cooldown-bars", type=int, default=0,
+                     help="Optional per-symbol cooldown after any closed trade. preset=robust defaults to 6.")
+    # Research gates (default OFF — preserve calibrated baseline).
+    # See scan_thoth docstring for rationale; wired for 2026-07-17 OOS battery.
+    _ap.add_argument("--strict-direction", action="store_true",
+                     help="Require explicit struct or macro match (removes neutral-struct fallback).")
+    _ap.add_argument("--min-components", type=int, default=0,
+                     help="Require at least N of {funding, oi, ls} signals non-zero (default 0 = off).")
+    _ap.add_argument("--min-dir-thresh", type=float, default=None,
+                     help="Override THOTH_DIRECTION_THRESHOLD for this run (default uses config).")
+    _ap.add_argument("--exit-on-reversal", action="store_true",
+                     help="(reserved) close position when composite sentiment reverses past threshold.")
     _args, _ = _ap.parse_known_args()
+    END_TIME_MS = None
+    if _args.end:
+        import pandas as _pd_tmp
+        END_TIME_MS = int(_pd_tmp.Timestamp(_args.end).timestamp() * 1000)
 
     if _args.interval:
         INTERVAL = _args.interval
+
+    _runtime = _resolve_runtime_preset(
+        _args.preset,
+        strict_direction=_args.strict_direction,
+        min_components=_args.min_components,
+        min_dir_thresh=_args.min_dir_thresh,
+        disable_oi=_args.disable_oi,
+        enable_symbol_health=_args.enable_symbol_health,
+        allowed_regimes=_args.allowed_regimes,
+        post_trade_cooldown_bars=_args.post_trade_cooldown_bars,
+    )
+    RUNTIME_PRESET_NAME = _runtime["preset"]
+    RUNTIME_STRICT_DIRECTION = _runtime["strict_direction"]
+    RUNTIME_MIN_COMPONENTS = _runtime["min_components"]
+    RUNTIME_MIN_DIR_THRESH = _runtime["min_dir_thresh"]
+    RUNTIME_DISABLE_OI = _runtime["disable_oi"]
+    RUNTIME_ALLOWED_MACRO_REGIMES = _runtime["allowed_macro_regimes"]
+    RUNTIME_POST_TRADE_COOLDOWN_BARS = _runtime["post_trade_cooldown_bars"]
+    RUNTIME_REGIME_THRESHOLDS = _runtime["regime_thresholds"]
+    RUNTIME_SYMBOL_HEALTH = _runtime["symbol_health"]
+    runtime_min_coverage = _runtime.get("min_coverage_fraction", 0.70)
+    if _args.min_coverage_fraction is None:
+        RUNTIME_MIN_COVERAGE_FRACTION = max(0.0, min(1.0, float(runtime_min_coverage)))
+    else:
+        RUNTIME_MIN_COVERAGE_FRACTION = max(0.0, min(1.0, float(_args.min_coverage_fraction)))
 
     print(f"\n{SEP}")
     print(f"  BRIDGEWATER  ·  Macro Sentiment Contrarian")
@@ -557,10 +1117,15 @@ if __name__ == "__main__":
     # N_CANDLES scales with TF (15m=4/h, 1h=1/h, 4h=1/4h)
     _tf_per_hour = 60 / _TF_MINUTES.get(INTERVAL, 15)
     N_CANDLES = int(SCAN_DAYS * 24 * _tf_per_hour)
+    WARMUP_BARS = _scan_warmup_bars()
+    FETCH_CANDLES = N_CANDLES + WARMUP_BARS
 
-    BASKET_NAME = _args.basket or ENGINE_BASKETS.get("BRIDGEWATER", "default")
+    _symbols_override = _parse_symbols_override(_args.symbols)
+    BASKET_NAME = "custom" if _symbols_override else (_args.basket or ENGINE_BASKETS.get("BRIDGEWATER", "default"))
     from config.params import BASKETS
-    if BASKET_NAME in BASKETS:
+    if _symbols_override:
+        SYMBOLS = _symbols_override
+    elif BASKET_NAME in BASKETS:
         SYMBOLS = BASKETS[BASKET_NAME]
     elif not _args.no_menu:
         SYMBOLS = select_symbols(SYMBOLS)
@@ -581,6 +1146,11 @@ if __name__ == "__main__":
     print(f"\n{SEP}")
     print(f"  BRIDGEWATER  ·  {SCAN_DAYS}d  ·  {len(SYMBOLS)} ativos  ·  {INTERVAL}")
     print(f"  ${ACCOUNT_SIZE:,.0f}  ·  {LEVERAGE}x")
+    print(f"  preset={RUNTIME_PRESET_NAME}  disable_oi={RUNTIME_DISABLE_OI}  strict_direction={RUNTIME_STRICT_DIRECTION}  min_components={RUNTIME_MIN_COMPONENTS}  min_dir_thresh={RUNTIME_MIN_DIR_THRESH}")
+    print(f"  allowed_macro_regimes={sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else 'ALL'}  post_trade_cooldown={RUNTIME_POST_TRADE_COOLDOWN_BARS}")
+    print(f"  regime_thresholds={RUNTIME_REGIME_THRESHOLDS or 'flat'}")
+    print(f"  symbol_health={RUNTIME_SYMBOL_HEALTH or 'off'}")
+    print(f"  min_coverage_fraction={RUNTIME_MIN_COVERAGE_FRACTION:.2f}")
     print(f"  {RUN_DIR}/")
     print(SEP)
     if not _args.no_menu:
@@ -589,11 +1159,22 @@ if __name__ == "__main__":
     log.info(f"BRIDGEWATER v1.0 iniciado — {RUN_ID}  tf={INTERVAL}  dias={SCAN_DAYS}")
 
     # ── FETCH OHLCV ──
-    print(f"\n{SEP}\n  DADOS   {INTERVAL}   {N_CANDLES:,} candles\n{SEP}")
+    print(f"\n{SEP}\n  DADOS   {INTERVAL}   {FETCH_CANDLES:,} candles ({N_CANDLES:,} scan + {WARMUP_BARS} warmup)\n{SEP}")
     _fetch_syms = list(SYMBOLS)
     if MACRO_SYMBOL not in _fetch_syms:
         _fetch_syms.insert(0, MACRO_SYMBOL)
-    all_dfs = fetch_all(_fetch_syms, INTERVAL, N_CANDLES)
+    all_dfs = fetch_all(
+        _fetch_syms,
+        INTERVAL,
+        FETCH_CANDLES,
+        futures=True,
+        min_rows=min(300, FETCH_CANDLES),
+        end_time_ms=END_TIME_MS,
+    )
+    all_dfs, stale_symbols = _filter_stale_market_data(all_dfs, INTERVAL)
+    if stale_symbols:
+        print(f"  stale symbols skipped: {', '.join(sorted(stale_symbols))}")
+        log.warning(f"stale OHLCV skipped: {sorted(stale_symbols)}")
     for sym, df in all_dfs.items():
         validate(df, sym)
     if not all_dfs:
@@ -604,7 +1185,37 @@ if __name__ == "__main__":
 
     # ── FETCH SENTIMENT ──
     print(f"\n{SEP}\n  SENTIMENT DATA\n{SEP}")
-    sentiment_data = collect_sentiment([s for s in SYMBOLS if s in all_dfs])
+    sentiment_data = collect_sentiment(
+        [s for s in SYMBOLS if s in all_dfs],
+        end_time_ms=END_TIME_MS,
+        window_days=SCAN_DAYS,
+    )
+    runtime_sentiment_data = _runtime_sentiment_view(
+        sentiment_data,
+        disable_oi=RUNTIME_DISABLE_OI,
+    )
+    eligible_symbols = [
+        s for s in SYMBOLS
+        if s in all_dfs
+        and s in runtime_sentiment_data
+        and runtime_sentiment_data[s].get("funding_z") is not None
+        and runtime_sentiment_data[s].get("oi_ready", runtime_sentiment_data[s].get("oi_df") is not None)
+        and runtime_sentiment_data[s].get("ls_ready", runtime_sentiment_data[s].get("ls_signal") is not None)
+    ]
+    skipped_sentiment = sorted([s for s in SYMBOLS if s in all_dfs and s not in eligible_symbols])
+    if skipped_sentiment:
+        print(f"  sentiment-incomplete symbols skipped: {', '.join(skipped_sentiment)}")
+        log.warning(f"sentiment-incomplete symbols skipped: {skipped_sentiment}")
+    if not eligible_symbols:
+        print("  sem simbolos com sentiment completo"); sys.exit(1)
+    all_dfs = {sym: all_dfs[sym] for sym in eligible_symbols}
+    SYMBOLS = eligible_symbols
+    runtime_sentiment_data = {sym: runtime_sentiment_data[sym] for sym in eligible_symbols}
+
+    if not _scan_window_can_close_trades(N_CANDLES):
+        print(f"\n  insufficient sample: {N_CANDLES} candles <= MAX_HOLD {MAX_HOLD}")
+        log.warning(f"insufficient sample for closed trades: n_candles={N_CANDLES} max_hold={MAX_HOLD}")
+        sys.exit(0)
 
     print_header()
 
@@ -612,10 +1223,46 @@ if __name__ == "__main__":
     print(f"\n{SEP}\n  SCAN SENTIMENT\n{SEP}")
     all_trades = []
     all_vetos = defaultdict(int)
+    insufficient_coverage_symbols: list[str] = []
+    insufficient_coverage_details: list[str] = []
 
     for sym, df in all_dfs.items():
+        coverage = _coverage_eligibility(
+            df,
+            runtime_sentiment_data.get(sym),
+            max(0, len(df) - N_CANDLES),
+            min_fraction=RUNTIME_MIN_COVERAGE_FRACTION,
+        )
+        symbol_scan_start_idx = int(coverage["scan_start_idx"])
+        remaining_scan_candles = int(coverage["covered_scan_candles"])
+        if not coverage["eligible"]:
+            insufficient_coverage_symbols.append(sym)
+            insufficient_coverage_details.append(
+                f"{sym}({remaining_scan_candles}/{coverage['total_scan_candles']}="
+                f"{coverage['coverage_fraction']:.0%}, closeable={coverage['closeable']})"
+            )
+            log.warning(
+                "sentiment coverage insufficient: %s scan_candles=%s total_scan=%s coverage=%.2f closeable=%s min_required=%.2f",
+                sym,
+                remaining_scan_candles,
+                coverage["total_scan_candles"],
+                coverage["coverage_fraction"],
+                coverage["closeable"],
+                RUNTIME_MIN_COVERAGE_FRACTION,
+            )
+            continue
         trades, vetos = scan_thoth(df, sym, macro_bias, corr,
-                                   sentiment_data=sentiment_data)
+                                   sentiment_data=runtime_sentiment_data,
+                                   scan_start_idx=symbol_scan_start_idx,
+                                   disable_oi=RUNTIME_DISABLE_OI,
+                                   allowed_macro_regimes=RUNTIME_ALLOWED_MACRO_REGIMES,
+                                   post_trade_cooldown_bars=RUNTIME_POST_TRADE_COOLDOWN_BARS,
+                                   regime_thresholds=RUNTIME_REGIME_THRESHOLDS,
+                                   symbol_health=RUNTIME_SYMBOL_HEALTH,
+                                   strict_direction=RUNTIME_STRICT_DIRECTION,
+                                   min_components=RUNTIME_MIN_COMPONENTS,
+                                   min_dir_thresh=RUNTIME_MIN_DIR_THRESH,
+                                   exit_on_reversal=_args.exit_on_reversal)
         all_trades.extend(trades)
         for k, v in vetos.items():
             all_vetos[k] += v
@@ -623,6 +1270,15 @@ if __name__ == "__main__":
     all_trades.sort(key=lambda t: t["timestamp"])
 
     closed = [t for t in all_trades if t["result"] in ("WIN", "LOSS")]
+    if insufficient_coverage_symbols:
+        skipped = ", ".join(sorted(insufficient_coverage_symbols))
+        print(f"  insufficient sentiment coverage skipped: {skipped}")
+        print(f"  coverage rule: need >= {RUNTIME_MIN_COVERAGE_FRACTION:.0%} of requested scan window with closeable sentiment history")
+        for detail in sorted(insufficient_coverage_details)[:8]:
+            print(f"    {detail}")
+        if not closed:
+            print(f"\n  insufficient sentiment coverage: need more cached OI/LS history to close trades")
+            sys.exit(0)
     if not closed:
         print(f"\n  sem trades fechados"); sys.exit(1)
 
@@ -685,7 +1341,7 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════
     #  PERSISTÊNCIA — alinhado com CITADEL
     # ══════════════════════════════════════════════════════════════
-    from core.run_manager import snapshot_config, save_run_artifacts, append_to_index
+    from core.ops.run_manager import snapshot_config, save_run_artifacts, append_to_index
 
     roi = ratios["ret"]
     _config = snapshot_config()
@@ -711,6 +1367,16 @@ if __name__ == "__main__":
         "interval": INTERVAL,
         "period_days": SCAN_DAYS,
         "engine": "BRIDGEWATER",
+        "preset": RUNTIME_PRESET_NAME,
+        "disable_oi": RUNTIME_DISABLE_OI,
+        "strict_direction": RUNTIME_STRICT_DIRECTION,
+        "min_components": RUNTIME_MIN_COMPONENTS,
+        "min_dir_thresh": RUNTIME_MIN_DIR_THRESH,
+        "allowed_macro_regimes": sorted(RUNTIME_ALLOWED_MACRO_REGIMES) if RUNTIME_ALLOWED_MACRO_REGIMES else None,
+        "post_trade_cooldown_bars": RUNTIME_POST_TRADE_COOLDOWN_BARS,
+        "regime_thresholds": RUNTIME_REGIME_THRESHOLDS,
+        "symbol_health": RUNTIME_SYMBOL_HEALTH,
+        "min_coverage_fraction": RUNTIME_MIN_COVERAGE_FRACTION,
     }
 
     save_run_artifacts(

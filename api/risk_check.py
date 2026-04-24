@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from core.risk_gates import (
+from core.risk.risk_gates import (
     GateDecision,
     RiskState,
     check_gates,
@@ -46,7 +46,7 @@ def build_start_state(snapshot: dict | None) -> RiskState:
 
 def _fetch_snapshot(mode: str) -> dict | None:
     try:
-        from core.portfolio_monitor import PortfolioMonitor
+        from core.ui.portfolio_monitor import PortfolioMonitor
         return PortfolioMonitor().refresh(mode)
     except Exception:
         return None

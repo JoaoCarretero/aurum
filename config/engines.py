@@ -9,19 +9,18 @@ the trading style each engine implements.
 """
 
 ENGINES = {
-    "citadel":     {"script": "engines/citadel.py",      "display": "CITADEL",     "desc": "Systematic momentum — trend-following + fractal alignment"},
-    "renaissance": {"script": "engines/renaissance.py",   "display": "RENAISSANCE", "desc": "Pattern recognition — harmonic geometry + Bayesian scoring"},
-    "jump":        {"script": "engines/jump.py",      "display": "JUMP",        "desc": "Order flow — CVD divergence + volume imbalance"},
-    "bridgewater": {"script": "engines/bridgewater.py",         "display": "BRIDGEWATER", "desc": "Macro sentiment — funding + OI + LS ratio contrarian"},
-    "deshaw":      {"script": "engines/deshaw.py",        "display": "DE SHAW",     "desc": "Statistical arb — pairs cointegration + mean reversion"},
-    "millennium":  {"script": "engines/millennium.py", "display": "MILLENNIUM",  "desc": "Multi-strategy pod — ensemble orchestrator"},
-    "twosigma":    {"script": "engines/twosigma.py",      "display": "TWO SIGMA",   "desc": "ML meta-ensemble — LightGBM walk-forward"},
-    "janestreet":  {"script": "engines/janestreet.py",     "display": "JANE STREET", "desc": "Cross-venue arb — funding/basis multi-exchange"},
-    "aqr":         {"script": "engines/aqr.py",        "display": "AQR",         "desc": "Adaptive allocation — evolutionary parameter optimization"},
-    "kepos":       {"script": "engines/kepos.py",      "display": "KEPOS",       "desc": "Critical endogeneity fade — Hawkes η≥0.95 reversal plays"},
-    "graham":      {"script": "engines/graham.py",     "display": "GRAHAM",      "desc": "Endogenous momentum — trend-following gated by Hawkes ENDO regime"},
-    "winton":      {"script": "core/chronos.py",          "display": "WINTON",      "desc": "Time-series intelligence — HMM + GARCH + Hurst + seasonality"},
-    "live":        {"script": "engines/live.py",          "display": "LIVE",        "desc": "Live execution — paper / demo / testnet / real"},
+    "citadel":     {"script": "engines/citadel.py",      "display": "CITADEL",     "desc": "Cross-timeframe momentum with fractal confirmation",       "module": "BACKTEST", "stage": "validated",          "sort_weight": 10,  "live_ready": True},
+    "renaissance": {"script": "engines/renaissance.py",  "display": "RENAISSANCE", "desc": "Harmonic pattern recognition with Bayesian scoring",      "module": "BACKTEST", "stage": "research",           "sort_weight": 50,  "live_ready": False, "live_bootstrap": True},
+    "jump":        {"script": "engines/jump.py",         "display": "JUMP",        "desc": "Order-flow microstructure with CVD divergence",           "module": "BACKTEST", "stage": "validated",          "sort_weight": 40,  "live_ready": True},
+    "bridgewater": {"script": "engines/bridgewater.py",  "display": "BRIDGEWATER", "desc": "Cross-sectional sentiment contrarian",                    "module": "BACKTEST", "stage": "quarantined",        "sort_weight": 20,  "live_ready": False},
+    "millennium":  {"script": "engines/millennium.py",   "display": "MILLENNIUM",  "desc": "Multi-strategy portfolio orchestrator · live bootstrap staged", "module": "BACKTEST", "stage": "bootstrap_staging", "sort_weight": 60,  "live_ready": False, "live_bootstrap": True},
+    "twosigma":    {"script": "engines/twosigma.py",     "display": "TWO SIGMA",   "desc": "LightGBM meta-allocator on regime features",              "module": "BACKTEST", "stage": "research",           "sort_weight": 70,  "live_ready": False},
+    "janestreet":  {"script": "engines/janestreet.py",   "display": "JANE STREET", "desc": "Cross-venue basis arbitrage, delta-neutral",              "module": "LIVE",     "stage": "validated",          "sort_weight": 90,  "live_ready": True},
+    "aqr":         {"script": "engines/aqr.py",          "display": "AQR",         "desc": "Evolutionary parameter allocation",                       "module": "TOOLS",    "stage": "research",           "sort_weight": 100, "live_ready": False},
+    "graham":      {"script": "engines/graham.py",       "display": "GRAHAM",      "desc": "Endogenous momentum with Hawkes regime gate",             "module": "BACKTEST", "stage": "experimental",       "sort_weight": 74,  "live_ready": False},
+    "phi":         {"script": "engines/phi.py",          "display": "PHI",         "desc": "Fibonacci confluence at 0.618 retracement",               "module": "BACKTEST", "stage": "research",           "sort_weight": 78,  "live_ready": False},
+    "winton":      {"script": "core/chronos.py",         "display": "WINTON",      "desc": "Time-series regime suite (HMM, GARCH, Hurst)",            "module": "TOOLS",    "stage": "research",           "sort_weight": 110, "live_ready": False},
+    "live":        {"script": "engines/live.py",         "display": "LIVE",        "desc": "Live execution — paper / demo / testnet / real",          "module": "LIVE",     "stage": "validated",          "sort_weight": 80,  "live_ready": True},
 }
 
 # Convenience lookups
@@ -30,6 +29,37 @@ ENGINE_SCRIPTS = {k: v["script"] for k, v in ENGINES.items()}
 
 # Reverse lookup: script path -> canonical key
 SCRIPT_TO_KEY = {v["script"]: k for k, v in ENGINES.items()}
+ENGINE_GROUPS = {k: v.get("module", "ENGINES") for k, v in ENGINES.items()}
+ENGINE_SORT_WEIGHTS = {k: int(v.get("sort_weight", 999)) for k, v in ENGINES.items()}
+ENGINE_STAGES = {k: str(v.get("stage", "research")) for k, v in ENGINES.items()}
+
+# Engines with a validated live runner (paper/demo/testnet/live modes).
+# Consumed by launcher_support/engines_live_view.py to split the picker
+# into READY LIVE vs RESEARCH buckets. Update this flag per engine only
+# after a run-paper smoke test confirms the live entrypoint works.
+LIVE_READY_SLUGS = frozenset(k for k, v in ENGINES.items() if v.get("live_ready"))
+
+# Engines that may appear in the live cockpit as bootstrap-runnable even
+# before the full live execution loop is validated. These remain distinct
+# from LIVE_READY_SLUGS so the UI can stay honest about stage.
+LIVE_BOOTSTRAP_SLUGS = frozenset(k for k, v in ENGINES.items() if v.get("live_bootstrap"))
+
+# Engines em quarentena — rodáveis mas sem edge confirmado OOS ou com
+# bugs documentados. Não vão pra paper/live sem re-calibração genuína
+# + DSR. Bloco 1 do plano de alinhamento 2026-04-17.
+#
+# Critérios de inclusão:
+#   - OOS Sharpe < 0 em janela representativa (COLLAPSED)
+#   - 0 trades em janela representativa (NON_FUNCTIONAL) sem fix de
+#     threshold aplicado
+#   - Bug estrutural documentado sem fix aprovado
+#   - Arquivado por docstring mas ainda no registry
+#
+# Consumo: launcher filtra em view "experimental"; CLI aurum_cli emite
+# warning ao rodar; orquestrador OOS audit pode incluir/excluir via flag.
+EXPERIMENTAL_SLUGS: frozenset[str] = frozenset({
+    "graham",    # arquivado per docstring (4h overfit)
+})
 
 # Process-manager names are still legacy in some UI/API surfaces. Keep the
 # mapping here so every consumer resolves to the same script/display pair.
@@ -53,11 +83,6 @@ PROC_ENGINES = {
         "script": ENGINES["janestreet"]["script"],
         "display": "JANE STREET",
         "canonical": "janestreet",
-    },
-    "newton": {
-        "script": ENGINES["deshaw"]["script"],
-        "display": "DE SHAW",
-        "canonical": "deshaw",
     },
     "mercurio": {
         "script": ENGINES["jump"]["script"],
@@ -89,18 +114,13 @@ PROC_ENGINES = {
         "display": "WINTON",
         "canonical": "winton",
     },
-    "kepos": {
-        "script": ENGINES["kepos"]["script"],
-        "display": "KEPOS",
-        "canonical": "kepos",
-    },
     "graham": {
         "script": ENGINES["graham"]["script"],
         "display": "GRAHAM",
         "canonical": "graham",
     },
     "prefetch": {
-        "script": "tools/prefetch.py",
+        "script": "tools/capture/prefetch.py",
         "display": "PREFETCH",
         "canonical": "prefetch",
     },

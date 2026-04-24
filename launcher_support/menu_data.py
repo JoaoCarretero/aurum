@@ -35,6 +35,7 @@ def main_groups(markets: dict, tile_markets: str, tile_execute: str, tile_resear
             ("TERMINAL", "_terminal"),
             ("DATA", "_data_center"),
             ("MACRO BRAIN", "_macro_brain_menu"),
+            ("RESEARCH DESK", "_research_desk"),
         ]),
         ("CONTROL", "4", tile_control, [
             ("CONNECTIONS", "_connections"),
@@ -62,6 +63,7 @@ BLOCK_DESCRIPTIONS = {
     "_risk_menu": "portfolio, limites e kill-switch",
     "_terminal": "charts, macro e research terminal",
     "_data_center": "backtests, logs e reports",
+    "_research_desk": "mesa ai: scryer, arbiter, artifex, curator",
     "_connections": "exchanges, contas e credenciais",
     "_command_center": "site, servers e operacao",
     "_config": "settings, keys e telegram",

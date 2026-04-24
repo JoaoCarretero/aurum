@@ -3,8 +3,7 @@ AURUM Finance — Overfit Audit
 6 reality checks on backtest trade data.
 If it smells like overfit, it probably is.
 """
-import json, sys, math
-import numpy as np
+import json, sys
 from pathlib import Path
 
 from config.params import LEVERAGE, COMMISSION, FUNDING_PER_8H
@@ -72,39 +71,82 @@ def _test_walk_forward(trades):
 # ---------------------------------------------------------------------------
 # TEST B — Parameter Sensitivity
 # ---------------------------------------------------------------------------
+def _pick_score_field(trades):
+    """Return (field_name, thresholds) based on what's available on trades.
+
+    - CITADEL-style: 'score' in [0, 1]  → thresholds 0.50..0.56 step 0.01
+    - Hawkes-style:  'eta_at_entry' in ~[0.7, 1.0] → data-driven quartiles
+    - None: returns (None, []) → test becomes SKIP
+    """
+    n = len(trades)
+    if n == 0:
+        return None, []
+    has_score = sum(1 for t in trades if t.get("score") is not None)
+    if has_score > n * 0.5:
+        return "score", [0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56]
+    has_eta = sum(1 for t in trades if t.get("eta_at_entry") is not None)
+    if has_eta > n * 0.5:
+        vals = sorted(float(t["eta_at_entry"]) for t in trades
+                      if t.get("eta_at_entry") is not None)
+        if len(vals) < 10:
+            return None, []
+        # 5 quantile cuts: p10, p25, p50, p75, p90
+        def q(p): return vals[int(p * (len(vals) - 1))]
+        thrs = sorted({round(q(p), 4) for p in (0.10, 0.25, 0.50, 0.75, 0.90)})
+        return "eta_at_entry", thrs
+    return None, []
+
+
 def _test_sensitivity(trades):
-    thresholds = [0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56]
+    field, thresholds = _pick_score_field(trades)
+    if field is None or not thresholds:
+        return {"name": "sensitivity", "pass": None, "status": "SKIP",
+                "detail": "no score/eta field on trades",
+                "thresholds": []}
+
     rows = []
     for th in thresholds:
-        subset = [t for t in trades if t.get("score", 0) >= th]
+        subset = [t for t in trades if (t.get(field) or 0) >= th]
         pnl = _total_pnl(subset) if subset else 0.0
         wr = _wr(subset) if subset else 0.0
         rows.append({"threshold": th, "n": len(subset), "wr": round(wr, 1),
                       "pnl": round(pnl, 2)})
 
-    # Check for cliff: PnL drops >60% in one step
+    # A meaningful sensitivity test requires real variation across thresholds.
+    non_empty = [r for r in rows if r["n"] > 0]
+    if len(non_empty) < 2:
+        return {"name": "sensitivity", "pass": None, "status": "SKIP",
+                "detail": f"{field} range too narrow for thresholds",
+                "thresholds": rows, "field": field}
+
+    # Check for cliff: PnL drops >60% in one step (only when prev had trades)
     cliff = False
+    cliff_thr = None
     for i in range(1, len(rows)):
         prev_pnl = rows[i - 1]["pnl"]
         curr_pnl = rows[i]["pnl"]
+        if rows[i - 1]["n"] == 0:
+            continue
         if prev_pnl > 0:
             drop = (prev_pnl - curr_pnl) / prev_pnl
             if drop > 0.60:
                 cliff = True
+                cliff_thr = rows[i]["threshold"]
                 break
         if prev_pnl > 0 and curr_pnl < 0:
             cliff = True
+            cliff_thr = rows[i]["threshold"]
             break
 
     if not cliff:
         status, passed = "PASS", True
-        detail = "Smooth degradation across thresholds"
+        detail = f"Smooth degradation across {field} thresholds"
     else:
         status, passed = "FAIL", False
-        detail = f"Cliff detected at threshold {rows[i]['threshold']:.2f}"
+        detail = f"Cliff at {field}>={cliff_thr:.3f}"
 
     return {"name": "sensitivity", "pass": passed, "status": status,
-            "detail": detail, "thresholds": rows}
+            "detail": detail, "thresholds": rows, "field": field}
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +199,13 @@ def _test_concentration(trades):
 # ---------------------------------------------------------------------------
 def _test_regime(trades):
     from collections import defaultdict
+    # If no trade carries a real macro_bias tag, skip honestly rather than
+    # collapsing everything into UNKNOWN (which trivially "passes").
+    tagged = sum(1 for t in trades if t.get("macro_bias"))
+    if tagged < max(5, len(trades) * 0.25):
+        return {"name": "regime", "pass": None, "status": "SKIP",
+                "detail": "macro_bias not tracked by this engine",
+                "regimes": {}}
     by_regime = defaultdict(list)
     for t in trades:
         r = t.get("macro_bias", "UNKNOWN")
@@ -334,8 +383,11 @@ def run_audit(trades: list[dict], slippage_fn=None) -> dict:
 
     passed = sum(1 for t in tests.values() if t["status"] == "PASS")
     warnings = sum(1 for t in tests.values() if t["status"] == "WARN")
+    skipped = sum(1 for t in tests.values() if t["status"] == "SKIP")
+    failed = sum(1 for t in tests.values() if t["status"] == "FAIL")
 
-    return {"tests": tests, "passed": passed, "total": 6, "warnings": warnings}
+    return {"tests": tests, "passed": passed, "total": 6,
+            "warnings": warnings, "skipped": skipped, "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -346,13 +398,16 @@ def print_audit_box(results: dict):
     tests = results.get("tests", {})
     p = results.get("passed", 0)
     w = results.get("warnings", 0)
-    f = results.get("total", 6) - p - w
+    sk = results.get("skipped", 0)
+    f = results.get("failed", results.get("total", 6) - p - w - sk)
 
     header = f"OVERFIT AUDIT: {p}/{results['total']} PASS"
     if w:
         header += f"  {w} WARNING"
     if f:
         header += f"  {f} FAIL"
+    if sk:
+        header += f"  {sk} SKIP"
 
     width = 45
     print(f"  +-- {header} {'-' * max(1, width - len(header) - 6)}+")
@@ -376,7 +431,7 @@ def build_audit_html(results: dict) -> str:
     """Build HTML fragment for embedding in backtest report."""
     # Shared chart palette — see analysis/_chart_palette.py.
     from analysis._chart_palette import (
-        BG as _BG, PANEL as _PANEL, GOLD as _GOLD, GREEN as _GREEN,
+        PANEL as _PANEL, GOLD as _GOLD, GREEN as _GREEN,
         RED as _RED, GRAY as _GRAY, WHITE as _WHITE, BORDER as _BORDER,
         TEAL as _TEAL,
     )

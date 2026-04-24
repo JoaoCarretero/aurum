@@ -1,0 +1,43 @@
+[Unit]
+Description=AURUM · MILLENNIUM shadow runner (24h rolling scan, no order routing)
+Documentation=https://github.com/joao/aurum.finance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change these two for your VPS layout:
+User=aurum
+WorkingDirectory=/srv/aurum.finance
+
+# tick-sec 900 = every 15 min; run-hours 0 = run until stopped.
+# Use `systemctl stop millennium-shadow` or `touch data/millennium_shadow/<run>/.kill`
+# to exit cleanly after the current tick.
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 tools/maintenance/millennium_shadow.py --tick-sec 900 --run-hours 0
+
+# Resource hygiene — one tick fetches ~11 symbols × 5 timeframes; ~200-400MB peak.
+MemoryMax=1G
+CPUQuota=200%
+
+# Restart semantics: only restart on unexpected failure, never if we exit
+# cleanly (deadline reached, kill flag, SIGTERM from systemd stop).
+Restart=on-failure
+RestartSec=30s
+# Give the current tick up to 120s to finish before killing (one tick takes
+# ~45s in practice, leaving 75s of slack).
+TimeoutStopSec=120
+
+# Tight hardening — shadow never needs network except through the engine's
+# own fetch, and never writes outside its own run dir.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/aurum.finance/data
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=millennium-shadow
+
+[Install]
+WantedBy=multi-user.target

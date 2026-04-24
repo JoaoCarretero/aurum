@@ -1,0 +1,12 @@
+{
+  "date": "2026-04-18",
+  "branch": "lane-1/organizacao-estrutural",
+  "smoke_count": "173/173 passed",
+  "pytest_count": "1151 passed, 7 skipped",
+  "reference_backtest": {
+    "command": "python aurum_cli.py backtest citadel --days 30",
+    "run_dir": "data/runs/citadel_2026-04-18_090805",
+    "csv_path": "trades.json",
+    "sha256": "a0f10d75cbebc0db64d7e3ff9a05e86242dff372242d74b0fa4d9086afead147"
+  }
+}
