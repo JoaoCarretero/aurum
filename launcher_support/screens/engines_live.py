@@ -32,6 +32,11 @@ class EnginesLiveScreen(Screen):
         app.h_stat.configure(text=market_label, fg=AMBER_D)
         app.f_lbl.configure(text="ESC main  |  ▲▼ select  |  ENTER run  |  M cycle mode")
         app._bind_global_nav()
+        # engines_live renders its own rich footer (hints + TUNNEL color)
+        # inside the screen root — hide the app-wide footer here so the
+        # bottom of the window shows one clear strip instead of two.
+        if hasattr(app, "_hide_app_footer"):
+            app._hide_app_footer()
 
         prior = getattr(app, "_engines_live_handle", None)
         prior_root = prior.get("root") if isinstance(prior, dict) else None
@@ -79,6 +84,10 @@ class EnginesLiveScreen(Screen):
                 prior["cleanup"]()
             except Exception:
                 pass
+        # Restore the app-wide footer when leaving engines_live so the
+        # next screen (which relies on app.f_lbl) stays visible.
+        if hasattr(app, "_show_app_footer"):
+            app._show_app_footer()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -950,10 +950,39 @@ class App(tk.Tk):
         # widget to the end of the pack list, which would otherwise push
         # a side="top" footer above the screen content area).
         ft = tk.Frame(self, bg=BG2, height=20); ft.pack(side="bottom", fill="x"); ft.pack_propagate(False)
-        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x")
+        ft_sep = tk.Frame(self, bg=BORDER, height=1); ft_sep.pack(side="bottom", fill="x")
         fc = tk.Frame(ft, bg=BG2); fc.pack(fill="both", expand=True, padx=10)
         self.f_lbl = tk.Label(fc, text="", font=(FONT, 7), fg=DIM, bg=BG2); self.f_lbl.pack(side="right")
         tk.Label(fc, text="v2.0", font=(FONT, 7), fg=DIM2, bg=BG2).pack(side="left")
+        # Exposed refs so screens with their own footer (engines_live)
+        # can hide this app-wide strip to avoid a redundant bottom bar.
+        self._app_footer_frame = ft
+        self._app_footer_sep = ft_sep
+
+    def _hide_app_footer(self) -> None:
+        for w in (getattr(self, "_app_footer_frame", None),
+                  getattr(self, "_app_footer_sep", None)):
+            if w is not None:
+                try:
+                    w.pack_forget()
+                except Exception:
+                    pass
+
+    def _show_app_footer(self) -> None:
+        sep = getattr(self, "_app_footer_sep", None)
+        ft = getattr(self, "_app_footer_frame", None)
+        # Re-pack in the right order (ft first so it claims the bottom,
+        # separator next so it sits just above ft).
+        if ft is not None:
+            try:
+                ft.pack(side="bottom", fill="x")
+            except Exception:
+                pass
+        if sep is not None:
+            try:
+                sep.pack(side="bottom", fill="x")
+            except Exception:
+                pass
 
     def _clr(self):
         aid = getattr(self, "_exec_progress_after_id", None)
