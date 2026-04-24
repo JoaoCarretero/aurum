@@ -88,20 +88,40 @@ def _h_levels(X, D, direction, XA, AD):
     return round(target,8), round(stop,4)
 
 
+def _h_entropy_norm(df, idx):
+    """Normalized Shannon entropy (0..1) of the last H_ENTROPY_WINDOW
+    close-to-close returns. Returns None when the series is too short
+    or degenerate (zero variance) — callers treat that as STRUCTURED.
+    Exposed as a separate function so callers can persist the raw
+    numeric value alongside the label for post-hoc diagnosis.
+    """
+    if idx < H_ENTROPY_WINDOW:
+        return None
+    prices = df["close"].iloc[idx - H_ENTROPY_WINDOW:idx].values
+    rets = [prices[i] / prices[i - 1] - 1 for i in range(1, len(prices)) if prices[i - 1] > 0]
+    if len(rets) < H_ENTROPY_BINS:
+        return None
+    mn, mx = min(rets), max(rets)
+    if mx == mn:
+        return None
+    bw = (mx - mn) / H_ENTROPY_BINS
+    counts = [0] * H_ENTROPY_BINS
+    for r in rets:
+        counts[min(int((r - mn) / bw), H_ENTROPY_BINS - 1)] += 1
+    n = len(rets)
+    probs = [c / n for c in counts if c > 0]
+    H = -sum(p * math.log(p) for p in probs)
+    return H / math.log(H_ENTROPY_BINS)
+
+
 def _h_entropy(df, idx):
-    if idx<H_ENTROPY_WINDOW: return "STRUCTURED"
-    prices=df["close"].iloc[idx-H_ENTROPY_WINDOW:idx].values
-    rets=[prices[i]/prices[i-1]-1 for i in range(1,len(prices)) if prices[i-1]>0]
-    if len(rets)<H_ENTROPY_BINS: return "STRUCTURED"
-    mn,mx=min(rets),max(rets)
-    if mx==mn: return "STRUCTURED"
-    bw=(mx-mn)/H_ENTROPY_BINS; counts=[0]*H_ENTROPY_BINS
-    for r in rets: counts[min(int((r-mn)/bw),H_ENTROPY_BINS-1)]+=1
-    n=len(rets); probs=[c/n for c in counts if c>0]
-    H=-sum(p*math.log(p) for p in probs)
-    norm=H/math.log(H_ENTROPY_BINS)
-    if norm>0.92: return "RANDOM"
-    if norm<0.50: return "STRUCTURED"
+    norm = _h_entropy_norm(df, idx)
+    if norm is None:
+        return "STRUCTURED"
+    if norm > 0.92:
+        return "RANDOM"
+    if norm < 0.50:
+        return "STRUCTURED"
     return "TRANSITION"
 
 
@@ -278,7 +298,11 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                     if htf_str>=0.35 and htf_s==tgt_struct: aligned+=1
                 fractal_score=round(aligned/n_htf,2) if n_htf>0 else 1.0
                 if aligned==0: vetos["hermes_fractal_misalign"]+=1; continue
-            ent=_h_entropy(df,idx)
+            ent_norm=_h_entropy_norm(df,idx)
+            if ent_norm is None: ent="STRUCTURED"
+            elif ent_norm>0.92: ent="RANDOM"
+            elif ent_norm<0.50: ent="STRUCTURED"
+            else: ent="TRANSITION"
             if ent=="RANDOM": vetos["hermes_entropy_random"]+=1; continue
             hurst=_h_hurst(df,idx)
             ent_w=1.2 if ent=="STRUCTURED" else 0.8
@@ -352,7 +376,9 @@ def scan_hermes(df, symbol, macro_bias_series, corr, htf_stack_dfs=None,
                 "symbol":symbol,"time":ts,"timestamp":df["time"].iloc[idx],
                 "strategy":"RENAISSANCE","pattern":pat,"idx":idx,"entry_idx":idx+1,
                 "direction":direction,"macro_bias":macro_b,"vol_regime":vol_r,
-                "h_regime":h_regime,"entropy":ent,"hurst":hurst,
+                "h_regime":h_regime,"entropy":ent,
+                "entropy_norm":(round(ent_norm,4) if ent_norm is not None else None),
+                "hurst":hurst,
                 "entry":entry,"stop":stop,"target":target,"exit_p":round(ep,6),
                 "rr":rr,"duration":duration,"result":result,"exit_reason":exit_reason,"pnl":pnl,
                 "size":round(size,4),

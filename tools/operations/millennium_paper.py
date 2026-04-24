@@ -574,6 +574,19 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "entry": pos.entry_price, "stop": pos.stop,
                 "target": pos.target, "decision": "opened",
                 "pos_id": pos.id,
+                # Feature snapshot from the scan — enables post-hoc
+                # diagnosis of live↔backtest divergence.
+                "signal_ts": str(signal_timestamp(t)),
+                "pattern": t.get("pattern"),
+                "entropy": t.get("entropy"),
+                "entropy_norm": t.get("entropy_norm"),
+                "hurst": t.get("hurst"),
+                "h_regime": t.get("h_regime"),
+                "score": t.get("score"),
+                "rr": t.get("rr"),
+                "fractal_align": t.get("fractal_align"),
+                "macro_bias": t.get("macro_bias"),
+                "vol_regime": t.get("vol_regime"),
             })
             if notify:
                 _tg_send(
