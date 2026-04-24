@@ -112,21 +112,44 @@ Response: `[[open_ts, O, H, L, C, V, close_ts, ...], ...]` — array de arrays. 
 
 ### 4.4 Timeframe por engine
 
-Map estático (mantém em `trade_chart_popup.py` — single source, ajustável):
+**Fonte de verdade: `config/params.py::ENGINE_INTERVALS`** (NÃO duplicar map).
+O popup deve **importar direto** de `config.params` pra nunca divergir do TF
+real do engine. Hoje (2026-04-24):
 
-| Engine | TF |
+| Engine | TF (ENGINE_INTERVALS) |
 |---|---|
-| `CITADEL` | `1h` |
-| `RENAISSANCE` | `4h` |
-| `JUMP` | `5m` |
-| `DE_SHAW` | `1h` |
-| `BRIDGEWATER` | `4h` |
-| `KEPOS` | `15m` |
-| `MEDALLION` | `1h` |
-| `AQR` | `1d` |
-| `TWO_SIGMA` | `1h` |
-| `PHI` | `4h` |
-| default | `1h` |
+| `CITADEL` | `15m` |
+| `RENAISSANCE` | `15m` |
+| `DESHAW` | `1h` |
+| `JUMP` | `1h` |
+| `BRIDGEWATER` | `1h` |
+
+Engines ausentes do dict (KEPOS, MEDALLION, PHI, AQR, TWO_SIGMA, JANE_STREET,
+MILLENNIUM, WINTON) são meta/arb/allocator — não consomem ENGINE_INTERVALS
+by-design (ver comentário em params.py:267-270). Fallback: `INTERVAL`
+(hoje `15m`, default global). Para v1 isso é aceitável — charts pra
+engines meta raramente acontecem (operador debugga via LOG).
+
+**Função `resolve_tf(engine: str) -> str`** em `trade_chart_popup.py`:
+
+```python
+from config.params import ENGINE_INTERVALS, INTERVAL
+
+_ENGINE_ALIASES = {"DE_SHAW": "DESHAW"}  # logger name → params key
+
+def resolve_tf(engine: str | None) -> str:
+    if not engine:
+        return INTERVAL
+    key = _ENGINE_ALIASES.get(engine.upper(), engine.upper())
+    return ENGINE_INTERVALS.get(key, INTERVAL)
+```
+
+Unit-test: `resolve_tf("CITADEL") == "15m"`, `resolve_tf("DE_SHAW") == "1h"`,
+`resolve_tf("KEPOS") == INTERVAL`, `resolve_tf(None) == INTERVAL`,
+`resolve_tf("citadel") == "15m"` (case-insensitive).
+
+**Regra meta**: se o operador mudar `ENGINE_INTERVALS` em `params.py`, o
+chart herda automaticamente — zero maintenance cruzada.
 
 ### 4.5 Derivação do exit timestamp
 
@@ -328,10 +351,11 @@ Edge cases: null/missing fields, zero duration, extreme r values, direction alia
 
 Formatters puros:
 
+- `resolve_tf(engine)` → `"15m"`, `"1h"` etc — lê `ENGINE_INTERVALS` de params.py, aliases (DE_SHAW→DESHAW), fallback a `INTERVAL`, case-insensitive
+- `tf_to_seconds(tf_str)` → `"15m"` → 900, `"1h"` → 3600, `"4h"` → 14400, `"1d"` → 86400
 - `derive_candle_window(entry_ts, exit_ts, tf_sec)` → (start, end) com limites
 - `build_marker_specs(trade)` → list of matplotlib-compatible dicts
 - `fetch_binance_candles(symbol, tf, start, end)` com `unittest.mock` pra urllib → DataFrame parsed
-- `tf_seconds(engine)` → map lookup + default fallback
 - `normalize_direction("BULLISH")` → `"LONG"`, idem BEARISH→SHORT
 
 ### 8.3 Smoke — `test_trade_chart_popup_smoke.py`
