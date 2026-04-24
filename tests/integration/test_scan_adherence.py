@@ -148,12 +148,6 @@ def test_scan_hermes_adherence_on_newest_signal_per_symbol():
     assert checked >= 1, "No RENAISSANCE backtest signal found to validate adherence"
 
 
-@pytest.mark.skip(reason=(
-    "engines/jump.py:89 pre-existing bug — `indicators` resolves as module "
-    "not function under pytest import path, TypeError on first call. "
-    "Tracked in backlog since 2026-04-23. Once that is fixed, drop this mark "
-    "and this test will run."
-))
 def test_scan_mercurio_adherence_on_newest_signal_per_symbol():
     """JUMP: per-symbol newest signal live=backtest adherence."""
     from engines.jump import scan_mercurio
