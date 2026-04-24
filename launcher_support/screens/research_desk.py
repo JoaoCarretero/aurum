@@ -76,7 +76,9 @@ from launcher_support.research_desk.agent_view import (
     offline_view,
     shape_agents_by_uuid,
 )
-from launcher_support.research_desk.agents import AGENTS, COMPANY_ID, AgentIdentity
+from launcher_support.research_desk.agent_tab import AgentTab
+from launcher_support.research_desk.tab_strip import TabStrip
+from launcher_support.research_desk.agents import AGENTS, BY_KEY, COMPANY_ID, AgentIdentity
 from launcher_support.research_desk.artifact_scanner import (
     ArtifactEntry,
     scan_artifacts,
@@ -180,6 +182,12 @@ class ResearchDeskScreen(Screen):
         self._last_snapshot_date = ""  # detecta rollover de dia
         # Widgets do toggle paperclip
         self._action_btn: tk.Label | None = None
+        # Tab strip state
+        self._active_tab: str = "overview"
+        self._tab_frames: dict[str, tk.Frame] = {}
+        self._tab_strip: TabStrip | None = None
+        self._tab_container: tk.Frame | None = None
+        self._overview_frame: tk.Frame | None = None
 
     # ── Build ─────────────────────────────────────────────────────
 
@@ -252,6 +260,27 @@ class ResearchDeskScreen(Screen):
         tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
     def _build_content(self, parent: tk.Frame) -> None:
+        # Tab strip — nav entre OVERVIEW e 5 agent tabs
+        tabs = [("overview", "OVERVIEW")] + [(a.key, a.key) for a in AGENTS]
+        self._tab_strip = TabStrip(
+            parent,
+            tabs=tabs,
+            on_select=self._switch_tab,
+            initial_key="overview",
+        )
+        self._tab_strip.pack(fill="x", pady=(8, 0))
+
+        # Tab container — onde os frames das tabs se empilham
+        self._tab_container = tk.Frame(parent, bg=BG)
+        self._tab_container.pack(fill="both", expand=True)
+
+        # OVERVIEW frame = todo o conteudo existente
+        self._overview_frame = tk.Frame(self._tab_container, bg=BG)
+        self._build_overview_content(self._overview_frame)
+        self._overview_frame.pack(fill="both", expand=True)
+        self._tab_frames["overview"] = self._overview_frame
+
+    def _build_overview_content(self, parent: tk.Frame) -> None:
         content = tk.Frame(parent, bg=BG)
         content.pack(fill="both", expand=True)
 
@@ -281,10 +310,86 @@ class ResearchDeskScreen(Screen):
                 on_assign=self._stub_action("assign"),
                 on_configure=lambda a=agent: self._on_configure_click(a),
                 on_history=self._stub_action("history"),
-                on_inspect=self._open_agent_detail,
+                on_inspect=lambda a=agent: self._switch_tab(a.key),
             )
             card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0))
             self._agent_cards[agent.key] = card
+
+    # ── Tab navigation ────────────────────────────────────────────
+
+    def _switch_tab(self, key: str) -> None:
+        """Troca tab ativa. Lazy-builds AgentTab se ainda nao existe."""
+        if key == self._active_tab:
+            return
+        # Esconde tab atual
+        current = self._tab_frames.get(self._active_tab)
+        if current is not None and current.winfo_exists():
+            try:
+                current.pack_forget()
+            except Exception as e:
+                _LOG.exception("tab hide failed: %s", e)
+            if hasattr(current, "on_hide"):
+                try:
+                    current.on_hide()
+                except Exception as e:
+                    _LOG.exception("tab on_hide failed: %s", e)
+        # Mostra / constroi target
+        if key not in self._tab_frames:
+            try:
+                self._tab_frames[key] = self._build_agent_tab(key)
+            except Exception as e:
+                _LOG.exception("build AgentTab %s failed: %s", key, e)
+                self._flash_feedback(ok=False, msg=f"tab {key} falhou")
+                # Mantém tab atual visível
+                if current is not None and current.winfo_exists():
+                    current.pack(fill="both", expand=True)
+                return
+        target = self._tab_frames[key]
+        try:
+            target.pack(fill="both", expand=True)
+        except Exception as e:
+            _LOG.exception("tab pack failed: %s", e)
+        if hasattr(target, "on_show"):
+            try:
+                target.on_show()
+            except Exception as e:
+                _LOG.exception("tab on_show failed: %s", e)
+        self._active_tab = key
+        if self._tab_strip is not None:
+            self._tab_strip.set_active(key)
+
+    def _build_agent_tab(self, agent_key: str) -> AgentTab:
+        """Factory pra AgentTab. Encontra AgentIdentity pelo key."""
+        agent = BY_KEY[agent_key]
+        return AgentTab(
+            self._tab_container,
+            agent=agent,
+            fetch_runs=self._fetch_runs_for_agent,
+            root_path=self.root_path,
+            fetch_ratios=self._fetch_ratios_for_agent,
+            on_toggle_pause=self._toggle_agent_pause,
+            toplevel=self.app,
+        )
+
+    def _fetch_runs_for_agent(self, agent: AgentIdentity) -> list[dict]:
+        """Callable passado ao AgentTab via on_show pra live runs polling."""
+        try:
+            return self._client.list_heartbeat_runs_cached(agent.uuid, limit=10)
+        except Exception as e:
+            _LOG.debug("fetch_runs for %s failed: %s", agent.key, e)
+            return []
+
+    def _fetch_ratios_for_agent(self, agent: AgentIdentity):
+        """Callable passado ao AgentTab; retorna RatiosView | None via stats_db."""
+        conn = self._ensure_stats_db()
+        if conn is None:
+            return None
+        try:
+            rows = stats_db.list_days(conn, agent.key, days=30)
+            return stats_db.compute_ratios(rows)
+        except Exception as e:
+            _LOG.debug("fetch_ratios for %s failed: %s", agent.key, e)
+            return None
 
     def _stub_action(self, action: str) -> Any:
         """Retorna handler generico que mostra msg no h_stat.
@@ -698,6 +803,22 @@ class ResearchDeskScreen(Screen):
                 )
             except Exception:
                 pass  # DB opcional — nao bloqueia UI
+
+        # Distribui poll pras agent tabs ja construidas
+        agents_state = {a.get("id"): a for a in agents_raw if a.get("id")}
+        for key, tab in list(self._tab_frames.items()):
+            if key == "overview":
+                continue
+            if not isinstance(tab, AgentTab):
+                continue
+            try:
+                tab.update(
+                    agents_state=agents_state,
+                    issues_raw=issues_raw,
+                    full_scan=full_scan,
+                )
+            except Exception as e:
+                _LOG.exception("tab %s update failed: %s", key, e)
 
     def _apply_artifacts(self) -> list[ArtifactEntry]:
         """Atualiza panels + retorna o scan pra reuso (snapshots)."""
