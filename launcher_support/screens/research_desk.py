@@ -491,7 +491,7 @@ class ResearchDeskScreen(Screen):
 
     def _on_activity_click(self, event: ActivityEvent) -> None:
         """Navega pro source do evento: artifact -> markdown viewer,
-        issue -> feedback breve (detail pane real em Sprint 3.1)."""
+        issue -> IssueDetailModal com polling."""
         payload = event.payload
         if isinstance(payload, ArtifactEntry):
             open_markdown_viewer(
@@ -500,12 +500,16 @@ class ResearchDeskScreen(Screen):
             return
         # Issue payload — abre modal de detalhe
         if isinstance(payload, dict):
+            iid = str(payload.get("id") or "")
+            if not iid:
+                return
             open_issue_detail(
                 self,
                 client=self._client,
-                issue_id=str(payload.get("id") or ""),
+                issue_id=iid,
                 on_close=self._refresh_pipeline,
             )
+            return
 
     def _refresh_pipeline(self) -> None:
         """Re-poll forçado pro pipeline panel após ação de ticket."""

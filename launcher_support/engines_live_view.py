@@ -471,7 +471,7 @@ def render(launcher, parent, *, on_escape) -> dict:
     body.pack(fill="both", expand=True, padx=14, pady=(8, 0))
     state["body"] = body
 
-    # Split 24/76 master/detail by default. `_apply_master_layout` may
+    # Split 30/70 master/detail by default. `_apply_master_layout` may
     # switch to a fixed-width rail when state["master_collapsed"] is set.
     _apply_master_layout(body, collapsed=False)
 
@@ -1037,8 +1037,10 @@ def _apply_master_layout(body: tk.Widget, *, collapsed: bool) -> None:
     when the column-weight setup moved into this helper; the row config
     must live here too so every call path keeps the stretch.
 
-    Expanded: 24/76 horizontal split via uniform groups — master gets a
-    quarter of the width so names + subtitles read.
+    Expanded: 30/70 horizontal split via uniform groups with a 260px
+    floor on the master column, so engine names + instance labels
+    breathe without truncation on narrow windows (operator feedback
+    2026-04-24: "sidebar preencha mais ainda ta pra esquerda").
     Collapsed: fixed ~52px rail for col 0, detail takes everything else.
     """
     body.grid_rowconfigure(0, weight=1)
@@ -1046,8 +1048,8 @@ def _apply_master_layout(body: tk.Widget, *, collapsed: bool) -> None:
         body.grid_columnconfigure(0, weight=0, minsize=52, uniform="")
         body.grid_columnconfigure(1, weight=1, minsize=0, uniform="")
     else:
-        body.grid_columnconfigure(0, weight=24, minsize=0, uniform="body")
-        body.grid_columnconfigure(1, weight=76, minsize=0, uniform="body")
+        body.grid_columnconfigure(0, weight=30, minsize=260, uniform="body")
+        body.grid_columnconfigure(1, weight=70, minsize=0, uniform="body")
 
 
 def _toggle_master_collapsed(state: dict) -> None:

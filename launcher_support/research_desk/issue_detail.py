@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from core.ui.ui_palette import (
-    AMBER, AMBER_B, AMBER_D, BG, BG2, BG3, BORDER,
-    DIM, DIM2, FONT, GREEN, RED, WHITE,
+    AMBER, AMBER_D, BG, BG2, BG3,
+    DIM, FONT, RED, WHITE,
 )
-from launcher_support.research_desk.agents import AGENTS, BY_UUID
+from launcher_support.research_desk.agents import BY_UUID
 from launcher_support.research_desk.palette import AGENT_COLORS
 
 
