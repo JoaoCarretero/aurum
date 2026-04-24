@@ -457,6 +457,49 @@ def _render_run_row(parent: tk.Frame, view: RunView, *, palette: Any) -> None:
     ).pack(side="right")
 
 
+def _render_artifact_row_fn(
+    parent: tk.Frame,
+    entry: ArtifactEntry,
+    *,
+    palette: Any,
+    toplevel: tk.Misc,
+    root_path: Path,
+) -> None:
+    """Module-level artifact row renderer (usado por build_persona_stats
+    e pelo modal)."""
+    row = tk.Frame(parent, bg=BG, cursor="hand2")
+    row.pack(fill="x", pady=2)
+    tk.Frame(row, bg=palette.primary, width=2).pack(side="left", fill="y")
+    content = tk.Frame(row, bg=BG)
+    content.pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+    title_row = tk.Frame(content, bg=BG)
+    title_row.pack(fill="x")
+    tk.Label(
+        title_row, text=entry.kind.upper(),
+        font=(FONT, 7, "bold"), fg=palette.primary, bg=BG, width=8,
+        anchor="w",
+    ).pack(side="left")
+    tk.Label(
+        title_row, text=entry.title[:80],
+        font=(FONT, 8), fg=WHITE, bg=BG, anchor="w",
+    ).pack(side="left", fill="x", expand=True)
+    tk.Label(
+        title_row, text=relative_age(entry),
+        font=(FONT, 7), fg=DIM, bg=BG, anchor="e",
+    ).pack(side="right")
+
+    def _on_click(_e: tk.Event, e: ArtifactEntry = entry) -> None:
+        open_markdown_viewer(toplevel, root_path=root_path, entry=e)
+
+    row.bind("<Button-1>", _on_click)
+    for child in (content, title_row):
+        child.bind("<Button-1>", _on_click)
+    for leaf in title_row.winfo_children():
+        if isinstance(leaf, tk.Label):
+            leaf.bind("<Button-1>", _on_click)
+
+
 def build_persona_stats(
     parent: tk.Frame,
     *,
@@ -464,15 +507,16 @@ def build_persona_stats(
     ratios: "RatiosView | None",
     root_path: Path,
     toplevel: tk.Misc,
+    artifacts: list[ArtifactEntry] | None = None,
 ) -> BuilderHandles:
     """30d ratios + recent work summary + EDIT PERSONA button.
     toplevel = widget pai pro markdown_editor Toplevel (self.top
-    da modal ou screen root pra tab)."""
+    da modal ou screen root pra tab).
+    artifacts: lista de ArtifactEntry pra exibir no RECENT WORK panel."""
     handles = BuilderHandles()
+    palette = AGENT_COLORS[agent.key]
 
     if ratios is not None and ratios.total > 0:
-        tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
-
         section = tk.Frame(parent, bg=BG)
         section.pack(fill="x", pady=(10, 0))
 
@@ -517,21 +561,33 @@ def build_persona_stats(
 
         handles.widgets["ratios_section"] = section
 
-    # EDIT PERSONA button
-    edit_btn_frame = tk.Frame(parent, bg=BG)
-    edit_btn_frame.pack(fill="x", pady=(8, 0))
-    edit_btn = tk.Label(
-        edit_btn_frame, text="  EDIT PERSONA  ",
-        font=(FONT, 8, "bold"),
-        fg=WHITE, bg=BG3, cursor="hand2",
-        padx=8, pady=4,
-    )
-    edit_btn.pack(side="left")
-    edit_btn.bind(
-        "<Button-1>",
-        lambda _e: _open_persona_editor(toplevel, agent=agent, root_path=root_path),
-    )
-    handles.widgets["edit_persona_btn"] = edit_btn
+    # ── Recent work panel ─────────────────────────────────────────
+    if artifacts is not None:
+        tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
+        rw_section = tk.Frame(parent, bg=BG)
+        rw_section.pack(fill="both", expand=True, pady=(10, 0))
+
+        tk.Label(
+            rw_section, text="RECENT WORK",
+            font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w",
+        ).pack(anchor="w")
+
+        body = tk.Frame(rw_section, bg=BG)
+        body.pack(fill="both", expand=True, pady=(6, 0))
+
+        if not artifacts:
+            tk.Label(
+                body, text="sem artefatos registrados ainda.",
+                font=(FONT, 8, "italic"), fg=DIM, bg=BG, anchor="w",
+            ).pack(anchor="w")
+        else:
+            for entry in artifacts:
+                _render_artifact_row_fn(
+                    body, entry,
+                    palette=palette, toplevel=toplevel, root_path=root_path,
+                )
+
+        handles.widgets["recent_work_body"] = body
 
     return handles
 
@@ -677,7 +733,7 @@ class AgentDetailModal:
         wrap = tk.Frame(self.top, bg=BG, padx=20, pady=16)
         wrap.pack(fill="both", expand=True)
 
-        # Header: hero + statblock (no pause btn here — actions row below)
+        # Header: hero + statblock
         header_frame = tk.Frame(wrap, bg=BG)
         header_frame.pack(fill="x")
         self._header_handles = build_agent_header(
@@ -690,21 +746,17 @@ class AgentDetailModal:
 
         tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
 
-        # Persona stats (ratios section — dividers handled inside)
+        # Persona stats (ratios) + recent work in one builder
         stats_frame = tk.Frame(wrap, bg=BG)
-        stats_frame.pack(fill="x")
+        stats_frame.pack(fill="both", expand=True)
         self._stats_handles = build_persona_stats(
             stats_frame,
             agent=self.agent,
             ratios=self._ratios,
             root_path=self.root_path,
             toplevel=self.top,
+            artifacts=artifacts,
         )
-
-        tk.Frame(wrap, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
-
-        # Recent work
-        self._build_recent_work(wrap, artifacts)
 
         # Linked work
         if self._chains:
@@ -731,76 +783,8 @@ class AgentDetailModal:
                 interval_ms=_RUNS_REFRESH_MS,
             )
 
-        # Actions row (assign + pause/resume + close)
-        self._build_actions(wrap)
-
-    # ── Recent work ──────────────────────────────────────────────
-
-    def _build_recent_work(
-        self, parent: tk.Frame, artifacts: list[ArtifactEntry],
-    ) -> None:
-        section = tk.Frame(parent, bg=BG)
-        section.pack(fill="both", expand=True, pady=(10, 0))
-
-        tk.Label(
-            section, text="RECENT WORK",
-            font=(FONT, 8, "bold"), fg=AMBER_D, bg=BG, anchor="w",
-        ).pack(anchor="w")
-
-        body = tk.Frame(section, bg=BG)
-        body.pack(fill="both", expand=True, pady=(6, 0))
-
-        if not artifacts:
-            tk.Label(
-                body, text="sem artefatos registrados ainda.",
-                font=(FONT, 8, "italic"), fg=DIM, bg=BG, anchor="w",
-            ).pack(anchor="w")
-            return
-
-        for entry in artifacts:
-            self._render_artifact_row(body, entry)
-
-    def _render_artifact_row(
-        self, parent: tk.Frame, entry: ArtifactEntry,
-    ) -> None:
-        row = tk.Frame(parent, bg=BG, cursor="hand2")
-        row.pack(fill="x", pady=2)
-        tk.Frame(row, bg=self.palette.primary, width=2).pack(side="left", fill="y")
-        content = tk.Frame(row, bg=BG)
-        content.pack(side="left", fill="x", expand=True, padx=(6, 0))
-
-        title_row = tk.Frame(content, bg=BG)
-        title_row.pack(fill="x")
-        tk.Label(
-            title_row, text=entry.kind.upper(),
-            font=(FONT, 7, "bold"), fg=self.palette.primary, bg=BG, width=8,
-            anchor="w",
-        ).pack(side="left")
-        tk.Label(
-            title_row, text=entry.title[:80],
-            font=(FONT, 8), fg=WHITE, bg=BG, anchor="w",
-        ).pack(side="left", fill="x", expand=True)
-        tk.Label(
-            title_row, text=relative_age(entry),
-            font=(FONT, 7), fg=DIM, bg=BG, anchor="e",
-        ).pack(side="right")
-
-        def _on_click(_e: tk.Event, e: ArtifactEntry = entry) -> None:
-            open_markdown_viewer(
-                self.top, root_path=self.root_path, entry=e,
-            )
-
-        row.bind("<Button-1>", _on_click)
-        for child in (content, title_row):
-            child.bind("<Button-1>", _on_click)
-        for leaf in title_row.winfo_children():
-            if isinstance(leaf, tk.Label):
-                leaf.bind("<Button-1>", _on_click)
-
-    # ── Actions ───────────────────────────────────────────────────
-
-    def _build_actions(self, parent: tk.Frame) -> None:
-        actions = tk.Frame(parent, bg=BG)
+        # Actions row (assign + pause/resume + close) — inlined
+        actions = tk.Frame(wrap, bg=BG)
         actions.pack(fill="x", pady=(12, 0))
 
         assign_btn = tk.Label(
