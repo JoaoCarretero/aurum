@@ -33,13 +33,24 @@ from config.params import *
 # Calibrated TF (longrun battery 2026-04-14: 1h >> 15m para order flow)
 INTERVAL = ENGINE_INTERVALS.get("JUMP", INTERVAL)
 from core.chronos import enrich_with_regime
-from core import (
-    fetch_all, validate, indicators, swing_structure, omega,
-    cvd, cvd_divergence, volume_imbalance, liquidation_proxy,
-    detect_macro, build_corr_matrix, portfolio_allows, check_aggregate_notional,
-    position_size,
-    calc_levels, label_trade,
+from core.data import fetch_all, validate
+from core.indicators import (
+    indicators,
+    swing_structure,
+    omega,
+    cvd,
+    cvd_divergence,
+    volume_imbalance,
+    liquidation_proxy,
 )
+from core.portfolio import (
+    detect_macro,
+    build_corr_matrix,
+    portfolio_allows,
+    check_aggregate_notional,
+    position_size,
+)
+from core.signals import calc_levels, label_trade
 from analysis.stats import equity_stats, calc_ratios
 from analysis.montecarlo import monte_carlo
 from analysis.walkforward import walk_forward
