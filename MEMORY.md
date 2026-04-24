@@ -118,7 +118,7 @@ Arquivo completo: `docs/methodology/anti_overfit_protocol.md`.
 | **Veredictos OOS** | `docs/audits/2026-04-16_oos_verdict.md` (base), superseded por arquivos `*_final_verdict.md` |
 | **Run manifests** | `data/anti_overfit/<engine>/<timestamp>/manifest.json` + `results.csv` + `logs/` |
 | **Runs individuais** | `data/<engine>/YYYY-MM-DD_HHMMSS_xxxxxx/` com `summary.json` (root), `trades.json`, `config.json`, `logs/<engine>.log` |
-| **Índice canônico** | `data/index.json` (reconciled via `python -m tools.reconcile_runs`) |
+| **Índice canônico** | `data/index.json` (reconciled via `python -m tools.reports.reconcile_runs`) |
 | **Session logs** | `docs/sessions/YYYY-MM-DD_HHMM.md` |
 | **Daily logs** | `docs/days/YYYY-MM-DD.md` |
 | **Planos mestres** | `docs/superpowers/plans/YYYY-MM-DD-<slug>.md` |
@@ -166,6 +166,6 @@ Se houve mudança em lógica de trading (sinais, custos, sizing, risco): destaca
 ```bash
 python smoke_test.py --quiet       # 156-178/178 esperado
 python tools/maintenance/verify_keys_intact.py   # antes de mexer em config/
-python -m tools.reconcile_runs     # reconciliar data/index.json
+python -m tools.reports.reconcile_runs     # reconciliar data/index.json
 pytest -n 6                        # paralelo opt-in (26s vs 55s sequential)
 ```

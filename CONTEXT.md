@@ -189,14 +189,15 @@ aurum.finance/
 │
 ├── tests/                       pytest suite (1666+ pass)
 ├── tools/                       UTILITIES
-│   ├── reconcile_runs.py        ← reconciliar data/index.json
-│   ├── oos_revalidate.py        ← orquestrador multi-janela + DSR
-│   ├── lookahead_scan.py        ← scanner estático
-│   ├── prewarm_sentiment_cache.py
-│   ├── anti_overfit_grid.py
-│   ├── maintenance/             ← verify_keys, backup_keys
+│   ├── reports/
+│   │   └── reconcile_runs.py    ← reconciliar data/index.json
+│   ├── oos_revalidate.py        ← orquestrador multi-janela + DSR (se presente)
+│   ├── lookahead_scan.py        ← scanner estático (se presente)
+│   ├── prewarm_sentiment_cache.py (se presente)
+│   ├── anti_overfit_grid.py     (se presente)
+│   ├── maintenance/             ← verify_keys_intact, backup_keys, check_hub_drift, etc
 │   ├── operations/              ← millennium_paper, etc
-│   └── debug/                   ← 🆕 debug tools (uncommitted)
+│   └── debug/                   ← debug tools
 │
 ├── docs/                        DOCUMENTAÇÃO (PT-BR)
 │   ├── sessions/                ← session logs
@@ -305,7 +306,7 @@ pytest                                      # sequential
 # Maintenance
 python tools/maintenance/verify_keys_intact.py
 python tools/maintenance/backup_keys.py
-python -m tools.reconcile_runs
+python -m tools.reports.reconcile_runs
 
 # Backtest por engine
 python -m engines.citadel --no-menu --days 180
