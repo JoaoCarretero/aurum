@@ -10,6 +10,7 @@ testável sem Tk.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 import tkinter as tk
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from core.ui.ui_palette import (
 from launcher_support.research_desk.agents import BY_UUID
 from launcher_support.research_desk.palette import AGENT_COLORS
 
+
+_LOG = logging.getLogger("aurum.research_desk.issue_detail")
 
 POLL_INTERVAL_MS = 5000
 _LINEAGE_RE = re.compile(r"^from:\s*(AUR-\d+[^\n]*)", re.MULTILINE)
@@ -265,26 +268,26 @@ class IssueDetailModal:
         if canvas is not None:
             try:
                 canvas.configure(scrollregion=canvas.bbox("all"))
-            except Exception:
-                pass
+            except Exception as e:
+                _LOG.debug("canvas scrollregion failed: %s", e)
 
     def close(self) -> None:
         self._closing = True
         if self._poll_after is not None:
             try:
                 self.top.after_cancel(self._poll_after)
-            except Exception:
-                pass
+            except Exception as e:
+                _LOG.debug("after_cancel failed: %s", e)
             self._poll_after = None
         try:
             self.top.destroy()
-        except Exception:
-            pass
+        except Exception as e:
+            _LOG.debug("top.destroy failed: %s", e)
         if self._on_close is not None:
             try:
                 self._on_close()
-            except Exception:
-                pass
+            except Exception as e:
+                _LOG.debug("on_close callback failed: %s", e)
 
 
 def open_issue_detail(

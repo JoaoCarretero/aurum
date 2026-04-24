@@ -579,7 +579,7 @@ class ResearchDeskScreen(Screen):
         try:
             self._poll_state()
         except Exception:
-            pass
+            _LOG.exception("_refresh_pipeline _poll_state failed")
 
     # ── Lifecycle ─────────────────────────────────────────────────
 

@@ -208,3 +208,56 @@ def test_detect_origin_human_when_no_label_no_branch(tmp_path):
     from launcher_support.research_desk.artifact_scanner import _detect_origin
     origin = _detect_origin(tmp_path, "citadel", "2026-04-23_1403", [])
     assert origin == "human"
+
+
+def test_detect_origin_agent_via_experiment_checkout(tmp_path):
+    """Git reflog mostra checkout em experiment/* dentro de ±1h do mtime → agent."""
+    from launcher_support.research_desk.artifact_scanner import _detect_origin
+    mtime = time.time()
+    gitlogs = tmp_path / ".git" / "logs"
+    gitlogs.mkdir(parents=True)
+    (gitlogs / "HEAD").write_text(
+        f"0000000000000000000000000000000000000000 "
+        f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+        f"Joao <j@e.com> {int(mtime - 100)} -0300\t"
+        f"checkout: moving from main to experiment/phi\n",
+        encoding="utf-8",
+    )
+    origin = _detect_origin(
+        tmp_path, "phi", "2026-04-23_1403", [], mtime_epoch=mtime,
+    )
+    assert origin == "agent"
+
+
+def test_detect_origin_human_when_checkout_outside_window(tmp_path):
+    """Checkout em experiment/* MAS fora da janela ±1h → human."""
+    from launcher_support.research_desk.artifact_scanner import _detect_origin
+    mtime = time.time()
+    gitlogs = tmp_path / ".git" / "logs"
+    gitlogs.mkdir(parents=True)
+    (gitlogs / "HEAD").write_text(
+        f"0000 aaaa Joao <j@e.com> {int(mtime - 7200)} -0300\t"
+        f"checkout: moving from main to experiment/phi\n",
+        encoding="utf-8",
+    )
+    origin = _detect_origin(
+        tmp_path, "phi", "2026-04-23_1403", [], mtime_epoch=mtime,
+    )
+    assert origin == "human"
+
+
+def test_detect_origin_agent_ignores_non_experiment_checkout(tmp_path):
+    """Checkout pra branch não-experiment dentro da janela → não marca agent."""
+    from launcher_support.research_desk.artifact_scanner import _detect_origin
+    mtime = time.time()
+    gitlogs = tmp_path / ".git" / "logs"
+    gitlogs.mkdir(parents=True)
+    (gitlogs / "HEAD").write_text(
+        f"0000 aaaa Joao <j@e.com> {int(mtime - 100)} -0300\t"
+        f"checkout: moving from main to feat/unrelated\n",
+        encoding="utf-8",
+    )
+    origin = _detect_origin(
+        tmp_path, "phi", "2026-04-23_1403", [], mtime_epoch=mtime,
+    )
+    assert origin == "human"

@@ -15,12 +15,16 @@ Nao joga se um dir nao existe — retorna lista vazia daquele agente.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+_RUN_SUBDIR = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}$")
+_EXPERIMENT_WINDOW_SEC = 3600
 
 
 @dataclass(frozen=True)
@@ -131,11 +135,6 @@ def _scan_experiment_branches(root: Path) -> list[ArtifactEntry]:
     return out
 
 
-import re as _re
-
-_RUN_SUBDIR = _re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}$")
-
-
 def _scan_backtests(
     root: Path, issues: list[dict] | None = None,
 ) -> list[ArtifactEntry]:
@@ -160,7 +159,9 @@ def _scan_backtests(
             except OSError:
                 continue
             run_id = run_dir.name
-            origin = _detect_origin(root, engine, run_id, issues)
+            origin = _detect_origin(
+                root, engine, run_id, issues, mtime_epoch=stat.st_mtime,
+            )
             out.append(ArtifactEntry(
                 agent_key="",
                 kind="backtest",
@@ -177,9 +178,11 @@ def _scan_backtests(
 
 def _detect_origin(
     root: Path, engine: str, run_id: str, issues: list[dict],
+    mtime_epoch: float = 0.0,
 ) -> str:
     """agent se label 'run:<engine>/<run_id>' em alguma issue OR body tem
-    '**run_id:** <engine>/<run_id>'. Senão human."""
+    '**run_id:** <engine>/<run_id>' OR .git/logs/HEAD mostra checkout em
+    experiment/* dentro de ±1h do mtime_epoch. Senão human."""
     needle = f"{engine}/{run_id}"
     label_needle = f"run:{needle}"
     body_needle = f"**run_id:** {needle}"
@@ -190,7 +193,44 @@ def _detect_origin(
         desc = issue.get("description") or issue.get("body") or ""
         if isinstance(desc, str) and body_needle in desc:
             return "agent"
+    if _was_on_experiment_branch(root, mtime_epoch):
+        return "agent"
     return "human"
+
+
+def _was_on_experiment_branch(
+    root: Path, mtime_epoch: float, window_sec: int = _EXPERIMENT_WINDOW_SEC,
+) -> bool:
+    """Inspeciona .git/logs/HEAD por checkout em experiment/* dentro de
+    ±window_sec de mtime_epoch. Best-effort: retorna False em qualquer
+    falha (reflog ausente, parse error, filesystem error)."""
+    if mtime_epoch <= 0:
+        return False
+    reflog = root / ".git" / "logs" / "HEAD"
+    if not reflog.exists():
+        return False
+    try:
+        with open(reflog, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                tab_split = line.split("\t", 1)
+                if len(tab_split) < 2:
+                    continue
+                header, message = tab_split
+                if "checkout:" not in message or "experiment/" not in message:
+                    continue
+                # Header ends with "... <timestamp> <tz>"; split from right.
+                tokens = header.rsplit(None, 2)
+                if len(tokens) < 3:
+                    continue
+                try:
+                    ts = float(tokens[-2])
+                except ValueError:
+                    continue
+                if abs(ts - mtime_epoch) <= window_sec:
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def list_backtest_runs(
