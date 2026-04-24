@@ -1038,16 +1038,19 @@ def _load_detail(r: RunSummary, state: dict) -> None:
 
 
 def _render_error_banner(parent: tk.Widget, err: str) -> None:
-    """Banner vermelho compacto pra last_error do heartbeat."""
+    """Red banner shown when the last heartbeat carries `last_error`.
+    Label is H2 (8pt bold RED) so the operator registers the alert at
+    first glance; text stays BODY (7pt RED) with wraplength tuned for
+    the wider panes used by the cockpit-class displays."""
     bar = tk.Frame(parent, bg=BG)
     bar.pack(fill="x")
     inner = tk.Frame(bar, bg=BG)
     inner.pack(fill="x", padx=10, pady=(4, 6))
-    tk.Label(inner, text="LAST ERROR", font=(FONT, 6, "bold"),
+    tk.Label(inner, text="LAST ERROR", font=(FONT, 8, "bold"),
              fg=RED, bg=BG, anchor="w").pack(anchor="w")
     tk.Label(inner, text=err[:300], font=(FONT, 7),
              fg=RED, bg=BG, anchor="w", justify="left",
-             wraplength=260).pack(anchor="w", pady=(1, 0))
+             wraplength=380).pack(anchor="w", pady=(1, 0))
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
 
 
