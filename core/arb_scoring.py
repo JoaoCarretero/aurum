@@ -44,6 +44,7 @@ _DEFAULT_VENUE_RELIABILITY: dict[str, float] = {
 }
 
 _DEFAULT_POS_SIZE_REF = 1_000.0   # USD reference position for slippage ratio
+_DEFAULT_RT_FEE_BPS = 30.0         # Round-trip fee in basis points, used by _profit_usd_per_1k_24h
 
 
 def _resolve_cfg(cfg: dict | None) -> dict:
@@ -240,6 +241,48 @@ def _weighted_score(factor_scores: dict[str, float | None], weights: dict[str, f
     return score
 
 
+# ─── v2 density helpers ──────────────────────────────────────────────────────
+
+def _profit_usd_per_1k_24h(opp: dict, rt_fee_bps: float = _DEFAULT_RT_FEE_BPS) -> float | None:
+    """Net 24h profit on a $1,000 notional, after round-trip fees.
+
+    gross = apr/100 * $1000 * 24/8760
+    fees_rt_usd = rt_fee_bps/10_000 * $1000  (= $3 at 30 bps default)
+    net = gross - fees_rt_usd
+
+    Returns None if APR is missing. Can be negative (signals the edge
+    doesn't cover fees at this size).
+    """
+    apr = opp.get("net_apr") or opp.get("apr") or opp.get("basis_apr")
+    if apr is None:
+        return None
+    gross = abs(float(apr)) / 100.0 * 1000.0 * (24.0 / 8760.0)
+    fees_usd = rt_fee_bps / 10_000.0 * 1000.0
+    return round(gross - fees_usd, 4)
+
+
+def _depth_pct_at_1k(opp: dict) -> float | None:
+    """Slippage bps for a $1,000 notional against the shallowest leg book.
+
+    Expects ``book_depth_usd`` (min of both legs) in the pair record.
+    Returns None if absent — the UI shows ``—`` and the DEPTH column
+    stays empty until the scanner enriches records.
+
+    Linear model: bps = 10_000 / (book_depth_usd / 1_000). A book of
+    $1k matches 100% slippage (10_000 bps); $50k → 200 bps; $10M → 1 bps.
+    """
+    depth = opp.get("book_depth_usd")
+    if depth is None:
+        return None
+    try:
+        d = float(depth)
+    except (TypeError, ValueError):
+        return None
+    if d <= 0:
+        return None
+    return round(10_000.0 / (d / 1000.0), 4)
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 @dataclass
@@ -247,6 +290,9 @@ class ScoreResult:
     """Result of scoring a single opportunity."""
     score:   float          # 0-100
     grade:   str            # GO / MAYBE / SKIP
+    # v2 density columns (2026-04-23):
+    profit_usd_per_1k_24h: float | None = None   # net $ on $1k over 24h (fees_rt = _DEFAULT_RT_FEE_BPS)
+    depth_pct_at_1k: float | None = None         # slippage bps for $1k notional, from book_depth_usd
     factors: dict = field(default_factory=dict)  # per-factor raw scores (0-100 or None)
 
 
@@ -278,7 +324,16 @@ def score_opp(opp: dict, cfg: dict | None = None) -> ScoreResult:
     score  = _weighted_score(factor_scores, weights)
     grade  = _grade(score, thresholds)
 
-    return ScoreResult(score=round(score, 2), grade=grade, factors=factor_scores)
+    profit = _profit_usd_per_1k_24h(opp)
+    depth  = _depth_pct_at_1k(opp)
+
+    return ScoreResult(
+        score=round(score, 2),
+        grade=grade,
+        profit_usd_per_1k_24h=profit,
+        depth_pct_at_1k=depth,
+        factors=factor_scores,
+    )
 
 
 def score_batch(opps: list[dict], cfg: dict | None = None) -> list[ScoreResult]:

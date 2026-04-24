@@ -156,3 +156,53 @@ def test_linear_clamp_boundaries():
     assert _linear_clamp(-5,  floor=0, ceil=100) == 0.0
     assert _linear_clamp(200, floor=0, ceil=100) == 100.0
     assert _linear_clamp(50,  floor=0, ceil=100) == pytest.approx(50.0)
+
+
+# ─── New v2 fields: profit_usd_per_1k_24h + depth_pct_at_1k ──────────
+
+def test_score_result_has_profit_field():
+    res = score_opp(_make_pair())
+    assert hasattr(res, "profit_usd_per_1k_24h")
+    assert hasattr(res, "depth_pct_at_1k")
+
+
+def test_profit_usd_per_1k_24h_formula():
+    """profit = apr/100 * $1000 * 24/8760 - $3 (30bps fees_rt on $1k)."""
+    # apr=60%  →  0.6 * 1000 * 24/8760 = 1.6438; fees_rt = 3  →  net ≈ -1.356
+    res = score_opp(_make_pair(net_apr=60.0))
+    expected = 0.60 * 1000.0 * (24.0 / 8760.0) - 3.0
+    assert res.profit_usd_per_1k_24h == pytest.approx(expected, rel=1e-3)
+
+
+def test_profit_high_apr_positive():
+    # 300% APR → gross = 8.22/day, minus $3 fees = ~$5.22 net
+    res = score_opp(_make_pair(net_apr=300.0))
+    assert res.profit_usd_per_1k_24h is not None
+    assert res.profit_usd_per_1k_24h > 0
+
+
+def test_profit_none_when_apr_missing():
+    res = score_opp({"symbol": "X"})
+    assert res.profit_usd_per_1k_24h is None
+
+
+def test_depth_pct_none_when_book_depth_missing():
+    res = score_opp(_make_pair())
+    # No book_depth field in the _make_pair fixture → None.
+    assert res.depth_pct_at_1k is None
+
+
+def test_depth_pct_computed_from_book_depth():
+    # If book_depth_usd is present, return slippage-in-bps estimate.
+    # Simple linear model: bps = 10_000 / (book_depth_usd / 1000)
+    # book=$50k → 10_000/50 = 200 bps
+    pair = _make_pair(book_depth_usd=50_000.0)
+    res = score_opp(pair)
+    assert res.depth_pct_at_1k == pytest.approx(200.0, rel=1e-3)
+
+
+def test_depth_pct_deep_book_low_slippage():
+    pair = _make_pair(book_depth_usd=10_000_000.0)
+    res = score_opp(pair)
+    # 10_000 / 10_000 = 1.0 bps
+    assert res.depth_pct_at_1k == pytest.approx(1.0, rel=1e-3)
