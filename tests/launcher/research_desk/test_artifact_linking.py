@@ -201,3 +201,30 @@ def test_backtest_cmd_no_engine_is_comment() -> None:
     chain = LinkedChain(stem="unknown-stem")
     cmd = backtest_command_for(chain)
     assert cmd.startswith("#")
+
+
+# ── LinkedChain.backtest_run_id ───────────────────────────────────
+
+
+def test_linked_chain_holds_backtest_run_id() -> None:
+    chain = LinkedChain(stem="phi-fib", backtest_run_id="phi/2026-04-23_1403")
+    assert chain.backtest_run_id == "phi/2026-04-23_1403"
+
+
+def test_link_artifacts_populates_backtest_from_entries() -> None:
+    spec = ArtifactEntry(
+        agent_key="RESEARCH", kind="spec", title="phi-fib",
+        path="docs/specs/phi-fib.md", mtime_epoch=100.0, is_markdown=True,
+    )
+    review = ArtifactEntry(
+        agent_key="REVIEW", kind="review", title="phi-fib",
+        path="docs/reviews/phi-fib.md", mtime_epoch=150.0, is_markdown=True,
+    )
+    bt = ArtifactEntry(
+        agent_key="", kind="backtest", title="phi/2026-04-23_1403",
+        path="data/phi/2026-04-23_1403", mtime_epoch=200.0, is_markdown=False,
+        engine="phi", run_id="2026-04-23_1403", origin="agent",
+    )
+    chains = link_artifacts([spec, review, bt])
+    assert len(chains) == 1
+    assert chains[0].backtest_run_id == "phi/2026-04-23_1403"

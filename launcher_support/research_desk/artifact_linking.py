@@ -42,6 +42,7 @@ class LinkedChain:
     review: ArtifactEntry | None = None
     branch: ArtifactEntry | None = None
     audit: ArtifactEntry | None = None
+    backtest_run_id: str = ""    # "engine/run_id" se backtest linkado
     engine: str | None = None    # ex: "PHI" se matchou prefixo
 
     @property
@@ -85,7 +86,15 @@ def link_artifacts(artifacts: Iterable[ArtifactEntry]) -> list[LinkedChain]:
     """Agrupa artefatos por stem normalizado. Chain so e emitida se >=2
     artefatos distintos compartilham stem (senao seria 1 spec solto)."""
     by_stem: dict[str, dict[str, ArtifactEntry]] = {}
+    backtests_by_engine: dict[str, ArtifactEntry] = {}
+
     for art in artifacts:
+        if art.kind == "backtest":
+            # Guarda o backtest mais recente por engine (vem pré-ordenado do scan)
+            key = art.engine.lower()
+            if key not in backtests_by_engine:
+                backtests_by_engine[key] = art
+            continue
         stem = normalize_stem(art.title)
         slot = by_stem.setdefault(stem, {})
         # Primeiro artifact daquele kind ganha (mais recente ja pelo scan)
@@ -96,13 +105,20 @@ def link_artifacts(artifacts: Iterable[ArtifactEntry]) -> list[LinkedChain]:
     for stem, slots in by_stem.items():
         if len(slots) < 2:
             continue
+        engine_key = detect_engine(stem)
+        bt_entry = None
+        if engine_key is not None:
+            bt_entry = backtests_by_engine.get(engine_key.lower())
         chains.append(LinkedChain(
             stem=stem,
             spec=slots.get("spec"),
             review=slots.get("review"),
             branch=slots.get("branch"),
             audit=slots.get("audit"),
-            engine=detect_engine(stem),
+            backtest_run_id=(
+                f"{bt_entry.engine}/{bt_entry.run_id}" if bt_entry else ""
+            ),
+            engine=engine_key,
         ))
 
     # Ordena chains pela mtime_epoch do artefato mais recente
