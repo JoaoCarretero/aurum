@@ -354,6 +354,7 @@ class ResearchDeskScreen(Screen):
         try:
             from config.paths import AURUM_DB_PATH
             self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
+            self._stats_db_error_flashed = False
         except Exception as e:
             self._stats_db_conn = None
             if not getattr(self, "_stats_db_error_flashed", False):
@@ -438,9 +439,11 @@ class ResearchDeskScreen(Screen):
                         pass
                 else:
                     _LOG.warning("pause/resume falhou (%s): %s", agent.key, e)
+                    _ename = e.__class__.__name__
+                    _akey = agent.key
                     try:
                         self.container.after(0, lambda: self._flash_feedback(
-                            ok=False, msg=f"pause {agent.key}: {e.__class__.__name__}",
+                            ok=False, msg=f"pause {_akey}: {_ename}",
                         ))
                     except Exception:
                         pass
@@ -646,9 +649,10 @@ class ResearchDeskScreen(Screen):
                 issues_raw = []
                 used_cents = cap_cents = 0
                 _LOG.exception("poll_state exception: %s", e)
+                _ename = e.__class__.__name__
                 try:
                     self.container.after(0, lambda: self._flash_feedback(
-                        ok=False, msg=f"poll erro: {e.__class__.__name__}",
+                        ok=False, msg=f"poll erro: {_ename}",
                     ))
                 except Exception:
                     pass
@@ -726,6 +730,7 @@ class ResearchDeskScreen(Screen):
                     limit=200,
                 )
                 self._activity_feed.update(events)
+                self._merge_error_flashed = False
             except Exception as e:
                 _LOG.warning("merge_events falhou: %s", e)
                 if not getattr(self, "_merge_error_flashed", False):
