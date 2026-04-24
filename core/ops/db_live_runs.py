@@ -145,34 +145,13 @@ def cleanup_stale_rows(stale_minutes: int = 30) -> int:
     """Marca como 'stopped' rows com status='running' sem heartbeat > N min.
 
     Mitiga bug do paper runner (nao marca status='stopped' ao SIGTERM);
-    sem isso, restarts acumulam phantom rows que poluem o cockpit
-    picker e fazem a UI mostrar "runs travadas" que nao existem mais.
-
-    Safe pra services vivos: eles upsertam last_tick_at a cada tick
-    (tick_sec=900=15min default); 30min = 2x margem antes de considerar
-    orfao. Retorna count de rows afetadas.
-    """
-    with _connect() as conn:
-        cur = conn.execute(
-            "UPDATE live_runs "
-            "SET status='stopped', ended_at=datetime('now') "
-            "WHERE status='running' "
-            "  AND datetime(last_tick_at) < datetime('now', ?)",
-            (f"-{int(stale_minutes)} minutes",),
-        )
-        return cur.rowcount or 0
-
-
-def cleanup_stale_rows(stale_minutes: int = 30) -> int:
-    """Marca como 'stopped' rows com status='running' sem heartbeat > N min.
-
-    Mitiga bug do paper runner (nao marca status='stopped' ao SIGTERM);
     sem isso, restarts acumulam phantom rows que poluem o cockpit picker
     e fazem a UI mostrar "runs travadas" que nao existem mais.
 
     Safe pra services vivos: eles upsertam last_tick_at a cada tick
     (tick_sec=900=15min default); 30min = 2x margem antes de considerar
-    orfao. Retorna count de rows afetadas.
+    orfao. Retorna count de rows afetadas. Tagga notes com
+    'auto_cleanup_stale_YYYYMMDD_HHMM' pra facilitar debug posterior.
     """
     with _connect() as conn:
         cur = conn.execute(

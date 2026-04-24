@@ -131,3 +131,44 @@ def test_list_filters_by_since(fake_db: Path) -> None:
     rows = m.list_live_runs(since="2026-04-19T00:00:00Z")
     assert len(rows) == 1
     assert rows[0]["run_id"] == "new"
+
+
+def test_cleanup_stale_rows_marks_stopped_and_tags_notes(fake_db: Path) -> None:
+    """cleanup_stale_rows: transiciona 'running' stuck → 'stopped' e tagga
+    notes com 'auto_cleanup_stale_YYYYMMDD_HHMM' pra debug. Fresh runs
+    (last_tick dentro do threshold) ficam intactos."""
+    m.upsert(run_id="zombie", engine="citadel", mode="paper",
+             started_at="2026-01-01T00:00:00Z", run_dir="d/zombie",
+             status="running",
+             last_tick_at="2026-01-01T00:00:00Z")  # way past 30min
+    m.upsert(run_id="fresh", engine="citadel", mode="paper",
+             started_at="2026-04-24T10:00:00Z", run_dir="d/fresh",
+             status="running",
+             last_tick_at=_now_iso_minus_minutes(5))
+
+    n = m.cleanup_stale_rows(stale_minutes=30)
+    assert n == 1
+
+    zombie = m.get_live_run("zombie")
+    fresh = m.get_live_run("fresh")
+    assert zombie is not None and zombie["status"] == "stopped"
+    assert zombie["ended_at"] is not None
+    assert zombie["notes"] is not None
+    assert zombie["notes"].startswith("auto_cleanup_stale_")
+    assert fresh is not None and fresh["status"] == "running"
+
+
+def test_cleanup_stale_rows_idempotent_on_already_stopped(fake_db: Path) -> None:
+    """Re-executar cleanup nao mexe em rows ja stopped."""
+    m.upsert(run_id="zombie", engine="citadel", mode="paper",
+             started_at="2026-01-01T00:00:00Z", run_dir="d/zombie",
+             status="running",
+             last_tick_at="2026-01-01T00:00:00Z")
+    assert m.cleanup_stale_rows(stale_minutes=30) == 1
+    # Second call: nothing left to clean
+    assert m.cleanup_stale_rows(stale_minutes=30) == 0
+
+
+def _now_iso_minus_minutes(mins: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(minutes=mins)).isoformat()
