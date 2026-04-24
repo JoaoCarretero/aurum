@@ -762,3 +762,21 @@ def test_render_run_row_smoke(gui_root):
     assert len(rows) == 1  # one row frame
     cells = rows[0].winfo_children()
     assert len(cells) == len(_COLUMNS)  # 11 cells, matches column schema
+
+
+def test_section_helper_deleted():
+    """_section is replaced by the polyvalent _detail_section."""
+    import launcher_support.runs_history as rh
+    assert not hasattr(rh, "_section"), \
+        "_section should be deleted — _detail_section replaces it"
+    assert callable(rh._detail_section)
+
+
+def test_detail_section_optional_rows(gui_root):
+    """_detail_section(rows=None) emits header only, no crash."""
+    import tkinter as tk
+    from launcher_support.runs_history import _detail_section
+    frame = tk.Frame(gui_root)
+    _detail_section(frame, "TRADES", extra="last 3", rows=None)
+    # Just the header row + divider.
+    assert len(frame.winfo_children()) == 2

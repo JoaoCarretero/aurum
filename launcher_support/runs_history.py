@@ -1268,18 +1268,33 @@ def _render_detail_telemetry(parent: tk.Widget, r: RunSummary) -> None:
 
 
 def _detail_section(parent: tk.Widget, title: str,
-                    rows: list[tuple[str, str, str]]) -> None:
-    """Section com header AMBER_D 7 bold + divider + linhas label/value."""
-    tk.Label(parent, text=title,
-             font=(FONT, 7, "bold"), fg=AMBER_D, bg=PANEL,
-             anchor="w").pack(anchor="w", pady=(8, 2))
+                    rows: list[tuple[str, str, str]] | None = None,
+                    extra: str | None = None) -> None:
+    """Section header + optional label/value rows.
+
+    Title is H2 (8pt bold AMBER_D). `extra` is a discreet annotation
+    (e.g. 'last 10') shown in BODY (7pt normal DIM) next to the title.
+    If `rows` is None, the caller builds a custom body below — useful
+    for tables (TRADES) and streamed text (LOG TAIL).
+    """
+    hdr_row = tk.Frame(parent, bg=PANEL)
+    hdr_row.pack(fill="x", pady=(10, 2))
+    tk.Label(hdr_row, text=title,
+             font=(FONT, 8, "bold"), fg=AMBER_D, bg=PANEL,
+             anchor="w").pack(side="left")
+    if extra:
+        tk.Label(hdr_row, text=f"  ·  {extra}",
+                 font=(FONT, 7), fg=DIM, bg=PANEL,
+                 anchor="w").pack(side="left")
     tk.Frame(parent, bg=DIM2, height=1).pack(fill="x")
+    if rows is None:
+        return
     for k, v, color in rows:
         row = tk.Frame(parent, bg=PANEL)
         row.pack(fill="x", pady=0)
-        tk.Label(row, text=k, font=(FONT, 7, "bold"),
+        tk.Label(row, text=k, font=(FONT, 7),
                  fg=DIM, bg=PANEL, anchor="w", width=10).pack(side="left")
-        tk.Label(row, text=str(v), font=(FONT, 8),
+        tk.Label(row, text=str(v), font=(FONT, 7),
                  fg=color, bg=PANEL, anchor="w").pack(side="left")
 
 
@@ -1327,7 +1342,7 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
         return
     box = tk.Frame(parent, bg=PANEL)
     box.pack(fill="x", pady=(6, 2))
-    _section(box, "TRADES", extra=f"last {len(lines)}")
+    _detail_section(box, "TRADES", extra=f"last {len(lines)}")
     tbl = tk.Frame(box, bg=PANEL)
     tbl.pack(fill="x", pady=(1, 4))
     hdr = tk.Frame(tbl, bg=BG)
@@ -1391,7 +1406,7 @@ def _render_detail_log_tail(parent: tk.Widget, r: RunSummary) -> None:
         return
     box = tk.Frame(parent, bg=PANEL)
     box.pack(fill="both", expand=True, pady=(6, 6))
-    _section(box, "LOG TAIL", extra=log_path.name)
+    _detail_section(box, "LOG TAIL", extra=log_path.name)
     txt = tk.Text(box, wrap="word", bg=BG, fg=WHITE,
                   font=(FONT, 7), padx=6, pady=4,
                   borderwidth=0, highlightthickness=0, height=10)
@@ -1399,17 +1414,6 @@ def _render_detail_log_tail(parent: tk.Widget, r: RunSummary) -> None:
     txt.insert("end", "\n".join(lines) + "\n")
     txt.see("end")
     txt.config(state="disabled")
-
-
-def _section(parent: tk.Widget, title: str, extra: str | None = None) -> None:
-    row = tk.Frame(parent, bg=PANEL)
-    row.pack(fill="x")
-    tk.Label(row, text=title.upper(), fg=AMBER, bg=PANEL,
-             font=(FONT, 7, "bold")).pack(side="left")
-    if extra:
-        tk.Label(row, text=f"  ·  {extra}", fg=DIM, bg=PANEL,
-                 font=(FONT, 7)).pack(side="left")
-    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", pady=(1, 2))
 
 
 def _schedule_refresh(launcher, state: dict,
