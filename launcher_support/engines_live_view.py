@@ -1010,12 +1010,19 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
 
 
 def _apply_master_layout(body: tk.Widget, *, collapsed: bool) -> None:
-    """Configure the master/detail column weights on the body container.
+    """Configure the master/detail grid weights on the body container.
 
-    Expanded: 24/76 weight split with uniform groups — master gets a
-    quarter of the horizontal real estate so names + subtitles read.
-    Collapsed: fixed ~46px rail for col 0, detail takes everything else.
+    Row weight=1 is CRITICAL — without it the grid row does not stretch
+    and master_host/detail_host collapse to their natural content height,
+    leaving a dead zone between the panes and the footer. This regressed
+    when the column-weight setup moved into this helper; the row config
+    must live here too so every call path keeps the stretch.
+
+    Expanded: 24/76 horizontal split via uniform groups — master gets a
+    quarter of the width so names + subtitles read.
+    Collapsed: fixed ~52px rail for col 0, detail takes everything else.
     """
+    body.grid_rowconfigure(0, weight=1)
     if collapsed:
         body.grid_columnconfigure(0, weight=0, minsize=52, uniform="")
         body.grid_columnconfigure(1, weight=1, minsize=0, uniform="")
