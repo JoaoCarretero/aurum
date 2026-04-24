@@ -75,6 +75,7 @@ from launcher_support.research_desk.paperclip_process import (
     ServerStatus,
     default_paperclip_cmd,
 )
+from launcher_support.research_desk.issue_detail import open_issue_detail
 from launcher_support.research_desk.pipeline_panel import PipelinePanel
 from launcher_support.research_desk import stats_db
 from launcher_support.research_desk.ticket_form import (
@@ -434,17 +435,14 @@ class ResearchDeskScreen(Screen):
         self._pipeline_panel.pack(fill="both", expand=True)
 
     def _on_issue_click(self, view: IssueView) -> None:
-        """Stub — Sprint 3.1 vai abrir painel de detalhe com stream."""
-        try:
-            self.app.h_stat.configure(
-                text=f"issue {view.id[:8]}: em breve",
-                fg=AMBER_D,
-            )
-            self._after(2500, lambda: self.app.h_stat.configure(
-                text=s.STATUS_LABEL, fg=AMBER_D,
-            ))
-        except Exception:
-            pass
+        if not view.id:
+            return
+        open_issue_detail(
+            self,
+            client=self._client,
+            issue_id=view.id,
+            on_close=self._refresh_pipeline,
+        )
 
     def _build_artifacts_panel(self, parent: tk.Frame) -> None:
         frame = tk.Frame(
@@ -500,16 +498,19 @@ class ResearchDeskScreen(Screen):
                 self.container, root_path=self.root_path, entry=payload,
             )
             return
-        # Issue payload — feedback breve
-        try:
-            title = payload.get("title", "?") if isinstance(payload, dict) else "?"
-            self.app.h_stat.configure(
-                text=f"issue {title[:30]}: detalhe em breve",
-                fg=AMBER_D,
+        # Issue payload — abre modal de detalhe
+        if isinstance(payload, dict):
+            open_issue_detail(
+                self,
+                client=self._client,
+                issue_id=str(payload.get("id") or ""),
+                on_close=self._refresh_pipeline,
             )
-            self._after(2500, lambda: self.app.h_stat.configure(
-                text=s.STATUS_LABEL, fg=AMBER_D,
-            ))
+
+    def _refresh_pipeline(self) -> None:
+        """Re-poll forçado pro pipeline panel após ação de ticket."""
+        try:
+            self._poll_state()
         except Exception:
             pass
 
