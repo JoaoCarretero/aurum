@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from launcher_support.research_desk.alignment_scan import (
     AlignmentReport,
     CheckResult,
@@ -215,6 +213,27 @@ def test_check_paperclip_sync_green_when_all_present(tmp_path: Path) -> None:
     assert result.status == "green"
 
 
+def test_check_paperclip_sync_handles_utf8_bom_from_paperclip(tmp_path: Path) -> None:
+    """Paperclip (Node.js/Electron) may write files with UTF-8 BOM on Windows.
+    The sync check must strip BOM or it would falsely flag every agent as
+    header_mismatch on this platform.
+    """
+    company = "c2ccbb97-bda1-45db-ab53-5b2bb63962ee"
+    base = tmp_path / ".paperclip" / "instances" / "default" / "companies" / company / "agents"
+    agents_map = {"ORACLE": "2f790a10-9941-4c44-a318-6d9d2df129d2"}
+    inst = base / "2f790a10-9941-4c44-a318-6d9d2df129d2" / "instructions"
+    inst.mkdir(parents=True)
+    # Write file WITH UTF-8 BOM prepended (simulates Electron/Node output)
+    import codecs
+    (inst / "AGENTS.md").write_bytes(
+        codecs.BOM_UTF8 + b"# ORACLE - Integrity Auditor\n\nBody."
+    )
+    result = check_paperclip_sync(
+        agents=agents_map, paperclip_home=tmp_path / ".paperclip", company_id=company,
+    )
+    assert result.status == "green", f"BOM should be stripped, got details: {result.details}"
+
+
 def test_check_paperclip_sync_red_when_missing_or_header_mismatch(tmp_path: Path) -> None:
     company = "c2ccbb97-bda1-45db-ab53-5b2bb63962ee"
     base = tmp_path / ".paperclip" / "instances" / "default" / "companies" / company / "agents"
@@ -265,3 +284,17 @@ def test_run_alignment_scan_includes_all_five_checks() -> None:
         "paperclip_sync",
         "protected_files",
     }
+
+
+def test_load_registered_engine_names_raises_when_config_missing(tmp_path: Path) -> None:
+    """If config/engines.py is missing or broken, the scan must raise loudly
+    instead of silently returning an empty set (which would greenwash the
+    engine_roster check)."""
+    import pytest
+    from launcher_support.research_desk.alignment_scan import (
+        EngineRegistryLoadError,
+        _load_registered_engine_names,
+    )
+
+    with pytest.raises(EngineRegistryLoadError):
+        _load_registered_engine_names(tmp_path)  # no config/engines.py here

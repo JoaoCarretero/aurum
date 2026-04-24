@@ -197,7 +197,19 @@ def check_staleness(
         return CheckResult(
             status="yellow", summary="Nenhum canon file encontrado.", details=[]
         )
-    newest_canon_mtime = max(f.stat().st_mtime for f in canon_list)
+    # Guard against TOCTOU on syncing filesystems (OneDrive): a canon file
+    # listed by _collect_canon_files may vanish between collection and stat.
+    mtimes: list[float] = []
+    for f in canon_list:
+        try:
+            mtimes.append(f.stat().st_mtime)
+        except OSError:
+            continue
+    if not mtimes:
+        return CheckResult(
+            status="yellow", summary="Nenhum canon file acessivel (stat falhou).", details=[],
+        )
+    newest_canon_mtime = max(mtimes)
     threshold_s = max_age_days * 86400
 
     stale: list[dict] = []
@@ -242,12 +254,15 @@ def check_paperclip_sync(
             issues.append({"agent": key, "reason": "missing", "path": str(f)})
             continue
         try:
-            text = f.read_text(encoding="utf-8")
+            # utf-8-sig transparently strips BOM (Paperclip is Node.js/Electron,
+            # writes BOM on Windows which would break startswith() below).
+            text = f.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
             issues.append({"agent": key, "reason": "unreadable", "path": str(f)})
             continue
         first = text.splitlines()[0] if text else ""
-        if not first.startswith(f"# {key}"):
+        # Also strip leading whitespace so "  # ORACLE" would still match.
+        if not first.lstrip().startswith(f"# {key}"):
             issues.append({
                 "agent": key,
                 "reason": "header_mismatch",
@@ -341,17 +356,40 @@ def _collect_agent_facing_files(
     return files
 
 
+class EngineRegistryLoadError(RuntimeError):
+    """Raised when config/engines.py cannot be loaded. Caller should treat
+    this as a scan failure — silently returning an empty set would make
+    engine_roster pass as green even when the registry is unreadable."""
+
+
 def _load_registered_engine_names(repo_root: Path) -> set[str]:
-    """Load ENGINE_NAMES display values from config/engines.py."""
+    """Load ENGINE_NAMES display values from config/engines.py.
+
+    Raises EngineRegistryLoadError on any failure (spec resolution, import,
+    missing ENGINE_NAMES attribute). Callers must handle this explicitly —
+    never fall back to empty set, which would silently green-wash
+    engine_roster.
+    """
     import importlib.util
 
     spec_path = repo_root / "config" / "engines.py"
+    if not spec_path.exists():
+        raise EngineRegistryLoadError(f"config/engines.py not found at {spec_path}")
+
     spec = importlib.util.spec_from_file_location("_aurum_config_engines", spec_path)
     if spec is None or spec.loader is None:
-        return set()
+        raise EngineRegistryLoadError(f"Could not build import spec for {spec_path}")
+
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return set(module.ENGINE_NAMES.values())
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001
+        raise EngineRegistryLoadError(f"exec_module failed: {exc}") from exc
+
+    names = getattr(module, "ENGINE_NAMES", None)
+    if not isinstance(names, dict):
+        raise EngineRegistryLoadError("ENGINE_NAMES dict missing or wrong type")
+    return set(names.values())
 
 
 def _aggregate_overall(checks: dict[str, CheckResult]) -> str:

@@ -62,6 +62,7 @@ class AlignmentModal:
         self._root_path = root_path
         self._closed = False
         self._body_frame: tk.Frame | None = None
+        self._last_report: AlignmentReport | None = None
 
         self.top = tk.Toplevel(parent)
         self.top.title("ALIGNMENT STATUS  ·  aurum research")
@@ -223,7 +224,7 @@ class AlignmentModal:
 
     def _export(self) -> None:
         """Serialize current report to docs/audits/repo/YYYY-MM-DD_alignment.md."""
-        if self._closed or not hasattr(self, "_last_report"):
+        if self._closed or self._last_report is None:
             return
         report = self._last_report
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

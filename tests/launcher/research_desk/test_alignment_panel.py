@@ -21,8 +21,11 @@ from launcher_support.research_desk.alignment_scan import (
 )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def _tk_root():
+    """Module-scoped Tk root — mirrors test_sigils.py pattern. Per-test
+    Tk() creation exhausts Windows Tk state in large suites, causing
+    spurious skips downstream (test_sigils saw this in pre-review runs)."""
     try:
         root = tk.Tk()
     except tk.TclError:
@@ -37,7 +40,8 @@ def _tk_root():
 
 
 def test_open_alignment_modal_builds(_tk_root, tmp_path) -> None:
-    """Opening the modal against a tmp_path repo should construct widgets."""
+    """Opening the modal against a tmp_path repo should actually render
+    widgets — not just construct an empty shell with exceptions swallowed."""
     # Minimal fake repo: just need config/engines.py + docs/agents/ to avoid
     # exceptions in run_alignment_scan.
     (tmp_path / "config").mkdir()
@@ -46,8 +50,24 @@ def test_open_alignment_modal_builds(_tk_root, tmp_path) -> None:
     )
     (tmp_path / "docs" / "agents").mkdir(parents=True)
     modal = open_alignment_modal(_tk_root, root_path=tmp_path)
+
     assert isinstance(modal, AlignmentModal)
     assert not modal._closed
+    # Body frame must exist AND have children rendered (one per check).
+    # Without this, a silent scan failure would leave an empty body and
+    # still pass the test.
+    assert modal._body_frame is not None
+    assert len(modal._body_frame.winfo_children()) > 0
+    # _last_report must be populated — proves _refresh() completed.
+    assert modal._last_report is not None
+    assert set(modal._last_report.checks.keys()) == {
+        "engine_roster",
+        "path_existence",
+        "staleness",
+        "paperclip_sync",
+        "protected_files",
+    }
+
     modal._close()
     assert modal._closed
 
