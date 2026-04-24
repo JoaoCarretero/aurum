@@ -717,3 +717,16 @@ def test_columns_schema():
     assert widths["ROI"] == 8
     assert widths["SRC"] == 5
     assert widths["TRADES"] == 6
+
+
+def test_render_left_header_smoke(gui_root):
+    """_render_left_header paints chips + column header without exception.
+    Validates the structural contract post-polish: no crash, widgets created."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_left_header
+    frame = tk.Frame(gui_root)
+    state = {"filter_mode": "all", "refresh_fn": lambda: None}
+    _render_left_header(frame, state, None)
+    # Sanity: at least the chip row and the column header row were packed.
+    children = frame.winfo_children()
+    assert len(children) >= 3  # chip row + divider + col header row (+ optional divider)

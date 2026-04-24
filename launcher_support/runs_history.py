@@ -598,18 +598,16 @@ def pause_runs_history(root: tk.Widget, launcher) -> None:
 
 
 def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
-    # Titulo "RUNS HISTORY" removido daqui — quando dentro do wrapper
-    # /engines, o header ENGINES + chip bar HISTORY/LIVE/LOGS ja deixa
-    # claro o que a tela mostra. O subtitulo "local + VPS, newest first"
-    # tambem vira obvio pelos valores da coluna SRC (local/db/vps).
-    #
-    # Ordem reorganizada: filter chips primeiro (mesmo estilo visual
-    # de LIVE/LOGS pra consistencia cross-aba), dai column headers
-    # direto — sem labels redundantes ("MODE" label apagado, chips
-    # "ALL/SHADOW/PAPER" sao auto-explicativos).
+    """Filter chips + column header for the runs table.
+
+    Chips are 1px BORDER boxes when active (H2 8pt bold). Column headers
+    are COL tier (7pt bold) to preserve pixel-accurate width alignment
+    with 7pt rows. Numeric columns right-aligned to match rows.
+    Divider rule: BORDER between blocks, DIM2 for sub-divisions.
+    """
     current = state.get("filter_mode", "all")
     f_row = tk.Frame(parent, bg=BG)
-    f_row.pack(fill="x", padx=10, pady=(8, 6))
+    f_row.pack(fill="x", padx=10, pady=(10, 8))
     for idx, label in enumerate(("ALL", "SHADOW", "PAPER"), start=1):
         key = label.lower()
         is_active = (current == "all" and key == "all") or (current == key)
@@ -621,24 +619,30 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
                 fn()
         chip = tk.Label(
             f_row, text=f" {idx}:{label} ",
-            font=(FONT, 7, "bold"),
+            font=(FONT, 8, "bold"),
             fg=AMBER_D if is_active else DIM,
             bg=BG3 if is_active else BG,
-            cursor="hand2", padx=5, pady=2,
+            cursor="hand2", padx=8, pady=4,
+            highlightbackground=BORDER if is_active else BG,
+            highlightthickness=1,
         )
-        chip.pack(side="left", padx=(0, 3))
+        chip.pack(side="left", padx=(0, 6))
         chip.bind("<Button-1>", _pick)
 
-    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
+    # Divider between filter block and table block — BORDER (structural).
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10)
 
-    # Column header
-    cols = _COLUMNS
+    # Column header — 7pt bold (COL tier, preserves alignment with rows).
+    # Numeric columns right-aligned.
+    numeric = {"TICKS", "SIG", "EQUITY", "ROI", "TRADES"}
     col_hdr = tk.Frame(parent, bg=BG)
     col_hdr.pack(fill="x", padx=10, pady=(6, 2))
-    for label, w in cols:
+    for label, w in _COLUMNS:
+        anchor = "e" if label in numeric else "w"
         tk.Label(col_hdr, text=label, fg=DIM, bg=BG,
                  font=(FONT, 7, "bold"), width=w,
-                 anchor="w").pack(side="left", padx=(2, 0))
+                 anchor=anchor).pack(side="left", padx=(2, 0))
+    # Divider below column header — DIM2 (sub-division within table block).
     tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=10)
 
 
