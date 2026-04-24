@@ -1735,6 +1735,11 @@ def hub_scan_async(app):
     data via whichever ``_arb_*_repaint`` callback is registered.
     """
     import threading
+    import os
+    def _test_mode_enabled() -> bool:
+        return os.getenv("AURUM_TEST_MODE", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
     if _test_mode_enabled():
         app._ui_call_soon(lambda: app._arb_hub_telem_update(
             {"dex_online": 0, "cex_online": 0, "total": 0},

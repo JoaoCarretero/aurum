@@ -673,12 +673,14 @@ def test_draw_status_block_creates_rows(app):
 # _arb_hub_row_widgets, hover cursor, semaphore bullets) was retired in
 # the unification refactor.
 
-def test_arbitrage_hub_renders_six_tabs(app):
+def test_arbitrage_hub_renders_eight_tabs(app):
     app._arbitrage_hub()
     app.update_idletasks()
     assert hasattr(app, "_arb_tab_labels")
-    # Six tabs: cex-cex, dex-dex, cex-dex, basis, spot, engine
-    expected = {"cex-cex", "dex-dex", "cex-dex", "basis", "spot", "engine"}
+    # v2 density: 8 tabs (6 type + 2 meta). See launcher.App._ARB_TAB_DEFS.
+    expected = {"cex-cex", "dex-dex", "cex-dex",
+                "perp-perp", "spot-spot", "basis",
+                "positions", "history"}
     assert set(app._arb_tab_labels.keys()) == expected
 
 
@@ -692,10 +694,11 @@ def test_arbitrage_hub_tab_switch(app):
     app._arbitrage_hub(tab="dex-dex")
     app.update_idletasks()
     assert app._arb_tab == "dex-dex"
-    # Re-entering with another tab swaps state
+    # Re-entering with another tab swaps state. "engine" is a v1 legacy alias
+    # routed to "positions" via _ARB_LEGACY_TAB_MAP.
     app._arbitrage_hub(tab="engine")
     app.update_idletasks()
-    assert app._arb_tab == "engine"
+    assert app._arb_tab == "positions"
 
 
 def test_arbitrage_hub_telem_update_populates_status_strip(app):
@@ -733,11 +736,11 @@ def test_arbitrage_hub_telem_update_populates_status_strip(app):
 
 
 def test_arb_engine_tab_renders_without_snapshot(app):
-    # Engine tab should render even when no JANE STREET run is active.
+    # Legacy "engine" alias should route to the v2 "positions" tab and render
+    # even when no JANE STREET run is active.
     app._arbitrage_hub(tab="engine")
     app.update_idletasks()
-    # Tab registered as active
-    assert app._arb_tab == "engine"
+    assert app._arb_tab == "positions"
 
 
 def test_funding_scanner_screen_redirects_to_hub_tab(app):
@@ -758,15 +761,17 @@ def test_arb_basis_screen_redirects_to_hub_tab(app):
 
 
 def test_arb_spot_screen_redirects_to_hub_tab(app):
+    # Legacy "spot" alias routes to v2 "spot-spot" via _ARB_LEGACY_TAB_MAP.
     app._arb_spot_screen()
     app.update_idletasks()
-    assert app._arb_tab == "spot"
+    assert app._arb_tab == "spot-spot"
 
 
 def test_alchemy_enter_redirects_to_engine_tab(app):
+    # Legacy "engine" alias routes to v2 "positions" via _ARB_LEGACY_TAB_MAP.
     app._alchemy_enter()
     app.update_idletasks()
-    assert app._arb_tab == "engine"
+    assert app._arb_tab == "positions"
 
 
 def test_cockpit_stream_spawn_is_off_ui_thread(app, mod, monkeypatch):
