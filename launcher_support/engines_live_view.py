@@ -3602,15 +3602,24 @@ def _dedupe_and_sort_trades(raw: list[dict], *, limit: int) -> list[dict]:
 def _fetch_paper_engine_trades_sync(engine_slug: str, *,
                                     limit: int = 50,
                                     per_run_limit: int = 50,
-                                    max_runs: int = 10) -> list[dict]:
+                                    max_runs: int = 15,
+                                    recency_window: int = 50) -> list[dict]:
     """Aggregate closed trades across every paper run of ``engine_slug``.
 
     Cockpit's per-run fetch only covers the *currently selected* run, so
     trades that closed in a run since stopped (e.g. after a restart
-    earlier today) never surface. This helper walks the ``max_runs`` most
-    recent paper runs for the engine, fans their /v1/runs/{id}/trades
-    fetches out in parallel, then dedupes + sorts newest-first via
-    _dedupe_and_sort_trades.
+    earlier today) never surface. This helper walks recent paper runs,
+    fans their /v1/runs/{id}/trades fetches out in parallel, then
+    dedupes + sorts newest-first via _dedupe_and_sort_trades.
+
+    Run selection: of the ``recency_window`` most-recent paper runs,
+    filter to those that reported signals (``novel_total`` > 0) — runs
+    with zero signals have zero trades by construction, so including
+    them only wastes HTTP calls — then cap the fan-out at ``max_runs``.
+    Without the signal filter, the recency window alone was too tight:
+    four restarts of an idle engine would occupy the top 10 by
+    started_at and push the one run that actually closed a trade below
+    the cutoff.
     """
     client = _get_cockpit_client()
     if client is None:
@@ -3622,7 +3631,9 @@ def _fetch_paper_engine_trades_sync(engine_slug: str, *,
         and str(r.get("mode") or "").lower() == "paper"
     ]
     paper_runs.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
-    paper_runs = paper_runs[:max_runs]
+    recent = paper_runs[:recency_window]
+    with_signals = [r for r in recent if int(r.get("novel_total") or 0) > 0]
+    paper_runs = with_signals[:max_runs]
     if not paper_runs:
         return []
 

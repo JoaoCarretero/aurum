@@ -803,13 +803,18 @@ def test_fetch_paper_engine_trades_sync_aggregates_across_runs(monkeypatch):
     # Two runs of the same engine: one running, one stopped. Each returns
     # a trade for the same signal tick — aggregator must dedupe to one.
     cockpit_rows = [
+        # novel_total > 0 so the aggregator actually fans out to this run
+        # (runs with no signals are skipped to avoid wasting HTTP calls).
         {"run_id": "RUN_A", "engine": "millennium", "mode": "paper",
-         "status": "running", "started_at": "2026-04-24T17:40:00Z"},
+         "status": "running", "started_at": "2026-04-24T17:40:00Z",
+         "novel_total": 1},
         {"run_id": "RUN_B", "engine": "millennium", "mode": "paper",
-         "status": "stopped", "started_at": "2026-04-24T13:48:00Z"},
+         "status": "stopped", "started_at": "2026-04-24T13:48:00Z",
+         "novel_total": 1},
         # unrelated engine — must be ignored
         {"run_id": "RUN_C", "engine": "citadel", "mode": "paper",
-         "status": "running", "started_at": "2026-04-24T18:00:00Z"},
+         "status": "running", "started_at": "2026-04-24T18:00:00Z",
+         "novel_total": 1},
     ]
     trades_by_run = {
         "RUN_A": {"trades": []},
@@ -834,6 +839,52 @@ def test_fetch_paper_engine_trades_sync_aggregates_across_runs(monkeypatch):
     assert len(out) == 1
     assert out[0]["symbol"] == "OPUSDT"
     assert out[0]["_source_run_id"] == "RUN_B"
+
+
+def test_fetch_paper_engine_trades_sync_skips_novel_zero_runs(monkeypatch):
+    """Runs with novel_total=0 have no closed trades by construction, so
+    the aggregator skips them. Prevents a common failure mode: a busy
+    engine with many recent restart-then-idle runs pushing the one run
+    that actually traded out of the recency window, causing a bogus
+    empty TRADE HISTORY."""
+    import launcher_support.engines_live_view as evv
+
+    cockpit_rows = [
+        # four recent idle runs (novel=0) — must be skipped even though
+        # they're newer than RUN_OLD
+        *[{"run_id": f"IDLE_{i}", "engine": "millennium", "mode": "paper",
+           "status": "stopped", "started_at": f"2026-04-24T18:00:{i:02d}Z",
+           "novel_total": 0}
+          for i in range(4)],
+        # older run with a real trade
+        {"run_id": "RUN_OLD", "engine": "millennium", "mode": "paper",
+         "status": "stopped", "started_at": "2026-04-24T13:48:00Z",
+         "novel_total": 1},
+    ]
+    trades_by_run = {
+        "RUN_OLD": {"trades": [
+            {"timestamp": "2026-04-24T13:48:00Z", "symbol": "OPUSDT",
+             "strategy": "millennium", "pnl": 0.58, "primed": False},
+        ]},
+    }
+    fetched: list[str] = []
+
+    class _FakeClient:
+        def _get(self, path):
+            rid = path.split("/")[3]
+            fetched.append(rid)
+            return trades_by_run.get(rid, {"trades": []})
+
+    monkeypatch.setattr(evv, "_get_cockpit_client", lambda: _FakeClient())
+    monkeypatch.setattr(evv, "_load_cockpit_runs_cached",
+                        lambda *args, **kwargs: list(cockpit_rows))
+
+    out = evv._fetch_paper_engine_trades_sync("millennium")
+
+    # IDLE_* runs must NOT have been fetched — only RUN_OLD.
+    assert fetched == ["RUN_OLD"]
+    assert len(out) == 1
+    assert out[0]["symbol"] == "OPUSDT"
 
 
 def test_refresh_paper_detail_skips_rerender_when_signature_unchanged(monkeypatch):
