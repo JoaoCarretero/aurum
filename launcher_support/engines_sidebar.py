@@ -786,10 +786,13 @@ def _uptime_from_heartbeat(hb: dict) -> str:
 def _render_signals_table_rich(parent, trades: list[dict], on_row_click):
     """Tabela com colunas time/sym/dir/entry/stop/rr/size/res. Rows clicaveis."""
     if not trades:
+        # Centered in the available vertical space. Without expand=True
+        # the empty-state label glues itself to the top of sig_box and
+        # the rest of the pane reads as a dead zone.
         tk.Label(parent,
                  text="(sem sinais ainda — aguardando primeiros ticks)",
                  fg=DIM, bg=PANEL, font=(FONT, 7, "italic")).pack(
-                     anchor="w", pady=(4, 4))
+                     expand=True)
         return
 
     cols = [("TIME", 6), ("SYM", 5), ("DIR", 4),
