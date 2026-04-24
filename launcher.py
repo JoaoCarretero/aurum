@@ -4462,20 +4462,9 @@ class App(tk.Tk):
         return render_engine(self, parent)
     # ═══════════════════════════════════════════════════════════
     # Phase 1 redesign (2026-04-22): 3-tab layout
-    # ═══════════════════════════════════════════════════════════
-    # 6-column layout after organize pass (2026-04-22):
-    # Dropped TYPE (~always PERP_PERP, goes in detail) and VOL
-    # (REALISTIC filter already gates anything uninvestable, and the
-    # detail pane shows vol ratio at the actual trade size). Left with
-    # the 6 columns that actually drive the "take this or not?" call.
-    _ARB_OPPS_COLS = [
-        ("VIAB",    5,  "w"),
-        ("SYM",    11,  "w"),
-        ("VENUES", 22,  "w"),
-        ("APR",     9,  "e"),
-        ("BKEVN",   7,  "e"),
-        ("SCORE",   5,  "e"),
-    ]
+    # (Phase-1 6-column _ARB_OPPS_COLS removed 2026-04-24 — v2 density
+    # supersedes it with the 8-column layout declared above at class-level
+    # near the other _ARB_* data defs. Task 9 will wire the painter to use it.)
 
     def _arb_render_opps(self, parent):
         from launcher_support.screens.arbitrage_hub import render_opps
