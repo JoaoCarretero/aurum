@@ -324,15 +324,15 @@ class ResearchDeskScreen(Screen):
         # Esconde tab atual
         current = self._tab_frames.get(self._active_tab)
         if current is not None and current.winfo_exists():
-            try:
-                current.pack_forget()
-            except Exception as e:
-                _LOG.exception("tab hide failed: %s", e)
             if hasattr(current, "on_hide"):
                 try:
                     current.on_hide()
                 except Exception as e:
                     _LOG.exception("tab on_hide failed: %s", e)
+            try:
+                current.pack_forget()
+            except Exception as e:
+                _LOG.exception("tab hide failed: %s", e)
         # Mostra / constroi target
         if key not in self._tab_frames:
             try:
@@ -349,6 +349,15 @@ class ResearchDeskScreen(Screen):
             target.pack(fill="both", expand=True)
         except Exception as e:
             _LOG.exception("tab pack failed: %s", e)
+            self._flash_feedback(ok=False, msg=f"tab {key} pack falhou")
+            if current is not None and current.winfo_exists():
+                try:
+                    current.pack(fill="both", expand=True)
+                    if hasattr(current, "on_show"):
+                        current.on_show()
+                except Exception as e2:
+                    _LOG.exception("restore current tab failed: %s", e2)
+            return
         if hasattr(target, "on_show"):
             try:
                 target.on_show()
