@@ -330,7 +330,7 @@ cockpit para, o VPS cai, Telegram silencia, live trading quebra.
 **Regras operacionais:**
 1. **NUNCA** escreva/edite `config/keys.json` diretamente, nem por `Write`,
    nem por `Edit`, nem por script (incluindo setup scripts que "restauram
-   o template"). Se precisa rodar setup, faça em `config/keys.json.tmpl`
+   o template"). Se precisa rodar setup, faça em `config/keys.json.example`
    ou similar e deixe pro usuário copiar manualmente.
 2. **NUNCA** commite `config/keys.json` (gitignored + hook pre-commit).
 3. Se abrir e ver placeholders `COLE_AQUI`, **pare e alerte o Joao
@@ -381,7 +381,7 @@ via VPS (cockpit tokens + telegram) + conhecimento prévio (vps_ssh host
 1. LER o ficheiro ANTES de editar.
 2. TESTAR após mudança: `python smoke_test.py --quiet`
 3. RESPEITAR single source of truth: `params.py` + `core/`
-4. PRESERVAR imports: engines importam de `core.*` e `config.params`, nunca entre si (exceção documentada: `multistrategy` importa `engines/backtest.py`).
+4. PRESERVAR imports: engines importam de `core.*` e `config.params`, nunca entre si. Orquestração multi-engine vive em `engines/millennium.py` (MILLENNIUM).
 5. DOCUMENTAR em português. Engines em inglês.
 6. MEDIR antes e depois em mudanças de sinais / indicadores / custos.
 7. **Gerar session log ao final** (ver regra permanente acima).
@@ -391,7 +391,7 @@ via VPS (cockpit tokens + telegram) + conhecimento prévio (vps_ssh host
 
 - `from config.params import *` no topo de cada engine
 - Run dirs: `data/{engine}/{YYYY-MM-DD_HHMM}/` com logs/, reports/, state/
-- Índice canônico: `data/index.json` (reconciled via `tools/reconcile_runs.py`)
+- Índice canônico: `data/index.json` (reconciled via `tools/reports/reconcile_runs.py`)
 - Reports: JSON (machine) + HTML (visual)
 - UTF-8 sempre. Platform: Windows-first (OneDrive, PyInstaller .exe)
 - Commits atômicos com mensagem descritiva (subject + body)

@@ -151,7 +151,7 @@ Se houve mudança em lógica de trading (sinais, custos, sizing, risco): destaca
 
 ## 9. Convenções inegociáveis
 
-- Imports: engines importam de `core.*` e `config.params` — **nunca entre engines** (exceção documentada: `multistrategy` importa `engines/backtest.py`)
+- Imports: engines importam de `core.*` e `config.params` — **nunca entre engines**. Orquestração multi-engine vive em `engines/millennium.py` (MILLENNIUM), não em módulo separado.
 - `from config.params import *` no topo de cada engine
 - Run dirs: `data/{engine}/{YYYY-MM-DD_HHMM}/` com `logs/`, `reports/`, `state/`
 - Docs em PT-BR, engines/código em EN
