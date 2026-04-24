@@ -312,6 +312,7 @@ def _master_list_sig(state, launcher=None) -> tuple:
         running,
         vps_running,
         collapsed,
+        bool(state.get("master_collapsed")),
     )
 
 
@@ -453,12 +454,11 @@ def render(launcher, parent, *, on_escape) -> dict:
 
     body = tk.Frame(root, bg=BG)
     body.pack(fill="both", expand=True, padx=14, pady=(8, 0))
+    state["body"] = body
 
-    # Split 24/76 master/detail. The master list is the operator's
-    # primary navigation, so it needs enough width for status + context.
-    body.grid_columnconfigure(0, weight=24, uniform="body")
-    body.grid_columnconfigure(1, weight=76, uniform="body")
-    body.grid_rowconfigure(0, weight=1)
+    # Split 24/76 master/detail by default. `_apply_master_layout` may
+    # switch to a fixed-width rail when state["master_collapsed"] is set.
+    _apply_master_layout(body, collapsed=False)
 
     state["master_host"] = tk.Frame(body, bg=BG)
     state["master_host"].grid(row=0, column=0, sticky="nsew", padx=(0, 8))
@@ -496,6 +496,8 @@ def render(launcher, parent, *, on_escape) -> dict:
         _kb("<KeyPress-S>", lambda _e=None: _stop_selected_live(state, launcher))
         _kb("<KeyPress-b>", lambda _e=None: _open_selected_backtest(state, launcher))
         _kb("<KeyPress-B>", lambda _e=None: _open_selected_backtest(state, launcher))
+        _kb("<KeyPress-c>", lambda _e=None: _toggle_master_collapsed(state))
+        _kb("<KeyPress-C>", lambda _e=None: _toggle_master_collapsed(state))
 
     def _cancel_pending_detail_refresh():
         aid = state.pop("detail_refresh_after_id", None)
@@ -1007,6 +1009,105 @@ def _fetch_shadow_snapshot(*, launcher=None, state=None) -> tuple[Path | None, d
     )
 
 
+def _apply_master_layout(body: tk.Widget, *, collapsed: bool) -> None:
+    """Configure the master/detail column weights on the body container.
+
+    Expanded: 24/76 weight split with uniform groups — master gets a
+    quarter of the horizontal real estate so names + subtitles read.
+    Collapsed: fixed ~46px rail for col 0, detail takes everything else.
+    """
+    if collapsed:
+        body.grid_columnconfigure(0, weight=0, minsize=52, uniform="")
+        body.grid_columnconfigure(1, weight=1, minsize=0, uniform="")
+    else:
+        body.grid_columnconfigure(0, weight=24, minsize=0, uniform="body")
+        body.grid_columnconfigure(1, weight=76, minsize=0, uniform="body")
+
+
+def _toggle_master_collapsed(state: dict) -> None:
+    state["master_collapsed"] = not bool(state.get("master_collapsed"))
+    body = state.get("body")
+    if body is not None:
+        _apply_master_layout(body, collapsed=state["master_collapsed"])
+    refresh = state.get("refresh")
+    if callable(refresh):
+        refresh()
+
+
+def _render_master_handle(host: tk.Widget, state: dict) -> None:
+    """Top bar inside master_host — matches the detail pane's header bar.
+
+    Same bg (BG), same vertical padding, same trailing 1px separator so
+    the master pane's top line sits at the same y-coordinate as the
+    detail pane's ``_hl2_header`` divider. Contains the ENGINES title on
+    the left and the collapse chevron on the right.
+    """
+    collapsed = bool(state.get("master_collapsed"))
+    bar = tk.Frame(host, bg=BG)
+    bar.pack(fill="x")
+    inner = tk.Frame(bar, bg=BG)
+    inner.pack(fill="x", padx=10, pady=7)
+    tk.Frame(inner, bg=AMBER, width=3, height=22).pack(side="left",
+                                                        padx=(0, 8))
+    if not collapsed:
+        tk.Label(inner, text="ENGINES", fg=AMBER, bg=BG,
+                 font=(FONT, 12, "bold")).pack(side="left")
+    chev = tk.Label(inner, text=("⟩" if collapsed else "⟨"),
+                    fg=AMBER, bg=BG, font=(FONT, 12, "bold"),
+                    cursor="hand2", padx=6)
+    chev.pack(side="right")
+    chev.bind("<Button-1>", lambda _e: _toggle_master_collapsed(state))
+    # Separator line mirrors the one under the detail pane header so the
+    # horizontal rule lines up across both panes. Breathing room below
+    # comes from the first bucket header's pady=(8, 4), which matches
+    # the telemetry strip's top pad on the detail side.
+    tk.Frame(host, bg=BORDER, height=1).pack(fill="x")
+
+
+def _render_master_rail(host: tk.Widget, state: dict, *,
+                        live_n: int, ready_n: int, research_n: int) -> None:
+    """Compact rail shown when the master pane is collapsed.
+
+    Three stacked badges (LIVE / RDY / LAB) + the selected engine's
+    short code so the operator still knows what's on screen without
+    expanding. Clicking any badge re-expands the pane.
+    """
+    rail = tk.Frame(host, bg=PANEL,
+                    highlightbackground=BORDER, highlightthickness=1)
+    rail.pack(fill="both", expand=True, padx=(0, 2), pady=(0, 4))
+
+    def _cell(label: str, n: int, tint: str) -> None:
+        cell = tk.Frame(rail, bg=PANEL, cursor="hand2")
+        cell.pack(fill="x", pady=(8, 0))
+        tk.Label(cell, text=label, fg=DIM2, bg=PANEL,
+                 font=(FONT, 6, "bold")).pack()
+        badge_bg = tint if n else BG2
+        badge_fg = BG if n else DIM2
+        tk.Label(cell, text=str(n), fg=badge_fg, bg=badge_bg,
+                 font=(FONT, 8, "bold"), width=3, padx=2).pack(pady=(1, 0))
+        cell.bind("<Button-1>", lambda _e: _toggle_master_collapsed(state))
+        for c in cell.winfo_children():
+            c.bind("<Button-1>", lambda _e: _toggle_master_collapsed(state))
+
+    _cell("LIVE", live_n, GREEN)
+    _cell("RDY", ready_n, AMBER_B)
+    _cell("LAB", research_n, DIM)
+
+    slug = state.get("selected_slug")
+    if slug:
+        tk.Frame(rail, bg=BORDER, height=1).pack(fill="x", pady=(10, 4),
+                                                  padx=4)
+        try:
+            from config.engines import ENGINES
+            display = str((ENGINES.get(slug) or {}).get("display") or slug).upper()
+        except Exception:
+            display = str(slug).upper()
+        tk.Label(rail, text="SEL", fg=DIM2, bg=PANEL,
+                 font=(FONT, 6, "bold")).pack()
+        tk.Label(rail, text=display[:3], fg=AMBER_B, bg=PANEL,
+                 font=(FONT, 7, "bold")).pack(pady=(1, 6))
+
+
 def _render_master_list(state, launcher):
     """Mount the 3-bucket master list on state['master_host']."""
     host = state["master_host"]
@@ -1090,17 +1191,6 @@ def _render_master_list(state, launcher):
         [(slug, "RESEARCH") for slug, _meta in experimental_items]
     )
 
-    # Scrollable container
-    canvas = tk.Canvas(host, bg=BG, highlightthickness=0)
-    vbar = tk.Scrollbar(host, orient="vertical", command=canvas.yview)
-    inner = tk.Frame(canvas, bg=BG)
-    inner.bind("<Configure>",
-               lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-    canvas.create_window((0, 0), window=inner, anchor="nw")
-    canvas.configure(yscrollcommand=vbar.set)
-    canvas.pack(side="left", fill="both", expand=True)
-    vbar.pack(side="right", fill="y")
-
     # Default selection: first LIVE, else first READY, else first RESEARCH,
     # falling back to the EXPERIMENTAL cluster when it is the only content.
     if state.get("selected_slug") is None:
@@ -1113,11 +1203,6 @@ def _render_master_list(state, launcher):
         if selected is not None:
             state["selected_slug"], state["selected_bucket"] = selected
 
-    _render_bucket(inner, "LIVE", live_items, state)
-    _render_bucket(inner, "READY LIVE", ready_items, state)
-    _render_bucket(inner, "RESEARCH", research_items, state)
-    _render_bucket(inner, "EXPERIMENTAL", experimental_items, state)
-
     # Running counter: for VPS-backed modes (shadow, paper) count actual
     # run *instances* in the cockpit cache — otherwise a single engine
     # with 2+ instances registers as "1 running".
@@ -1127,6 +1212,35 @@ def _render_master_list(state, launcher):
         )
     else:
         running_instances = len(live_items)
+
+    _render_master_handle(host, state)
+
+    if state.get("master_collapsed"):
+        _render_master_rail(
+            host, state,
+            live_n=running_instances,
+            ready_n=len(ready_items),
+            research_n=len(research_items) + len(experimental_items),
+        )
+    else:
+        # Scrollable bucket list. Canvas + inner bg matches the detail
+        # pane's body bg (PANEL) so the empty space below the last row
+        # doesn't read as a hard black void — instead it flows like a
+        # continuation of the panel.
+        canvas = tk.Canvas(host, bg=PANEL, highlightthickness=0)
+        vbar = tk.Scrollbar(host, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=PANEL)
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=vbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vbar.pack(side="right", fill="y")
+
+        _render_bucket(inner, "LIVE", live_items, state)
+        _render_bucket(inner, "READY LIVE", ready_items, state)
+        _render_bucket(inner, "RESEARCH", research_items, state)
+        _render_bucket(inner, "EXPERIMENTAL", experimental_items, state)
 
     _render_summary_row(
         state,
@@ -1226,84 +1340,23 @@ def _render_bucket(parent, title, items, state):
     for tup in items:
         if is_live_bucket:
             slug, meta, proc = tup
-            _render_row_live(parent, slug, meta, proc, state)
-            # Sub-rows de instancias sob o engine selecionado. Antes
-            # viviam numa segunda tabela (sidebar ENGINES rail dentro
-            # do detail pane) — operador reportou "duas barras fazem a
-            # mesma coisa". Agora tudo numa secao so: master list com
-            # instancias indentadas sob o engine ativo. Filtrado pelo
-            # mode atual (paper/shadow/etc), entao "separe shadow em
-            # shadow e paper em paper" tb fica respeitado — so aparece
-            # o set da aba ativa.
+            _render_nav_row(parent, bucket="LIVE", slug=slug, meta=meta,
+                            proc=proc, state=state)
+            # Instance sub-rows under the selected LIVE engine. Previously
+            # lived in a second table (the ENGINES sidebar rail inside the
+            # detail pane) — operator found it redundant. Keep everything
+            # in a single master list with indented instances under the
+            # active engine, filtered by the current mode.
             if state.get("selected_slug") == slug:
                 _render_live_instance_subrows(parent, slug, state)
         elif is_research_like:
             slug, meta = tup
-            _render_row_research(parent, slug, meta, state)
+            _render_nav_row(parent, bucket="RESEARCH", slug=slug,
+                            meta=meta, proc=None, state=state)
         else:
             slug, meta = tup
-            _render_row_ready(parent, slug, meta, state)
-
-
-def _render_live_instance_subrows(parent, slug: str, state: dict) -> None:
-    """Indented instance rows sob o engine LIVE selecionado.
-
-    Filtra pelo `state["mode"]` atual — em paper so mostra paper
-    instances, em shadow so shadow. Respeita o modo selecionado no
-    header pill e deixa cada aba com seu conjunto proprio.
-    """
-    current_mode = str(state.get("mode") or "").lower()
-    if current_mode not in ("paper", "shadow"):
-        return  # demo/testnet/live nao tem multi-instance em VPS
-
-    instances = _active_engine_runs(
-        slug, launcher=None, state=state, mode=current_mode,
-    )
-    if not instances:
-        return
-
-    cur_rid = state.get(
-        "selected_paper_run_id" if current_mode == "paper"
-        else "selected_shadow_run_id"
-    )
-    active_rid = str(cur_rid) if cur_rid else None
-
-    for inst in instances:
-        rid = str(inst.get("run_id") or "")
-        label = str(inst.get("label") or "") or (
-            f"#{rid.split('_')[-1][:6]}" if rid else "?"
-        )
-        ticks = inst.get("ticks_ok") or 0
-        is_active = rid == active_rid
-        mode_color = _MODE_COLORS.get(current_mode, DIM2)
-        row_bg = BG2 if is_active else BG
-        label_fg = WHITE if is_active else DIM
-
-        sub = tk.Frame(parent, bg=row_bg, cursor="hand2")
-        sub.pack(fill="x", padx=0, pady=0)
-        # Indent left strip + hierarchical glyph
-        tk.Frame(sub, bg=row_bg, width=6).pack(side="left", fill="y")
-        tk.Label(sub, text="└", fg=DIM2, bg=row_bg,
-                 font=(FONT, 7)).pack(side="left", padx=(0, 4))
-        tk.Label(sub, text=current_mode.upper()[:6], fg=mode_color,
-                 bg=row_bg, font=(FONT, 6, "bold")).pack(side="left",
-                                                          padx=(0, 4))
-        tk.Label(sub, text=label[:14], fg=label_fg, bg=row_bg,
-                 font=(FONT, 7)).pack(side="left")
-        tk.Label(sub, text=f"{ticks}t", fg=DIM2, bg=row_bg,
-                 font=(FONT, 6)).pack(side="right", padx=(0, 8))
-
-        def _click(_e, _rid=rid, _mode=current_mode):
-            if _mode == "paper":
-                state["selected_paper_run_id"] = _rid
-            else:
-                state["selected_shadow_run_id"] = _rid
-            refresh = state.get("refresh")
-            if callable(refresh):
-                refresh()
-        sub.bind("<Button-1>", _click)
-        for child in sub.winfo_children():
-            child.bind("<Button-1>", _click)
+            _render_nav_row(parent, bucket="READY", slug=slug, meta=meta,
+                            proc=None, state=state)
 
 
 def _select_slug(state, slug, bucket):
@@ -1375,6 +1428,23 @@ def _open_selected_backtest(state, launcher):
         _go_to_backtest(launcher, state.get("selected_slug"))
 
 
+# Master-list row layout — all three bucket types (LIVE / READY / RESEARCH)
+# share this 5-column grid so badges, names, actions and chevrons align
+# across rows. Character widths are fixed on the labels (not just grid
+# minsize) because every row is its own Frame with its own grid — grid
+# columns don't share widths across separate frames, so only explicit
+# label widths guarantee per-pixel alignment in the right-hand gutter.
+#
+#   col 0  accent strip       4px       sticky="nsw"
+#   col 1  status badge       width=3   RUN / RDY / LAB
+#   col 2  name + subtitle    flex      display on top row, meta below
+#   col 3  action label       width=9   MONITOR / LAUNCH / BACKTEST / ...
+#   col 4  chevron            width=2   ">" visual cue
+_ROW_BADGE_W = 3
+_ROW_ACTION_W = 9
+_ROW_CHEV_W = 2
+
+
 def _row_base(parent, slug, state, is_selected):
     bg = BG2 if is_selected else PANEL
     row = tk.Frame(parent, bg=bg, cursor="hand2",
@@ -1383,85 +1453,8 @@ def _row_base(parent, slug, state, is_selected):
     tk.Frame(row, bg=(AMBER_B if is_selected else BORDER), width=4).grid(
         row=0, column=0, rowspan=2, sticky="nsw")
     row.grid_columnconfigure(2, weight=1)
-    row.pack(fill="x", pady=(0, 4), padx=(0, 2))
+    row.pack(fill="x", pady=(0, 3), padx=(0, 2))
     return row
-
-
-def _render_row_live(parent, slug, meta, proc, state):
-    sel = state.get("selected_slug") == slug
-    row = _row_base(parent, slug, state, is_selected=sel)
-    bg = row["bg"]
-    stage_label, stage_color = _stage_badge(meta)
-    action_label, action_color = row_action_label("LIVE", meta)
-    tk.Label(row, text="●", fg=GREEN, bg=bg,
-             font=(FONT, 9, "bold"), padx=4).pack(side="left")
-    tk.Label(row, text=meta.get("display", slug.upper()),
-             fg=WHITE, bg=bg, font=(FONT, 9, "bold")).pack(side="left")
-    tk.Label(row, text=f" {stage_label} ",
-             fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
-             padx=4, pady=1).pack(side="left", padx=(6, 0))
-    tk.Label(row, text=action_label,
-             fg=action_color, bg=bg, font=(FONT, 6, "bold")
-             ).pack(side="right", padx=(0, 8))
-    mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
-    if mode_key in _MODE_ORDER:
-        tk.Label(row, text=f" {mode_key.upper()} ",
-                 fg=BG, bg=_MODE_COLORS[mode_key],
-                 font=(FONT, 7, "bold"), padx=4, pady=1).pack(side="left", padx=(6, 0))
-    started = proc.get("started")
-    if started:
-        try:
-            from datetime import datetime as _dt
-            secs = (_dt.now() - _dt.fromisoformat(started)).total_seconds()
-            tk.Label(row, text=format_uptime(seconds=secs),
-                     fg=DIM2, bg=bg, font=(FONT, 8)).pack(side="left", padx=(8, 0))
-        except Exception:
-            pass
-    for w in (row,) + tuple(row.winfo_children()):
-        w.bind("<Button-1>", lambda _e, _s=slug: _select_slug(state, _s, "LIVE"))
-
-
-def _render_row_ready(parent, slug, meta, state):
-    sel = state.get("selected_slug") == slug
-    row = _row_base(parent, slug, state, is_selected=sel)
-    bg = row["bg"]
-    stage_label, stage_color = _stage_badge(meta)
-    action_label, action_color = row_action_label("READY", meta)
-    tk.Label(row, text=meta.get("display", slug.upper()),
-             fg=WHITE, bg=bg, font=(FONT, 8, "bold"),
-             padx=6).pack(side="left")
-    tk.Label(row, text=f" {stage_label} ",
-             fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
-             padx=3).pack(side="left", padx=(0, 4))
-    tk.Label(row, text=action_label,
-             fg=action_color, bg=bg, font=(FONT, 6, "bold")
-             ).pack(side="right", padx=(0, 6))
-    sub = _subtitle_for(slug, meta)
-    if sub:
-        tk.Label(row, text=sub, fg=DIM, bg=bg,
-                 font=(FONT, 6)).pack(side="left", padx=(2, 0))
-    for w in (row,) + tuple(row.winfo_children()):
-        w.bind("<Button-1>", lambda _e, _s=slug: _select_slug(state, _s, "READY"))
-
-
-def _render_row_research(parent, slug, meta, state):
-    sel = state.get("selected_slug") == slug
-    row = _row_base(parent, slug, state, is_selected=sel)
-    bg = row["bg"]
-    stage_label, stage_color = _stage_badge(meta)
-    tk.Label(row, text="🔒", fg=DIM, bg=bg,
-             font=(FONT, 8), padx=4).pack(side="left")
-    tk.Label(row, text=meta.get("display", slug.upper()),
-             fg=DIM, bg=bg, font=(FONT, 9)).pack(side="left")
-    tk.Label(row, text=f" {stage_label} ",
-             fg=BG, bg=stage_color, font=(FONT, 6, "bold"),
-             padx=4, pady=1).pack(side="left", padx=(6, 0))
-    sub = _subtitle_for(slug, meta)
-    if sub:
-        tk.Label(row, text=sub, fg=DIM2, bg=bg,
-                 font=(FONT, 7)).pack(side="left", padx=(4, 0))
-    for w in (row,) + tuple(row.winfo_children()):
-        w.bind("<Button-1>", lambda _e, _s=slug: _select_slug(state, _s, "RESEARCH"))
 
 
 def _subtitle_for(slug, meta) -> str:
@@ -1481,86 +1474,86 @@ def _bind_nav_row(row: tk.Widget, slug: str, bucket: str, state: dict) -> None:
             pass
 
 
-def _render_row_live(parent, slug, meta, proc, state):
-    sel = state.get("selected_slug") == slug
-    row = _row_base(parent, slug, state, is_selected=sel)
-    bg = row["bg"]
-    stage_label, _stage_color = _stage_badge(meta)
-    action_label, action_color = row_action_label("LIVE", meta)
-    tk.Label(row, text="RUN", fg=BG, bg=GREEN,
-             font=(FONT, 6, "bold"), padx=5, pady=1).grid(
-                 row=0, column=1, rowspan=2, padx=(9, 7), pady=7, sticky="n")
-    tk.Label(row, text=meta.get("display", slug.upper()),
-             fg=WHITE, bg=bg, font=(FONT, 9, "bold"),
-             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
-    tk.Label(row, text=action_label.upper(), fg=action_color, bg=bg,
-             font=(FONT, 6, "bold"), anchor="e").grid(
-                 row=0, column=3, padx=(6, 8), pady=(6, 0), sticky="e")
-    meta_line = []
+def _live_subtitle(meta: dict, proc: dict) -> str:
+    """Bottom-line meta for a LIVE row: MODE / UPTIME / STAGE."""
+    stage_label, _ = _stage_badge(meta)
+    parts: list[str] = []
     mode_key = (proc.get("engine_mode") or proc.get("mode") or "").lower()
     if mode_key in _MODE_ORDER:
-        meta_line.append(mode_key.upper())
+        parts.append(mode_key.upper())
     started = proc.get("started")
     if started:
         try:
             from datetime import datetime as _dt
             secs = (_dt.now() - _dt.fromisoformat(started)).total_seconds()
-            meta_line.append(format_uptime(seconds=secs))
+            parts.append(format_uptime(seconds=secs))
         except Exception:
             pass
-    meta_line.append(stage_label)
-    tk.Label(row, text="  /  ".join(meta_line),
+    parts.append(stage_label)
+    return "  /  ".join(parts)
+
+
+def _render_nav_row(parent, *, bucket: str, slug: str, meta: dict,
+                    proc: dict | None, state: dict) -> None:
+    """Unified master-list row for LIVE / READY / RESEARCH buckets.
+
+    Same 5-column grid across buckets — only badge style, subtitle
+    source, and action label differ. Single renderer = aligned rows.
+    """
+    sel = state.get("selected_slug") == slug
+    row = _row_base(parent, slug, state, is_selected=sel)
+    bg = row["bg"]
+    stage_label, stage_color = _stage_badge(meta)
+
+    # Column 1 — status badge (fixed 3-char width → same pixel column
+    # across every row, regardless of badge text).
+    if bucket == "LIVE":
+        badge_text, badge_bg = "RUN", GREEN
+    elif bucket == "READY":
+        badge_text, badge_bg = "RDY", stage_color
+    else:
+        badge_text, badge_bg = "LAB", stage_color
+    tk.Label(row, text=badge_text, fg=BG, bg=badge_bg,
+             font=(FONT, 6, "bold"), padx=4, pady=1,
+             width=_ROW_BADGE_W).grid(
+                 row=0, column=1, rowspan=2, padx=(8, 7), pady=7, sticky="n")
+
+    # Column 2 — display name on top, subtitle underneath. Research rows
+    # get a dimmer name to read as "locked / not runnable".
+    name_fg = DIM if (bucket == "RESEARCH" and not sel) else WHITE
+    tk.Label(row, text=str(meta.get("display", slug.upper()))[:16],
+             fg=name_fg, bg=bg, font=(FONT, 8, "bold"),
+             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
+
+    if bucket == "LIVE" and proc is not None:
+        subtitle = _live_subtitle(meta, proc)
+    else:
+        subtitle = _subtitle_for(slug, meta) or stage_label
+    tk.Label(row, text=subtitle[:22],
              fg=AMBER_B if sel else DIM2, bg=bg, font=(FONT, 7),
              anchor="w").grid(row=1, column=2, sticky="ew", pady=(0, 6))
-    tk.Label(row, text=">", fg=DIM, bg=bg, font=(FONT, 8, "bold"),
-             anchor="e").grid(row=1, column=3, padx=(6, 8), pady=(0, 6), sticky="e")
-    _bind_nav_row(row, slug, "LIVE", state)
 
+    # Column 3 — action label. Fixed 9-char width forces the same right
+    # edge on every row so the column reads as a column across buckets.
+    # RESEARCH falls back to stage label (readiness verdict) instead of
+    # a runnable action.
+    if bucket == "RESEARCH":
+        action_text, action_color = stage_label, DIM2
+    else:
+        action_label, action_color = row_action_label(bucket, meta)
+        action_text = action_label.upper()
+    tk.Label(row, text=action_text[:9], fg=action_color, bg=bg,
+             font=(FONT, 6, "bold"), anchor="e",
+             width=_ROW_ACTION_W).grid(
+                 row=0, column=3, rowspan=2, padx=(6, 2), pady=7, sticky="e")
 
-def _render_row_ready(parent, slug, meta, state):
-    sel = state.get("selected_slug") == slug
-    row = _row_base(parent, slug, state, is_selected=sel)
-    bg = row["bg"]
-    stage_label, stage_color = _stage_badge(meta)
-    action_label, action_color = row_action_label("READY", meta)
-    tk.Label(row, text="RDY", fg=BG, bg=stage_color,
-             font=(FONT, 6, "bold"), padx=5, pady=1).grid(
-                 row=0, column=1, rowspan=2, padx=(9, 7), pady=7, sticky="n")
-    tk.Label(row, text=meta.get("display", slug.upper()),
-             fg=WHITE, bg=bg, font=(FONT, 8, "bold"),
-             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
-    tk.Label(row, text=action_label.upper(), fg=action_color, bg=bg,
-             font=(FONT, 6, "bold"), anchor="e").grid(
-                 row=0, column=3, padx=(6, 8), pady=(6, 0), sticky="e")
-    sub = _subtitle_for(slug, meta) or stage_label
-    tk.Label(row, text=sub, fg=AMBER_B if sel else DIM2, bg=bg,
-             font=(FONT, 7), anchor="w").grid(
-                 row=1, column=2, sticky="ew", pady=(0, 6))
-    tk.Label(row, text=">", fg=DIM, bg=bg, font=(FONT, 8, "bold"),
-             anchor="e").grid(row=1, column=3, padx=(6, 8), pady=(0, 6), sticky="e")
-    _bind_nav_row(row, slug, "READY", state)
+    # Column 4 — chevron (fixed 2-char width → consistent right gutter).
+    tk.Label(row, text=">", fg=DIM if sel else DIM2, bg=bg,
+             font=(FONT, 8, "bold"), anchor="e",
+             width=_ROW_CHEV_W).grid(
+                 row=0, column=4, rowspan=2, padx=(0, 6), pady=7, sticky="e")
 
-
-def _render_row_research(parent, slug, meta, state):
-    sel = state.get("selected_slug") == slug
-    row = _row_base(parent, slug, state, is_selected=sel)
-    bg = row["bg"]
-    stage_label, stage_color = _stage_badge(meta)
-    tk.Label(row, text="LAB", fg=BG, bg=stage_color,
-             font=(FONT, 6, "bold"), padx=5, pady=1).grid(
-                 row=0, column=1, rowspan=2, padx=(9, 7), pady=7, sticky="n")
-    tk.Label(row, text=meta.get("display", slug.upper()),
-             fg=WHITE if sel else DIM, bg=bg, font=(FONT, 8, "bold"),
-             anchor="w").grid(row=0, column=2, sticky="ew", pady=(6, 0))
-    tk.Label(row, text=stage_label, fg=DIM2, bg=bg,
-             font=(FONT, 6, "bold"), anchor="e").grid(
-                 row=0, column=3, padx=(6, 8), pady=(6, 0), sticky="e")
-    sub = _subtitle_for(slug, meta)
-    tk.Label(row, text=sub, fg=AMBER_B if sel else DIM2, bg=bg,
-             font=(FONT, 7), anchor="w").grid(
-                 row=1, column=2, columnspan=2, sticky="ew",
-                 padx=(0, 8), pady=(0, 6))
-    _bind_nav_row(row, slug, "RESEARCH", state)
+    _bind_nav_row(row, slug, bucket, state)
 
 
 def _render_live_instance_subrows(parent, slug: str, state: dict) -> None:

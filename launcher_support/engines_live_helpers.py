@@ -86,7 +86,7 @@ def footer_hints(*, selected_bucket: Bucket | None, mode: str) -> tuple[str, str
         hints += ["B backtest", "ENTER"]
     else:
         hints += ["ENTER select"]
-    hints += ["1=paper 2=demo 3=testnet 4=live 5=shadow"]
+    hints += ["C collapse", "1=paper 2=demo 3=testnet 4=live 5=shadow"]
     warn = "LIVE MODE - real orders enabled" if mode == "live" else ""
     return ("  ·  ".join(hints), warn)
 
@@ -109,8 +109,10 @@ def bucket_title(bucket: Bucket) -> str:
 
 
 def bucket_header_title(title: str) -> str:
+    # LIVE → "RUNNING" (the pane-level handle already reads ENGINES, so
+    # the bucket heading differentiates rather than duplicates).
     if title == "LIVE":
-        return "ENGINES"
+        return "RUNNING"
     if title == "READY LIVE":
         return "READY TO LAUNCH"
     if title == "EXPERIMENTAL":

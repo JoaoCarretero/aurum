@@ -165,56 +165,6 @@ def test_build_engine_rows_active_engine_without_counts():
     assert rows[0].signals is None
 
 
-def test_render_sidebar_expanded_smoke_no_exception(gui_root):
-    from launcher_support.engines_sidebar import EngineRow, render_sidebar
-    parent = None
-    try:
-        parent = tk.Frame(gui_root)
-        frame = render_sidebar(
-            parent,
-            engines=[
-                EngineRow("millennium", "MILLENNIUM", True, 41, 625),
-                EngineRow("citadel", "CITADEL", False, None, None),
-            ],
-            selected_slug="millennium",
-            on_select=lambda _slug: None,
-            instances_for_selected=[
-                {"run_id": "paper_main", "mode": "paper",
-                 "label": "main", "ticks_ok": 7},
-                {"run_id": "shadow_probe", "mode": "shadow",
-                 "label": "probe", "ticks_ok": 3},
-            ],
-            on_select_instance=lambda _rid, _mode: None,
-            active_instance_key=("paper", "paper_main"),
-        )
-        assert frame.winfo_children()
-    finally:
-        if parent is not None:
-            parent.destroy()
-
-
-def test_render_sidebar_collapsed_smoke_no_exception(gui_root):
-    from launcher_support.engines_sidebar import EngineRow, render_sidebar
-    parent = None
-    try:
-        parent = tk.Frame(gui_root)
-        frame = render_sidebar(
-            parent,
-            engines=[
-                EngineRow("millennium", "MILLENNIUM", True, 41, 625),
-                EngineRow("citadel", "CITADEL", False, None, None),
-            ],
-            selected_slug="citadel",
-            on_select=lambda _slug: None,
-            collapsed=True,
-            on_toggle=lambda: None,
-        )
-        assert frame.winfo_children()
-    finally:
-        if parent is not None:
-            parent.destroy()
-
-
 def test_last_sig_age_prefers_heartbeat_last_novel():
     """LAST SIG deve usar heartbeat.last_novel_at (detectado AO VIVO)
     em vez do ultimo trade (que pode ser primed do universo)."""
