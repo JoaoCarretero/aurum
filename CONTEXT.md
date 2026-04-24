@@ -56,7 +56,7 @@ aurum.finance/
 │   ├── harmonics.py             ← RENAISSANCE harmonic patterns library
 │   ├── chronos.py               ← HMM regime, GARCH vol, Hurst
 │   ├── sentiment.py             ← funding, OI, LS ratio (cache reprodutível)
-│   ├── hawkes.py                ← Hawkes endogeneity (KEPOS, GRAHAM arquivados)
+│   ├── hawkes.py                ← Hawkes endogeneity (KEPOS deletado 2026-04-23; GRAHAM ainda usa)
 │   ├── cache.py                 ← JSON cache (era pickle → eliminou RCE)
 │   ├── engine_base.py           ← shared engine runtime setup
 │   ├── engine_picker.py         ← engine selection

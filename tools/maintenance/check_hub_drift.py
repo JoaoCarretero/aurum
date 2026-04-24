@@ -160,13 +160,55 @@ def check_hub_sections() -> list[str]:
 def check_personas() -> list[str]:
     findings = []
     personas_dir = ROOT / "docs" / "agents"
-    required = ["scryer.md", "arbiter.md", "artifex.md", "curator.md"]
+    agents_md = _read(ROOT / "AGENTS.md")
 
-    for key in required:
-        if not (personas_dir / key).exists():
+    # Operatives listados em AGENTS.md na tabela RESEARCH DESK (secao 4).
+    # Match "| ... | **NAME** |" onde NAME é o operative key uppercase.
+    table_ops = re.findall(
+        r"\|\s*[^|]*?\|\s*\*\*([A-Z]+)\*\*",
+        agents_md,
+    )
+    # Filtra keys conhecidas de operativos (upper -> lower para file match)
+    known = {"SCRYER", "ARBITER", "ARTIFEX", "CURATOR", "ORACLE"}
+    required_keys = [op.lower() for op in table_ops if op in known]
+    if not required_keys:
+        # fallback — pelo menos os 4 originais
+        required_keys = ["scryer", "arbiter", "artifex", "curator"]
+
+    for key in required_keys:
+        file = f"{key}.md"
+        if not (personas_dir / file).exists():
             findings.append(
-                f"  [docs/agents/{key}] nao existe — markdown_editor "
+                f"  [docs/agents/{file}] nao existe — markdown_editor "
                 f"vai fallback pra AGENTS.md (risco de edit acidental no hub)"
+            )
+
+    # WORKFLOWS.md é referenciado em AGENTS.md como pipeline doc
+    if "docs/agents/WORKFLOWS.md" in agents_md and not (personas_dir / "WORKFLOWS.md").exists():
+        findings.append(
+            "  [docs/agents/WORKFLOWS.md] referenciado em AGENTS.md mas nao existe"
+        )
+
+    return findings
+
+
+def check_deleted_engines() -> list[str]:
+    """Detecta engines deletados que ainda sao referenciados como ativos."""
+    findings = []
+    engines_dir = ROOT / "engines"
+    readme = _read(ROOT / "README.md")
+
+    # Engines deletados em 2026-04-23 Fase 1
+    deleted = ["deshaw", "kepos", "medallion", "ornstein", "ornstein_v2"]
+    for name in deleted:
+        if (engines_dir / f"{name}.py").exists():
+            continue  # reintroduzido legitimamente, nao e drift
+        # Check README.md para command tipo `python engines/<name>.py`
+        pattern = rf"python engines/{name}\.py"
+        if re.search(pattern, readme):
+            findings.append(
+                f"  [README.md] menciona `python engines/{name}.py` "
+                f"mas o arquivo foi deletado em 2026-04-23"
             )
     return findings
 
@@ -182,7 +224,8 @@ def main() -> int:
         ("Referenced commands exist", check_referenced_commands),
         ("Referenced docs exist", check_referenced_docs),
         ("Hub files + CLAUDE.md pointer", check_hub_sections),
-        ("Persona stubs (docs/agents/)", check_personas),
+        ("Persona stubs (docs/agents/) + WORKFLOWS", check_personas),
+        ("Deleted engines nao referenciados como ativos", check_deleted_engines),
     ]
 
     total_findings = 0

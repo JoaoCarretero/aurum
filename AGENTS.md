@@ -74,20 +74,24 @@ Cada agente recebe prompt self-contained: contexto, caminhos, output format <500
 
 ## 4. RESEARCH DESK — Operativos AI (feat/research-desk)
 
-Quatro personas configuráveis via Paperclip API (porta 3100), gerenciadas pelo `launcher_support/research_desk/`:
+Cinco personas configuráveis via Paperclip API (porta 3100), gerenciadas pelo `launcher_support/research_desk/`:
 
-| Sigil | Operativo | Foco |
-|---|---|---|
-| 👁️ | **SCRYER** | Detecção / observação — scanning de mercado, anomaly flags, regime shifts |
-| ⚖️ | **ARBITER** | Julgamento — validação de hipóteses, scoring de edges, ship/iterate/kill calls |
-| 🔨 | **ARTIFEX** | Construção — geração de código/engine novos, implementação de features |
-| 📚 | **CURATOR** | Curadoria — docs, audits, consolidação de findings, session logs |
+| Sigil | Operativo | Foco | Model | Budget/mês |
+|---|---|---|---|---|
+| 👁️ | **SCRYER** | Detecção / observação — scanning de mercado, anomaly flags, regime shifts, **research specs** | sonnet-4-6 | $80 |
+| ⚖️ | **ARBITER** | Julgamento — validação de hipóteses, scoring de edges, ship/iterate/kill calls em **TIPO 1 (spec) e TIPO 2 (code)** reviews | opus-4-7 | $100 |
+| 🔨 | **ARTIFEX** | Construção — geração de código/engine novos, implementação de features em `experiment/*` branches | opus-4-7 | $250 |
+| 📚 | **CURATOR** | Curadoria — docs, audits, consolidação de findings, session logs, **alignment drift** (Fase 2) | sonnet-4-6 | $50 |
+| 🔮 | **ORACLE** | Integridade — **gate final** entre `stage=research` e `live_ready`, protocolo 6-block de audit forense | opus-4-7 | $80 |
 
 Cada operativo tem:
 - **Persona editável**: `docs/agents/{key}.md` (markdown inline editor no launcher)
+- **Instruction file** (Paperclip): `~/.paperclip/instances/default/companies/{cid}/agents/{aid}/instructions/AGENTS.md` — thin pointer que instrui leitura dos 4 root files + persona + `docs/agents/WORKFLOWS.md`
 - **Stats históricos**: `data/aurum.db` → tabela `research_desk_stats` (ship/iterate/kill ratio 30d)
 - **Cost tracking**: sparklines + alert row quando >80% budget
 - **Pause/Resume**: POST `/api/agents/:id/pause|/resume`
+
+**Pipeline típico**: SCRYER (spec TIPO 1) → ARBITER (review TIPO 1) → ARTIFEX (implementa) → ARBITER (review TIPO 2, loop ITERATE possível) → ORACLE (AUDIT 6-block) → merge. Detalhes em `docs/agents/WORKFLOWS.md`.
 
 **Acesso humano:** tecla `n` cria ticket, click no card abre detail modal 720x720, tecla `c` abre cost dashboard. Branch `feat/research-desk` — ver daily 2026-04-23.
 

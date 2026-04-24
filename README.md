@@ -2,6 +2,10 @@
 
 Plataforma quantitativa de trading algorítmico para crypto futures.
 
+> **Para agentes (Claude/Codex/outros):** antes de tocar em código, leia
+> `CLAUDE.md`, `AGENTS.md`, `MEMORY.md`, `CONTEXT.md`, `SKILLS.md` no root.
+> Esses 5 arquivos são o hub de orientação do projeto.
+
 ## Arquitectura
 
 ```
@@ -33,23 +37,21 @@ aurum.finance/
 │   ├── benchmark.py           ← BTC/SPY/XAU comparison, bear market analysis
 │   ├── diagnostics.py         ← execution realism, score calibration
 │   └── plots.py               ← matplotlib dashboard, MC, trade charts
-├── engines/                    EXECUTION ENGINES (17 no registry — config/engines.py)
+├── engines/                    EXECUTION ENGINES (12 no registry — config/engines.py)
 │   ├── citadel.py             ← CITADEL systematic momentum (Ω fractal 5D) — validated
-│   ├── jump.py                ← JUMP order flow (CVD divergence, microstructure)
+│   ├── jump.py                ← JUMP order flow (CVD divergence, microstructure) — validated
 │   ├── bridgewater.py         ← BRIDGEWATER macro sentiment (funding/OI/LS) — quarantined
 │   ├── renaissance.py         ← RENAISSANCE harmonic patterns
-│   ├── deshaw.py              ← DE SHAW pair cointegration — experimental
 │   ├── twosigma.py            ← TWO SIGMA ML meta-ensemble (LightGBM)
 │   ├── aqr.py                 ← AQR evolutionary allocation
 │   ├── janestreet.py          ← JANE STREET cross-venue arbitrage — validated live
 │   ├── millennium.py          ← MILLENNIUM ensemble orchestrator (live bootstrap staged)
-│   ├── kepos.py               ← KEPOS Hawkes endogeneity fade — experimental
-│   ├── graham.py              ← GRAHAM endogenous momentum — experimental (arquivado)
-│   ├── medallion.py           ← MEDALLION short-horizon ensemble — experimental
+│   ├── millennium_live.py     ← MILLENNIUM live bootstrap infra
+│   ├── graham.py              ← GRAHAM endogenous momentum — experimental (arquivado informalmente)
 │   ├── phi.py                 ← PHI Fibonacci confluence (0.618 retracement)
-│   ├── ornstein.py            ← ORNSTEIN mean-reversion (O-U / Hurst / ADF / VR)
-│   ├── ornstein_v2.py         ← ORNSTEIN V2 hardened preset (entry geometry + exits)
+│   ├── supertrend_futures.py  ← SUPERTREND strategy
 │   └── live.py                ← LIVE execution (paper/demo/testnet/live)
+│   (DE SHAW / KEPOS / MEDALLION / ORNSTEIN deletados na Fase 1 em 2026-04-23)
 ├── api/                        ← REST server (auth, routes, risk_check, models)
 ├── bot/
 │   └── telegram.py            ← notificações + comandos Telegram
@@ -72,19 +74,18 @@ aurum.finance/
 | **JUMP** | `python engines/jump.py` | Order flow microstructure: CVD divergence + volume imbalance |
 | **BRIDGEWATER** | `python engines/bridgewater.py` | Macro sentiment contrarian: funding + OI + long/short ratio |
 | **RENAISSANCE** | `python engines/renaissance.py` | Harmonic patterns (Gartley, Bat, Butterfly) + Bayesian scoring |
-| **DE SHAW** | `python engines/deshaw.py` | Statistical arb: Engle-Granger cointegration pairs |
 | **TWO SIGMA** | `python engines/twosigma.py` | ML meta-ensemble (LightGBM walk-forward) |
 | **AQR** | `python engines/aqr.py` | Evolutionary fitness allocation |
 | **JANE STREET** | `python engines/janestreet.py --mode paper` | Delta-neutral cross-venue funding/basis arbitrage |
 | **MILLENNIUM** | `python engines/millennium.py` | Multi-strategy pod — orquestra ensemble + live bootstrap |
-| **KEPOS** | `python engines/kepos.py` | Hawkes endogeneity fade (experimental, sem edge OOS atual) |
-| **GRAHAM** | `python engines/graham.py` | Endogenous momentum w/ Hawkes regime gate (arquivado) |
-| **MEDALLION** | `python engines/medallion.py` | Short-horizon ensemble com Kelly sizing (experimental) |
+| **GRAHAM** | `python engines/graham.py` | Endogenous momentum w/ Hawkes regime gate (arquivado informalmente) |
 | **PHI** | `python engines/phi.py` | Fibonacci confluence em 0.618 retracement |
-| **ORNSTEIN** | `python engines/ornstein.py` | Mean-reversion battery (O-U, Hurst, ADF, VR) |
-| **ORNSTEIN V2** | `python engines/ornstein_v2.py` | ORNSTEIN com preset hardened (default `robust`) |
 | **WINTON** | `python core/chronos.py` | Time-series regime suite (HMM, GARCH, Hurst) — toolkit |
 | **LIVE** | `python engines/live.py` | Paper/Demo/Testnet/Live via Binance USDT Futures WebSocket |
+
+> DE SHAW / KEPOS / MEDALLION / ORNSTEIN foram **deletados** na Fase 1 em
+> 2026-04-23 (ver `docs/days/2026-04-23.md`). Status histórico em
+> `MEMORY.md` seção 4 e veredict em `docs/audits/2026-04-16_oos_verdict.md`.
 
 > Lista canônica completa em `config/engines.py`. Status OOS de cada engine em `docs/audits/2026-04-16_oos_verdict.md`.
 
