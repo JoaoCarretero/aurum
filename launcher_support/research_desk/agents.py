@@ -77,8 +77,19 @@ CURATOR = AgentIdentity(
     artifact_dir="docs/audits",
 )
 
+ORACLE = AgentIdentity(
+    key="ORACLE",
+    uuid="2f790a10-55d1-4b4c-9a48-30db1e4cb73b",
+    role="Integrity Auditor",
+    archetype="The Oracle",
+    stone="Gold",
+    tagline="Oracular, cirurgical, veredito com evidencia.",
+    typeface="serif-grave",
+    artifact_dir="docs/audits/engines",
+)
 
-AGENTS: tuple[AgentIdentity, ...] = (SCRYER, ARBITER, ARTIFEX, CURATOR)
+
+AGENTS: tuple[AgentIdentity, ...] = (SCRYER, ARBITER, ARTIFEX, CURATOR, ORACLE)
 BY_KEY: dict[str, AgentIdentity] = {a.key: a for a in AGENTS}
 BY_UUID: dict[str, AgentIdentity] = {a.uuid: a for a in AGENTS}
 

@@ -9,20 +9,33 @@ import pytest
 
 
 def test_agents_package_loads() -> None:
-    """Os 4 agentes canonicos existem e tem UUIDs distintos."""
+    """Os 5 agentes canonicos existem e tem UUIDs distintos."""
     from launcher_support.research_desk import agents
 
-    assert len(agents.AGENTS) == 4
+    assert len(agents.AGENTS) == 5
     keys = [a.key for a in agents.AGENTS]
-    assert keys == ["SCRYER", "ARBITER", "ARTIFEX", "CURATOR"]
+    assert keys == ["SCRYER", "ARBITER", "ARTIFEX", "CURATOR", "ORACLE"]
 
     uuids = {a.uuid for a in agents.AGENTS}
-    assert len(uuids) == 4, "UUIDs devem ser unicos"
+    assert len(uuids) == 5, "UUIDs devem ser unicos"
 
     # Cross-reference resolve por uuid retorna o mesmo objeto
     for agent in agents.AGENTS:
         assert agents.BY_UUID[agent.uuid] is agent
         assert agents.BY_KEY[agent.key] is agent
+
+
+def test_oracle_registered() -> None:
+    """ORACLE eh o 5to operativo com UUID e role corretos."""
+    from launcher_support.research_desk.agents import AGENTS, BY_KEY, ORACLE
+
+    assert ORACLE.key == "ORACLE"
+    assert ORACLE.uuid == "2f790a10-55d1-4b4c-9a48-30db1e4cb73b"
+    assert ORACLE.role == "Integrity Auditor"
+    assert ORACLE.archetype == "The Oracle"
+    assert ORACLE.stone == "Gold"
+    assert ORACLE in AGENTS
+    assert BY_KEY["ORACLE"] is ORACLE
 
 
 def test_palette_covers_every_agent() -> None:
@@ -134,7 +147,7 @@ def test_launcher_has_research_desk_shim() -> None:
     )
 
 
-@pytest.mark.parametrize("key", ["SCRYER", "ARBITER", "ARTIFEX", "CURATOR"])
+@pytest.mark.parametrize("key", ["SCRYER", "ARBITER", "ARTIFEX", "CURATOR", "ORACLE"])
 def test_agent_tagline_and_role_populated(key: str) -> None:
     """Cada identidade tem role + tagline + archetype nao vazios."""
     from launcher_support.research_desk.agents import BY_KEY

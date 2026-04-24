@@ -7,6 +7,7 @@ Cada operativo AI carrega uma pedra/metal alquimico associado ao papel:
   ARBITER → onix       (julgamento, dureza, justica)
   ARTIFEX → cobre      (forja, engenharia, materia)
   CURATOR → prata      (preservacao, quietude, memoria)
+  ORACLE  → ouro       (integridade, veredito final, transmutacao)
 
 Essas cores aparecem em:
   - borda esquerda/accent dos cards (acent de ~2px)
@@ -68,10 +69,21 @@ CURATOR = AgentPalette(
     dim="#989898",
 )
 
+# ── Ouro — ORACLE ─────────────────────────────────────────────────
+# Tom quente nobre aludindo a veredito final e transmutacao alquimica.
+# Gold classico (#D4AF37) eh legivel contra charcoal sem confundir com
+# o amber do launcher — shift pro amarelo mais puro.
+ORACLE = AgentPalette(
+    primary="#D4AF37",
+    dark="#8B6914",
+    dim="#AA8C2C",
+)
+
 
 AGENT_COLORS: dict[str, AgentPalette] = {
     "SCRYER": SCRYER,
     "ARBITER": ARBITER,
     "ARTIFEX": ARTIFEX,
     "CURATOR": CURATOR,
+    "ORACLE": ORACLE,
 }
