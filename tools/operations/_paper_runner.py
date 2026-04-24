@@ -63,6 +63,7 @@ from tools.operations.paper_position_manager import (  # noqa: E402
 from tools.operations.paper_ks_gate import KSLiveGate, KSState  # noqa: E402
 from tools.operations.paper_metrics import MetricsStreamer  # noqa: E402
 from tools.operations.run_id import build_run_id, sanitize_label  # noqa: E402
+from tools.operations.tick_schedule import seconds_until_next_tick_boundary  # noqa: E402
 
 # ─── Engine parametrization ──────────────────────────────────────
 # ENGINE_NAME is read from env at import. Entry scripts set it before
@@ -753,11 +754,12 @@ def run_paper(tick_sec: int, run_hours: float, account_size: float) -> int:
             except Exception as exc:  # noqa: BLE001
                 state.ticks_fail += 1
                 log.exception("tick %d failed: %s", tick_idx, exc)
+            sleep_for = seconds_until_next_tick_boundary(time.time(), tick_sec)
             sliced = 0.0
-            while sliced < tick_sec:
+            while sliced < sleep_for:
                 if KILL_FLAG.exists() or stop["flag"]:
                     break
-                chunk = min(2.0, tick_sec - sliced)
+                chunk = min(2.0, sleep_for - sliced)
                 time.sleep(chunk)
                 sliced += chunk
     finally:

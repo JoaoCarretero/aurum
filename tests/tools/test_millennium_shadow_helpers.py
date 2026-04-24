@@ -47,6 +47,41 @@ def test_is_live_signal_uses_reference_timestamp():
     ) is False
 
 
+def test_is_live_signal_default_tolerance_accepts_up_to_3x_tick():
+    """Default tolerance=3.0 × tick_sec accommodates the case where a shadow
+    runner's tick happens ~5min after the candle close (scan returns 0) and
+    the next tick lands ~20min later, now observing the confirmed signal
+    at age ~35min. With the previous default of 2.0 the signal was marked
+    STALE — verified live on 2026-04-24 when 3/3 shadow runners rejected the
+    RENAISSANCE RENDERUSDT signal at age 35min while paper accepted it at
+    age 23min. Tolerance of 3x=45min gives margin without letting hour-old
+    signals through.
+    """
+    trade = {"timestamp": "2026-04-24T09:00:00+00:00"}
+
+    # Age 35min (2100s) — observed 5min after second candle close.
+    # Previously stale (2*900=1800s), must now be live with new default.
+    assert is_live_signal(
+        trade,
+        tick_sec=900,
+        reference_ts="2026-04-24T09:35:32+00:00",
+    ) is True
+
+    # Age 44min59s — just inside the 45min window.
+    assert is_live_signal(
+        trade,
+        tick_sec=900,
+        reference_ts="2026-04-24T09:44:59+00:00",
+    ) is True
+
+    # Age 45min01s — just past 3x window, correctly STALE.
+    assert is_live_signal(
+        trade,
+        tick_sec=900,
+        reference_ts="2026-04-24T09:45:01+00:00",
+    ) is False
+
+
 def test_tg_signal_clamps_future_ts_to_now(monkeypatch):
     """Future ts must be clamped to now in Telegram rendering."""
     import tools.maintenance.millennium_shadow as shadow

@@ -55,6 +55,7 @@ from tools.operations.millennium_signal_gate import (  # noqa: E402
     trade_key,
 )
 from tools.operations.run_id import build_run_id, sanitize_label  # noqa: E402
+from tools.operations.tick_schedule import seconds_until_next_tick_boundary  # noqa: E402
 
 # ─── Engine parametrization ──────────────────────────────────────
 ENGINE_NAME = os.environ.get("AURUM_ENGINE_NAME", "citadel").lower()
@@ -521,8 +522,6 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
     )
 
     while True:
-        tick_start = time.time()
-
         if KILL_FLAG.exists():
             stop_requested["flag"] = True
             stop_requested["reason"] = "kill file"
@@ -618,8 +617,7 @@ def run_shadow(tick_sec: int, run_hours: float) -> int:
                 last_tick_at=now_iso_fail,
             )
 
-        elapsed = time.time() - tick_start
-        sleep_for = max(0.0, tick_sec - elapsed)
+        sleep_for = seconds_until_next_tick_boundary(time.time(), tick_sec)
         sliced = 0.0
         while sliced < sleep_for:
             if KILL_FLAG.exists() or stop_requested["flag"]:
