@@ -476,7 +476,11 @@ def render(launcher, parent, *, on_escape) -> dict:
     _apply_master_layout(body, collapsed=False)
 
     state["master_host"] = tk.Frame(body, bg=BG)
-    state["master_host"].grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+    # Reduced right gutter 8 → 4 — the sidebar content wasn't reaching the
+    # column edge; operator feedback "sidebar nao preenche pra direita"
+    # (2026-04-24). Detail pane still gets breathing room via its own
+    # padding on the left.
+    state["master_host"].grid(row=0, column=0, sticky="nsew", padx=(0, 4))
 
     state["detail_host"] = tk.Frame(body, bg=BG)
     state["detail_host"].grid(row=0, column=1, sticky="nsew")
@@ -1068,15 +1072,19 @@ def _render_master_handle(host: tk.Widget, state: dict) -> None:
     bar = tk.Frame(host, bg=BG)
     bar.pack(fill="x")
     inner = tk.Frame(bar, bg=BG)
-    inner.pack(fill="x", padx=10, pady=7)
-    tk.Frame(inner, bg=AMBER, width=3, height=22).pack(side="left",
-                                                        padx=(0, 8))
+    inner.pack(fill="x", padx=8, pady=6)
+    tk.Frame(inner, bg=DIM2, width=2, height=16).pack(side="left",
+                                                        padx=(0, 6))
     if not collapsed:
-        tk.Label(inner, text="ENGINES", fg=AMBER, bg=BG,
-                 font=(FONT, 12, "bold")).pack(side="left")
+        # Title tone matches the institutional aesthetic — caps + bold
+        # but dim-white instead of amber, so the eye doesn't land on
+        # the heading first. Amber is reserved for actionable/selected
+        # state (bucket badges, selected row).
+        tk.Label(inner, text="ENGINES", fg=WHITE, bg=BG,
+                 font=(FONT, 9, "bold")).pack(side="left")
     chev = tk.Label(inner, text=("⟩" if collapsed else "⟨"),
-                    fg=AMBER, bg=BG, font=(FONT, 12, "bold"),
-                    cursor="hand2", padx=6)
+                    fg=DIM, bg=BG, font=(FONT, 10, "bold"),
+                    cursor="hand2", padx=4)
     chev.pack(side="right")
     chev.bind("<Button-1>", lambda _e: _toggle_master_collapsed(state))
     # Separator line mirrors the one under the detail pane header so the
@@ -1333,7 +1341,8 @@ def _render_bucket(parent, title, items, state):
 
     header = tk.Frame(parent, bg=BG2, cursor="hand2" if collapsible else "",
                       highlightbackground=BORDER, highlightthickness=1)
-    header.pack(fill="x", pady=(8, 4), padx=(0, 2))
+    # padx=0 — bucket headers align with nav rows (no dangling 2px gutter).
+    header.pack(fill="x", pady=(8, 4), padx=0)
     tk.Frame(header, bg=AMBER, width=3).pack(side="left", fill="y")
     inner = tk.Frame(header, bg=BG2)
     inner.pack(side="left", fill="x", expand=True, padx=8, pady=5)
@@ -1475,7 +1484,11 @@ def _row_base(parent, slug, state, is_selected):
     tk.Frame(row, bg=(AMBER_B if is_selected else BORDER), width=4).grid(
         row=0, column=0, rowspan=2, sticky="nsw")
     row.grid_columnconfigure(2, weight=1)
-    row.pack(fill="x", pady=(0, 3), padx=(0, 2))
+    # padx=0 — rows stretch edge-to-edge of the master_host. The 2px
+    # right gutter used to leave a visible stripe against the amber
+    # selected-border on the adjacent column (operator feedback
+    # 2026-04-24).
+    row.pack(fill="x", pady=(0, 3), padx=0)
     return row
 
 
