@@ -1372,30 +1372,45 @@ def _render_bucket(parent, title, items, state):
     collapsible = title in _COLLAPSIBLE_BUCKETS
     collapsed = collapsible and _is_bucket_collapsed(state, title)
 
+    # Bucket header uses the SAME 4-column grid as _render_nav_row so the
+    # accent / badge-slot / title / count columns align per-pixel with the
+    # rows underneath. Before this, the header was pack-based and the
+    # chevron+title drift (variable-width chevron label + padx) pushed the
+    # title left of where the row names started, which read as misalignment.
     header = tk.Frame(parent, bg=BG2, cursor="hand2" if collapsible else "",
                       highlightbackground=BORDER, highlightthickness=1)
-    # padx=0 — bucket headers align with nav rows (no dangling 2px gutter).
     header.pack(fill="x", pady=(8, 4), padx=0)
-    # 4px accent strip matches the nav-row accent so header and rows
-    # align per-pixel on the left edge (rows use width=4 in _row_base).
-    tk.Frame(header, bg=AMBER, width=4).pack(side="left", fill="y")
-    inner = tk.Frame(header, bg=BG2)
-    # padx=(8, 7) matches the badge padding in _render_nav_row so the
-    # bucket title sits at the same x as the badge text on the rows.
-    inner.pack(side="left", fill="x", expand=True, padx=(8, 7), pady=5)
-    if collapsible:
-        chevron = "▸" if collapsed else "▾"
-        tk.Label(inner, text=(">" if collapsed else "v"), font=(FONT, 7, "bold"),
-                 fg=AMBER, bg=BG2, cursor="hand2").pack(side="left", padx=(0, 5))
-    tk.Label(inner, text=bucket_header_title(title), font=(FONT, 7, "bold"),
-             fg=AMBER, bg=BG2, cursor="hand2" if collapsible else "").pack(side="left")
-    tk.Label(inner, text=str(len(items)), font=(FONT, 7, "bold"),
-             fg=BG, bg=AMBER if title == "LIVE" else DIM,
-             cursor="hand2" if collapsible else "", padx=5).pack(side="right")
+    header.grid_columnconfigure(2, weight=1)
+
+    # Col 0 — accent strip (4px, matches _row_base).
+    tk.Frame(header, bg=AMBER, width=4).grid(row=0, column=0, sticky="nsw")
+
+    # Col 1 — chevron occupies the same 2ch slot as the row badge, so
+    # badges and chevrons stack vertically per-pixel across header/rows.
+    chev_text = (">" if collapsed else "v") if collapsible else " "
+    tk.Label(header, text=chev_text, fg=AMBER, bg=BG2,
+             font=(FONT, 7, "bold"), width=_ROW_BADGE_W,
+             cursor="hand2" if collapsible else "").grid(
+                 row=0, column=1, padx=(8, 7), pady=5, sticky="n")
+
+    # Col 2 — title, flex like the row-name column.
+    tk.Label(header, text=bucket_header_title(title), fg=AMBER, bg=BG2,
+             font=(FONT, 7, "bold"), anchor="w",
+             cursor="hand2" if collapsible else "").grid(
+                 row=0, column=2, sticky="ew", pady=5)
+
+    # Col 3 — count pill sits in the same slot as the row metric (width=7
+    # so the right edges align even when counts are 1-digit vs 2-digit).
+    tk.Label(header, text=str(len(items)), fg=BG,
+             bg=AMBER if title == "LIVE" else DIM,
+             font=(FONT, 7, "bold"), width=_ROW_METRIC_W,
+             cursor="hand2" if collapsible else "").grid(
+                 row=0, column=3, padx=(6, 8), pady=5, sticky="e")
+
     if collapsible:
         def _on_click(_e=None, _t=title, _s=state):
             _toggle_bucket(_s, _t)
-        for w in (header, inner) + tuple(inner.winfo_children()):
+        for w in (header,) + tuple(header.winfo_children()):
             w.bind("<Button-1>", _on_click)
 
     if collapsed:
