@@ -831,3 +831,82 @@ def test_refresh_shadow_detail_skips_rerender_when_signature_unchanged(monkeypat
 
     assert "render" not in calls
     assert "after" in calls
+
+
+def test_vps_canonical_services_cover_all_engines():
+    """Start/stop buttons must be wired pra os 4 engines × 2 modos — não só
+    MILLENNIUM (bug pré-2026-04-24: UI hardcoded só millennium_{paper,shadow})."""
+    from launcher_support.engines_live_view import VPS_CANONICAL_SERVICES
+
+    engines = {svc.split("_", 1)[0] for svc in VPS_CANONICAL_SERVICES}
+    assert engines == {"citadel", "jump", "renaissance", "millennium"}
+
+    modes = {svc.split("_", 1)[1].split("@", 1)[0] for svc in VPS_CANONICAL_SERVICES}
+    assert modes == {"paper", "shadow"}
+
+    for svc in VPS_CANONICAL_SERVICES:
+        assert "@" in svc, f"{svc} missing @instance suffix"
+
+
+def test_vps_service_display_name_is_human_readable():
+    from launcher_support.engines_live_view import _vps_service_display_name
+
+    assert _vps_service_display_name("citadel_paper@desk-a") == "CITADEL PAPER A"
+    assert _vps_service_display_name(
+        "millennium_shadow@desk-shadow-b") == "MILLENNIUM SHADOW B"
+    assert _vps_service_display_name("jump_shadow@desk-a") == "JUMP SHADOW A"
+    assert _vps_service_display_name("renaissance_paper") == "RENAISSANCE PAPER"
+
+
+def test_vps_service_discovery_flips_running_from_runs():
+    """Reproduces the discovery logic from _render_vps_control_bar:
+    for each live run matching (managed engine × paper|shadow × label),
+    flip the canonical service to "running". Probe and non-managed
+    engines are ignored.
+    """
+    from launcher_support.engines_live_view import (
+        VPS_CANONICAL_SERVICES,
+        _VPS_MANAGED_ENGINES,
+    )
+
+    def discover(runs):
+        state = {svc: "stopped" for svc in VPS_CANONICAL_SERVICES}
+        for r in runs or []:
+            engine = str(r.get("engine") or "").lower()
+            mode = r.get("mode")
+            label = str(r.get("label") or "")
+            status = r.get("status")
+            if (engine not in _VPS_MANAGED_ENGINES
+                    or mode not in ("paper", "shadow")
+                    or not label):
+                continue
+            svc = f"{engine}_{mode}@{label}"
+            if status == "running":
+                state[svc] = "running"
+            elif svc not in state:
+                state[svc] = "stopped"
+        return state
+
+    runs = [
+        {"engine": "citadel", "mode": "paper", "label": "desk-a",
+         "status": "running"},
+        {"engine": "jump", "mode": "shadow", "label": "desk-a",
+         "status": "running"},
+        {"engine": "renaissance", "mode": "paper", "label": "desk-a",
+         "status": "running"},
+        {"engine": "millennium", "mode": "shadow", "label": "desk-shadow-b",
+         "status": "running"},
+        {"engine": "citadel", "mode": "shadow", "label": "desk-a",
+         "status": "stopped"},
+        {"engine": "probe", "mode": "shadow", "label": "desk-a",
+         "status": "running"},
+    ]
+    state = discover(runs)
+
+    assert state["citadel_paper@desk-a"] == "running"
+    assert state["jump_shadow@desk-a"] == "running"
+    assert state["renaissance_paper@desk-a"] == "running"
+    assert state["millennium_shadow@desk-shadow-b"] == "running"
+    assert state["citadel_shadow@desk-a"] == "stopped"
+    assert state["jump_paper@desk-a"] == "stopped"
+    assert "probe_shadow@desk-a" not in state
