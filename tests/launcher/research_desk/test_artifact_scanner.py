@@ -149,3 +149,62 @@ def test_relative_age_days() -> None:
         mtime_epoch=time.time() - 3 * 86400, is_markdown=True,
     )
     assert relative_age(entry).endswith("d atras")
+
+
+from launcher_support.research_desk.artifact_scanner import (
+    list_backtest_runs,
+    scan_artifacts,
+)
+
+
+def test_scan_backtests_picks_dated_subdirs(tmp_path):
+    """Varre data/<engine>/<YYYY-MM-DD_HHMM>/ e retorna ArtifactEntry."""
+    (tmp_path / "data" / "citadel" / "2026-04-23_1403").mkdir(parents=True)
+    (tmp_path / "data" / "phi" / "2026-04-20_0900").mkdir(parents=True)
+    (tmp_path / "data" / "citadel" / "not_a_run").mkdir(parents=True)
+
+    entries = scan_artifacts(tmp_path)
+    backtests = [e for e in entries if e.kind == "backtest"]
+
+    assert len(backtests) == 2
+    stems = {(e.engine, e.run_id) for e in backtests}
+    assert ("citadel", "2026-04-23_1403") in stems
+    assert ("phi", "2026-04-20_0900") in stems
+
+
+def test_scan_backtests_empty_when_data_missing(tmp_path):
+    """data/ não existe = lista vazia, sem crash."""
+    entries = scan_artifacts(tmp_path)
+    backtests = [e for e in entries if e.kind == "backtest"]
+    assert backtests == []
+
+
+def test_list_backtest_runs_sorted_recent_first(tmp_path):
+    import os, time
+    d1 = tmp_path / "data" / "citadel" / "2026-04-20_0900"
+    d2 = tmp_path / "data" / "citadel" / "2026-04-23_1403"
+    d1.mkdir(parents=True)
+    d2.mkdir(parents=True)
+    # Força mtime diferente
+    os.utime(d1, (time.time() - 1000, time.time() - 1000))
+
+    runs = list_backtest_runs(tmp_path)
+    assert len(runs) == 2
+    # Mais recente primeiro
+    assert runs[0][0] == "citadel" and runs[0][1] == "2026-04-23_1403"
+    assert runs[1][0] == "citadel" and runs[1][1] == "2026-04-20_0900"
+
+
+def test_detect_origin_agent_when_label_matches(tmp_path):
+    from launcher_support.research_desk.artifact_scanner import _detect_origin
+    issues = [
+        {"id": "1", "labels": ["run:citadel/2026-04-23_1403"]},
+    ]
+    origin = _detect_origin(tmp_path, "citadel", "2026-04-23_1403", issues)
+    assert origin == "agent"
+
+
+def test_detect_origin_human_when_no_label_no_branch(tmp_path):
+    from launcher_support.research_desk.artifact_scanner import _detect_origin
+    origin = _detect_origin(tmp_path, "citadel", "2026-04-23_1403", [])
+    assert origin == "human"

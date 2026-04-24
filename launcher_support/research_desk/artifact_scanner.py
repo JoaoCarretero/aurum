@@ -25,13 +25,16 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 @dataclass(frozen=True)
 class ArtifactEntry:
-    """Um artefato producido por um agente."""
-    agent_key: str               # "RESEARCH" | "REVIEW" | "BUILD" | "CURATE" | "AUDIT"
-    kind: str                    # "spec" | "review" | "branch" | "audit"
-    title: str                   # filename sem extensao / nome da branch
-    path: str                    # caminho relativo ao root, ou refname do git
-    mtime_epoch: float           # seconds since epoch (0 se branch)
-    is_markdown: bool            # True se renderivel pelo markdown_viewer
+    """Um artefato producido por um agente ou run de backtest."""
+    agent_key: str               # "RESEARCH" | "REVIEW" | "BUILD" | "CURATE" | "AUDIT" | ""
+    kind: str                    # "spec" | "review" | "branch" | "audit" | "backtest"
+    title: str
+    path: str
+    mtime_epoch: float
+    is_markdown: bool
+    engine: str = ""             # só backtest: "citadel", "phi", ...
+    run_id: str = ""             # só backtest: "2026-04-23_1403"
+    origin: str = ""             # "agent" | "human" | "" (não-backtest)
 
 
 _AGENT_KINDS: list[tuple[str, str, str]] = [
@@ -42,14 +45,17 @@ _AGENT_KINDS: list[tuple[str, str, str]] = [
 ]
 
 
-def scan_artifacts(root: Path, limit: int = 50) -> list[ArtifactEntry]:
-    """Combina filesystem + git refs; retorna ate `limit` itens mais recentes."""
+def scan_artifacts(
+    root: Path, limit: int = 50, issues: list[dict] | None = None,
+) -> list[ArtifactEntry]:
+    """Combina filesystem + git refs + backtests; limit mais recentes."""
     entries: list[ArtifactEntry] = []
     for agent_key, kind, rel_dir in _AGENT_KINDS:
         entries.extend(_scan_markdown_dir(
             root=root, rel_dir=rel_dir, agent_key=agent_key, kind=kind,
         ))
     entries.extend(_scan_experiment_branches(root=root))
+    entries.extend(_scan_backtests(root, issues=issues))
 
     entries.sort(key=lambda e: e.mtime_epoch, reverse=True)
     return entries[:limit]
@@ -123,6 +129,77 @@ def _scan_experiment_branches(root: Path) -> list[ArtifactEntry]:
             is_markdown=False,
         ))
     return out
+
+
+import re as _re
+
+_RUN_SUBDIR = _re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}$")
+
+
+def _scan_backtests(
+    root: Path, issues: list[dict] | None = None,
+) -> list[ArtifactEntry]:
+    """Varre data/<engine>/<YYYY-MM-DD_HHMM>/ e retorna entries
+    com kind='backtest'. Retorna [] se data/ não existe."""
+    base = root / "data"
+    if not base.exists() or not base.is_dir():
+        return []
+    issues = issues or []
+    out: list[ArtifactEntry] = []
+    for engine_dir in base.iterdir():
+        if not engine_dir.is_dir():
+            continue
+        engine = engine_dir.name
+        for run_dir in engine_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            if not _RUN_SUBDIR.match(run_dir.name):
+                continue
+            try:
+                stat = run_dir.stat()
+            except OSError:
+                continue
+            run_id = run_dir.name
+            origin = _detect_origin(root, engine, run_id, issues)
+            out.append(ArtifactEntry(
+                agent_key="",
+                kind="backtest",
+                title=f"{engine}/{run_id}",
+                path=str(run_dir.relative_to(root)).replace("\\", "/"),
+                mtime_epoch=stat.st_mtime,
+                is_markdown=False,
+                engine=engine,
+                run_id=run_id,
+                origin=origin,
+            ))
+    return out
+
+
+def _detect_origin(
+    root: Path, engine: str, run_id: str, issues: list[dict],
+) -> str:
+    """agent se label 'run:<engine>/<run_id>' em alguma issue OR body tem
+    '**run_id:** <engine>/<run_id>'. Senão human."""
+    needle = f"{engine}/{run_id}"
+    label_needle = f"run:{needle}"
+    body_needle = f"**run_id:** {needle}"
+    for issue in issues:
+        labels = issue.get("labels") or []
+        if isinstance(labels, list) and label_needle in labels:
+            return "agent"
+        desc = issue.get("description") or issue.get("body") or ""
+        if isinstance(desc, str) and body_needle in desc:
+            return "agent"
+    return "human"
+
+
+def list_backtest_runs(
+    root: Path, limit: int = 50,
+) -> list[tuple[str, str, float]]:
+    """(engine, run_id, mtime) ordenado desc por mtime."""
+    entries = _scan_backtests(root, issues=[])
+    entries.sort(key=lambda e: e.mtime_epoch, reverse=True)
+    return [(e.engine, e.run_id, e.mtime_epoch) for e in entries[:limit]]
 
 
 def relative_age(entry: ArtifactEntry) -> str:
