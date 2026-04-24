@@ -1392,11 +1392,13 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
     tbl.pack(fill="x", pady=(1, 4))
     hdr = tk.Frame(tbl, bg=BG)
     hdr.pack(fill="x")
+    numeric_trade = {"ENTRY", "EXIT", "PNL", "R"}
     for lbl, w in [("SYMBOL", 9), ("DIR", 5), ("ENTRY", 9), ("EXIT", 9),
                    ("PNL", 9), ("R", 5), ("REASON", 8)]:
-        tk.Label(hdr, text=lbl, fg=DIM2, bg=BG,
-                 font=(FONT, 6, "bold"), width=w,
-                 anchor="w").pack(side="left", padx=(3, 0))
+        anchor = "e" if lbl in numeric_trade else "w"
+        tk.Label(hdr, text=lbl, fg=DIM, bg=BG,
+                 font=(FONT, 7, "bold"), width=w,
+                 anchor=anchor).pack(side="left", padx=(3, 0))
     tk.Frame(box, bg=BORDER, height=1).pack(fill="x")
     for t in lines:
         pnl = float(t.get("pnl_after_fees") or t.get("pnl") or 0.0)
@@ -1407,22 +1409,22 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
         xp = t.get("exit_price") if t.get("exit_price") is not None else t.get("exit_p")
         r_mul = t.get("r_multiple")
         cells = [
-            (str(t.get("symbol", "?"))[:9], WHITE, 9, "bold"),
+            (str(t.get("symbol", "?"))[:9], WHITE, 9, "bold", "w"),
             (direction, (GREEN if direction.startswith(("L", "B"))
-                          else RED), 5, "bold"),
-            (f"{float(ep):.5g}" if ep is not None else "—", WHITE, 9, "normal"),
-            (f"{float(xp):.5g}" if xp is not None else "—", WHITE, 9, "normal"),
-            (f"{pnl:+.2f}", pnl_color, 9, "bold"),
+                          else RED), 5, "bold", "w"),
+            (f"{float(ep):.5g}" if ep is not None else "—", WHITE, 9, "normal", "e"),
+            (f"{float(xp):.5g}" if xp is not None else "—", WHITE, 9, "normal", "e"),
+            (f"{pnl:+.2f}", pnl_color, 9, "bold", "e"),
             (f"{float(r_mul):+.2f}" if r_mul is not None else "—",
-             pnl_color, 5, "normal"),
-            (reason, DIM, 8, "normal"),
+             pnl_color, 5, "normal", "e"),
+            (reason, DIM, 8, "normal", "w"),
         ]
         row = tk.Frame(tbl, bg=PANEL)
         row.pack(fill="x")
-        for text, color, w, weight in cells:
+        for text, color, w, weight, anchor in cells:
             tk.Label(row, text=text, fg=color, bg=PANEL,
                      font=(FONT, 7, weight), width=w,
-                     anchor="w").pack(side="left", padx=(3, 0))
+                     anchor=anchor).pack(side="left", padx=(3, 0))
 
 
 def _render_detail_log_tail(parent: tk.Widget, r: RunSummary) -> None:

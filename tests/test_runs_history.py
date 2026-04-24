@@ -809,3 +809,28 @@ def test_render_block_header_smoke(gui_root):
     assert len(outer) == 1
     row = outer[0]
     assert len(row.winfo_children()) == 2
+
+
+def test_render_detail_trades_smoke(gui_root, tmp_path):
+    """_render_detail_trades paints a trades table for a run with a
+    reports/trades.jsonl file, using the COL tier header."""
+    import tkinter as tk
+    from launcher_support.runs_history import _render_detail_trades, RunSummary
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "trades.jsonl").write_text(
+        '{"symbol":"BTCUSDT","direction":"LONG","entry_price":65000,'
+        '"exit_price":66000,"pnl_after_fees":100,"r_multiple":1.5,'
+        '"exit_reason":"target"}\n',
+        encoding="utf-8",
+    )
+    r = RunSummary(
+        run_id="t", engine="CITADEL", mode="paper", status="stopped",
+        started_at=None, stopped_at=None, last_tick_at=None,
+        ticks_ok=0, ticks_fail=0, novel=0,
+        equity=1100, initial_balance=1000, roi_pct=10,
+        trades_closed=1, source="local", run_dir=tmp_path, heartbeat={},
+    )
+    frame = tk.Frame(gui_root)
+    _render_detail_trades(frame, r)
+    assert frame.winfo_children()
