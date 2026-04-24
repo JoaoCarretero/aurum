@@ -19,9 +19,32 @@ sao canceladas em on_exit.
 """
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from pathlib import Path
 from typing import Any
+
+
+def _research_desk_logger() -> logging.Logger:
+    log = logging.getLogger("aurum.research_desk")
+    if log.handlers:
+        return log
+    log.setLevel(logging.INFO)
+    log_dir = Path("data/.paperclip_cache")
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        h = logging.FileHandler(log_dir / "research_desk.log", mode="a", encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        log.addHandler(h)
+    except OSError:
+        pass
+    return log
+
+
+_LOG = _research_desk_logger()
 
 from core.ui.ui_palette import (
     AMBER,
@@ -331,8 +354,14 @@ class ResearchDeskScreen(Screen):
         try:
             from config.paths import AURUM_DB_PATH
             self._stats_db_conn = stats_db.connect(AURUM_DB_PATH)
-        except Exception:
+        except Exception as e:
             self._stats_db_conn = None
+            if not getattr(self, "_stats_db_error_flashed", False):
+                _LOG.warning("stats_db indisponível: %s", e)
+                self._flash_feedback(
+                    ok=False, msg=f"stats_db: {e.__class__.__name__}",
+                )
+                self._stats_db_error_flashed = True
         return self._stats_db_conn
 
     def _fetch_ratios_for(self, agent: AgentIdentity):
@@ -398,8 +427,23 @@ class ResearchDeskScreen(Screen):
                     self._client.resume_agent(agent.uuid)
                 else:
                     self._client.pause_agent(agent.uuid)
-            except Exception:  # noqa: BLE001
-                pass  # erro cai no proximo poll — status pill volta
+            except Exception as e:  # noqa: BLE001
+                from launcher_support.research_desk.paperclip_client import CircuitOpen
+                if isinstance(e, CircuitOpen):
+                    try:
+                        self.container.after(0, lambda: self._flash_feedback(
+                            ok=False, msg="paperclip offline",
+                        ))
+                    except Exception:
+                        pass
+                else:
+                    _LOG.warning("pause/resume falhou (%s): %s", agent.key, e)
+                    try:
+                        self.container.after(0, lambda: self._flash_feedback(
+                            ok=False, msg=f"pause {agent.key}: {e.__class__.__name__}",
+                        ))
+                    except Exception:
+                        pass
 
         threading.Thread(target=_run, daemon=True).start()
         # Feedback visual imediato + re-poll em 200ms (thread deve completar)
@@ -580,6 +624,8 @@ class ResearchDeskScreen(Screen):
         import threading
 
         def _work() -> None:
+            from launcher_support.research_desk.paperclip_client import CircuitOpen
+            import urllib.error
             try:
                 online = self._client.is_online()
                 agents_raw: list[dict] = []
@@ -589,11 +635,23 @@ class ResearchDeskScreen(Screen):
                     agents_raw = self._client.list_agents_cached(COMPANY_ID)
                     issues_raw = self._client.list_issues_cached(COMPANY_ID)
                     used_cents, cap_cents = total_budget_cents(agents_raw)
-            except Exception:  # noqa: BLE001
+            except (CircuitOpen, urllib.error.URLError, TimeoutError):
                 online = False
                 agents_raw = []
                 issues_raw = []
                 used_cents = cap_cents = 0
+            except Exception as e:  # noqa: BLE001
+                online = False
+                agents_raw = []
+                issues_raw = []
+                used_cents = cap_cents = 0
+                _LOG.exception("poll_state exception: %s", e)
+                try:
+                    self.container.after(0, lambda: self._flash_feedback(
+                        ok=False, msg=f"poll erro: {e.__class__.__name__}",
+                    ))
+                except Exception:
+                    pass
 
             # Post resultado pra main thread
             try:
@@ -645,9 +703,21 @@ class ResearchDeskScreen(Screen):
         # feed recebe ate 200 (pagina internamente via LOAD MORE).
         try:
             full_scan = scan_artifacts(self.root_path, limit=200)
-        except Exception:
-            full_scan = []
-        self._artifacts_panel.update(full_scan[:30])
+        except Exception as e:
+            full_scan = getattr(self, "_last_full_scan", [])
+            _LOG.warning("scan_artifacts falhou: %s", e)
+            if not getattr(self, "_scan_error_flashed", False):
+                self._flash_feedback(ok=False, msg="scan artifacts falhou")
+                self._scan_error_flashed = True
+        else:
+            self._last_full_scan = full_scan
+            self._scan_error_flashed = False
+
+        try:
+            self._artifacts_panel.update(full_scan[:30])
+        except Exception as e:
+            _LOG.warning("artifacts_panel.update falhou: %s", e)
+
         if self._activity_feed is not None:
             try:
                 events = merge_events(
@@ -656,8 +726,11 @@ class ResearchDeskScreen(Screen):
                     limit=200,
                 )
                 self._activity_feed.update(events)
-            except Exception:
-                pass
+            except Exception as e:
+                _LOG.warning("merge_events falhou: %s", e)
+                if not getattr(self, "_merge_error_flashed", False):
+                    self._flash_feedback(ok=False, msg="activity feed falhou")
+                    self._merge_error_flashed = True
         return full_scan
 
     def _maybe_record_snapshots(
