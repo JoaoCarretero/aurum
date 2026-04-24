@@ -164,23 +164,55 @@ def _live_trade_keys(engine_lower: str, data_root: Path) -> dict[tuple, dict]:
     return out
 
 
+_DIR_NORMAL = {
+    "BULL": "BUY", "BULLISH": "BUY", "LONG": "BUY", "BUY": "BUY",
+    "BEAR": "SELL", "BEARISH": "SELL", "SHORT": "SELL", "SELL": "SELL",
+}
+
+
+def _norm_direction(d: str) -> str:
+    return _DIR_NORMAL.get(str(d).upper(), str(d).upper())
+
+
 def audit_engine(engine_lower: str, engine_upper: str, scan_fn,
                  live_map: dict[tuple, dict], days: int) -> EngineAudit:
     ea = EngineAudit(engine=engine_upper)
     bt_trades = _bt_trades(engine_upper, scan_fn, days)
     ea.n_backtest = len(bt_trades)
-    ea.n_live = sum(1 for k in live_map if k[0] == engine_upper)
+
+    # Audit-window cutoff in ISO — anything older than (now - days) is
+    # outside scope. Without this the `extra` bucket catches every
+    # historical live trade still on disk (49 in the 2026-04-24 baseline).
+    from datetime import timedelta
+    cutoff_iso = (
+        (datetime.now(timezone.utc) - timedelta(days=days))
+        .isoformat().replace("+00:00", "")[:19]
+    )
+
+    ea.n_live = sum(
+        1 for k in live_map
+        if k[0] == engine_upper and k[2] >= cutoff_iso
+    )
 
     # For each backtest trade, try to match live by (engine, symbol, open_ts)
+    # Direction normalization handles BULLISH/LONG/BUY and BEARISH/SHORT/SELL
+    # variants consistently.
     for t in bt_trades:
         sym = str(t.get("symbol") or "").upper()
-        direc = str(t.get("direction") or "").upper()
+        direc_norm = _norm_direction(t.get("direction") or "")
         open_ts_raw = t.get("open_ts") or t.get("timestamp")
         open_ts = str(open_ts_raw).replace(" ", "T")[:19]
         key = (engine_upper, sym, open_ts)
-        if key in live_map and direc in (live_map[key].get("_direction"), "", None):
+        live_direc_norm = (
+            _norm_direction(live_map[key].get("_direction", ""))
+            if key in live_map else ""
+        )
+        if key in live_map and (
+            not live_direc_norm  # empty → don't enforce
+            or live_direc_norm == direc_norm
+        ):
             ea.matched.append({
-                "symbol": sym, "direction": direc, "open_ts": open_ts,
+                "symbol": sym, "direction": direc_norm, "open_ts": open_ts,
                 "entry": t.get("entry"), "stop": t.get("stop"),
                 "target": t.get("target"),
                 "bt_result": t.get("result"), "bt_pnl": t.get("pnl"),
@@ -188,13 +220,13 @@ def audit_engine(engine_lower: str, engine_upper: str, scan_fn,
             })
         else:
             ea.missed.append({
-                "symbol": sym, "direction": direc, "open_ts": open_ts,
+                "symbol": sym, "direction": direc_norm, "open_ts": open_ts,
                 "entry": t.get("entry"), "stop": t.get("stop"),
                 "target": t.get("target"),
                 "bt_result": t.get("result"), "bt_pnl": t.get("pnl"),
                 "entropy_norm": t.get("entropy_norm"),
             })
-    # Any live trade without a backtest equivalent in the window
+    # Any live trade inside the window without a backtest equivalent
     bt_keys = {
         (engine_upper, str(t.get("symbol") or "").upper(),
          str(t.get("open_ts") or t.get("timestamp")).replace(" ", "T")[:19])
@@ -202,6 +234,9 @@ def audit_engine(engine_lower: str, engine_upper: str, scan_fn,
     }
     for key, rec in live_map.items():
         if key[0] != engine_upper:
+            continue
+        # Window gate: skip live records from before the audit window.
+        if key[2] < cutoff_iso:
             continue
         if key not in bt_keys:
             ea.extra.append({

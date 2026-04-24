@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily AURUM audit live vs backtest (23:00 UTC)
+Documentation=https://github.com/joao/aurum.finance
+
+[Timer]
+# 23:00 UTC = 20:00 BRT = 01:00 CEST. Market EUA ja fechou, asia ainda
+# nao abriu — janela boa pra auditoria do dia em paz. Persistent=true
+# garante que se o VPS tiver down na hora, a proxima subida dispara
+# catch-up em vez de pular.
+OnCalendar=*-*-* 23:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
