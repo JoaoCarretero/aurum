@@ -401,6 +401,7 @@ def test_render_detail_reuses_shell_for_paper_refresh(monkeypatch):
             [],
             [],
             {"equity": 10000.0, "drawdown_pct": 0.0, "initial_balance": 10000.0, "metrics": {}},
+            [],
         ))
         monkeypatch.setattr(elv, "_schedule_paper_refresh", lambda launcher, state: None)
         monkeypatch.setattr(elv, "_render_vps_control_bar", lambda *args, **kwargs: None)

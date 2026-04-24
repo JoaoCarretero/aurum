@@ -706,6 +706,7 @@ def test_fetch_paper_extras_uses_ttl_cache(monkeypatch):
             [{"symbol": "BTCUSDT"}],
             [10100.0],
             {"available": 10000.0},
+            [{"symbol": "BTCUSDT", "timestamp": "2026-04-22T10:00:00Z"}],
         ),
     )
     first = evv._fetch_paper_extras("paper_1", allow_sync=True)
@@ -718,6 +719,7 @@ def test_fetch_paper_extras_uses_ttl_cache(monkeypatch):
             [{"symbol": "ETHUSDT"}],
             [9900.0],
             {"available": 9000.0},
+            [{"symbol": "ETHUSDT", "timestamp": "2026-04-22T11:00:00Z"}],
         ),
     )
     second = evv._fetch_paper_extras("paper_1")
@@ -763,12 +765,13 @@ def test_fetch_paper_extras_sync_prefers_local_run_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(evv.run_catalog, "get_run_summary", lambda *args, **kwargs: row)
     monkeypatch.setattr(evv, "_get_cockpit_client", lambda: None)
 
-    hb, positions, series, account = evv._fetch_paper_extras_sync("paper-live")
+    hb, positions, series, account, trades = evv._fetch_paper_extras_sync("paper-live")
 
     assert hb["run_id"] == "paper-live"
     assert positions[0]["symbol"] == "ETHUSDT"
     assert series == [10000.0, 10123.0]
     assert account["equity"] == 10123.0
+    assert trades == []
 
 
 def test_refresh_paper_detail_skips_rerender_when_signature_unchanged(monkeypatch):

@@ -75,7 +75,7 @@ _PAPER_SNAPSHOT_CACHE_TTL_S = 60.0
 _SHADOW_SNAPSHOT_CACHE_TTL_S = 60.0
 _COCKPIT_RUNS_CACHE: dict[str, object] = {"ts": 0.0, "runs": None, "loading": False}
 _COCKPIT_RUNS_LOCK = threading.Lock()
-_PAPER_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[dict | None, list[dict], list[float], dict | None]]] = {}
+_PAPER_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[dict | None, list[dict], list[float], dict | None, list[dict]]]] = {}
 _PAPER_SNAPSHOT_LOADING: set[str] = set()
 _PAPER_SNAPSHOT_LOCK = threading.Lock()
 _SHADOW_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
@@ -2666,9 +2666,10 @@ def _paper_content_sig_cheap(state) -> tuple:
     if cached is None:
         return ("loading", run_id)
     _ts, payload = cached
-    hb, positions, series, _account = payload
+    hb, positions, series, _account, trades = payload
     if hb is None:
         return ("loading", run_id)
+    last_trade_ts = trades[-1].get("timestamp") if trades else None
     return (
         run_id,
         hb.get("status"),
@@ -2676,6 +2677,8 @@ def _paper_content_sig_cheap(state) -> tuple:
         hb.get("novel_total"),
         len(positions),
         len(series),
+        len(trades),
+        last_trade_ts,
     )
 
 
@@ -3287,9 +3290,15 @@ def _fetch_paper_run_id(launcher, state: dict | None = None) -> str | None:
     return paper_runs[0].get("run_id")
 
 
-def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list[float], dict | None]:
-    """Fetch heartbeat + account + positions + equity via cockpit API.
-    Returns (heartbeat, positions, equity_series, account_snapshot)."""
+def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list[float], dict | None, list[dict]]:
+    """Fetch heartbeat + account + positions + equity + trades via cockpit API.
+    Returns (heartbeat, positions, equity_series, account_snapshot, trades).
+
+    Trades are the closed-trade history (reports/trades.jsonl locally,
+    /v1/runs/{id}/trades remotely). Primed signals (status markers from
+    first-N-ticks) are filtered out so the paper pane only shows real
+    executed trades.
+    """
     summary = run_catalog.get_run_summary(run_id, client=_get_cockpit_client())
     if summary is not None and summary.run_dir is not None:
         hb = dict(summary.heartbeat or {})
@@ -3333,6 +3342,15 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
             except Exception:
                 series = []
 
+        trades: list[dict] = []
+        trades_path = summary.run_dir / "reports" / "trades.jsonl"
+        if trades_path.exists():
+            try:
+                records = run_catalog._tail_jsonl_records(trades_path, limit=50)
+                trades = [r for r in records if not r.get("primed", False)]
+            except Exception:
+                trades = []
+
         if account is None and hb:
             account = {
                 "equity": hb.get("equity", 0.0),
@@ -3343,21 +3361,23 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
                 "ks_state": hb.get("ks_state", "NORMAL"),
                 "metrics": {},
             }
-        if hb or positions or series or account is not None:
-            return hb or None, positions, series, account
+        if hb or positions or series or account is not None or trades:
+            return hb or None, positions, series, account, trades
 
     client = _get_cockpit_client()
     if client is None:
-        return None, [], [], None
+        return None, [], [], None, []
     hb: dict | None = None
     positions: list[dict] = []
     series: list[float] = []
     account: dict | None = None
+    trades: list[dict] = []
     endpoints = {
         "heartbeat": f"/v1/runs/{run_id}/heartbeat",
         "positions": f"/v1/runs/{run_id}/positions",
         "equity": f"/v1/runs/{run_id}/equity?tail=200",
         "account": f"/v1/runs/{run_id}/account",
+        "trades": f"/v1/runs/{run_id}/trades?limit=50",
     }
     with ThreadPoolExecutor(max_workers=len(endpoints)) as pool:
         futures = {
@@ -3381,6 +3401,11 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
                 ]
             elif name == "account" and isinstance(payload, dict) and payload.get("available"):
                 account = payload
+            elif name == "trades" and isinstance(payload, dict):
+                trades = [
+                    t for t in (payload.get("trades") or [])
+                    if isinstance(t, dict) and not t.get("primed", False)
+                ]
     # Fallback: if /account endpoint missing (older cockpit), build minimal
     # snapshot from heartbeat fields (equity, drawdown_pct, ks_state, account_size).
     if account is None and hb is not None:
@@ -3392,11 +3417,11 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
             "ks_state": hb.get("ks_state", "NORMAL"),
             "metrics": {},
         }
-    return hb, positions, series, account
+    return hb, positions, series, account, trades
 
 
 def _fetch_paper_extras(run_id: str, *, launcher=None, state=None,
-                        allow_sync: bool = False) -> tuple[dict | None, list[dict], list[float], dict | None]:
+                        allow_sync: bool = False) -> tuple[dict | None, list[dict], list[float], dict | None, list[dict]]:
     now = time.monotonic()
     with _PAPER_SNAPSHOT_LOCK:
         cached = _PAPER_SNAPSHOT_CACHE.get(run_id)
@@ -3405,7 +3430,7 @@ def _fetch_paper_extras(run_id: str, *, launcher=None, state=None,
         if allow_sync:
             _PAPER_SNAPSHOT_LOADING.add(run_id)
         elif run_id in _PAPER_SNAPSHOT_LOADING:
-            return cached[1] if cached is not None else (None, [], [], None)
+            return cached[1] if cached is not None else (None, [], [], None, [])
         else:
             _PAPER_SNAPSHOT_LOADING.add(run_id)
 
@@ -3421,7 +3446,7 @@ def _fetch_paper_extras(run_id: str, *, launcher=None, state=None,
                 name=f"engines-live-paper-{run_id}",
                 daemon=True,
             ).start()
-            return cached[1] if cached is not None else (None, [], [], None)
+            return cached[1] if cached is not None else (None, [], [], None, [])
     payload = _fetch_paper_extras_sync(run_id)
     with _PAPER_SNAPSHOT_LOCK:
         _PAPER_SNAPSHOT_CACHE[run_id] = (time.monotonic(), payload)
@@ -3433,7 +3458,7 @@ def _paper_content_sig(state, launcher=None) -> tuple:
     run_id = _fetch_paper_run_id(launcher, state)
     if run_id is None:
         return ("no-run", bool(_cockpit_runs_loading()))
-    hb, positions, series, account = _fetch_paper_extras(
+    hb, positions, series, account, trades = _fetch_paper_extras(
         run_id,
         launcher=launcher,
         state=state,
@@ -3463,6 +3488,10 @@ def _paper_content_sig(state, launcher=None) -> tuple:
         hb.get("drawdown_pct"),
         hb.get("novel_total"),
     )
+    trades_sig = (
+        len(trades),
+        trades[-1].get("timestamp") if trades else None,
+    )
     return (
         run_id,
         hb_sig,
@@ -3470,6 +3499,7 @@ def _paper_content_sig(state, launcher=None) -> tuple:
         len(series),
         last_equity,
         account_sig,
+        trades_sig,
         state.get("selected_paper_run_id"),
     )
 
@@ -3501,7 +3531,7 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
             _render_paper_no_run(parent, launcher, state)
         return
 
-    hb, positions, series, account = _fetch_paper_extras(
+    hb, positions, series, account, trades = _fetch_paper_extras(
         run_id,
         launcher=launcher,
         state=state,
@@ -3522,19 +3552,41 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     status = str(hb.get("status") or "unknown").upper()
     status_color = GREEN if status == "RUNNING" else DIM2
 
+    # Paper trade history comes through now (reports/trades.jsonl locally,
+    # /v1/runs/{id}/trades via VPS). Was passed as empty until 2026-04-24
+    # when the operator asked where closed-trade telemetry went.
+    def _on_paper_row_click(trade: dict):
+        state["paper_selected_trade"] = trade
+        _render_detail(state, launcher)
+
+    def _on_paper_close_detail():
+        state.pop("paper_selected_trade", None)
+        _render_detail(state, launcher)
+
+    # Drop stale selection if the trade fell off the tail window.
+    paper_selected = state.get("paper_selected_trade")
+    if paper_selected is not None and trades:
+        sel_key = (paper_selected.get("symbol"), paper_selected.get("timestamp"))
+        known_keys = {(t.get("symbol"), t.get("timestamp")) for t in trades}
+        if sel_key not in known_keys:
+            state.pop("paper_selected_trade", None)
+            paper_selected = None
+
     detail_frame = render_detail(
         parent=parent,
         engine_display=name,
         mode="paper",
         heartbeat=hb,
         manifest=None,
-        trades=[],
-        on_row_click=lambda _t: None,
+        trades=trades,
+        on_row_click=_on_paper_row_click,
         status_badge_text=f"TUNNEL {tun_text}  ·  {status}  ·  run {run_id}",
         status_badge_color=status_color,
         account_snapshot=account,
         open_positions=positions,
         equity_series=series,
+        selected_trade=paper_selected,
+        on_close_detail=_on_paper_close_detail,
     )
 
     state["paper_last_render_sig"] = _paper_content_sig(state, launcher)
