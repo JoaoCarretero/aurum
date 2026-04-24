@@ -251,17 +251,31 @@ def _weighted_score(factor_scores: dict[str, float | None], weights: dict[str, f
 _DEFAULT_RT_FEE_BPS = 30.0
 
 
+def _apr_from_opp(opp: dict) -> float | None:
+    """Read APR from an opp record, preferring net_apr → apr → basis_apr.
+
+    Uses explicit-None fallthrough so a leg with net_apr=0.0 (zero funding,
+    meaningful value) is NOT silently upgraded to a sibling field's APR.
+    Returns None only when every candidate is missing (None).
+    """
+    for key in ("net_apr", "apr", "basis_apr"):
+        v = opp.get(key)
+        if v is not None:
+            return float(v)
+    return None
+
+
 def _breakeven_hours(opp: dict, rt_fee_bps: float = _DEFAULT_RT_FEE_BPS) -> float | None:
     """Hours to recover round-trip fees at this opp's current APR.
 
     bkevn_h = fee_bps * 8760 / (100 * net_apr)
             = fee_bps * 87.6 / net_apr   (APR in %)
     """
-    apr = opp.get("net_apr") or opp.get("apr") or opp.get("basis_apr")
+    apr = _apr_from_opp(opp)
     if apr is None:
         return None
-    a = abs(float(apr))
-    if a <= 0:
+    a = abs(apr)
+    if a <= 0 or not math.isfinite(a):
         return None
     return round(rt_fee_bps * 87.6 / a, 2)
 
@@ -274,12 +288,12 @@ def _profit_usd_per_1k_24h(opp: dict, rt_fee_bps: float = _DEFAULT_RT_FEE_BPS) -
     net = gross - fees_rt_usd
 
     Returns None if APR is missing. Can be negative (signals the edge
-    doesn't cover fees at this size).
+    doesn't cover fees at this size). Non-finite APR returns None.
     """
-    apr = opp.get("net_apr") or opp.get("apr") or opp.get("basis_apr")
-    if apr is None:
+    apr = _apr_from_opp(opp)
+    if apr is None or not math.isfinite(apr):
         return None
-    gross = abs(float(apr)) / 100.0 * 1000.0 * (24.0 / 8760.0)
+    gross = abs(apr) / 100.0 * 1000.0 * (24.0 / 8760.0)
     fees_usd = rt_fee_bps / 10_000.0 * 1000.0
     return round(gross - fees_usd, 4)
 
@@ -293,6 +307,7 @@ def _depth_pct_at_1k(opp: dict) -> float | None:
 
     Linear model: bps = 10_000 / (book_depth_usd / 1_000). A book of
     $1k matches 100% slippage (10_000 bps); $50k → 200 bps; $10M → 1 bps.
+    Non-finite or non-positive depth returns None.
     """
     depth = opp.get("book_depth_usd")
     if depth is None:
@@ -301,7 +316,7 @@ def _depth_pct_at_1k(opp: dict) -> float | None:
         d = float(depth)
     except (TypeError, ValueError):
         return None
-    if d <= 0:
+    if d <= 0 or not math.isfinite(d):
         return None
     return round(10_000.0 / (d / 1000.0), 4)
 

@@ -206,3 +206,56 @@ def test_depth_pct_deep_book_low_slippage():
     res = score_opp(pair)
     # 10_000 / 10_000 = 1.0 bps
     assert res.depth_pct_at_1k == pytest.approx(1.0, rel=1e-3)
+
+
+# ─── Robustness patches (2026-04-24): NaN guards + explicit-None APR fallthrough
+
+def test_profit_explicit_none_apr_fallthrough():
+    """net_apr=0.0 must NOT fallthrough to sibling apr field.
+
+    With `or`-chain fallthrough, 0.0 is falsy and silently upgrades to the
+    next candidate. The explicit-None helper keeps zero-APR zero.
+    """
+    # opp with net_apr=0.0 but apr=100.0 — the "or" chain used to return apr.
+    # Explicit-None fallthrough keeps net_apr=0 → profit = -$3 (just the fees).
+    res = score_opp({
+        "symbol": "BTC", "short_venue": "binance", "long_venue": "bybit",
+        "_type": "CC",
+        "net_apr": 0.0,  # explicit zero — must win over sibling apr
+        "apr": 100.0,
+        "volume_24h_short": 30_000_000, "volume_24h_long": 30_000_000,
+        "open_interest_short": 10_000_000, "open_interest_long": 10_000_000,
+        "risk": "LOW",
+    })
+    # Zero APR → gross=0 → net = -fees_usd = -$3
+    assert res.profit_usd_per_1k_24h == pytest.approx(-3.0, abs=1e-3)
+
+
+def test_profit_nan_apr_returns_none():
+    import math
+    res = score_opp({
+        "symbol": "X", "short_venue": "binance", "long_venue": "bybit",
+        "_type": "CC", "net_apr": math.nan,
+    })
+    assert res.profit_usd_per_1k_24h is None
+
+
+def test_depth_nan_returns_none():
+    import math
+    res = score_opp(_make_pair(book_depth_usd=math.nan))
+    assert res.depth_pct_at_1k is None
+
+
+def test_depth_inf_returns_none():
+    import math
+    res = score_opp(_make_pair(book_depth_usd=math.inf))
+    assert res.depth_pct_at_1k is None
+
+
+def test_breakeven_nan_apr_returns_none():
+    import math
+    res = score_opp({
+        "symbol": "X", "short_venue": "binance", "long_venue": "bybit",
+        "_type": "CC", "net_apr": math.nan,
+    })
+    assert res.breakeven_h is None
