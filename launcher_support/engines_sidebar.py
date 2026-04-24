@@ -515,17 +515,26 @@ def _hl2_paper_body(parent: tk.Widget, hb: dict, account: dict | None,
         _hl2_section(parent, "EQUITY + METRICS")
         _hl2_equity_metrics(parent, account, equity_series)
 
-    # SIGNALS (opcional; só aparece se houver trades ou drill-down)
+    # TRADE HISTORY — closed-trade feed (newest first) so the operator
+    # sees what happened to positions that cycled through. Always renders
+    # the section so an empty state is explicit instead of silent.
     if selected_trade is not None:
         from launcher_support.signal_detail_popup import render_inline
         _hl2_section(parent, "TRADE DETAIL  ·  click ✕ to close")
         render_inline(parent, selected_trade,
                       on_close_detail or (lambda: None))
-    elif trades:
-        _hl2_section(parent, "SIGNAL FEED", extra="click row for detail")
-        sig_box = tk.Frame(parent, bg=PANEL)
-        sig_box.pack(fill="x", padx=10, pady=(0, 6))
-        _render_signals_table_rich(sig_box, trades[-6:][::-1], on_row_click)
+    else:
+        extra = (f"{len(trades)} closed · click row for detail"
+                 if trades else "aguardando primeiro trade fechado")
+        _hl2_section(parent, "TRADE HISTORY", extra=extra)
+        if trades:
+            sig_box = tk.Frame(parent, bg=PANEL)
+            sig_box.pack(fill="x", padx=10, pady=(0, 6))
+            _render_signals_table_rich(sig_box, trades[-6:][::-1], on_row_click)
+        else:
+            tk.Label(parent, text="   — nenhum trade fechado ainda —",
+                     fg=DIM2, bg=PANEL, font=(FONT, 7, "italic")).pack(
+                         anchor="w", padx=12, pady=(2, 6))
 
 
 def _hl2_shadow_body(parent: tk.Widget, trades: list[dict],
