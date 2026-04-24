@@ -58,6 +58,10 @@ from launcher_support.engines_live_helpers import (
     _sanitize_instance_label,
 )
 from launcher_support.screens._metrics import emit_timing_metric
+from launcher_support import trade_history_panel
+from launcher_support.trade_chart_popup import (
+    open_trade_chart, resolve_tf, tf_to_seconds,
+)
 # signal_detail_popup.render_inline eh chamado via engines_sidebar.render_detail
 # (inline, sem Toplevel). show() legacy continua disponivel no modulo.
 
@@ -3489,6 +3493,19 @@ def _paper_content_sig(state, launcher=None) -> tuple:
     )
 
 
+def _fetch_paper_trades(run_id: str) -> list[dict]:
+    """Fetch recent paper trades via cockpit API. Empty list on error."""
+    client = _get_cockpit_client()
+    if client is None:
+        return []
+    try:
+        payload = client.get_trades(run_id, limit=200)
+    except Exception:
+        return []
+    raw = (payload or {}).get("trades") or []
+    return [t for t in raw if isinstance(t, dict)]
+
+
 def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     """Render PAPER mode detail pane with full trading dashboard.
     Reuses render_detail (mode='paper') extended kwargs: account_snapshot,
@@ -3550,6 +3567,41 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
         account_snapshot=account,
         open_positions=positions,
         equity_series=series,
+    )
+
+    # Trade history block — clickable rows open matplotlib chart popup.
+    # Trades come from cockpit API (reports/trades.jsonl served for paper runs).
+    trades = _fetch_paper_trades(run_id)
+    # Newest first for display.
+    trades_display = list(reversed(trades)) if trades else []
+
+    _engine_for_tf = (
+        (trades_display[0].get("strategy") if trades_display else None) or slug
+    )
+    try:
+        _tf_sec_panel = tf_to_seconds(resolve_tf(_engine_for_tf))
+    except ValueError:
+        _tf_sec_panel = 900  # 15m fallback
+
+    _panel_colors = {
+        "BG": BG, "PANEL": PANEL, "BG2": BG2, "AMBER": AMBER,
+        "AMBER_B": AMBER_B, "AMBER_D": AMBER_D, "GREEN": GREEN,
+        "RED": RED, "WHITE": WHITE, "DIM": DIM, "DIM2": DIM2,
+        "BORDER": BORDER,
+    }
+
+    def _open_chart_paper(t: dict, _rid=run_id):
+        open_trade_chart(
+            launcher, t, run_id=str(_rid),
+            colors=_panel_colors, font_name=FONT,
+        )
+
+    trade_history_panel.render(
+        parent, trades=trades_display,
+        on_click=_open_chart_paper,
+        colors=_panel_colors, font_name=FONT,
+        tf_sec=_tf_sec_panel,
+        title="PAPER TRADES",
     )
 
     state["paper_last_render_sig"] = _paper_content_sig(state, launcher)
