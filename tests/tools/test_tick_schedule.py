@@ -82,3 +82,35 @@ def test_returns_non_negative():
     assert result > 0
     # Should be ~900s (next cycle), not a tiny sliver
     assert result > 899.0
+
+
+def test_rejects_non_positive_tick_sec():
+    import pytest
+    with pytest.raises(ValueError, match="tick_sec"):
+        seconds_until_next_tick_boundary(1000.0, tick_sec=0)
+    with pytest.raises(ValueError, match="tick_sec"):
+        seconds_until_next_tick_boundary(1000.0, tick_sec=-60)
+
+
+def test_rejects_negative_post_close_delay():
+    import pytest
+    with pytest.raises(ValueError, match="post_close_delay"):
+        seconds_until_next_tick_boundary(
+            1000.0, tick_sec=900, post_close_delay=-1
+        )
+
+
+def test_rejects_post_close_delay_gte_tick_sec():
+    """Contract: sleep must be bounded by one tick_sec cycle. A
+    post_close_delay >= tick_sec would put the tick past the next
+    boundary, violating that contract.
+    """
+    import pytest
+    with pytest.raises(ValueError, match="post_close_delay"):
+        seconds_until_next_tick_boundary(
+            1000.0, tick_sec=900, post_close_delay=900
+        )
+    with pytest.raises(ValueError, match="post_close_delay"):
+        seconds_until_next_tick_boundary(
+            1000.0, tick_sec=900, post_close_delay=901
+        )

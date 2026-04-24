@@ -207,6 +207,63 @@ def test_runner_first_tick_opens_on_live_signal(tmp_path, monkeypatch):
     assert heartbeat["last_scan_opened"] == 1
 
 
+def test_runner_admits_signal_at_35min_age(tmp_path, monkeypatch):
+    """Paper tolerance_mult default is 3.0 post-2026-04-24, so signals up
+    to 45min old are still opened. Before the fix, wrapper shadowed the
+    gate with default 2.0 (=30min) and 35min signals were rejected as
+    stale — which caused the RENDERUSDT signal from paper to open while
+    shadow (correctly running 3.0) rejected it, inverting the
+    asymmetry. This test pins the 35min-age case to prevent regression.
+    """
+    from datetime import timedelta
+    from tools.operations import millennium_paper as mp
+
+    run_dir = tmp_path / "millennium_paper" / "AGE35_TEST"
+    for sub in ("state", "reports", "logs"):
+        (run_dir / sub).mkdir(parents=True)
+
+    monkeypatch.setattr(mp, "RUN_DIR", run_dir)
+    monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
+    monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
+    monkeypatch.setattr(mp, "LOGS_DIR", run_dir / "logs")
+    monkeypatch.setattr(mp, "RUN_ID", "AGE35_TEST")
+    monkeypatch.setattr(mp, "TRADES_PATH", run_dir / "reports" / "trades.jsonl")
+    monkeypatch.setattr(mp, "EQUITY_PATH", run_dir / "reports" / "equity.jsonl")
+    monkeypatch.setattr(mp, "FILLS_PATH", run_dir / "reports" / "fills.jsonl")
+    monkeypatch.setattr(mp, "SIGNALS_PATH", run_dir / "reports" / "signals.jsonl")
+    monkeypatch.setattr(mp, "POSITIONS_PATH", run_dir / "state" / "positions.json")
+    monkeypatch.setattr(mp, "ACCOUNT_PATH", run_dir / "state" / "account.json")
+    monkeypatch.setattr(mp, "HEARTBEAT_PATH", run_dir / "state" / "heartbeat.json")
+
+    # Signal fired 35min ago — inside 3.0 × 900s = 45min window, outside
+    # the pre-fix 2.0 × 900 = 30min window.
+    signal_ts = (datetime.now(timezone.utc) - timedelta(minutes=35)).isoformat()
+
+    def fake_scan(notify=False):
+        return [{
+            "strategy": "RENAISSANCE", "symbol": "RENDERUSDT",
+            "direction": "LONG",
+            "entry": 1.794, "stop": 1.784, "target": 1.802, "size": 500,
+            "timestamp": signal_ts, "open_ts": signal_ts,
+        }]
+    monkeypatch.setattr(mp, "_scan_new_signals", fake_scan)
+    monkeypatch.setattr(mp, "_fetch_new_bars", lambda s, since: [])
+
+    state = mp.RunnerState(account_size=10_000.0)
+    mp.run_one_tick(state, tick_idx=1, notify=False)
+
+    # First tick primes. Run another tick to test post-prime admission.
+    mp.run_one_tick(state, tick_idx=2, notify=False)
+
+    # With tolerance=3.0, 35min age is live → position opens.
+    assert len(state.open_positions) == 1, (
+        f"expected 1 open position (tolerance 3.0 admits 35min), got "
+        f"{len(state.open_positions)}. This means the paper wrapper is "
+        f"shadowing the gate default back to 2.0 — the regression is back."
+    )
+    assert state.open_positions[0].symbol == "RENDERUSDT"
+
+
 def test_runner_rejects_opposing_direction_same_symbol(tmp_path, monkeypatch):
     """Portfolio gate V2 — no hedge acidental cross-engine.
 
