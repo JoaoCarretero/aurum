@@ -561,6 +561,20 @@ def build_persona_stats(
 
         handles.widgets["ratios_section"] = section
 
+    # ── EDIT PERSONA button ──────────────────────────────────────
+    edit_btn = tk.Label(
+        parent, text="  EDIT PERSONA  ",
+        font=(FONT, 8, "bold"),
+        fg=WHITE, bg=BG3, cursor="hand2",
+        padx=8, pady=4,
+    )
+    edit_btn.pack(side="left", padx=(0, 0), pady=(6, 0))
+    edit_btn.bind(
+        "<Button-1>",
+        lambda _e: _open_persona_editor(toplevel, agent=agent, root_path=root_path),
+    )
+    handles.widgets["edit_persona_btn"] = edit_btn
+
     # ── Recent work panel ─────────────────────────────────────────
     if artifacts is not None:
         tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
@@ -595,8 +609,15 @@ def build_persona_stats(
 def _open_persona_editor(
     toplevel: tk.Misc, *, agent: AgentIdentity, root_path: Path,
 ) -> None:
-    """Abre markdown_editor sobre AGENTS.md do agent. Standalone
-    (antes era método de AgentDetailModal)."""
+    """Abre markdown_editor sobre AGENTS.md do agent. Standalone helper
+    (antes era método de AgentDetailModal com anti-double-click guard).
+
+    Note: original class method tracked self._persona_editor attr, calling
+    focus_set() on existing window instead of opening a duplicate. This
+    module-level helper is stateless by design. open_markdown_editor()
+    uses transient(parent) but has no internal instance tracking. If
+    double-click becomes an issue, reintroduce guard via module-level dict
+    keyed by (agent.key, root_path) tuple, or add grab_set() to editor."""
     from launcher_support.research_desk.markdown_editor import (
         open_markdown_editor,
         persona_path,
