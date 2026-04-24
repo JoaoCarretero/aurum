@@ -3346,9 +3346,18 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
         if summary.run_id and "run_id" not in hb:
             hb["run_id"] = summary.run_id
 
+        # Track whether ANY state file actually existed on disk. A VPS-only
+        # run has summary.run_dir set (via merge_runs from the DB) but none
+        # of the state files exist locally — if we early-return on that
+        # partial state, the /v1/runs/{id}/trades endpoint never runs and
+        # the operator sees a blank TRADE HISTORY. Only take the local path
+        # when at least one state file was real on disk.
+        had_disk_data = False
+
         positions: list[dict] = []
         positions_path = summary.run_dir / "state" / "positions.json"
         if positions_path.exists():
+            had_disk_data = True
             try:
                 payload = json.loads(positions_path.read_text(encoding="utf-8"))
                 if isinstance(payload, dict):
@@ -3361,6 +3370,7 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
         account: dict | None = None
         account_path = summary.run_dir / "state" / "account.json"
         if account_path.exists():
+            had_disk_data = True
             try:
                 payload = json.loads(account_path.read_text(encoding="utf-8"))
                 if isinstance(payload, dict):
@@ -3371,6 +3381,7 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
         series: list[float] = []
         equity_path = summary.run_dir / "reports" / "equity.jsonl"
         if equity_path.exists():
+            had_disk_data = True
             try:
                 points = run_catalog._tail_jsonl_records(equity_path, limit=200)
                 series = [float(point.get("equity") or 0.0) for point in points]
@@ -3380,23 +3391,24 @@ def _fetch_paper_extras_sync(run_id: str) -> tuple[dict | None, list[dict], list
         trades: list[dict] = []
         trades_path = summary.run_dir / "reports" / "trades.jsonl"
         if trades_path.exists():
+            had_disk_data = True
             try:
                 records = run_catalog._tail_jsonl_records(trades_path, limit=50)
                 trades = [r for r in records if not r.get("primed", False)]
             except Exception:
                 trades = []
 
-        if account is None and hb:
-            account = {
-                "equity": hb.get("equity", 0.0),
-                "drawdown_pct": hb.get("drawdown_pct", 0.0),
-                "initial_balance": hb.get("account_size", 10_000.0),
-                "realized_pnl": 0.0,
-                "unrealized_pnl": 0.0,
-                "ks_state": hb.get("ks_state", "NORMAL"),
-                "metrics": {},
-            }
-        if hb or positions or series or account is not None or trades:
+        if had_disk_data:
+            if account is None and hb:
+                account = {
+                    "equity": hb.get("equity", 0.0),
+                    "drawdown_pct": hb.get("drawdown_pct", 0.0),
+                    "initial_balance": hb.get("account_size", 10_000.0),
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "ks_state": hb.get("ks_state", "NORMAL"),
+                    "metrics": {},
+                }
             return hb or None, positions, series, account, trades
 
     client = _get_cockpit_client()
