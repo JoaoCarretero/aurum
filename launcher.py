@@ -4371,6 +4371,18 @@ class App(tk.Tk):
     def _arb_toggle_risky_venues(self) -> None:
         from launcher_support.screens.arbitrage_hub import toggle_risky_venues
         return toggle_risky_venues(self)
+    def _arb_open_profit_popover(self, anchor):
+        from launcher_support.screens.arbitrage_hub import open_profit_popover
+        return open_profit_popover(self, anchor)
+
+    def _arb_open_life_popover(self, anchor):
+        from launcher_support.screens.arbitrage_hub import open_life_popover
+        return open_life_popover(self, anchor)
+
+    def _arb_open_venues_popover(self, anchor):
+        from launcher_support.screens.arbitrage_hub import open_venues_popover
+        return open_venues_popover(self, anchor)
+
     def _arb_toggle_realistic(self) -> None:
         from launcher_support.screens.arbitrage_hub import toggle_realistic
         return toggle_realistic(self)

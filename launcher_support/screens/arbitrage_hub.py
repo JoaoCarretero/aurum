@@ -558,6 +558,42 @@ def build_viab_toolbar(app, parent):
     real_btn.bind("<Button-1>", lambda _e: app._arb_toggle_realistic())
     app._arb_viab_btns["realistic"] = (real_btn, None)
 
+    # Divider between Phase-1 chips and v2 density chips
+    tk.Frame(bar, bg=BORDER, width=1, height=18).pack(
+        side="left", fill="y", padx=(10, 10))
+
+    # v2 density chips — PROFIT$, LIFE, VENUES
+    pm = float(state.get("profit_min_usd", 0.0) or 0.0)
+    pm_label = f" PROFIT$ ≥ {pm:.0f} " if pm > 0 else " PROFIT$ OFF "
+    pm_btn = tk.Label(bar, text=pm_label,
+                       font=(FONT, 8, "bold"),
+                       fg=AMBER if pm > 0 else DIM, bg=BG,
+                       cursor="hand2", padx=6, pady=3)
+    pm_btn.pack(side="left", padx=(0, 4))
+    pm_btn.bind("<Button-1>", lambda _e: app._arb_open_profit_popover(pm_btn))
+    app._arb_viab_btns["profit"] = (pm_btn, None)
+
+    lm = int(state.get("life_min_seconds", 0) or 0)
+    lm_label = (f" LIFE ≥ {lm // 60}m " if lm > 0 else " LIFE OFF ")
+    lm_btn = tk.Label(bar, text=lm_label,
+                       font=(FONT, 8, "bold"),
+                       fg=AMBER if lm > 0 else DIM, bg=BG,
+                       cursor="hand2", padx=6, pady=3)
+    lm_btn.pack(side="left", padx=(0, 4))
+    lm_btn.bind("<Button-1>", lambda _e: app._arb_open_life_popover(lm_btn))
+    app._arb_viab_btns["life"] = (lm_btn, None)
+
+    va = state.get("venues_allow")
+    va_label = (" VENUES ALL " if va is None
+                else f" VENUES {len(va)} SEL ")
+    va_btn = tk.Label(bar, text=va_label,
+                       font=(FONT, 8, "bold"),
+                       fg=AMBER if va else DIM, bg=BG,
+                       cursor="hand2", padx=6, pady=3)
+    va_btn.pack(side="left")
+    va_btn.bind("<Button-1>", lambda _e: app._arb_open_venues_popover(va_btn))
+    app._arb_viab_btns["venues"] = (va_btn, None)
+
 
 # ─── extracted from launcher.App._arb_build_filter_bar (Fase 3) ───
 
@@ -1924,6 +1960,19 @@ def filter_and_score(app, pairs: list) -> list[tuple[dict, object]]:
     apr_max = app._ARB_REALISTIC_APR_MAX
     vol_min_realistic = app._ARB_REALISTIC_VOL_MIN
     risky_venues = app._ARB_RISKY_VENUES
+
+    profit_min   = float(state.get("profit_min_usd", 0.0) or 0.0)
+    life_min     = float(state.get("life_min_seconds", 0) or 0)
+    venues_allow = state.get("venues_allow")  # None OR list[str]
+    venues_allow_set = None
+    if venues_allow is not None:
+        venues_allow_set = frozenset(str(v).lower() for v in venues_allow)
+
+    # Lifetime tracker — only needed if life_min > 0.
+    import time as _t2
+    _now = _t2.time()
+    tracker = app._arb_lifetime_tracker() if life_min > 0 else None
+
     out = []
     for p in (pairs or []):
         # Cheap filters first
@@ -1959,6 +2008,24 @@ def filter_and_score(app, pairs: list) -> list[tuple[dict, object]]:
             if sv in risky_venues or lv in risky_venues:
                 continue
 
+        # v2: venue allowlist
+        if venues_allow_set is not None:
+            sv = (p.get("short_venue") or p.get("venue_perp")
+                  or p.get("venue_a") or "").lower()
+            lv = (p.get("long_venue") or p.get("venue_spot")
+                  or p.get("venue_b") or "").lower()
+            if sv and sv not in venues_allow_set:
+                continue
+            if lv and lv not in venues_allow_set:
+                continue
+
+        # v2: minimum lifetime
+        if life_min > 0:
+            from core.arb.lifetime import stable_key as _sk
+            age = tracker.age(_sk(p), now=_now) if tracker is not None else None
+            if age is None or age < life_min:
+                continue
+
         # Cache key: symbol + venues + apr rounded to 1dp (the only
         # field that changes meaningfully between scans).
         ckey = (
@@ -1981,16 +2048,16 @@ def filter_and_score(app, pairs: list) -> list[tuple[dict, object]]:
 
         if _G.get(sr.grade, 2) > grade_cap:
             continue
+
+        # v2: minimum $ profit per $1k per 24h
+        if profit_min > 0:
+            pf = getattr(sr, "profit_usd_per_1k_24h", None)
+            if pf is None or pf < profit_min:
+                continue
+
         out.append((p, sr))
-    # Sort: grade bucket (GO first), then BKEVN asc (fastest payback),
-    # then SCORE desc as tiebreaker. Fastest-to-breakeven is what
-    # actually matters — high score with 80h bkevn is a trap.
-    def _key(t):
-        _p, _sr = t
-        be = getattr(_sr, "breakeven_h", None)
-        be_val = be if be is not None else 9999.0
-        return (_G.get(_sr.grade, 2), be_val, -_sr.score)
-    out.sort(key=_key)
+    from core.arb.tab_matrix import opps_sort_key
+    out.sort(key=opps_sort_key)
     return out
 
 # -- Tab renderers ------------------------------------------
@@ -2507,4 +2574,115 @@ def render_tab_filtered(app, parent, tab_id: str):
     # Delegate to the existing unified opps renderer — filtering is added
     # in Task 9 inside paint_opps by keying off app._arb_active_type_tab.
     render_opps(app, parent)
+
+
+# ─── v2 filter popovers (Task 10, 2026-04-23) ────────────────────────
+
+def open_profit_popover(app, anchor):
+    """Numeric entry popover for PROFIT$ ≥ threshold. Commits on <Return>."""
+    _open_numeric_popover(app, anchor, key="profit_min_usd",
+                           title="PROFIT$ ≥", suffix="$",
+                           parse=lambda s: float(s))
+
+
+def open_life_popover(app, anchor):
+    """Entry popover with m/h suffix for LIFE ≥. Commits on <Return>."""
+    def _parse(s: str) -> float:
+        s = s.strip().lower()
+        if s.endswith("h"):
+            return float(s[:-1]) * 3600
+        if s.endswith("m"):
+            return float(s[:-1]) * 60
+        return float(s) * 60  # bare number = minutes
+    _open_numeric_popover(app, anchor, key="life_min_seconds",
+                           title="LIFE ≥", suffix="m/h",
+                           parse=lambda s: int(_parse(s)))
+
+
+def open_venues_popover(app, anchor):
+    """Checkbox popover listing known venues. None=allow all, list=allowlist."""
+    import json as _json
+    from pathlib import Path as _P
+
+    venues = []
+    try:
+        path = _P("config") / "connections.json"
+        if path.exists():
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                venues = sorted(str(k).lower() for k in data.keys())
+    except Exception:
+        pass
+    if not venues:
+        from core.arb.tab_matrix import CEX_VENUES
+        venues = sorted(CEX_VENUES)
+
+    pop = tk.Toplevel(anchor)
+    pop.overrideredirect(True)
+    pop.configure(bg=BG)
+    x = anchor.winfo_rootx()
+    y = anchor.winfo_rooty() + anchor.winfo_height()
+    pop.geometry(f"+{x}+{y}")
+
+    current = app._arb_filter_state().get("venues_allow")
+    chk_vars: dict[str, tk.BooleanVar] = {}
+    for v in venues:
+        bv = tk.BooleanVar(value=(current is None or v in current))
+        chk_vars[v] = bv
+        cb = tk.Checkbutton(pop, text=v, variable=bv,
+                             fg=WHITE, bg=BG, selectcolor=BG3,
+                             font=(FONT, 8), anchor="w")
+        cb.pack(fill="x", padx=4)
+
+    def _commit(_e=None):
+        picked = [v for v, bv in chk_vars.items() if bv.get()]
+        new_val = None if len(picked) == len(venues) else picked
+        app._arb_filter_state()["venues_allow"] = new_val
+        if hasattr(app, "_arb_save_filters"):
+            app._arb_save_filters()
+        pop.destroy()
+        if hasattr(app, "_arb_rerender_current_tab"):
+            app._arb_rerender_current_tab()
+        app._arb_tab_labels = None
+        app._arbitrage_hub(app._arb_tab)
+
+    btn = tk.Label(pop, text=" OK ", font=(FONT, 8, "bold"),
+                    fg=BG, bg=AMBER, cursor="hand2", padx=8, pady=3)
+    btn.pack(pady=(4, 4))
+    btn.bind("<Button-1>", _commit)
+
+
+def _open_numeric_popover(app, anchor, *, key: str, title: str,
+                            suffix: str, parse):
+    """Shared numeric-entry popover. Commits on <Return>."""
+    pop = tk.Toplevel(anchor)
+    pop.overrideredirect(True)
+    pop.configure(bg=BG)
+    x = anchor.winfo_rootx()
+    y = anchor.winfo_rooty() + anchor.winfo_height()
+    pop.geometry(f"+{x}+{y}")
+    tk.Label(pop, text=f"{title} ({suffix})",
+             font=(FONT, 7, "bold"), fg=DIM, bg=BG).pack(padx=6, pady=(4, 2))
+    ent = tk.Entry(pop, width=10, font=(FONT, 9),
+                    fg=WHITE, bg=BG3, insertbackground=WHITE)
+    ent.pack(padx=6, pady=(0, 4))
+    ent.focus_set()
+
+    def _commit(_e=None):
+        raw = ent.get().strip()
+        try:
+            val = parse(raw) if raw else 0
+        except Exception:
+            val = 0
+        app._arb_filter_state()[key] = val
+        if hasattr(app, "_arb_save_filters"):
+            app._arb_save_filters()
+        pop.destroy()
+        if hasattr(app, "_arb_rerender_current_tab"):
+            app._arb_rerender_current_tab()
+        app._arb_tab_labels = None
+        app._arbitrage_hub(app._arb_tab)
+
+    ent.bind("<Return>", _commit)
+    ent.bind("<Escape>", lambda _e: pop.destroy())
 
