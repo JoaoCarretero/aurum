@@ -1250,12 +1250,38 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
             pp.get("volume_b", 0) or 0))
         tagged.append(pp)
 
+    # v2 density: filter by active type tab (if one of the 6 type tabs is
+    # active). Positions/history tabs don't call paint_opps. Unknown or
+    # None active tab means no filter (shows everything).
+    active_tab = getattr(app, "_arb_active_type_tab", None)
+    if active_tab in ("cex-cex", "dex-dex", "cex-dex",
+                       "perp-perp", "spot-spot", "basis"):
+        from core.arb.tab_matrix import matches_type
+        tagged = [p for p in tagged if matches_type(p, active_tab)]
+
+    # v2 density: observe pairs so the LIFE column shows persistence.
+    import time as _time
+    _now = _time.time()
+    try:
+        tracker = app._arb_lifetime_tracker()
+        tracker.observe_pairs(tagged, now=_now)
+        # Occasional cleanup to cap memory (drop pairs unseen for 24h).
+        if getattr(app, "_arb_lifetime_gc_counter", 0) % 100 == 0:
+            tracker.cleanup(now=_now, max_age=24 * 3600)
+        app._arb_lifetime_gc_counter = getattr(app, "_arb_lifetime_gc_counter", 0) + 1
+    except Exception:
+        tracker = None
+
     # Apply filter+score (with cache) and render cap
     filtered = app._arb_filter_and_score(tagged)[:50]
     app._arb_opps_selected = [p for p, _ in filtered]
 
+    # Pre-compute stable keys once per row so LIFE lookups are O(1).
+    from core.arb.lifetime import stable_key as _stable_key, fmt_duration as _fmt_duration
+
     rows = []
     for a, sr in filtered:
+        # VIAB column — prefer v2 viab field, fall back to grade.
         viab = getattr(sr, "viab", sr.grade)
         if viab == "GO":
             viab_fg = GREEN
@@ -1263,27 +1289,68 @@ def paint_opps(app, arb_cc, arb_dd, arb_cd, basis, spot):
             viab_fg = AMBER
         else:
             viab_fg = DIM
+
+        # SYM column — include _type suffix so the user can see at a glance
+        # which "flavor" a row is when viewing aggregate tabs.
+        type_suffix = {
+            "CC": "(P-P)", "DD": "(P-P)", "CD": "(P-P)",
+            "BS": "(P-S)", "SP": "(S-S)",
+        }.get(a.get("_type", ""), "")
+        sym_full = f"{a.get('symbol', '') or '—'}{type_suffix}"[:14]
+
+        # VENUES column — long → short direction.
+        short_v = (a.get("short_venue") or "")[:10].lower()
+        long_v = (a.get("long_venue") or "")[:10].lower()
+        venues = f"{long_v} → {short_v}"[:24]
+
+        # APR column — colored by magnitude.
         net_apr = float(a.get("net_apr", 0) or 0)
         apr_fg = GREEN if abs(net_apr) >= 50 else (
             AMBER if abs(net_apr) >= 20 else DIM)
+
+        # PROFIT$ column — net $ on $1k, 24h.
+        profit = getattr(sr, "profit_usd_per_1k_24h", None)
+        if profit is None:
+            profit_txt, profit_fg = "—", DIM
+        else:
+            profit_txt = f"${profit:+.2f}"
+            profit_fg = GREEN if profit > 0 else (AMBER if profit > -1 else DIM)
+
+        # LIFE column — age in stream via LifetimeTracker.
+        life_txt, life_fg = "—", DIM
+        if tracker is not None:
+            try:
+                age = tracker.age(_stable_key(a), now=_now)
+                if age is not None:
+                    life_txt = _fmt_duration(age)
+                    # Color: fresh = dim, 5m+ = amber, 1h+ = green (more trust).
+                    life_fg = GREEN if age >= 3600 else (AMBER if age >= 300 else DIM)
+            except Exception:
+                pass
+
+        # BKEVN column — hours to cover fees.
         be = getattr(sr, "breakeven_h", None)
         be_txt = f"{be:.1f}h" if be is not None and be < 999 else "—"
         be_fg = GREEN if (be is not None and be <= 24) else (
             AMBER if (be is not None and be <= 72) else DIM)
-        short_v = (a.get("short_venue") or "")[:10].lower()
-        long_v = (a.get("long_venue") or "")[:10].lower()
-        # Long leg goes first (the one you BUY), then short. Arrow
-        # direction (→) reads naturally as "take long from here,
-        # short to there". Width 22 fits "binance → bybit" plus
-        # slack for longer venue names.
-        venues = f"{long_v} → {short_v}"[:22]
+
+        # DEPTH$1k column — slippage bps on $1k notional.
+        depth = getattr(sr, "depth_pct_at_1k", None)
+        if depth is None:
+            depth_txt, depth_fg = "—", DIM
+        else:
+            depth_txt = f"{depth:.0f}bps"
+            depth_fg = GREEN if depth <= 10 else (AMBER if depth <= 50 else RED)
+
         rows.append([
             (viab, viab_fg),
-            ((a.get("symbol", "") or "—")[:11], WHITE),
+            (sym_full, WHITE),
             (venues, AMBER_D),
             (f"{net_apr:+.1f}%", apr_fg),
+            (profit_txt, profit_fg),
+            (life_txt, life_fg),
             (be_txt, be_fg),
-            (f"{int(sr.score):>3}", DIM),
+            (depth_txt, depth_fg),
         ])
     repaint(rows)
 
@@ -1734,6 +1801,63 @@ def hub_telem_update(app, stats, top, opps, arb_cc, arb_dd, arb_cd,
     # Push scan age + engine state into the status strip right away
     try:
         app._arb_update_status_strip()
+    except Exception:
+        pass
+
+    # v2 density: update per-tab counters on the strip labels. Compute
+    # match counts across all 6 type tabs against the tagged pair list,
+    # so the user sees (N) for each tab. Positions/history counters are
+    # populated downstream by the engine snapshot.
+    try:
+        from core.arb.tab_matrix import matches_type
+        # Rebuild the tagged list the same way paint_opps does.
+        _all_tagged: list[dict] = []
+        for _lst, _ty in ((arb_cc or [], "CC"), (arb_dd or [], "DD"),
+                          (arb_cd or [], "CD"), (basis or [], "BS"),
+                          (spot or [], "SP")):
+            for _p in _lst:
+                _pp = dict(_p); _pp["_type"] = _ty
+                if _ty == "BS":
+                    _pp.setdefault("short_venue", _pp.get("venue_perp"))
+                    _pp.setdefault("long_venue", _pp.get("venue_spot"))
+                elif _ty == "SP":
+                    _pp.setdefault("short_venue", _pp.get("venue_a"))
+                    _pp.setdefault("long_venue", _pp.get("venue_b"))
+                _all_tagged.append(_pp)
+
+        counts = {}
+        for tab_id in ("cex-cex", "dex-dex", "cex-dex",
+                       "perp-perp", "spot-spot", "basis"):
+            counts[tab_id] = sum(1 for p in _all_tagged if matches_type(p, tab_id))
+
+        # Positions/history are meta — their counts come from the engine.
+        eng = getattr(app, "_arb_simple_engine", None)
+        if eng is not None and hasattr(eng, "snapshot"):
+            try:
+                snap = eng.snapshot()
+                counts["positions"] = len(snap.get("positions", []) or [])
+                counts["history"] = len(snap.get("closed", []) or [])
+            except Exception:
+                counts["positions"] = 0
+                counts["history"] = 0
+        else:
+            counts["positions"] = 0
+            counts["history"] = 0
+
+        # Update label text with counter — only if level 0 is active (full + counters).
+        level = getattr(app, "_arb_tab_compact_level", 0)
+        if level == 0:
+            labels = getattr(app, "_arb_tab_labels", {}) or {}
+            defs = getattr(app, "_ARB_TAB_DEFS", [])
+            for _key, tid, full_label, _color in defs:
+                lbl = labels.get(tid)
+                if lbl is None:
+                    continue
+                try:
+                    n = counts.get(tid, 0)
+                    lbl.configure(text=f"  {full_label} ({n})  ")
+                except Exception:
+                    pass
     except Exception:
         pass
 
