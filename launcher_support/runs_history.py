@@ -186,7 +186,20 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str,
 
 
 def collect_vps_runs(client) -> list[RunSummary]:
-    """Fetch /v1/runs from cockpit and pull per-run heartbeat+account."""
+    """Fast list of VPS runs — single round-trip GET /v1/runs.
+
+    Why: the previous fan-out (per-run /heartbeat + /account) was 1 + 2*N
+    serialised round-trips through the SSH tunnel. With ~160 catalogued
+    runs that's ~320 round-trips — the ENGINES screen sat empty for
+    several seconds before the table populated, and the user had to
+    click on a row to force a repaint after the data finally arrived.
+
+    The /v1/runs payload already includes everything _render_run_row
+    needs (engine, mode, status, ticks_ok, novel_total, equity). For
+    paper runs we compute ROI directly from equity (initial=10000 by
+    convention). trades_closed and initial_balance stay None until the
+    detail pane lazy-fetches them via _collect_single_vps_run on click.
+    """
     rows: list[RunSummary] = []
     if client is None:
         return rows
@@ -200,26 +213,45 @@ def collect_vps_runs(client) -> list[RunSummary]:
         return rows
     if not isinstance(runs, list):
         return rows
-    indexed_runs = [(idx, r) for idx, r in enumerate(runs) if r.get("run_id")]
-    built_rows: dict[int, RunSummary] = {}
-    max_workers = min(8, max(1, len(indexed_runs)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_collect_single_vps_run, client, r): idx
-            for idx, r in indexed_runs
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                row = future.result()
-            except Exception:
-                row = None
-            if row is not None:
-                built_rows[idx] = row
-    for idx, _ in indexed_runs:
-        row = built_rows.get(idx)
-        if row is not None:
-            rows.append(row)
+    for payload in runs:
+        rid = payload.get("run_id")
+        if not rid:
+            continue
+        equity_raw = payload.get("equity")
+        try:
+            equity_f = float(equity_raw) if equity_raw is not None else None
+        except (TypeError, ValueError):
+            equity_f = None
+        mode = str(payload.get("mode") or "?")
+        # Paper runs always seed at 10_000 USDT (config.params PAPER_BALANCE).
+        # Compute ROI inline so the column does not show "—" until the
+        # operator clicks a row.
+        initial = 10000.0 if mode == "paper" and equity_f is not None else None
+        roi = ((equity_f - initial) / initial * 100.0
+               if initial and equity_f is not None else None)
+        rows.append(RunSummary(
+            run_id=rid,
+            engine=str(payload.get("engine") or "?").upper(),
+            mode=mode,
+            status=str(payload.get("status") or "unknown"),
+            started_at=payload.get("started_at"),
+            stopped_at=None,
+            last_tick_at=payload.get("last_tick_at"),
+            ticks_ok=_as_int(payload.get("ticks_ok")),
+            ticks_fail=_as_int(payload.get("ticks_fail")),
+            novel=_as_int(payload.get("novel_total") or payload.get("novel_count")),
+            equity=equity_f,
+            initial_balance=initial,
+            roi_pct=roi,
+            trades_closed=None,
+            source="vps",
+            run_dir=None,
+            heartbeat=None,
+            host=str(payload.get("host") or "") or None,
+            label=str(payload.get("label") or "") or None,
+            open_count=None,
+            _raw=payload,
+        ))
     _store_cached_rows(_VPS_RUNS_CACHE, cache_key, rows)
     return rows
 
