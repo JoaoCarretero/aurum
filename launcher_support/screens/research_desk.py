@@ -210,6 +210,52 @@ class ResearchDeskScreen(Screen):
         except Exception:
             pass
 
+    def _enforce_budget_caps(self, agents_raw: list[dict]) -> None:
+        """Pause agents that hit their effective hard cap.
+
+        Runs in the daemon poll thread (off-UI). Idempotent: skips
+        agents already paused. Errors swallowed since enforcement is
+        best-effort — daily snapshot will still record the event.
+
+        AGENTS.md §4 spec: $80/$100/$250/$50/$80 caps per agent. Server
+        value preferred (Joao's authoritative knob); HARD_BUDGETS_CENTS
+        is the fallback when Paperclip server returns 0 (e.g. fresh
+        instance, API drift). Without this, alerts at 90% are theatre —
+        nothing actually stops the agent from blowing past the cap.
+        """
+        from launcher_support.research_desk.agents import (
+            BY_UUID, effective_budget_cents,
+        )
+        for a_dict in agents_raw:
+            uid = a_dict.get("id")
+            if not uid:
+                continue
+            agent = BY_UUID.get(uid)
+            if agent is None:
+                continue
+            if a_dict.get("paused"):
+                continue  # already paused — no-op
+            spent = int(
+                a_dict.get("monthly_spent_cents") or
+                a_dict.get("spent_cents") or 0
+            )
+            server_cap = int(
+                a_dict.get("monthly_budget_cents") or
+                a_dict.get("budget_cents") or 0
+            )
+            cap = effective_budget_cents(agent, server_cap)
+            if cap <= 0:
+                continue  # no cap set — can't enforce
+            if spent >= cap:
+                try:
+                    self._client.pause_agent(uid)
+                    _LOG.warning(
+                        "auto-pause %s: spent=%d >= cap=%d cents",
+                        agent.key, spent, cap,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    _LOG.warning("auto-pause %s failed: %s", agent.key, e)
+
     # ── Build ─────────────────────────────────────────────────────
 
     def build(self) -> None:
@@ -773,6 +819,9 @@ class ResearchDeskScreen(Screen):
                     agents_raw = self._client.list_agents_cached(COMPANY_ID)
                     issues_raw = self._client.list_issues_cached(COMPANY_ID)
                     used_cents, cap_cents = total_budget_cents(agents_raw)
+                    # Enforce hard budget caps off-UI-thread; idempotent
+                    # via paused flag check (no double-pause spam).
+                    self._enforce_budget_caps(agents_raw)
             except (CircuitOpen, urllib.error.URLError, TimeoutError):
                 online = False
                 agents_raw = []
@@ -895,6 +944,11 @@ class ResearchDeskScreen(Screen):
     ) -> None:
         """Grava snapshot diario por agente no SQLite. Idempotente via
         upsert por (agent_key, date). Skipa se ja gravou hoje neste processo.
+
+        Wires runs_total/success/error from heartbeat per agent — without
+        this, the kill-leg of ship/iterate/kill is permanently 0 and the
+        ratio chart only ever shows ship vs iterate. Heartbeat fetches
+        run 1x/day/agent (5 HTTP calls total) and tolerate cache miss.
         """
         today = stats_db.today_utc()
         if today == self._last_snapshot_date:
@@ -912,6 +966,9 @@ class ResearchDeskScreen(Screen):
                         a_dict.get("spent_cents") or 0)
             done, active = _count_tickets_for(agent.uuid, issues_raw)
             arts = sum(1 for a in artifacts if a.agent_key == agent.key)
+            runs_total, runs_success, runs_error = self._fetch_run_counts(
+                agent.uuid,
+            )
             stats_db.record_snapshot(
                 conn,
                 agent_key=agent.key,
@@ -920,8 +977,36 @@ class ResearchDeskScreen(Screen):
                 tickets_active=active,
                 artifacts_total=arts,
                 spent_cents=spent,
+                runs_total=runs_total,
+                runs_success=runs_success,
+                runs_error=runs_error,
             )
         self._last_snapshot_date = today
+
+    def _fetch_run_counts(self, agent_uuid: str) -> tuple[int, int, int]:
+        """Fetch heartbeat runs and bucket statuses into (total, success, error).
+
+        Statuses observed in Paperclip API: 'running', 'completed',
+        'failed', 'error', 'cancelled', 'timeout'. Anything not matching
+        success/error patterns is counted in `total` only.
+
+        Returns (0, 0, 0) on any fetch failure — snapshots stay coherent
+        even when Paperclip flips offline mid-snapshot.
+        """
+        try:
+            runs = self._client.list_heartbeat_runs_cached(agent_uuid, limit=50)
+        except Exception:  # noqa: BLE001
+            return 0, 0, 0
+        total = len(runs)
+        success = 0
+        error = 0
+        for r in runs:
+            status = (r.get("status") or "").lower()
+            if status in ("completed", "success", "succeeded"):
+                success += 1
+            elif status in ("failed", "error", "cancelled", "canceled", "timeout"):
+                error += 1
+        return total, success, error
 
     def _apply_pipeline(self, issues_raw: list[dict], *, online: bool) -> None:
         if self._pipeline_panel is None:

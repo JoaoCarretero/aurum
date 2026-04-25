@@ -27,6 +27,18 @@ _RUN_SUBDIR = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}$")
 _EXPERIMENT_WINDOW_SEC = 3600
 
 
+def _load_valid_engines() -> set[str] | None:
+    """Set of lowercased engine keys from config/engines.py, or None if
+    the registry can't be loaded. Caller treats None as 'don't filter' —
+    backward-compat with bare-tree tests that don't have config/.
+    """
+    try:
+        from config.engines import ENGINE_NAMES
+        return {k.lower() for k in ENGINE_NAMES.keys()}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @dataclass(frozen=True)
 class ArtifactEntry:
     """Um artefato producido por um agente ou run de backtest."""
@@ -139,16 +151,32 @@ def _scan_backtests(
     root: Path, issues: list[dict] | None = None,
 ) -> list[ArtifactEntry]:
     """Varre data/<engine>/<YYYY-MM-DD_HHMM>/ e retorna entries
-    com kind='backtest'. Retorna [] se data/ não existe."""
+    com kind='backtest'. Retorna [] se data/ não existe.
+
+    Engine filter: skip subdirs whose name isn't a registered engine
+    in config/engines.py — drops `_archive`, `db`, `exports`,
+    `aurum.db.backup-*` etc that polluted backtest entries before.
+    Falls back to no-filter if config/engines.py isn't loadable
+    (bare-tree tests).
+
+    Reflog parsed ONCE at the top — `_was_on_experiment_branch` was
+    O(N·M) on N runs × M reflog lines (typical reflog is 10k+ lines
+    on dev machines).
+    """
     base = root / "data"
     if not base.exists() or not base.is_dir():
         return []
     issues = issues or []
+    valid_engines = _load_valid_engines()
+    reflog_events = _parse_reflog_once(root)
+
     out: list[ArtifactEntry] = []
     for engine_dir in base.iterdir():
         if not engine_dir.is_dir():
             continue
         engine = engine_dir.name
+        if valid_engines is not None and engine.lower() not in valid_engines:
+            continue
         for run_dir in engine_dir.iterdir():
             if not run_dir.is_dir():
                 continue
@@ -160,7 +188,9 @@ def _scan_backtests(
                 continue
             run_id = run_dir.name
             origin = _detect_origin(
-                root, engine, run_id, issues, mtime_epoch=stat.st_mtime,
+                root, engine, run_id, issues,
+                mtime_epoch=stat.st_mtime,
+                reflog_events=reflog_events,
             )
             out.append(ArtifactEntry(
                 agent_key="",
@@ -179,10 +209,16 @@ def _scan_backtests(
 def _detect_origin(
     root: Path, engine: str, run_id: str, issues: list[dict],
     mtime_epoch: float = 0.0,
+    reflog_events: list[tuple[float, str]] | None = None,
 ) -> str:
     """agent se label 'run:<engine>/<run_id>' em alguma issue OR body tem
     '**run_id:** <engine>/<run_id>' OR .git/logs/HEAD mostra checkout em
-    experiment/* dentro de ±1h do mtime_epoch. Senão human."""
+    experiment/* dentro de ±1h do mtime_epoch. Senão human.
+
+    `reflog_events` (optional): pre-parsed list from `_parse_reflog_once`.
+    When None (e.g. tests calling _detect_origin directly), falls back
+    to per-call file read via `_was_on_experiment_branch`.
+    """
     needle = f"{engine}/{run_id}"
     label_needle = f"run:{needle}"
     body_needle = f"**run_id:** {needle}"
@@ -193,22 +229,27 @@ def _detect_origin(
         desc = issue.get("description") or issue.get("body") or ""
         if isinstance(desc, str) and body_needle in desc:
             return "agent"
-    if _was_on_experiment_branch(root, mtime_epoch):
-        return "agent"
+
+    if reflog_events is not None:
+        if _was_on_experiment_branch_cached(reflog_events, mtime_epoch):
+            return "agent"
+    else:
+        if _was_on_experiment_branch(root, mtime_epoch):
+            return "agent"
     return "human"
 
 
-def _was_on_experiment_branch(
-    root: Path, mtime_epoch: float, window_sec: int = _EXPERIMENT_WINDOW_SEC,
-) -> bool:
-    """Inspeciona .git/logs/HEAD por checkout em experiment/* dentro de
-    ±window_sec de mtime_epoch. Best-effort: retorna False em qualquer
-    falha (reflog ausente, parse error, filesystem error)."""
-    if mtime_epoch <= 0:
-        return False
+def _parse_reflog_once(root: Path) -> list[tuple[float, str]]:
+    """Read .git/logs/HEAD once, return [(ts_epoch, message), ...] for
+    every line that mentions both `checkout:` and `experiment/`.
+
+    Returns [] on missing reflog or any parse/IO error — caller treats
+    as "no experiment activity recorded".
+    """
     reflog = root / ".git" / "logs" / "HEAD"
     if not reflog.exists():
-        return False
+        return []
+    events: list[tuple[float, str]] = []
     try:
         with open(reflog, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -218,7 +259,6 @@ def _was_on_experiment_branch(
                 header, message = tab_split
                 if "checkout:" not in message or "experiment/" not in message:
                     continue
-                # Header ends with "... <timestamp> <tz>"; split from right.
                 tokens = header.rsplit(None, 2)
                 if len(tokens) < 3:
                     continue
@@ -226,11 +266,38 @@ def _was_on_experiment_branch(
                     ts = float(tokens[-2])
                 except ValueError:
                     continue
-                if abs(ts - mtime_epoch) <= window_sec:
-                    return True
+                events.append((ts, message))
     except OSError:
+        return []
+    return events
+
+
+def _was_on_experiment_branch_cached(
+    reflog_events: list[tuple[float, str]],
+    mtime_epoch: float,
+    window_sec: int = _EXPERIMENT_WINDOW_SEC,
+) -> bool:
+    """O(M) check over pre-parsed reflog events. No FS I/O."""
+    if mtime_epoch <= 0:
         return False
-    return False
+    return any(abs(ts - mtime_epoch) <= window_sec for ts, _ in reflog_events)
+
+
+def _was_on_experiment_branch(
+    root: Path, mtime_epoch: float, window_sec: int = _EXPERIMENT_WINDOW_SEC,
+) -> bool:
+    """Backward-compat: per-call file read of .git/logs/HEAD.
+
+    Used only by tests that call `_detect_origin` directly without
+    pre-parsing the reflog. Production path (`_scan_backtests`) calls
+    `_parse_reflog_once` + `_was_on_experiment_branch_cached` to avoid
+    O(N·M) reads.
+    """
+    if mtime_epoch <= 0:
+        return False
+    return _was_on_experiment_branch_cached(
+        _parse_reflog_once(root), mtime_epoch, window_sec,
+    )
 
 
 def list_backtest_runs(

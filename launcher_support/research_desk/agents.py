@@ -101,6 +101,40 @@ BY_KEY: dict[str, AgentIdentity] = {a.key: a for a in AGENTS}
 BY_UUID: dict[str, AgentIdentity] = {a.uuid: a for a in AGENTS}
 
 
+# Hard budget caps per agent in cents (USD). Values from AGENTS.md §4
+# (RESEARCH $80 / REVIEW $100 / BUILD $250 / CURATE $50 / AUDIT $80).
+#
+# Acts as a defensive ceiling: when Paperclip's `monthly_budget_cents`
+# returns 0 (server hasn't been configured / API shape drift), the
+# cockpit still has a budget to enforce against. Without this fallback,
+# `cap_text` shows "—" and the agent appears unbounded — alerts become
+# theatre.
+#
+# The enforcer (screens/research_desk.py:_enforce_budget_caps) calls
+# `pause_agent` when `spent_cents >= effective_cap` AND the agent is
+# not already paused — idempotent. Joao can edit caps via Paperclip
+# server config; client-side floor stays as the safety net.
+HARD_BUDGETS_CENTS: dict[str, int] = {
+    "RESEARCH": 8000,
+    "REVIEW": 10000,
+    "BUILD": 25000,
+    "CURATE": 5000,
+    "AUDIT": 8000,
+}
+
+
+def effective_budget_cents(agent: AgentIdentity, server_cap: int) -> int:
+    """Return the active cap for budget enforcement.
+
+    Prefers the server value when non-zero (Joao's authoritative knob).
+    Falls back to HARD_BUDGETS_CENTS when server returns 0 — typical
+    when a fresh Paperclip instance hasn't seeded budgets yet.
+    """
+    if server_cap > 0:
+        return server_cap
+    return HARD_BUDGETS_CENTS.get(agent.key, 0)
+
+
 # ── Paperclip company / project context ───────────────────────────
 COMPANY_ID = "c2ccbb97-bda1-45db-ab53-5b2bb63962ee"
 PROJECT_ID = "b1830f57-5bfa-4071-992b-8a0dc3b5ed90"
