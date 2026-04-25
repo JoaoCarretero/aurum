@@ -104,6 +104,14 @@ class RiskGateConfig:
     # Default permissive (100%/hr ~ no-op) per module convention.
     max_dd_velocity_pct_per_hour: float = 100.0
 
+    # API latency p99 cap (milliseconds) — anomaly detector. CLAUDE.md
+    # kill-switch layer 3. Caller computes p99 over a rolling 5-min window
+    # of API call latencies (REST request → response). When p99 climbs
+    # above this threshold, the exchange is degrading (rate limited, sick,
+    # or network blip): pause new entries before bad fills happen.
+    # Default permissive (1e9 ms ~ no-op) per module convention.
+    max_api_latency_ms: float = 1e9
+
     def is_default(self) -> bool:
         """Return True if all values are still at factory defaults (no config loaded)."""
         defaults = RiskGateConfig()
@@ -118,6 +126,7 @@ class RiskGateConfig:
             and self.soft_block_losses   == defaults.soft_block_losses
             and self.max_single_position_pct == defaults.max_single_position_pct
             and self.max_dd_velocity_pct_per_hour == defaults.max_dd_velocity_pct_per_hour
+            and self.max_api_latency_ms  == defaults.max_api_latency_ms
         )
 
 
@@ -142,6 +151,11 @@ class RiskState:
     # Positive = losing equity. 0.0 = stationary or recovering. Negative =
     # equity climbing. Provided per call so risk_gates stays stateless.
     dd_velocity_pct_per_hour: float = 0.0
+    # API latency p99 in milliseconds. Caller computes p99 over a rolling
+    # window of REST API call latencies. 0.0 = no data yet (insufficient
+    # samples). Higher = exchange degrading. Provided per call so
+    # risk_gates stays stateless.
+    api_latency_ms_p99: float = 0.0
 
 
 # ── Decision ──────────────────────────────────────────────────────────
@@ -297,6 +311,36 @@ def gate_dd_velocity(state: RiskState, cfg: RiskGateConfig) -> GateDecision:
     return _allow()
 
 
+def gate_anomaly(state: RiskState, cfg: RiskGateConfig) -> GateDecision:
+    """Soft-block when API latency p99 exceeds the configured threshold.
+
+    CLAUDE.md mandates kill-switch layer 3 as "anomaly" detection. The
+    simplest universal anomaly signal is API latency p99 — when the
+    exchange's REST endpoint p99 climbs above a sane threshold, something
+    is wrong: rate limited, network blip, exchange degraded, or DDOS in
+    progress. Pausing new entries gives the operator (or higher-level
+    automation) a chance to investigate before bad fills happen on a
+    sick venue.
+
+    The caller computes ``api_latency_ms_p99`` over a rolling 5-min window
+    of REST call latencies (request → response). risk_gates.py stays
+    stateless — it just compares the reported value against the cap.
+
+    Same severity tier as gate_dd_velocity: a leading indicator that
+    soft_blocks. We do not flatten on a latency spike alone — the
+    operator decides whether to escalate.
+    """
+    if state.api_latency_ms_p99 <= 0:
+        # No data yet (engine just started, no latency samples) — allow.
+        return _allow()
+    if state.api_latency_ms_p99 >= cfg.max_api_latency_ms:
+        return _soft("anomaly",
+                     f"API latency p99 {state.api_latency_ms_p99:.0f}ms "
+                     f"≥ {cfg.max_api_latency_ms:.0f}ms",
+                     state.api_latency_ms_p99, cfg.max_api_latency_ms)
+    return _allow()
+
+
 # ── Composite check ──────────────────────────────────────────────────
 
 _ALL_GATES = (
@@ -304,6 +348,7 @@ _ALL_GATES = (
     gate_daily_loss,
     gate_consecutive_losses,
     gate_dd_velocity,
+    gate_anomaly,
     gate_gross_notional,
     gate_net_exposure,
     gate_concurrent_positions,
@@ -353,6 +398,7 @@ _ALLOWED_KEYS = {
     "max_concurrent_positions", "freeze_hours_utc",
     "max_single_position_pct",
     "max_dd_velocity_pct_per_hour",
+    "max_api_latency_ms",
 }
 
 
@@ -408,6 +454,7 @@ __all__ = [
     "gate_daily_loss",
     "gate_consecutive_losses",
     "gate_dd_velocity",
+    "gate_anomaly",
     "gate_gross_notional",
     "gate_net_exposure",
     "gate_concurrent_positions",

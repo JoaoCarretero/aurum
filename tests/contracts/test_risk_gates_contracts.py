@@ -17,6 +17,7 @@ from core.risk_gates import (
     RiskGateConfig,
     RiskState,
     check_gates,
+    gate_anomaly,
     gate_concurrent_positions,
     gate_consecutive_losses,
     gate_daily_dd,
@@ -317,6 +318,63 @@ class TestGateDdVelocity:
         cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
         state = RiskState(account_equity=0.0, dd_velocity_pct_per_hour=10.0)
         assert gate_dd_velocity(state, cfg).severity == "allow"
+
+
+# ────────────────────────────────────────────────────────────
+# gate_anomaly
+#
+# CLAUDE.md mandates 3 layers of kill-switch protection:
+# "Drawdown velocity, exposure limits, anomaly". Layer 3 (anomaly) is
+# implemented as API latency p99 — the simplest universal signal that
+# catches "exchange is sick / network blip / rate limited" before bad
+# fills happen. Soft_block tier (same as dd_velocity): leading indicator,
+# not a flatten trigger. Caller computes p99 over a rolling 5-min window
+# of REST call latencies and populates RiskState.api_latency_ms_p99.
+# ────────────────────────────────────────────────────────────
+
+class TestGateAnomaly:
+    def test_below_threshold_allows(self):
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=400.0)
+        assert gate_anomaly(state, cfg).severity == "allow"
+
+    def test_at_threshold_soft_blocks(self):
+        # Exact-equal trips. Pre-empt the spike before it confirms.
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=2000.0)
+        d = gate_anomaly(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.gate == "anomaly"
+
+    def test_above_threshold_soft_blocks_with_metric(self):
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=3500.0)
+        d = gate_anomaly(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.metric == 3500.0
+        assert d.threshold == 2000.0
+        assert "3500" in d.reason
+        assert "2000" in d.reason
+
+    def test_zero_latency_allows(self):
+        # Default state — caller hasn't accumulated enough samples yet.
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000)
+        assert gate_anomaly(state, cfg).severity == "allow"
+
+    def test_negative_latency_allows(self):
+        # Defensive: negative is non-physical, treat as no-data.
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=-5.0)
+        assert gate_anomaly(state, cfg).severity == "allow"
+
+    def test_default_threshold_is_permissive(self):
+        # Factory default = 1e9 ms; even an absurd 60s p99 still allows.
+        cfg = RiskGateConfig()
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=60_000.0)
+        assert gate_anomaly(state, cfg).severity == "allow"
+        # is_default() must still hold after the new field is added.
+        assert cfg.is_default() is True
 
 
 # ────────────────────────────────────────────────────────────
