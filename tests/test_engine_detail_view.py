@@ -244,6 +244,30 @@ def test_aderencia_block_skips_when_no_audit(gui_root, tmp_path, monkeypatch):
     parent.destroy()
 
 
+def test_aderencia_block_renders_red_parse_error(gui_root, tmp_path, monkeypatch):
+    """Corrupt audit JSON should render a RED parse-error banner."""
+    from core.ui.ui_palette import RED
+    from launcher_support.engine_detail_view import render_aderencia_block
+
+    monkeypatch.setenv("AURUM_AUDIT_DIR", str(tmp_path))
+    bad = tmp_path / "2026-04-25.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({}, engine="MILLENNIUM")
+    render_aderencia_block(parent, run)
+
+    text_pool = " ".join(_collect_text(parent))
+    assert "parse error" in text_pool.lower()
+    assert "2026-04-25.json" in text_pool
+
+    # Verify it's the RED label.
+    colors = _collect_label_colors(parent)
+    err_labels = [c for t, c in colors if "parse error" in t.lower()]
+    assert err_labels and err_labels[0] == RED
+    parent.destroy()
+
+
 def test_aderencia_block_reads_latest_artifact(gui_root, tmp_path, monkeypatch):
     import json
     from launcher_support.engine_detail_view import render_aderencia_block

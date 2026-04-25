@@ -486,7 +486,11 @@ def render_aderencia_block(parent: tk.Widget, run: RunSummary) -> None:
         return
 
     audit_dir = Path(os.environ.get("AURUM_AUDIT_DIR", "data/audit"))
-    payload = _load_latest_audit(audit_dir)
+    payload, parse_err = _load_latest_audit(audit_dir)
+    if parse_err:
+        tk.Label(parent, text=f"  (audit parse error: {parse_err})",
+                 font=(FONT, 7), fg=RED, bg=BG).pack(anchor="w", padx=12)
+        return
     if payload is None:
         tk.Label(parent, text="  (no audit data)",
                  font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)

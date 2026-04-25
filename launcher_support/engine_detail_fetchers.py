@@ -113,29 +113,35 @@ def _fetch_log_tail(run: RunSummary, limit: int) -> list[str]:
     return rows
 
 
-def _load_latest_audit(audit_dir: Path) -> dict | None:
+def _load_latest_audit(audit_dir: Path) -> tuple[dict | None, str | None]:
     """Latest YYYY-*.json dentro de audit_dir, parsed.
 
-    Retorna None se dir não existe, sem candidatos, ou parse falha.
-    Caller (render_aderencia_block) decide a mensagem de skip.
+    Retorna (payload, error_filename):
+      - (None, None)        — dir ausente ou sem candidatos JSON
+      - (None, "<filename>") — parse error num arquivo específico
+      - (payload, None)     — sucesso; payload anexado com
+        ``_audit_filename`` (nome completo) e ``_audit_stem`` (sem ext).
+
+    Caller (render_aderencia_block) decide a UX: dim "(no audit data)"
+    quando ambos None, banner RED quando ``parse_err`` setado.
     """
     if not audit_dir.exists():
-        return None
+        return None, None
     candidates = sorted(audit_dir.glob("*.json"),
                         key=lambda p: p.stat().st_mtime, reverse=True)
     candidates = [p for p in candidates if p.name[0].isdigit()]
     if not candidates:
-        return None
+        return None, None
     latest = candidates[0]
     try:
         payload = json.loads(latest.read_text(encoding="utf-8"))
     except Exception:
-        return None
+        return None, latest.name
     # Anexa o stem do arquivo pra o caller mostrar a data sem refazer glob.
     if isinstance(payload, dict):
         payload.setdefault("_audit_filename", latest.name)
         payload.setdefault("_audit_stem", latest.stem)
-    return payload
+    return payload, None
 
 
 __all__ = [
