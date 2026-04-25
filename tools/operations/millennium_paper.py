@@ -170,6 +170,54 @@ def _append_jsonl(path: Path, record: dict) -> None:
         fh.write(json.dumps(record) + "\n")
 
 
+def _persist_trade_to_db(record: dict) -> None:
+    """Persist a closed-trade record to SQLite live_trades table.
+
+    Belt-and-suspenders companion to _append_jsonl(TRADES_PATH, ...):
+    JSONL stays the source of truth; DB is convenience for cross-run
+    SQL queries ("all citadel paper trades this week"). Failures here
+    NEVER bubble — trade lifecycle must not depend on DB availability.
+
+    Connection is opened per-call and closed immediately to keep zero
+    long-lived locks and survive concurrent writers (multiple paper
+    runners on same VPS, or operator running ad-hoc backfills).
+
+    The runner's record uses 'engine'/'entry_price'/'pnl_after_fees' —
+    `db_live_trades._norm_trade` knows the aliases (entry_price→entry,
+    pnl→pnl_usd, etc), so we forward the raw record. We additionally
+    map 'engine'→'strategy' (the table column for which sub-engine
+    inside millennium emitted the signal) before forwarding.
+    """
+    try:
+        import sqlite3
+        from core.ops.db_live_trades import upsert_trade  # noqa: PLC0415
+        db_path = ROOT / "data" / "aurum.db"
+        if not db_path.exists():
+            return  # DB not initialised on this host — silent skip
+        payload = dict(record)
+        # 'engine' (paper-runner term) → 'strategy' (DB column term)
+        if "engine" in payload and "strategy" not in payload:
+            payload["strategy"] = payload["engine"]
+        # canonical 'ts' for UNIQUE key — paper writer uses entry_at
+        if "ts" not in payload and payload.get("entry_at"):
+            payload["ts"] = payload["entry_at"]
+        # canonical pnl_usd — paper uses pnl_after_fees as the realised pnl
+        if "pnl_usd" not in payload and payload.get("pnl_after_fees") is not None:
+            payload["pnl_usd"] = payload["pnl_after_fees"]
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            upsert_trade(conn, RUN_ID, payload)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        # Never crash trading on DB issue — log via PAPER_LOG handler
+        try:
+            import logging as _log
+            _log.getLogger("aurum.paper").warning(
+                "live_trades upsert failed (non-fatal): %s", exc,
+            )
+        except Exception:
+            pass
+
+
 def _pos_snapshot(pos: Position) -> dict:
     return {
         "id": pos.id, "engine": pos.engine, "symbol": pos.symbol,
@@ -374,7 +422,7 @@ def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
             "strategy": c.engine, "symbol": c.symbol,
             "exit_reason": c.exit_reason,
         })
-        _append_jsonl(TRADES_PATH, {
+        trade_record = {
             "id": c.id, "engine": c.engine, "symbol": c.symbol,
             "direction": c.direction, "entry_price": c.entry_price,
             "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
@@ -383,7 +431,9 @@ def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
             "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
             "r_multiple": c.r_multiple, "bars_held": c.bars_held,
             "primed": False,
-        })
+        }
+        _append_jsonl(TRADES_PATH, trade_record)
+        _persist_trade_to_db(trade_record)
         _append_jsonl(FILLS_PATH, {
             "event": "close", "pos_id": c.id, "ts": c.closed_at,
             "reason": reason, "price": c.exit_price,
@@ -426,7 +476,7 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "strategy": c.engine, "symbol": c.symbol,
                 "exit_reason": c.exit_reason,
             })
-            _append_jsonl(TRADES_PATH, {
+            trade_record = {
                 "id": c.id, "engine": c.engine, "symbol": c.symbol,
                 "direction": c.direction, "entry_price": c.entry_price,
                 "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
@@ -435,7 +485,9 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
                 "r_multiple": c.r_multiple, "bars_held": c.bars_held,
                 "primed": False,
-            })
+            }
+            _append_jsonl(TRADES_PATH, trade_record)
+            _persist_trade_to_db(trade_record)
             _append_jsonl(FILLS_PATH, {
                 "event": "close", "pos_id": c.id, "ts": c.closed_at,
                 "reason": c.exit_reason, "price": c.exit_price,
