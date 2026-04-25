@@ -12,12 +12,7 @@ from engines.live import LiveEngine, SignalEngine
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "phase_c" / "live"
-RECORDED_STATE = ROOT / "data" / "live" / "2026-04-09_1503" / "state" / "positions.json"
-
-pytestmark = pytest.mark.skipif(
-    not RECORDED_STATE.exists(),
-    reason="recorded live state dir cleaned up — replay fixture not yet wired",
-)
+RECORDED_STATE = FIXTURES / "recorded_state_empty.json"
 
 
 def _load_json(path: Path):
