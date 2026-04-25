@@ -549,9 +549,15 @@ def fmt_roi(roi: float | None) -> str:
 # ─── Tk rendering ─────────────────────────────────────────────────
 
 def render_runs_history(parent: tk.Widget, launcher,
-                        client_factory: Callable[[], object | None]
+                        client_factory: Callable[[], object | None],
+                        *,
+                        mode: str = "split",
                         ) -> tk.Frame:
-    """Full RUNS HISTORY screen. Two-column split: table left, detail right.
+    """Full RUNS HISTORY screen.
+
+    mode="split" (default): table esquerda + detail pane direita.
+    mode="list":  table esquerda full-width, sem detail pane.
+                  Click numa row dispara navegação via launcher.screens.show.
 
     `client_factory` mirrors the lazy cockpit pattern used elsewhere —
     must return a cockpit client or None.
@@ -578,21 +584,29 @@ def render_runs_history(parent: tk.Widget, launcher,
     split.pack(fill="both", expand=True)
 
     # LEFT — table
-    left = tk.Frame(split, bg=BG, width=640,
-                    highlightbackground=BORDER, highlightthickness=1)
-    left.pack(side="left", fill="y")
-    left.pack_propagate(False)
+    if mode == "split":
+        left = tk.Frame(split, bg=BG, width=640,
+                        highlightbackground=BORDER, highlightthickness=1)
+        left.pack(side="left", fill="y")
+        left.pack_propagate(False)
+    else:
+        left = tk.Frame(split, bg=BG,
+                        highlightbackground=BORDER, highlightthickness=1)
+        left.pack(side="left", fill="both", expand=True)
 
     _render_left_header(left, state, launcher)
     table_wrap = tk.Frame(left, bg=BG)
     table_wrap.pack(fill="both", expand=True)
     state["table_wrap"] = table_wrap
 
-    # RIGHT — detail
-    right = tk.Frame(split, bg=PANEL,
-                     highlightbackground=BORDER, highlightthickness=1)
-    right.pack(side="right", fill="both", expand=True)
-    state["detail_host"] = right
+    if mode == "split":
+        # RIGHT — detail
+        right = tk.Frame(split, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1)
+        right.pack(side="right", fill="both", expand=True)
+        state["detail_host"] = right
+    else:
+        state["detail_host"] = None
 
     def _refresh():
         _refresh_runs(state, launcher, client_factory)
@@ -666,7 +680,7 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
 
     # Column header — 7pt bold (COL tier, preserves alignment with rows).
     # Numeric columns right-aligned.
-    numeric = {"TICKS", "SIG", "EQUITY", "ROI", "TRADES"}
+    numeric = {"TICKS", "SIG", "EQUITY", "ROI", "DD%", "SHARPE", "#POS", "TRADES"}
     col_hdr = tk.Frame(parent, bg=BG)
     col_hdr.pack(fill="x", padx=10, pady=(6, 2))
     for label, w in _COLUMNS:
@@ -680,7 +694,7 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
 
 _COLUMNS = [
     ("ST",      2),
-    ("ENGINE",  11),
+    ("ENGINE",  14),   # bumped 11→14 (RENAISSANCE/BRIDGEWATER inteiros + folga)
     ("MODE",    6),
     ("STARTED", 13),
     ("DUR",     7),
@@ -688,6 +702,9 @@ _COLUMNS = [
     ("SIG",     5),
     ("EQUITY",  9),
     ("ROI",     8),
+    ("DD%",     6),    # NEW — drawdown percent atual
+    ("SHARPE",  7),    # NEW — sharpe rolling do run
+    ("#POS",    5),    # NEW — open positions count
     ("TRADES",  6),
     ("SRC",     5),
 ]
@@ -881,9 +898,25 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     # Weight rule: bold only on identity + outcome — ENGINE, ROI, SRC,
     # and SIG when > 0. Anchor rule: right-align numerics for decimal
     # alignment, left-align text for readability.
+    dd_pct = r.drawdown_pct
+    sharpe = r.sharpe_rolling
+    pos_count = r.open_positions
+    dd_txt = "—" if dd_pct is None else f"{dd_pct:+.2f}%"
+    dd_color = (RED if dd_pct is not None and dd_pct < -2 else DIM)
+    sharpe_txt = "—" if sharpe is None else f"{sharpe:+.2f}"
+    if sharpe is None:
+        sharpe_color = DIM
+    elif sharpe > 1:
+        sharpe_color = GREEN
+    elif sharpe < 0:
+        sharpe_color = RED
+    else:
+        sharpe_color = DIM
+    pos_txt = "—" if pos_count is None else str(pos_count)
+    pos_color = WHITE if pos_count else DIM
     cells = [
         (dot, dot_color, 2, "bold", "w"),
-        (r.engine[:11], WHITE, 11, "bold", "w"),
+        (r.engine[:14], WHITE, 14, "bold", "w"),
         (r.mode[:6], mode_color, 6, "normal", "w"),
         (fmt_started(r.started_at), DIM, 13, "normal", "w"),
         (dur, WHITE, 7, "normal", "w"),
@@ -892,6 +925,9 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
          "bold" if (r.novel or 0) > 0 else "normal", "e"),
         (fmt_equity(r.equity), WHITE, 9, "normal", "e"),
         (roi_txt, roi_color, 8, "bold", "e"),
+        (dd_txt, dd_color, 6, "normal", "e"),
+        (sharpe_txt, sharpe_color, 7, "normal", "e"),
+        (pos_txt, pos_color, 5, "normal", "e"),
         (tr, WHITE, 6, "normal", "e"),
         (r.source.upper(), src_color, 5, "bold", "w"),
     ]

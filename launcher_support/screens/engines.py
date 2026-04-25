@@ -102,6 +102,7 @@ class EnginesScreen(Screen):
             self._history_root = render_runs_history(
                 self._body, self.app,
                 client_factory=self._client_factory,
+                mode="list",
             )
         except Exception as exc:
             tk.Label(self._body, text=f"\n  render failed: {exc}",

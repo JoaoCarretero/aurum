@@ -106,6 +106,9 @@ class RunSummary:
     label: str | None = None
     open_count: int | None = None
     notes: str | None = None
+    drawdown_pct: float | None = None
+    sharpe_rolling: float | None = None
+    open_positions: int | None = None
     _raw: dict = field(default_factory=dict)
 
 
@@ -192,6 +195,9 @@ def collect_vps_runs(client) -> list[RunSummary]:
             host=str(payload.get("host") or "") or None,
             label=str(payload.get("label") or "") or None,
             open_count=None,
+            drawdown_pct=_as_float(payload.get("drawdown_pct") or payload.get("dd_pct")),
+            sharpe_rolling=_as_float(payload.get("sharpe_rolling")),
+            open_positions=_as_int(payload.get("open_positions_count")),
             _raw=payload,
         ))
     _store_cached_rows(_VPS_RUNS_CACHE, cache_key, rows)
@@ -744,6 +750,13 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str, hb: dict) -> RunS
     novel = hb.get("novel_since_prime")
     if novel is None:
         novel = hb.get("novel_total")
+    drawdown_pct = _as_float(hb.get("drawdown_pct") or hb.get("dd_pct"))
+    sharpe_rolling = _as_float(hb.get("sharpe_rolling"))
+    open_positions = _as_int(
+        hb.get("open_positions_count")
+        if hb.get("open_positions_count") is not None
+        else (len(hb.get("positions") or []) if hb.get("positions") is not None else None)
+    )
     return RunSummary(
         run_id=str(hb.get("run_id") or run_dir.name),
         engine=engine,
@@ -763,6 +776,9 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str, hb: dict) -> RunS
         run_dir=run_dir,
         heartbeat=hb,
         open_count=None,
+        drawdown_pct=drawdown_pct,
+        sharpe_rolling=sharpe_rolling,
+        open_positions=open_positions,
     )
 
 
@@ -799,6 +815,13 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
     if novel is None:
         novel = hb.get("novel_total", payload.get("novel_total"))
     last_tick_at = payload.get("last_tick_at") or hb.get("last_tick_at")
+    drawdown_pct = _as_float(hb.get("drawdown_pct") or hb.get("dd_pct"))
+    sharpe_rolling = _as_float(hb.get("sharpe_rolling"))
+    open_positions = _as_int(
+        hb.get("open_positions_count")
+        if hb.get("open_positions_count") is not None
+        else (len(hb.get("positions") or []) if hb.get("positions") is not None else None)
+    )
     return RunSummary(
         run_id=rid,
         engine=str(payload.get("engine") or hb.get("engine") or "?").upper(),
@@ -822,6 +845,9 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
         host=str(payload.get("host") or hb.get("host") or "") or None,
         label=str(payload.get("label") or hb.get("label") or "") or None,
         open_count=_as_int(account.get("open_count") if isinstance(account, dict) else None),
+        drawdown_pct=drawdown_pct,
+        sharpe_rolling=sharpe_rolling,
+        open_positions=open_positions,
         _raw=payload,
     )
 
