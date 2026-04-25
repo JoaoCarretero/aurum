@@ -9,6 +9,13 @@ import json
 from datetime import datetime, timezone
 
 
+def _isolate_runner_db(mp, tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    monkeypatch.setattr(mp.db_live_runs, "DB_PATH", data_dir / "aurum.db")
+
+
 def test_module_reload_does_not_create_run_dirs(monkeypatch):
     from pathlib import Path
     from tools.operations import millennium_paper as mp
@@ -35,7 +42,7 @@ def test_runner_single_tick_open_then_exit(tmp_path, monkeypatch):
     (run_dir / "reports").mkdir(parents=True)
     (run_dir / "logs").mkdir(parents=True)
 
-    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    _isolate_runner_db(mp, tmp_path, monkeypatch)
     monkeypatch.setattr(mp, "RUN_DIR", run_dir)
     monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
     monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
@@ -108,7 +115,7 @@ def test_runner_first_tick_primes_without_opening(tmp_path, monkeypatch):
     for sub in ("state", "reports", "logs"):
         (run_dir / sub).mkdir(parents=True)
 
-    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    _isolate_runner_db(mp, tmp_path, monkeypatch)
     monkeypatch.setattr(mp, "RUN_DIR", run_dir)
     monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
     monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
@@ -155,7 +162,7 @@ def test_runner_first_tick_opens_on_live_signal(tmp_path, monkeypatch):
     for sub in ("state", "reports", "logs"):
         (run_dir / sub).mkdir(parents=True)
 
-    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    _isolate_runner_db(mp, tmp_path, monkeypatch)
     monkeypatch.setattr(mp, "RUN_DIR", run_dir)
     monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
     monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
@@ -226,7 +233,7 @@ def test_runner_rejects_opposing_direction_same_symbol(tmp_path, monkeypatch):
     for sub in ("state", "reports", "logs"):
         (run_dir / sub).mkdir(parents=True)
 
-    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    _isolate_runner_db(mp, tmp_path, monkeypatch)
     monkeypatch.setattr(mp, "RUN_DIR", run_dir)
     monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
     monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
@@ -285,7 +292,7 @@ def test_runner_allows_same_direction_same_symbol(tmp_path, monkeypatch):
     for sub in ("state", "reports", "logs"):
         (run_dir / sub).mkdir(parents=True)
 
-    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    _isolate_runner_db(mp, tmp_path, monkeypatch)
     monkeypatch.setattr(mp, "RUN_DIR", run_dir)
     monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
     monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
@@ -335,7 +342,7 @@ def test_runner_rejects_stale_signal_post_prime(tmp_path, monkeypatch):
     for sub in ("state", "reports", "logs"):
         (run_dir / sub).mkdir(parents=True)
 
-    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    _isolate_runner_db(mp, tmp_path, monkeypatch)
     monkeypatch.setattr(mp, "RUN_DIR", run_dir)
     monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
     monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")
