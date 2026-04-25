@@ -21,6 +21,7 @@ def register_default_screens(
     from launcher_support.screens.engine_logs import EngineLogsScreen
     from launcher_support.screens.engines import EnginesScreen
     from launcher_support.screens.engines_live import EnginesLiveScreen
+    from launcher_support.screens.infra import InfraScreen
     from launcher_support.screens.live_runs import LiveRunsScreen
     from launcher_support.screens.macro_brain import MacroBrainScreen
     from launcher_support.screens.main_menu import MainMenuScreen
@@ -80,6 +81,10 @@ def register_default_screens(
     manager.register(
         "settings",
         lambda parent: SettingsScreen(parent=parent, app=app),
+    )
+    manager.register(
+        "infra",
+        lambda parent: InfraScreen(parent=parent, app=app),
     )
     manager.register(
         "processes",
