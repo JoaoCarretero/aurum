@@ -80,6 +80,19 @@ def _collect_text(widget):
     return out
 
 
+def _collect_label_colors(widget):
+    """DFS de Labels capturando (text, fg) em widget e descendants."""
+    out = []
+    if isinstance(widget, tk.Label):
+        try:
+            out.append((str(widget.cget("text")), str(widget.cget("fg"))))
+        except Exception:
+            pass
+    for child in widget.winfo_children():
+        out.extend(_collect_label_colors(child))
+    return out
+
+
 def test_scan_funnel_block_shows_funnel_metrics(gui_root):
     from launcher_support.engine_detail_view import render_scan_funnel_block
     parent = tk.Frame(gui_root)
@@ -200,10 +213,23 @@ def test_log_tail_block_renders_lines(gui_root, tmp_path):
     parent = tk.Frame(gui_root)
     run = _run_with_hb({}, source="local", run_dir=str(tmp_path))
     render_log_tail_block(parent, run, limit=10)
-    text_pool = " ".join(_collect_text(parent))
-    # Note: log tail uses Text widget, not Labels — _collect_text won't find
-    # Text content. Check that the LOG TAIL header at least rendered.
-    assert "LOG TAIL" in text_pool
+
+    # Find the Text widget and check it contains the last lines.
+    def _find_text_widget(w):
+        if isinstance(w, tk.Text):
+            return w
+        for c in w.winfo_children():
+            r = _find_text_widget(c)
+            if r is not None:
+                return r
+        return None
+
+    txt = _find_text_widget(parent)
+    assert txt is not None, "expected Text widget for log tail"
+    content = txt.get("1.0", "end")
+    assert "line 49" in content
+    assert "line 40" in content  # within last 10 (40-49)
+    assert "line 39" not in content  # excluded by limit=10
     parent.destroy()
 
 
@@ -239,4 +265,50 @@ def test_aderencia_block_reads_latest_artifact(gui_root, tmp_path, monkeypatch):
     render_aderencia_block(parent, run)
     text_pool = " ".join(_collect_text(parent))
     assert "87" in text_pool
+    parent.destroy()
+
+
+# ─── Color assertion tests ─────────────────────────────────────────
+
+
+def test_triage_block_last_error_label_is_red(gui_root):
+    """Verifies the visual signal — banner color must be RED."""
+    from core.ui.ui_palette import RED
+    from launcher_support.engine_detail_view import render_triage_block
+
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({"last_error": "boom"})
+    render_triage_block(parent, run)
+    colors = _collect_label_colors(parent)
+    error_labels = [c for t, c in colors if t == "LAST ERROR"]
+    assert error_labels, "expected LAST ERROR label"
+    assert error_labels[0] == RED
+    parent.destroy()
+
+
+def test_positions_long_dir_is_green_short_is_red(gui_root):
+    from core.ui.ui_palette import GREEN, RED
+    from launcher_support.engine_detail_view import render_positions_block
+
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({
+        "positions": [
+            {"symbol": "BTCUSDT", "direction": "long",
+             "entry_price": 50000.0, "mark_price": 50500.0,
+             "pnl_usd": 2.0, "pnl_pct": 1.0,
+             "stop": 49500.0, "target": 51000.0,
+             "opened_at": "2026-04-24T18:00:00Z"},
+            {"symbol": "ETHUSDT", "direction": "short",
+             "entry_price": 3000.0, "mark_price": 2950.0,
+             "pnl_usd": 1.0, "pnl_pct": 1.6,
+             "stop": 3050.0, "target": 2900.0,
+             "opened_at": "2026-04-24T19:00:00Z"},
+        ],
+    })
+    render_positions_block(parent, run)
+    colors = _collect_label_colors(parent)
+    long_dirs = [c for t, c in colors if t.strip() == "long"]
+    short_dirs = [c for t, c in colors if t.strip() == "short"]
+    assert long_dirs and long_dirs[0] == GREEN
+    assert short_dirs and short_dirs[0] == RED
     parent.destroy()
