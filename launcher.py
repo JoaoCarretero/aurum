@@ -1278,7 +1278,14 @@ class App(tk.Tk):
         self._menu_live["control"]  = self._fetch_tile_control()
 
     def _menu_live_fetch_async(self) -> None:
-        """Spawn a worker thread that refreshes the cache, then schedules a repaint."""
+        """Spawn a worker thread that refreshes the cache, then schedules a repaint.
+
+        Also pre-warms the ENGINES LIVE cockpit cache in parallel so when the
+        operator clicks EXECUTE > ENGINES LIVE, the master list paints with
+        VPS data immediately (instead of blocking ~1s on the first sync
+        round-trip there). Cache TTL on `_COCKPIT_RUNS_CACHE` is 60s, so
+        repeated calls during the menu's 5s refresh tick are no-ops once warm.
+        """
         def _worker():
             try:
                 self._menu_live_fetch_sync()
@@ -1289,6 +1296,18 @@ class App(tk.Tk):
             except Exception:
                 pass
         threading.Thread(target=_worker, daemon=True).start()
+
+        def _cockpit_prewarm():
+            try:
+                from launcher_support import engines_live_view
+                engines_live_view._load_cockpit_runs_cached(allow_sync=True)
+            except Exception:
+                pass
+        threading.Thread(
+            target=_cockpit_prewarm,
+            name="menu-cockpit-prewarm",
+            daemon=True,
+        ).start()
 
     def _menu_live_apply(self) -> None:
         """Main-thread: redraw tile texts from self._menu_live if the main menu is shown.
