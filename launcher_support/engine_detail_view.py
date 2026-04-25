@@ -35,6 +35,23 @@ from launcher_support.engine_detail_fetchers import (
 from launcher_support.runs_history import RunSummary
 
 
+# ─── Tunable thresholds ─────────────────────────────────────────────
+# Heartbeat freshness color ladder (multiples of expected tick_sec).
+FRESH_AMBER_MULT = 2
+FRESH_RED_MULT = 4
+
+# Drawdown thresholds (percent — negative values).
+DD_NOW_RED_PCT = -2.0
+DD_MAX_RED_PCT = -5.0
+
+# Aderência match% color ladder.
+ADERENCIA_GREEN_PCT = 90
+ADERENCIA_AMBER_PCT = 70
+
+# Default tick cadence when heartbeat doesn't expose tick_sec (15min).
+DEFAULT_TICK_SEC = 900
+
+
 # ─── Layout helpers ─────────────────────────────────────────────────
 
 
@@ -101,7 +118,7 @@ def render_triage_block(parent: tk.Widget, run: RunSummary) -> None:
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=12)
 
     age = _format_age(run.last_tick_at)
-    tick_sec = hb.get("tick_sec") or 900
+    tick_sec = hb.get("tick_sec") or DEFAULT_TICK_SEC
     fresh_color = WHITE
     try:
         if run.last_tick_at:
@@ -109,9 +126,9 @@ def render_triage_block(parent: tk.Widget, run: RunSummary) -> None:
             if t.tzinfo is None:
                 t = t.replace(tzinfo=timezone.utc)
             elapsed = (datetime.now(timezone.utc) - t).total_seconds()
-            if elapsed > 4 * tick_sec:
+            if elapsed > FRESH_RED_MULT * tick_sec:
                 fresh_color = RED
-            elif elapsed > 2 * tick_sec:
+            elif elapsed > FRESH_AMBER_MULT * tick_sec:
                 fresh_color = AMBER
     except Exception:
         pass
@@ -133,7 +150,7 @@ def render_cadence_block(parent: tk.Widget, run: RunSummary) -> None:
     _block_header(parent, "❷ TICK CADENCE")
     hb = run.heartbeat or {}
 
-    tick_sec = hb.get("tick_sec") or 900
+    tick_sec = hb.get("tick_sec") or DEFAULT_TICK_SEC
     _kv_row(parent, "expected tick_sec", str(tick_sec))
 
     _kv_row(parent, "ticks_ok", str(run.ticks_ok or 0))
@@ -291,10 +308,10 @@ def render_equity_block(parent: tk.Widget, run: RunSummary) -> None:
     _kv_row(parent, "equity peak", f"{eq_peak:.2f}" if eq_peak else "—")
     _kv_row(parent, "drawdown now",
             f"{dd_now:+.2f}%" if dd_now is not None else "—",
-            RED if dd_now and dd_now < -2 else DIM)
+            RED if dd_now and dd_now < DD_NOW_RED_PCT else DIM)
     _kv_row(parent, "drawdown max",
             f"{dd_max:+.2f}%" if dd_max is not None else "—",
-            RED if dd_max and dd_max < -5 else DIM)
+            RED if dd_max and dd_max < DD_MAX_RED_PCT else DIM)
     _kv_row(parent, "exposure",
             f"{exposure:.1f}%" if exposure is not None else "—")
     _kv_row(parent, "ROI", f"{run.roi_pct:+.3f}%" if run.roi_pct is not None else "—",
@@ -483,8 +500,8 @@ def render_aderencia_block(parent: tk.Widget, run: RunSummary) -> None:
         return
 
     match = info.get("match_pct")
-    color = GREEN if (match or 0) > 90 else (
-        AMBER if (match or 0) > 70 else RED)
+    color = GREEN if (match or 0) > ADERENCIA_GREEN_PCT else (
+        AMBER if (match or 0) > ADERENCIA_AMBER_PCT else RED)
     _kv_row(parent, "match %",
             f"{match:.1f}%" if match is not None else "—", color)
     _kv_row(parent, "audit date", payload.get("_audit_stem", "—"))
