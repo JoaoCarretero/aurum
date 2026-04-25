@@ -100,6 +100,7 @@ def _reap_tunnel_windows(local_port: int) -> int:
         if parts and parts[-1].isdigit():
             pids.add(int(parts[-1]))
     killed = 0
+    netstat_pid_dead = False
     for pid in pids:
         try:
             img = subprocess.check_output(
@@ -112,6 +113,8 @@ def _reap_tunnel_windows(local_port: int) -> int:
             # netstat owner-PID dangling while the actual listener child
             # owns the socket via fd inheritance under a different PID).
             if "ssh.exe" not in img.lower():
+                if "no tasks" in img.lower() or "nenhuma tarefa" in img.lower():
+                    netstat_pid_dead = True
                 continue
             subprocess.run(
                 ["taskkill", "/F", "/PID", str(pid)],
@@ -121,6 +124,38 @@ def _reap_tunnel_windows(local_port: int) -> int:
             killed += 1
         except Exception:
             continue
+    # Fallback: netstat reported a PID that doesn't exist (typical of
+    # `ssh -f` orphans on Windows where the daemonised parent PID survives
+    # in the kernel's socket-owner table). Sweep every running ssh.exe —
+    # any that's binding our port silently will release it on kill, the
+    # OS reclaims the socket, and start() can bind cleanly. Other ssh.exe
+    # instances unrelated to the cockpit still die: cost of recovery from
+    # a fairly rare state, accepted because the launcher's port=8787 is
+    # known and any ssh.exe holding it is presumed stale.
+    if killed == 0 and netstat_pid_dead:
+        try:
+            ssh_list = subprocess.check_output(
+                ["tasklist", "/FI", "IMAGENAME eq ssh.exe", "/FO", "CSV", "/NH"],
+                timeout=3, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            ).decode("latin-1", errors="replace")
+            for line in ssh_list.splitlines():
+                # CSV row: "ssh.exe","17656","Console","10","10,596 K"
+                parts = [p.strip().strip('"') for p in line.split(",")]
+                if len(parts) >= 2 and parts[1].isdigit():
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/PID", parts[1]],
+                            timeout=3,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=_NO_WINDOW,
+                        )
+                        killed += 1
+                    except Exception:
+                        continue
+        except Exception:
+            pass
     return killed
 
 
