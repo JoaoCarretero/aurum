@@ -76,18 +76,6 @@ def test_trades_to_features_excludes_open_trades():
     assert set(df["result"]) == {"WIN", "LOSS"}
 
 
-@pytest.mark.xfail(
-    reason=(
-        "BUG (audit 2026-04-25): engines/twosigma.py:127 returns "
-        "pd.Series(targets, index=df.index) where len(targets)=n-1 "
-        "(loop is range(len-1)) but len(df.index)=n. Always raises "
-        "ValueError. Bug surfaced by smoke contract; should be fixed "
-        "by changing index= to df.index[:-1] or by appending one final "
-        "-1 sentinel for the last row. Awaiting Joao's call — TWO SIGMA "
-        "is stage=research, live_ready=False, so prod impact is bounded."
-    ),
-    strict=True,
-)
 def test_build_target_short_window_emits_minus_one():
     """build_target marks insufficient-window trades as target=-1.
 
