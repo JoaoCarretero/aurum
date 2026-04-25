@@ -267,3 +267,137 @@ def test_query_by_strategy_index_works(conn):
         ("citadel",),
     )
     assert [r[0] for r in cur.fetchall()] == ["BTC"]
+
+
+# ─── Round-trip / details_json preservation ─────────────────────────
+
+
+def test_upsert_trade_preserves_existing_details_json_on_round_trip(conn):
+    """sync_vps_db reads a row and re-upserts it; details_json must stay
+    canonical (single JSON encoding), not get double-wrapped into
+    {"details_json": "<original>"}.
+
+    Regression: 2026-04-25 paper trades XRPUSDT/JUMP arrived locally
+    double-encoded because _norm_trade fed `details_json` (already a
+    string) into `extras` and re-serialized it.
+    """
+    original_details = json.dumps({
+        "id": "pos_000001", "engine": "JUMP", "bars_held": 0,
+        "primed": False, "pnl_after_fees": -17.85,
+    })
+    payload = {
+        "ts": "2026-04-25T16:16:40Z", "symbol": "XRPUSDT",
+        "direction": "LONG", "strategy": "JUMP",
+        "entry": 1.428513, "exit": 1.4239, "pnl_usd": -17.85,
+        "details_json": original_details,
+    }
+    upsert_trade(conn, "rid_round", payload)
+    rows = list_trades_for_run(conn, "rid_round")
+    assert len(rows) == 1
+    raw = rows[0]["details_json"]
+    parsed = json.loads(raw)
+    # Must NOT be {"details_json": "..."} (double-wrap)
+    assert "details_json" not in parsed, \
+        f"double-wrapped details_json detected: {parsed!r}"
+    # Must preserve the original keys
+    assert parsed["id"] == "pos_000001"
+    assert parsed["engine"] == "JUMP"
+    assert parsed["bars_held"] == 0
+
+
+def test_upsert_signal_preserves_existing_details_json_on_round_trip(conn):
+    """Same regression but for signals — sync_vps_db round-trips signals too."""
+    original_details = json.dumps({
+        "trade_type": "ORDER-FLOW", "struct": "DOWN", "cascade_n": 0,
+    })
+    payload = {
+        "observed_at": "2026-04-21T23:30:19Z",
+        "symbol": "SANDUSDT", "strategy": "JUMP", "direction": "BEARISH",
+        "details_json": original_details,
+    }
+    upsert_signal(conn, "rid_sig_round", payload)
+    rows = list_signals_for_run(conn, "rid_sig_round")
+    assert len(rows) == 1
+    parsed = json.loads(rows[0]["details_json"])
+    assert "details_json" not in parsed, \
+        f"double-wrapped details_json detected: {parsed!r}"
+    assert parsed["trade_type"] == "ORDER-FLOW"
+    assert parsed["cascade_n"] == 0
+
+
+def test_upsert_trade_merges_existing_details_json_with_new_extras(conn):
+    """If both incoming details_json AND novel extras exist, both must
+    survive — no silent data loss in either direction."""
+    original = json.dumps({"id": "pos_X", "engine": "JUMP"})
+    payload = {
+        "ts": "ts_x", "symbol": "BTCUSDT",
+        "direction": "long", "entry": 1.0,
+        "details_json": original,
+        "novel_field": "added_after_first_write",
+    }
+    upsert_trade(conn, "rid_merge", payload)
+    rows = list_trades_for_run(conn, "rid_merge")
+    parsed = json.loads(rows[0]["details_json"])
+    assert parsed.get("id") == "pos_X"
+    assert parsed.get("engine") == "JUMP"
+    assert parsed.get("novel_field") == "added_after_first_write"
+
+
+def test_upsert_signal_coerces_pandas_timestamp(conn):
+    """millennium_shadow passes the engine's raw `t["timestamp"]` straight
+    through; for pandas-backed engines that's a `pd.Timestamp` object, not
+    a string. Pre-fix this raised `Error binding parameter 3: type
+    'Timestamp' is not supported` on VPS, silently dropping every shadow
+    signal from live_signals (only WARNING, non-fatal). Coerce to ISO str.
+    """
+    import pandas as pd
+    payload = {
+        "shadow_observed_at": "2026-04-25T18:29:37Z",
+        "timestamp": pd.Timestamp("2026-04-25 18:00:00"),
+        "symbol": "XRPUSDT", "strategy": "JUMP", "direction": "BEARISH",
+        "entry": 1.42, "stop": 1.427, "target": 1.4,
+    }
+    inserted = upsert_signal(conn, "rid_ts", payload)
+    assert inserted is True, "should not silently drop on Timestamp"
+    rows = list_signals_for_run(conn, "rid_ts")
+    assert len(rows) == 1
+    assert isinstance(rows[0]["signal_ts"], str)
+    assert "2026-04-25" in rows[0]["signal_ts"]
+
+
+def test_upsert_trade_coerces_pandas_timestamp(conn):
+    """Same coercion guard for trade ts/exit_ts (paper engines use df-index
+    Timestamps too)."""
+    import pandas as pd
+    payload = {
+        "ts": pd.Timestamp("2026-04-25T16:16:40Z"),
+        "exit_ts": pd.Timestamp("2026-04-25T16:30:00Z"),
+        "symbol": "XRPUSDT", "direction": "LONG", "entry": 1.428,
+        "exit": 1.4239, "pnl_usd": -17.85,
+    }
+    inserted = upsert_trade(conn, "rid_ts2", payload)
+    assert inserted is True
+    rows = list_trades_for_run(conn, "rid_ts2")
+    assert len(rows) == 1
+    assert isinstance(rows[0]["ts"], str)
+    assert isinstance(rows[0]["exit_ts"], str)
+
+
+def test_upsert_trade_idempotent_round_trip_preserves_details(conn):
+    """Insert, read back, re-upsert — details_json must stabilise after
+    one cycle (not grow nesting on every sync)."""
+    payload = {
+        "ts": "ts_a", "symbol": "BTCUSDT", "direction": "long",
+        "entry": 1.0, "details_json": json.dumps({"k": "v"}),
+    }
+    upsert_trade(conn, "rid_stab", payload)
+    rows1 = list_trades_for_run(conn, "rid_stab")
+    # Simulate sync_vps_db: strip id/run_id and re-upsert
+    re_payload = {k: v for k, v in rows1[0].items()
+                  if k not in ("id", "run_id") and v is not None}
+    upsert_trade(conn, "rid_stab", re_payload)
+    rows2 = list_trades_for_run(conn, "rid_stab")
+    # Two cycles must converge
+    assert rows1[0]["details_json"] == rows2[0]["details_json"]
+    parsed = json.loads(rows2[0]["details_json"])
+    assert parsed == {"k": "v"}

@@ -179,6 +179,48 @@ def _append_jsonl(path: Path, record: dict) -> None:
         fh.write(json.dumps(record) + "\n")
 
 
+def _persist_signal_to_db(record: dict, *, observed_at: str) -> None:
+    """Persist one paper LIVE signal (non-stale) to SQLite live_signals.
+
+    Companion to _persist_trade_to_db: closed trades land in live_trades,
+    fired (live, non-stale) signals land in live_signals — together they
+    let the operator SQL-query "what was the JUMP score of the signal
+    that opened pos_X?" without parsing JSONLs from the run_dir.
+
+    Failures NEVER bubble — tick loop must never crash on DB issue.
+    Connection is short-lived (per-call) to avoid long-lived locks.
+
+    Aliasing: the runner's signal dict uses 'engine' (paper vocabulary);
+    table column is 'strategy'. We map engine→strategy if the canonical
+    is missing. observed_at is injected by the caller (= now_iso of the
+    tick that observed the signal) and feeds the unique key together
+    with (run_id, symbol).
+    """
+    try:
+        import sqlite3
+        from core.ops.db_live_trades import upsert_signal  # noqa: PLC0415
+        db_path = ROOT / "data" / "aurum.db"
+        if not db_path.exists():
+            return  # DB not initialised on this host — silent skip
+        payload = dict(record)
+        # 'engine' (paper-runner term) → 'strategy' (DB column term)
+        if "engine" in payload and "strategy" not in payload:
+            payload["strategy"] = payload["engine"]
+        # observed_at is required for the unique key — caller passes it
+        payload["observed_at"] = observed_at
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            upsert_signal(conn, RUN_ID, payload)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            import logging as _log
+            _log.getLogger("aurum.paper").warning(
+                "live_signals upsert failed (non-fatal): %s", exc,
+            )
+        except Exception:
+            pass
+
+
 def _persist_trade_to_db(record: dict) -> None:
     """Persist a closed-trade record to SQLite live_trades table.
 
@@ -605,6 +647,13 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
             state.novel_since_prime += 1
             live_count += 1
             state.last_novel_at = now_iso
+
+            # Persist live signal to live_signals — captures pre-gate
+            # context (score/struct/entropy/hurst/primed) that JSONL has
+            # but live_trades doesn't. Fires for every non-stale signal,
+            # regardless of whether the gates below let it open. Pairs
+            # with _persist_trade_to_db on close. Silent on DB failure.
+            _persist_signal_to_db(t, observed_at=now_iso)
 
             # 4. Portfolio gate V1: MAX_OPEN_POSITIONS only
             try:

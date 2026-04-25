@@ -41,6 +41,30 @@ _SIGNAL_COLS = (
 # ─── Field normalisation ───────────────────────────────────────────
 
 
+# SQLite binds only str/int/float/bytes/None natively. Engine records
+# arrive with pandas Timestamps (df-index values) and datetime objects.
+# Coerce to ISO strings on the way in so the upsert never raises
+# "Error binding parameter X: type 'Timestamp' is not supported" — that
+# silent WARNING dropped every shadow signal from live_signals on VPS
+# until 2026-04-25.
+_TS_FIELDS_TRADE = ("ts", "exit_ts")
+_TS_FIELDS_SIGNAL = ("observed_at", "signal_ts")
+
+
+def _coerce_ts(value):
+    """Best-effort cast of pandas Timestamp / datetime to ISO string.
+    Strings/None pass through unchanged."""
+    if value is None or isinstance(value, str):
+        return value
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        try:
+            return iso()
+        except Exception:  # noqa: BLE001
+            pass
+    return str(value)
+
+
 _MIGRATION_LOCK = threading.Lock()
 _MIGRATED_DBS: set[str] = set()
 
@@ -93,21 +117,69 @@ def _norm_trade(payload: dict) -> dict:
         # Cockpit emits 'engine' (=sub-engine name); JSONL emits 'strategy'.
         "strategy": ("strategy", "engine"),
     }
+    # Existing details_json (sync round-trip): pop early so it doesn't
+    # leak into `extras` and get re-serialised into a {"details_json": ...}
+    # double-wrap. Merge with novel extras at the end if both exist.
+    existing_dj = p.pop("details_json", None)
     out: dict = {}
+    consumed_aliases: set[str] = set()
     for canon, alts in aliases.items():
         for alt in alts:
             if alt in p and p[alt] is not None:
                 out[canon] = p[alt]
+                consumed_aliases.add(alt)
                 break
     # Direct copy for fields without aliases.
     for col in _TRADE_COLS:
         if col not in out and col in p and p[col] is not None:
             out[col] = p[col]
+    # Coerce timestamp-shaped fields to ISO strings (SQLite can't bind
+    # pandas.Timestamp / datetime — see _coerce_ts module note).
+    for f in _TS_FIELDS_TRADE:
+        if f in out:
+            out[f] = _coerce_ts(out[f])
     # Stash the rest for completeness.
     extras = {k: v for k, v in p.items()
-              if k not in out and k not in aliases}
-    out["details_json"] = json.dumps(extras) if extras else None
+              if k not in out and k not in consumed_aliases}
+    out["details_json"] = _merge_details_json(existing_dj, extras)
     return out
+
+
+def _merge_details_json(existing: str | dict | None, extras: dict) -> str | None:
+    """Combine an existing details_json blob with novel extras.
+
+    - Round-trip case (existing present, no extras): pass through unchanged.
+    - Backfill case (no existing, extras present): serialise extras.
+    - Mixed case: parse existing as dict, layer extras on top, re-serialise.
+      Extras win on key collision (treats existing as base, novel as patch).
+    - Pathological existing (non-JSON, non-dict): keep extras only,
+      preserving existing as a sub-key under "_legacy_details" so nothing
+      is silently dropped.
+    """
+    if existing is None and not extras:
+        return None
+    if existing is None:
+        return json.dumps(extras)
+    base: dict | None = None
+    if isinstance(existing, dict):
+        base = dict(existing)
+    elif isinstance(existing, str):
+        try:
+            parsed = json.loads(existing)
+            if isinstance(parsed, dict):
+                base = parsed
+        except (ValueError, TypeError):
+            base = None
+    if base is None:
+        # Existing isn't a parseable dict — preserve verbatim.
+        if not extras:
+            return existing if isinstance(existing, str) else json.dumps(existing)
+        merged = {"_legacy_details": existing, **extras}
+        return json.dumps(merged)
+    if not extras:
+        return json.dumps(base)
+    base.update(extras)
+    return json.dumps(base)
 
 
 def _norm_signal(payload: dict) -> dict:
@@ -118,6 +190,10 @@ def _norm_signal(payload: dict) -> dict:
     'direction' is BULLISH/BEARISH (renaissance vocab).
     """
     p = dict(payload)
+    # Pop existing details_json early — same round-trip rationale as
+    # _norm_trade. Without this, sync_vps_db would double-wrap shadow
+    # signals on every mirror cycle.
+    existing_dj = p.pop("details_json", None)
     out: dict = {}
     if p.get("shadow_observed_at"):
         out["observed_at"] = p["shadow_observed_at"]
@@ -132,11 +208,15 @@ def _norm_signal(payload: dict) -> dict:
     for col in _SIGNAL_COLS:
         if col not in out and col in p and p[col] is not None:
             out[col] = p[col]
+    # Coerce timestamp-shaped fields (see _coerce_ts module note).
+    for f in _TS_FIELDS_SIGNAL:
+        if f in out:
+            out[f] = _coerce_ts(out[f])
     extras = {k: v for k, v in p.items()
               if k not in out
               and k not in ("shadow_observed_at", "timestamp",
                             "shadow_run_id")}
-    out["details_json"] = json.dumps(extras) if extras else None
+    out["details_json"] = _merge_details_json(existing_dj, extras)
     return out
 
 
