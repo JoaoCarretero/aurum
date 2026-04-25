@@ -18,6 +18,7 @@ def register_default_screens(
     from launcher_support.screens.data_center import DataCenterScreen
     from launcher_support.screens.data_reports import DataReportsScreen
     from launcher_support.screens.deploy_pipeline import DeployPipelineScreen
+    from launcher_support.screens.engine_detail import EngineDetailScreen
     from launcher_support.screens.engine_logs import EngineLogsScreen
     from launcher_support.screens.engines import EnginesScreen
     from launcher_support.screens.engines_live import EnginesLiveScreen
@@ -124,6 +125,17 @@ def register_default_screens(
     manager.register(
         "engines",
         lambda parent: EnginesScreen(
+            parent=parent,
+            app=app,
+            client_factory=__import__(
+                "launcher_support.engines_live_view",
+                fromlist=["_get_cockpit_client"],
+            )._get_cockpit_client,
+        ),
+    )
+    manager.register(
+        "engine_detail",
+        lambda parent: EngineDetailScreen(
             parent=parent,
             app=app,
             client_factory=__import__(
