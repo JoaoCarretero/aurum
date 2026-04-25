@@ -362,11 +362,17 @@ def render_trades_block(parent: tk.Widget, run: RunSummary,
     tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=12)
     foot2 = tk.Frame(parent, bg=BG)
     foot2.pack(fill="x", padx=12, pady=(2, 0))
-    tk.Label(foot2,
-             text=f"  total {len(trades)} · win {wr*100:.0f}% · "
-                  f"avgR {ar:+.2f} · sharpe {s:+.2f} · sortino {so:+.2f}"
-             if all(v is not None for v in (s, ar, so))
-             else f"  total {len(trades)} · win {wr*100:.0f}%",
+    if all(v is not None for v in (s, ar, so)):
+        foot_text = (
+            f"  total {len(trades)} · win {wr*100:.0f}% · "
+            f"avgR {ar:+.2f} · sharpe {s:+.2f} · sortino {so:+.2f}"
+        )
+    else:
+        foot_text = (
+            f"  total {len(trades)} · win {wr*100:.0f}%  "
+            f"(insufficient samples for sharpe/sortino)"
+        )
+    tk.Label(foot2, text=foot_text,
              font=(FONT, 7, "bold"), fg=AMBER, bg=BG).pack(anchor="w")
 
 
@@ -455,7 +461,7 @@ def render_aderencia_block(parent: tk.Widget, run: RunSummary) -> None:
     Source: data/audit/<YYYY-MM-DD>.json (latest by mtime).
     Skipa graceful se audit ausente ou se mode != paper/shadow.
     """
-    _block_header(parent, "❾ ADERENCIA vs BACKTEST")
+    _block_header(parent, "❾ ADERENCIA vs BACKTEST (latest daily audit)")
 
     if run.mode not in ("paper", "shadow"):
         tk.Label(parent, text="  (only paper/shadow runs have audit)",
@@ -482,6 +488,7 @@ def render_aderencia_block(parent: tk.Widget, run: RunSummary) -> None:
     _kv_row(parent, "match %",
             f"{match:.1f}%" if match is not None else "—", color)
     _kv_row(parent, "audit date", payload.get("_audit_stem", "—"))
+    _kv_row(parent, "audit scope", "all paper/shadow runs in audit window", DIM)
 
     missed = info.get("missed") or []
     extra = info.get("extra") or []

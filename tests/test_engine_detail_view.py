@@ -286,6 +286,21 @@ def test_triage_block_last_error_label_is_red(gui_root):
     parent.destroy()
 
 
+def test_trades_footer_shows_insufficient_when_one_trade(gui_root):
+    """sharpe/sortino need >=2 trades; footer must hint when not."""
+    from launcher_support.engine_detail_view import render_trades_block
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({}, source="local", run_dir="/tmp/no_such_run")
+    trades = [{"ts": "t", "symbol": "BTCUSDT", "direction": "long",
+               "entry": 1, "exit": 1.1, "pnl_usd": 0.1, "r_multiple": 0.5,
+               "exit_reason": "target", "slippage_usd": 0,
+               "commission_usd": 0, "funding_usd": 0}]
+    render_trades_block(parent, run, trades_override=trades)
+    text_pool = " ".join(_collect_text(parent))
+    assert "insufficient samples" in text_pool.lower()
+    parent.destroy()
+
+
 def test_positions_long_dir_is_green_short_is_red(gui_root):
     from core.ui.ui_palette import GREEN, RED
     from launcher_support.engine_detail_view import render_positions_block

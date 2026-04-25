@@ -189,6 +189,12 @@ class EngineDetailScreen(Screen):
                  anchor="w").pack(anchor="w", padx=12, pady=(4, 0))
 
     def _tick(self) -> None:
+        """Re-paint body and re-arm 5s timer if status==running.
+
+        Called by Screen._after; also invoked manually by R-key reload binding.
+        Idempotent — re-pinta o body inteiro a cada tick (heartbeat fresh fetch
+        não está aqui ainda, fica como follow-up).
+        """
         if self._run is not None:
             self._paint_body(self._run)
         if self._run and self._run.status == "running":
