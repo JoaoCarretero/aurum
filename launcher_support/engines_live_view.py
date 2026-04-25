@@ -319,9 +319,28 @@ def _master_list_sig(state, launcher=None) -> tuple:
     mode = state.get("mode")
     vps_running: tuple = ()
     if mode in ("shadow", "paper"):
+        # Lock-free read: o sig computation roda em CADA refresh tick,
+        # entrar no `_load_cockpit_runs_cached` (que acquire
+        # `_COCKPIT_RUNS_LOCK`) competia com workers que estao escrevendo
+        # no cache. dict.get e tuple-build sao GIL-atomic em CPython —
+        # leitura suja aqui produz no maximo um sig stale por um tick,
+        # que dispara um rebuild a mais (acceptable). Exception-guarded
+        # caso o cache esteja em estado intermediario.
         try:
-            vps = _vps_running_slugs(mode=mode, launcher=launcher, state=state)
-            vps_running = tuple(sorted(vps))
+            cached_runs = _COCKPIT_RUNS_CACHE.get("runs") or []
+            from core.ops.run_catalog import is_run_stale as _is_stale
+            slugs: set[str] = set()
+            for r in cached_runs:
+                if r.get("status") != "running":
+                    continue
+                if r.get("mode") != mode:
+                    continue
+                if _is_stale(r):
+                    continue
+                eng = r.get("engine")
+                if eng:
+                    slugs.add(eng)
+            vps_running = tuple(sorted(slugs))
         except Exception:
             vps_running = ()
     collapsed = tuple(sorted((state.get("bucket_collapsed") or {}).items()))
