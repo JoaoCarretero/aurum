@@ -111,3 +111,37 @@ def test_decisions_block_renders_recent_signals(gui_root, tmp_path):
     assert "BTCUSDT" in text_pool
     assert "opened" in text_pool.lower()
     parent.destroy()
+
+
+def test_positions_block_renders_open_positions(gui_root):
+    from launcher_support.engine_detail_view import render_positions_block
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({
+        "positions": [
+            {"symbol": "BTCUSDT", "direction": "long",
+             "entry_price": 50000.0, "mark_price": 50500.0,
+             "size_usd": 200.0, "pnl_usd": 2.0, "pnl_pct": 1.0,
+             "stop": 49500.0, "target": 51000.0,
+             "opened_at": "2026-04-24T18:00:00Z"},
+        ],
+    })
+    render_positions_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "BTCUSDT" in text_pool
+    assert "long" in text_pool.lower()
+    assert "50000" in text_pool or "50,000" in text_pool
+    parent.destroy()
+
+
+def test_equity_block_shows_drawdown(gui_root):
+    from launcher_support.engine_detail_view import render_equity_block
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({
+        "equity_now": 9850.0, "equity_peak": 10150.0,
+        "drawdown_pct": -2.96, "exposure_pct": 18.0,
+    }, equity=9850.0, initial_balance=10000.0)
+    render_equity_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "9850" in text_pool or "9,850" in text_pool
+    assert "drawdown" in text_pool.lower() or "dd" in text_pool.lower()
+    parent.destroy()

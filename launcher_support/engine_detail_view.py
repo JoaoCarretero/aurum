@@ -253,3 +253,77 @@ def _fetch_signals(run: RunSummary, limit: int) -> list[dict]:
         except Exception:
             pass
     return rows
+
+
+# ─── Block ❺ POSITIONS ─────────────────────────────────────────────
+
+
+def render_positions_block(parent: tk.Widget, run: RunSummary) -> None:
+    """❺ POSITIONS — open positions agora."""
+    _block_header(parent, "❺ OPEN POSITIONS")
+    hb = run.heartbeat or {}
+    positions = hb.get("positions") or []
+
+    if not positions:
+        tk.Label(parent, text="  (no open positions)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    hdr = tk.Frame(parent, bg=BG)
+    hdr.pack(fill="x", padx=12, pady=(2, 1))
+    cols = (("SYMBOL", 10, "w"), ("DIR", 5, "w"),
+            ("ENTRY", 11, "e"), ("MARK", 11, "e"),
+            ("PNL$", 9, "e"), ("PNL%", 7, "e"),
+            ("STOP", 11, "e"), ("TARGET", 11, "e"),
+            ("AGE", 8, "w"))
+    for label, w, anchor in cols:
+        tk.Label(hdr, text=label, font=(FONT, 7, "bold"), fg=DIM,
+                 bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
+
+    for p in positions:
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", padx=12, pady=0)
+        pnl_pct = p.get("pnl_pct") or 0.0
+        pnl_color = GREEN if pnl_pct > 0 else (RED if pnl_pct < 0 else DIM)
+        for val, w, anchor, color in (
+            (str(p.get("symbol", ""))[:10], 10, "w", WHITE),
+            (str(p.get("direction", ""))[:5], 5, "w",
+             GREEN if str(p.get("direction")) == "long" else RED),
+            (f"{p.get('entry_price', 0):.4f}", 11, "e", WHITE),
+            (f"{p.get('mark_price', 0):.4f}", 11, "e", WHITE),
+            (f"{p.get('pnl_usd', 0):+.2f}", 9, "e", pnl_color),
+            (f"{pnl_pct:+.2f}%", 7, "e", pnl_color),
+            (f"{p.get('stop', 0):.4f}", 11, "e", DIM),
+            (f"{p.get('target', 0):.4f}", 11, "e", DIM),
+            (_format_age(p.get("opened_at")), 8, "w", DIM),
+        ):
+            tk.Label(row, text=val, font=(FONT, 7), fg=color,
+                     bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
+
+
+# ─── Block ❺ EQUITY ────────────────────────────────────────────────
+
+
+def render_equity_block(parent: tk.Widget, run: RunSummary) -> None:
+    """❺ EQUITY — agora vs peak vs drawdown."""
+    _block_header(parent, "❺ EQUITY")
+    hb = run.heartbeat or {}
+
+    eq_now = hb.get("equity_now") or run.equity
+    eq_peak = hb.get("equity_peak")
+    dd_now = hb.get("drawdown_pct")
+    dd_max = hb.get("drawdown_max_pct")
+    exposure = hb.get("exposure_pct")
+
+    _kv_row(parent, "equity now", f"{eq_now:.2f}" if eq_now else "—")
+    _kv_row(parent, "equity peak", f"{eq_peak:.2f}" if eq_peak else "—")
+    _kv_row(parent, "drawdown now",
+            f"{dd_now:+.2f}%" if dd_now is not None else "—",
+            RED if dd_now and dd_now < -2 else DIM)
+    _kv_row(parent, "drawdown max",
+            f"{dd_max:+.2f}%" if dd_max is not None else "—",
+            RED if dd_max and dd_max < -5 else DIM)
+    _kv_row(parent, "exposure",
+            f"{exposure:.1f}%" if exposure is not None else "—")
+    _kv_row(parent, "ROI", f"{run.roi_pct:+.3f}%" if run.roi_pct is not None else "—",
+            GREEN if (run.roi_pct or 0) > 0 else (RED if (run.roi_pct or 0) < 0 else DIM))
