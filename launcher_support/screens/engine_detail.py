@@ -158,7 +158,7 @@ class EngineDetailScreen(Screen):
             render_scan_funnel_block, render_decisions_block,
             render_positions_block, render_equity_block,
             render_trades_block, render_freshness_block,
-            render_log_tail_block,
+            render_log_tail_block, render_aderencia_block,
         )
         render_triage_block(body, run)
         render_cadence_block(body, run)
@@ -169,6 +169,7 @@ class EngineDetailScreen(Screen):
         render_trades_block(body, run)
         render_freshness_block(body, run)
         render_log_tail_block(body, run)
+        render_aderencia_block(body, run)
 
     def _tick(self) -> None:
         if self._run is not None:

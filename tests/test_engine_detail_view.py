@@ -205,3 +205,38 @@ def test_log_tail_block_renders_lines(gui_root, tmp_path):
     # Text content. Check that the LOG TAIL header at least rendered.
     assert "LOG TAIL" in text_pool
     parent.destroy()
+
+
+def test_aderencia_block_skips_when_no_audit(gui_root, tmp_path, monkeypatch):
+    from launcher_support.engine_detail_view import render_aderencia_block
+    monkeypatch.setenv("AURUM_AUDIT_DIR", str(tmp_path))  # empty
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({})
+    render_aderencia_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "no audit" in text_pool.lower() or "—" in text_pool
+    parent.destroy()
+
+
+def test_aderencia_block_reads_latest_artifact(gui_root, tmp_path, monkeypatch):
+    import json
+    from launcher_support.engine_detail_view import render_aderencia_block
+
+    monkeypatch.setenv("AURUM_AUDIT_DIR", str(tmp_path))
+    audit = tmp_path / "2026-04-25.json"
+    audit.write_text(json.dumps({
+        "generated_at": "2026-04-25T00:00:00Z",
+        "engines": {
+            "millennium": {
+                "match_pct": 87.5, "missed": [],
+                "extra": [],
+            }
+        }
+    }), encoding="utf-8")
+
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({}, engine="MILLENNIUM")
+    render_aderencia_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "87" in text_pool
+    parent.destroy()

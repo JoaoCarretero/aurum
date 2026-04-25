@@ -533,3 +533,66 @@ def _fetch_log_tail(run: RunSummary, limit: int) -> list[str]:
         except Exception:
             pass
     return rows
+
+
+# ─── Block ❾ ADERÊNCIA ─────────────────────────────────────────────
+
+
+def render_aderencia_block(parent: tk.Widget, run: RunSummary) -> None:
+    """❾ ADERÊNCIA — match% vs backtest replay (paper/shadow only).
+
+    Source: data/audit/<YYYY-MM-DD>.json (latest by mtime).
+    Skipa graceful se audit ausente ou se mode != paper/shadow.
+    """
+    _block_header(parent, "❾ ADERENCIA vs BACKTEST")
+
+    if run.mode not in ("paper", "shadow"):
+        tk.Label(parent, text="  (only paper/shadow runs have audit)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    import json, os
+    from pathlib import Path
+
+    audit_dir = Path(os.environ.get("AURUM_AUDIT_DIR", "data/audit"))
+    if not audit_dir.exists():
+        tk.Label(parent, text="  (no audit data)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    candidates = sorted(audit_dir.glob("*.json"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = [p for p in candidates if p.name[0].isdigit()]  # YYYY-*.json
+    if not candidates:
+        tk.Label(parent, text="  (no audit data)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    latest = candidates[0]
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+    except Exception:
+        tk.Label(parent, text=f"  (audit parse error: {latest.name})",
+                 font=(FONT, 7), fg=RED, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    engine_key = run.engine.lower()
+    info = (payload.get("engines") or {}).get(engine_key)
+    if info is None:
+        tk.Label(parent, text=f"  ({engine_key} not in latest audit)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    match = info.get("match_pct")
+    color = GREEN if (match or 0) > 90 else (
+        AMBER if (match or 0) > 70 else RED)
+    _kv_row(parent, "match %",
+            f"{match:.1f}%" if match is not None else "—", color)
+    _kv_row(parent, "audit date", latest.stem)
+
+    missed = info.get("missed") or []
+    extra = info.get("extra") or []
+    _kv_row(parent, "missed (bt→live)", str(len(missed)),
+            RED if missed else DIM)
+    _kv_row(parent, "extra (live→bt)", str(len(extra)),
+            AMBER if extra else DIM)
