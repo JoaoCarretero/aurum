@@ -21,6 +21,7 @@ from core.risk_gates import (
     gate_consecutive_losses,
     gate_daily_dd,
     gate_daily_loss,
+    gate_dd_velocity,
     gate_freeze_window,
     gate_gross_notional,
     gate_net_exposure,
@@ -251,6 +252,71 @@ class TestGateSinglePosition:
         cfg = RiskGateConfig(max_single_position_pct=10.0)
         state = RiskState(account_equity=0.0, proposed_notional=5_000)
         assert gate_single_position(state, cfg).severity == "allow"
+
+
+# ────────────────────────────────────────────────────────────
+# gate_dd_velocity
+#
+# CLAUDE.md mandates 3 layers of kill-switch protection:
+# "Drawdown velocity, exposure limits, anomaly". Until 2026-04-25 only
+# static DD (peak-to-current) was implemented. A 3% cliff in 10 minutes
+# would pass every gate until the static threshold tripped — by which
+# point the velocity already showed catastrophic structural failure.
+# This gate is the leading indicator: soft_block on velocity ≥ threshold,
+# pausing new entries before static DD fires hard_block.
+#
+# Caller is responsible for computing dd_velocity_pct_per_hour from a
+# rolling window of equity readings. risk_gates.py stays stateless.
+# ────────────────────────────────────────────────────────────
+
+class TestGateDdVelocity:
+    def test_below_threshold_allows(self):
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=1.0)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+
+    def test_at_threshold_soft_blocks(self):
+        # Exact-equal trips. Pre-empt the cliff before it confirms.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=2.5)
+        d = gate_dd_velocity(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.gate == "dd_velocity"
+
+    def test_above_threshold_soft_blocks_with_metric(self):
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=4.5)
+        d = gate_dd_velocity(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.metric == 4.5
+        assert d.threshold == 2.5
+        assert "4.5" in d.reason or "4.50" in d.reason
+
+    def test_zero_velocity_allows(self):
+        # Default state — caller hasn't provided velocity yet, no reason to block.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+
+    def test_negative_velocity_always_allows(self):
+        # Equity recovering (peak-relative); no cliff.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=-1.5)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+
+    def test_default_threshold_is_permissive(self):
+        # Factory default = 100.0 %/hr; insanely high velocity still allows.
+        cfg = RiskGateConfig()
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=99.0)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+        # is_default() must still hold after the new field is added.
+        assert cfg.is_default() is True
+
+    def test_zero_equity_allows(self):
+        # Bootstrap state — no equity, no meaningful velocity. Don't block.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=0.0, dd_velocity_pct_per_hour=10.0)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
 
 
 # ────────────────────────────────────────────────────────────

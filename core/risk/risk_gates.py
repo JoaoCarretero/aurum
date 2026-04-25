@@ -98,6 +98,12 @@ class RiskGateConfig:
     # Per-trade notional cap (% of account equity). Default 10%.
     max_single_position_pct: float = 10.0
 
+    # Drawdown velocity cap — % of equity lost per hour at which the
+    # leading indicator trips soft_block. Caller computes this from a
+    # rolling window of equity readings. CLAUDE.md kill-switch layer 1.
+    # Default permissive (100%/hr ~ no-op) per module convention.
+    max_dd_velocity_pct_per_hour: float = 100.0
+
     def is_default(self) -> bool:
         """Return True if all values are still at factory defaults (no config loaded)."""
         defaults = RiskGateConfig()
@@ -111,6 +117,7 @@ class RiskGateConfig:
             and self.freeze_hours_utc    == defaults.freeze_hours_utc
             and self.soft_block_losses   == defaults.soft_block_losses
             and self.max_single_position_pct == defaults.max_single_position_pct
+            and self.max_dd_velocity_pct_per_hour == defaults.max_dd_velocity_pct_per_hour
         )
 
 
@@ -130,6 +137,11 @@ class RiskState:
     #                        "notional": float, "unrealized": float}
     current_hour_utc:     int   = -1
     proposed_notional:    float = 0.0   # notional of the order being evaluated
+    # Drawdown velocity in %/hr. Caller computes from a rolling equity
+    # window (e.g., (equity_now - equity_60min_ago) / equity_60min_ago * -100).
+    # Positive = losing equity. 0.0 = stationary or recovering. Negative =
+    # equity climbing. Provided per call so risk_gates stays stateless.
+    dd_velocity_pct_per_hour: float = 0.0
 
 
 # ── Decision ──────────────────────────────────────────────────────────
@@ -258,12 +270,40 @@ def gate_single_position(state: RiskState,
     return _allow()
 
 
+def gate_dd_velocity(state: RiskState, cfg: RiskGateConfig) -> GateDecision:
+    """Soft-block when equity is bleeding faster than the configured rate.
+
+    CLAUDE.md mandates kill-switch layer 1 as "drawdown velocity" — a leading
+    indicator that should trip BEFORE the static daily DD threshold confirms.
+    A 3% drop over 10 minutes implies an 18%/hr velocity: catastrophic if
+    sustained. Pausing new entries gives the operator (or higher-level
+    automation) a chance to investigate before the static gate flattens.
+
+    The caller computes ``dd_velocity_pct_per_hour`` from a rolling window
+    of equity readings (typically the last 30-60 minutes). risk_gates.py
+    stays stateless — it just compares the reported value against the cap.
+    """
+    if state.account_equity <= 0:
+        return _allow()
+    velocity = state.dd_velocity_pct_per_hour
+    if velocity <= 0:
+        # Stationary or recovering equity — no cliff.
+        return _allow()
+    if velocity >= cfg.max_dd_velocity_pct_per_hour:
+        return _soft("dd_velocity",
+                     f"drawdown velocity {velocity:.2f}%/hr "
+                     f"≥ {cfg.max_dd_velocity_pct_per_hour:.2f}%/hr",
+                     velocity, cfg.max_dd_velocity_pct_per_hour)
+    return _allow()
+
+
 # ── Composite check ──────────────────────────────────────────────────
 
 _ALL_GATES = (
     gate_daily_dd,
     gate_daily_loss,
     gate_consecutive_losses,
+    gate_dd_velocity,
     gate_gross_notional,
     gate_net_exposure,
     gate_concurrent_positions,
@@ -312,6 +352,7 @@ _ALLOWED_KEYS = {
     "max_gross_notional_pct", "max_net_exposure_pct",
     "max_concurrent_positions", "freeze_hours_utc",
     "max_single_position_pct",
+    "max_dd_velocity_pct_per_hour",
 }
 
 
@@ -366,6 +407,7 @@ __all__ = [
     "gate_daily_dd",
     "gate_daily_loss",
     "gate_consecutive_losses",
+    "gate_dd_velocity",
     "gate_gross_notional",
     "gate_net_exposure",
     "gate_concurrent_positions",
