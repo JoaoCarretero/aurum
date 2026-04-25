@@ -80,6 +80,11 @@ def shape_agent_cost(
 
     history: rows do stats_db (DESC por data). Convertemos pra ASC pro
     trend linear.
+
+    `trend_cents` are DAILY DELTAS (daily burn), not cumulative.
+    Paperclip's `monthly_spent_cents` is a running monthly total, so a
+    cumulative plot is a monotone-ascending line that resets at month-
+    end — useless as a sparkline. Daily delta shows actual burn rate.
     """
     spent = agent_spent_cents(agent_dict) if agent_dict else 0
     cap = agent_budget_cents(agent_dict) if agent_dict else 0
@@ -87,7 +92,8 @@ def shape_agent_cost(
 
     rows = list(history)
     rows_asc = sorted(rows, key=lambda r: r.date)
-    trend = [r.spent_cents for r in rows_asc[-30:]]
+    cumulative = [r.spent_cents for r in rows_asc[-31:]]
+    trend = _to_daily_deltas(cumulative)[-30:]
 
     return AgentCostView(
         agent_key=agent.key,
@@ -99,6 +105,27 @@ def shape_agent_cost(
         cap_text=format_usd_from_cents(cap) if cap > 0 else "—",
         trend_cents=trend,
     )
+
+
+def _to_daily_deltas(cumulative: list[int]) -> list[int]:
+    """Convert running monthly cumulative spent to daily deltas.
+
+    First day: assume yesterday was 0 (use cumulative[0] as the day's
+    burn). Subsequent days: cur - prev. Month boundary (cur < prev,
+    cumulative reset): use cur as the day's burn.
+    """
+    if not cumulative:
+        return []
+    deltas = [cumulative[0]]
+    for i in range(1, len(cumulative)):
+        prev = cumulative[i - 1]
+        cur = cumulative[i]
+        if cur < prev:
+            # Month rollover — cumulative reset
+            deltas.append(cur)
+        else:
+            deltas.append(cur - prev)
+    return deltas
 
 
 def shape_cost_summary(
@@ -148,7 +175,9 @@ def normalize_trend(values: list[int], n_points: int = 30) -> list[float]:
     vals = list(values)
     if len(vals) > n_points:
         vals = vals[-n_points:]
-    # Pad com zeros no inicio pra historico curto aparecer alinhado a direita
+    # Pad com zeros no inicio pra historico curto aparecer alinhado a direita.
+    # Note: with daily-delta trends a leading zero looks like "no burn that
+    # day" which is exactly what we want for short-history agents.
     pad = n_points - len(vals)
     vals = [0] * pad + vals
 

@@ -108,10 +108,19 @@ def today_utc() -> str:
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
-    """Abre conexao, ativa WAL, garante schema. Idempotente."""
+    """Abre conexao, ativa WAL, garante schema. Idempotente.
+
+    `check_same_thread=False`: a single conn instance can be passed
+    across threads. SQLite is db-level safe under WAL (one writer +
+    many readers), so this is correct as long as callers don't issue
+    overlapping writes from multiple threads. Today the cockpit only
+    writes from the main thread (snapshot day-rollover) and reads
+    from the same; the relaxed flag is forward-compat for moving
+    cost_dashboard fetches off the main thread later.
+    """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode=WAL")

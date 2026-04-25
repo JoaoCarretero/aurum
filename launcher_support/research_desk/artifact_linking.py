@@ -91,6 +91,11 @@ def link_artifacts(artifacts: Iterable[ArtifactEntry]) -> list[LinkedChain]:
     for art in artifacts:
         if art.kind == "backtest":
             # Guarda o backtest mais recente por engine (vem pré-ordenado do scan)
+            if not art.engine:
+                # Defensive: ArtifactEntry.engine defaults to ""; a malformed
+                # entry would otherwise insert under key "" and shadow real
+                # engines via subsequent lookups.
+                continue
             key = art.engine.lower()
             if key not in backtests_by_engine:
                 backtests_by_engine[key] = art

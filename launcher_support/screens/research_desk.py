@@ -120,6 +120,11 @@ from launcher_support.screens.base import Screen
 _POLL_INTERVAL_MS = 5000
 _HEALTH_TIMEOUT_SEC = 1.5
 
+# Scan artifacts TTL — walking the whole repo every 5s tick (poll cadence)
+# meant 720 FS walks/hr in steady state. At 30s TTL we re-walk at most
+# 120/hr — 6x reduction in main-thread blocking.
+_SCAN_TTL_SEC = 30.0
+
 
 def _count_tickets_for(agent_uuid: str, issues_raw: list[dict]) -> tuple[int, int]:
     """Retorna (tickets_done, tickets_active) atribuidos a um agente."""
@@ -900,22 +905,55 @@ class ResearchDeskScreen(Screen):
                 _LOG.exception("tab %s update failed: %s", key, e)
 
     def _apply_artifacts(self) -> list[ArtifactEntry]:
-        """Atualiza panels + retorna o scan pra reuso (snapshots)."""
+        """Atualiza panels + retorna o scan pra reuso (snapshots).
+
+        TTL cache: scan_artifacts walks the entire repo (docs/, data/,
+        git refs). At 5s poll cadence that's 720 walks/hour; with
+        ~hundreds of files it adds up. Cache the result for SCAN_TTL_SEC
+        seconds — re-walk at most 1x/30s instead of every tick. New
+        issues still flow into merge_events on every tick (issues are
+        passed in from poll_state, not cached here).
+
+        On scan failure, fall back to last-known good. Stale-fallback
+        is tracked via `_scan_cache_ts` so a permanently-broken scan
+        eventually surfaces a flash + log warning every N misses.
+        """
         if self._artifacts_panel is None:
             return []
-        # Scan unico por tick. Panel usa os 30 mais recentes; activity
-        # feed recebe ate 200 (pagina internamente via LOAD MORE).
-        try:
-            full_scan = scan_artifacts(self.root_path, limit=200, issues=self._last_issues_raw)
-        except Exception as e:
-            full_scan = getattr(self, "_last_full_scan", [])
-            _LOG.warning("scan_artifacts falhou: %s", e)
-            if not getattr(self, "_scan_error_flashed", False):
-                self._flash_feedback(ok=False, msg="scan artifacts falhou")
-                self._scan_error_flashed = True
-        else:
-            self._last_full_scan = full_scan
+
+        import time as _time
+        now = _time.time()
+        cache_age = now - getattr(self, "_scan_cache_ts", 0.0)
+        cached = getattr(self, "_last_full_scan", None)
+
+        if cache_age < _SCAN_TTL_SEC and cached:
+            # Warm cache — skip FS walk this tick
+            full_scan = cached
             self._scan_error_flashed = False
+        else:
+            try:
+                full_scan = scan_artifacts(
+                    self.root_path, limit=200,
+                    issues=self._last_issues_raw,
+                )
+                self._last_full_scan = full_scan
+                self._scan_cache_ts = now
+                self._scan_error_flashed = False
+            except Exception as e:
+                full_scan = cached or []
+                _LOG.warning("scan_artifacts falhou: %s", e)
+                # Surface staleness when fallback cache is older than 2x TTL —
+                # masking permanent failures behind 'use last good' was the
+                # original audit complaint (Lane 4 HIGH #6).
+                stale_for = now - getattr(self, "_scan_cache_ts", 0.0)
+                if stale_for > _SCAN_TTL_SEC * 2 and not getattr(
+                    self, "_scan_error_flashed", False,
+                ):
+                    self._flash_feedback(
+                        ok=False,
+                        msg=f"scan artifacts stale {int(stale_for)}s",
+                    )
+                    self._scan_error_flashed = True
 
         try:
             self._artifacts_panel.update(full_scan[:30])

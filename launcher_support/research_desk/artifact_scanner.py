@@ -11,15 +11,21 @@ scan_artifacts(root) retorna lista ArtifactEntry ordenada por mtime DESC.
 Nao abre os arquivos — so lista. markdown_viewer.py renderiza quando o
 user clica.
 
-Nao joga se um dir nao existe — retorna lista vazia daquele agente.
+Nao joga se um dir nao existe — retorna lista vazia daquele agente,
+mais um _LOG.info one-time pra distinguir "diretorio ausente" de
+"diretorio vazio" (Lane 4 CRIT #3 do audit).
 """
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+_LOG = logging.getLogger(__name__)
+_MISSING_DIRS_LOGGED: set[str] = set()  # one-time log per missing dir per process
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -82,6 +88,17 @@ def _scan_markdown_dir(
 ) -> list[ArtifactEntry]:
     base = root / rel_dir
     if not base.exists() or not base.is_dir():
+        # One-time per process per dir — distinguishes "0 specs because
+        # nothing yet" from "0 specs because docs/specs doesn't exist".
+        # Without this, a typo in _AGENT_KINDS or a renamed dir silently
+        # surfaces as empty in the UI forever.
+        if rel_dir not in _MISSING_DIRS_LOGGED:
+            _MISSING_DIRS_LOGGED.add(rel_dir)
+            _LOG.info(
+                "artifact_scanner: dir missing %s (agent=%s kind=%s) — "
+                "panel will show 0 entries",
+                rel_dir, agent_key, kind,
+            )
         return []
     out: list[ArtifactEntry] = []
     for p in base.rglob("*.md"):
