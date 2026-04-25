@@ -1744,13 +1744,17 @@ def _render_detail(state, launcher):
         # Pre 2026-04-22: forcava slug="millennium" + bucket="LIVE" no
         # paper mode. Com runners per-engine (citadel/jump/renaissance),
         # paper tem tambem as 3 engines — preservar selecao do usuario.
-        # Defaults so aplicam quando nada foi selecionado ainda.
+        # Defaults so aplicam quando nada foi selecionado ainda; o write
+        # tambem fica condicional pra nao sobrescrever uma selecao
+        # operator-feita que possa ter chegado entre o read no top e
+        # esta linha (CPython single-threaded mas async callbacks via
+        # `after(0,...)` podem se intercalar).
         if not slug:
             slug = "millennium"
+            state["selected_slug"] = slug
         if not bucket:
             bucket = "LIVE"
-        state["selected_slug"] = slug
-        state["selected_bucket"] = bucket
+            state["selected_bucket"] = bucket
 
     shell_mode = state.get("_detail_shell_mode")
     layout = state.get("_detail_layout")
@@ -2790,11 +2794,18 @@ def _paper_content_sig_cheap(state) -> tuple:
     picked = (state or {}).get("selected_paper_run_id")
     if picked:
         run_id = picked
-    cached = _PAPER_SNAPSHOT_CACHE.get(run_id)
-    if cached is None:
+    # Unlocked read intencional (docstring) — dict.get e tuple unpack sao
+    # GIL-atomic em CPython. Mesmo assim, defensivo contra cache mid-write
+    # ou estado inicial inesperado: qualquer falha de unpack cai pro
+    # mesmo path do cache miss ("loading"), proximo tick recompoe.
+    try:
+        cached = _PAPER_SNAPSHOT_CACHE.get(run_id)
+        if cached is None:
+            return ("loading", run_id)
+        _ts, payload = cached
+        hb, positions, series, _account, trades = payload
+    except (TypeError, ValueError, IndexError):
         return ("loading", run_id)
-    _ts, payload = cached
-    hb, positions, series, _account, trades = payload
     if hb is None:
         return ("loading", run_id)
     last_trade_ts = trades[-1].get("timestamp") if trades else None
