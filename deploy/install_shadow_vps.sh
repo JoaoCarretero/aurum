@@ -29,12 +29,30 @@ if [ ! -f "${UNIT_SRC}" ]; then
 fi
 
 # Smoke: Python consegue importar o runner?
-echo "[1/5] smoke: python tools/maintenance/millennium_shadow.py --help"
+echo "[1/6] smoke: python tools/maintenance/millennium_shadow.py --help"
 (cd "${REPO_PATH}" && python3 tools/maintenance/millennium_shadow.py --help >/dev/null)
 echo "  OK"
 
+# Hardening: garantir perms restritivas em config/ + secrets se existirem.
+# keys.json é gitignored (não está no repo), mas se foi copiado manualmente
+# pro VPS, precisa estar 600 (owner-only). Idempotente: só age se file existe.
+echo "[2/6] hardening perms de config/"
+if [ -d "${REPO_PATH}/config" ]; then
+  sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${REPO_PATH}/config"
+  sudo chmod 700 "${REPO_PATH}/config"
+  for sensitive in keys.json keys.json.enc connections.json vps.json vpn.json; do
+    if [ -f "${REPO_PATH}/config/${sensitive}" ]; then
+      sudo chmod 600 "${REPO_PATH}/config/${sensitive}"
+      echo "  chmod 600 config/${sensitive}"
+    fi
+  done
+  echo "  OK"
+else
+  echo "  WARN: ${REPO_PATH}/config nao existe (skip)"
+fi
+
 # Instalar unit com User e WorkingDirectory ajustados.
-echo "[2/5] instalando unit em ${UNIT_DST}"
+echo "[3/6] instalando unit em ${UNIT_DST}"
 sed \
   -e "s|^User=.*|User=${SERVICE_USER}|" \
   -e "s|^WorkingDirectory=.*|WorkingDirectory=${REPO_PATH}|" \
@@ -43,16 +61,16 @@ sed \
 echo "  OK"
 
 # Reload + enable + start.
-echo "[3/5] systemctl daemon-reload"
+echo "[4/6] systemctl daemon-reload"
 sudo systemctl daemon-reload
 
-echo "[4/5] systemctl enable + start"
+echo "[5/6] systemctl enable + start"
 sudo systemctl enable millennium_shadow.service
 sudo systemctl start millennium_shadow.service
 
 # Aguarda 5s e reporta status inicial.
 sleep 5
-echo "[5/5] status inicial:"
+echo "[6/6] status inicial:"
 sudo systemctl status millennium_shadow.service --no-pager -l | head -20
 
 echo
