@@ -155,9 +155,12 @@ class EngineDetailScreen(Screen):
 
         from launcher_support.engine_detail_view import (
             render_triage_block, render_cadence_block,
+            render_scan_funnel_block, render_decisions_block,
         )
         render_triage_block(body, run)
         render_cadence_block(body, run)
+        render_scan_funnel_block(body, run)
+        render_decisions_block(body, run)
 
     def _tick(self) -> None:
         if self._run is not None:

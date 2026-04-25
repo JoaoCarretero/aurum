@@ -78,3 +78,36 @@ def _collect_text(widget):
     for child in widget.winfo_children():
         out.extend(_collect_text(child))
     return out
+
+
+def test_scan_funnel_block_shows_funnel_metrics(gui_root):
+    from launcher_support.engine_detail_view import render_scan_funnel_block
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({
+        "last_scan_scanned": 11, "last_scan_dedup": 8,
+        "last_scan_stale": 1, "last_scan_live": 2,
+        "last_scan_opened": 1,
+    })
+    render_scan_funnel_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "scanned" in text_pool.lower()
+    assert "11" in text_pool
+    assert "opened" in text_pool.lower()
+    parent.destroy()
+
+
+def test_decisions_block_renders_recent_signals(gui_root, tmp_path):
+    from launcher_support.engine_detail_view import render_decisions_block
+    parent = tk.Frame(gui_root)
+    sig_dir = tmp_path / "millennium_paper" / "rid" / "reports"
+    sig_dir.mkdir(parents=True)
+    (sig_dir / "signals.jsonl").write_text(
+        '{"ts":"t","symbol":"BTCUSDT","decision":"opened","score":0.8,"reason":"r"}\n',
+        encoding="utf-8")
+    run = _run_with_hb({}, source="local",
+                       run_dir=str(sig_dir.parent))
+    render_decisions_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "BTCUSDT" in text_pool
+    assert "opened" in text_pool.lower()
+    parent.destroy()

@@ -142,3 +142,114 @@ def render_cadence_block(parent: tk.Widget, run: RunSummary) -> None:
 
     started_age = _format_age(run.started_at)
     _kv_row(parent, "uptime", started_age)
+
+
+# ─── Block ❸ SCAN FUNNEL ───────────────────────────────────────────
+
+
+def render_scan_funnel_block(parent: tk.Widget, run: RunSummary) -> None:
+    """❸ SCAN FUNNEL — last tick scanned→dedup→stale→live→opened."""
+    _block_header(parent, "❸ SCAN FUNNEL (last tick)")
+    hb = run.heartbeat or {}
+
+    scanned = hb.get("last_scan_scanned") or 0
+    dedup = hb.get("last_scan_dedup") or 0
+    stale = hb.get("last_scan_stale") or 0
+    live = hb.get("last_scan_live") or 0
+    opened = hb.get("last_scan_opened") or 0
+
+    _kv_row(parent, "scanned", str(scanned), WHITE if scanned else DIM)
+    _kv_row(parent, "dedup", str(dedup), WHITE if dedup else DIM)
+    _kv_row(parent, "stale", str(stale), AMBER_D if stale else DIM)
+    _kv_row(parent, "live", str(live), GREEN if live else DIM)
+    _kv_row(parent, "opened", str(opened), GREEN if opened else DIM)
+
+    last_novel_at = hb.get("last_novel_at")
+    _kv_row(parent, "last novel", _format_age(last_novel_at),
+            AMBER if last_novel_at else DIM)
+
+
+# ─── Block ❹ DECISIONS ─────────────────────────────────────────────
+
+
+def render_decisions_block(parent: tk.Widget, run: RunSummary,
+                           limit: int = 30) -> None:
+    """❹ DECISIONS — last N signal decisions com REASON.
+
+    Source: local signals.jsonl tail (se source==local) ou cockpit
+    /v1/runs/{id}/signals (se source==vps). Skipa graceful se nenhum
+    disponível.
+    """
+    _block_header(parent, f"❹ DECISIONS (last {limit})")
+
+    rows = _fetch_signals(run, limit=limit)
+    if not rows:
+        tk.Label(parent, text="  (no signal records found)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    hdr = tk.Frame(parent, bg=BG)
+    hdr.pack(fill="x", padx=12, pady=(2, 1))
+    for label, w, anchor in (("TS", 16, "w"), ("SYMBOL", 10, "w"),
+                              ("DECISION", 14, "w"), ("SCORE", 7, "e"),
+                              ("REASON", 30, "w")):
+        tk.Label(hdr, text=label, font=(FONT, 7, "bold"), fg=DIM,
+                 bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
+
+    for r in rows:
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", padx=12, pady=0)
+        decision = str(r.get("decision", "?"))
+        decision_color = {"opened": GREEN, "stale": AMBER_D,
+                          "max_open": DIM, "dir_conflict": AMBER,
+                          "corr_block": AMBER}.get(decision, WHITE)
+        try:
+            score_val = float(r.get("score", 0) or 0)
+        except (TypeError, ValueError):
+            score_val = 0.0
+        for val, w, anchor, color in (
+            (str(r.get("ts", ""))[:16], 16, "w", DIM),
+            (str(r.get("symbol", ""))[:10], 10, "w", WHITE),
+            (decision, 14, "w", decision_color),
+            (f"{score_val:.2f}", 7, "e", WHITE),
+            (str(r.get("reason", ""))[:30], 30, "w", DIM),
+        ):
+            tk.Label(row, text=val, font=(FONT, 7), fg=color,
+                     bg=BG, width=w, anchor=anchor).pack(side="left",
+                                                          padx=(2, 0))
+
+
+def _fetch_signals(run: RunSummary, limit: int) -> list[dict]:
+    """Tail de signals.jsonl. Local: read file; VPS: cockpit endpoint."""
+    import json
+    from pathlib import Path
+
+    rows: list[dict] = []
+    if run.source == "local" and run.run_dir:
+        candidates = [
+            Path(run.run_dir) / "signals.jsonl",
+            Path(run.run_dir) / "reports" / "signals.jsonl",
+            Path(run.run_dir).parent / "reports" / "signals.jsonl",
+        ]
+        sig_path = next((p for p in candidates if p.exists()), None)
+        if sig_path is not None:
+            try:
+                lines = sig_path.read_text(
+                    encoding="utf-8").splitlines()[-limit:]
+                for ln in lines:
+                    if ln.strip():
+                        rows.append(json.loads(ln))
+            except (OSError, ValueError):
+                pass
+    elif run.source == "vps":
+        try:
+            from launcher_support.engines_live_view import _get_cockpit_client
+            client = _get_cockpit_client()
+            if client is not None:
+                resp = client._get(
+                    f"/v1/runs/{run.run_id}/signals?limit={limit}")
+                if isinstance(resp, dict):
+                    rows = resp.get("signals", []) or []
+        except Exception:
+            pass
+    return rows
