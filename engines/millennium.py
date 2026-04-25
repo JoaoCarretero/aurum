@@ -10,6 +10,7 @@ the lazy ``from engines.<x> import ...`` sites further down are therefore
 intentional, not violations to refactor away.
 """
 import sys, json, random, logging
+import contextlib, io
 import pandas as pd
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -1932,6 +1933,27 @@ def _collect_live_signals(all_dfs=None, htf_stack_by_sym=None,
             all_trades.append(tt)
     all_trades.sort(key=lambda t: t["timestamp"])
     return engine_trades, all_trades
+
+
+def _scan_one_engine_live(engine_name: str) -> list[dict]:
+    """Live scan filtered to a single sub-engine — used by per-engine paper
+    runners (jump_paper / citadel_paper / renaissance_paper).
+
+    Loads dados via ``_load_dados`` and dispatches to ``_collect_live_signals``,
+    then filters the result to ``engine_name``. Sharing the helper guarantees
+    that solo runners produce signals identical to the same engine running
+    inside the MILLENNIUM pod.
+
+    Returns an empty list for unknown engine names (instead of raising) so
+    a runner misconfigured with the wrong env doesn't crash the tick loop.
+    """
+    eng = (engine_name or "").upper()
+    with contextlib.redirect_stdout(io.StringIO()):
+        all_dfs, htf_stack, macro_series, corr = _load_dados(False)
+        engine_trades, _ = _collect_live_signals(
+            all_dfs, htf_stack, macro_series, corr,
+        )
+    return list(engine_trades.get(eng, []))
 
 
 def _menu():

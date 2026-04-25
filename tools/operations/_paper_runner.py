@@ -403,14 +403,14 @@ def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
             "strategy": c.engine, "symbol": c.symbol,
             "exit_reason": c.exit_reason,
         })
-            trade_record = {
-                "id": c.id, "engine": c.engine, "symbol": c.symbol,
-                "direction": c.direction, "entry_price": c.entry_price,
-                "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
-                "size": c.size, "notional": c.entry_price * c.size,
-                "entry_at": c.opened_at,
-                "exit_at": c.closed_at, "exit_reason": reason,
-                "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
+        trade_record = {
+            "id": c.id, "engine": c.engine, "symbol": c.symbol,
+            "direction": c.direction, "entry_price": c.entry_price,
+            "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
+            "size": c.size, "notional": c.entry_price * c.size,
+            "entry_at": c.opened_at,
+            "exit_at": c.closed_at, "exit_reason": reason,
+            "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
             "r_multiple": c.r_multiple, "bars_held": c.bars_held,
             "primed": False,
         }
