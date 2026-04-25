@@ -73,6 +73,18 @@ POSITIONS_PATH = STATE_DIR / "positions.json"
 ACCOUNT_PATH = STATE_DIR / "account.json"
 HEARTBEAT_PATH = STATE_DIR / "heartbeat.json"
 MANIFEST_PATH = STATE_DIR / "manifest.json"
+
+# Symbol cooldown after a stop-loss exit. Mirrors engines.millennium
+# SYMBOL_COOLDOWN_BARS_AFTER_LOSS (24 bars). Hardcoded here to avoid
+# importing the heavy engines/millennium module at startup just for a
+# single int. Override via env for tests/operations:
+#   AURUM_SYM_LOSS_COOLDOWN_BARS=0  → disable
+#   AURUM_SYM_LOSS_COOLDOWN_BARS=N  → N bars × tick_sec
+SYM_LOSS_COOLDOWN_BARS = int(os.environ.get("AURUM_SYM_LOSS_COOLDOWN_BARS", "24"))
+# Exit reasons that classify as a real loss → arm the cooldown. "breakeven"
+# is excluded (scratch outcome at entry price), "target" is a win, "ks_abort"
+# / "manual_flatten" are forced exits unrelated to signal quality.
+_LOSS_EXIT_REASONS = frozenset({"stop_initial", "trailing"})
 KILL_FLAG = RUN_DIR / ".kill"
 
 
@@ -353,6 +365,12 @@ class RunnerState:
     open_positions: list[Position] = field(default_factory=list)
     seen_keys: set = field(default_factory=set)
     last_bar_ts_by_symbol: dict[str, str] = field(default_factory=dict)
+    # symbol → ISO timestamp until which new opens on that symbol are blocked
+    # after a stop-loss exit. Mirrors engines.millennium.SYMBOL_COOLDOWN_BARS_AFTER_LOSS
+    # (24 bars × tick_sec = 6h default at 15m tf). Without this, a stop-out can
+    # be re-entered the next tick on the very same setup (XRP 2026-04-25 13:30
+    # incident: pos_000001 stopped 16:30, pos_000002 opened 16:47, same JUMP LONG).
+    sym_loss_cooldown_until: dict[str, str] = field(default_factory=dict)
     ticks_ok: int = 0
     ticks_fail: int = 0
     novel_total: int = 0
@@ -493,6 +511,21 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
                 "commission": c.exit_commission,
             })
+            if c.exit_reason in _LOSS_EXIT_REASONS and SYM_LOSS_COOLDOWN_BARS > 0:
+                cooldown_until = (
+                    datetime.fromisoformat(
+                        str(c.closed_at).replace("Z", "+00:00")
+                    )
+                    if isinstance(c.closed_at, str)
+                    else c.closed_at
+                )
+                if cooldown_until.tzinfo is None:
+                    cooldown_until = cooldown_until.replace(tzinfo=timezone.utc)
+                from datetime import timedelta
+                cooldown_until = cooldown_until + timedelta(
+                    seconds=SYM_LOSS_COOLDOWN_BARS * state.tick_sec
+                )
+                state.sym_loss_cooldown_until[c.symbol] = cooldown_until.isoformat()
             if notify:
                 _tg_send(
                     f"<b>PAPER · {c.engine} {c.symbol}</b> · {c.exit_reason.upper()}\n"
@@ -587,6 +620,37 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "reason": "max_open_positions",
                 })
                 continue
+
+            # Portfolio gate V3: reject opening a position on a symbol whose
+            # cooldown after a recent stop-loss has not expired yet. Without
+            # this, JUMP/CITADEL signals can re-fire the same setup tick after
+            # the stop fills and re-enter on the very same noise that just
+            # stopped them out (XRP 2026-04-25 incident).
+            t_sym_cd = str(t.get("symbol") or "").upper()
+            cooldown_iso = state.sym_loss_cooldown_until.get(t_sym_cd)
+            if cooldown_iso:
+                try:
+                    cooldown_dt = datetime.fromisoformat(
+                        cooldown_iso.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    cooldown_dt = None
+                if cooldown_dt is not None:
+                    now_dt = datetime.now(timezone.utc)
+                    if cooldown_dt.tzinfo is None:
+                        cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
+                    if now_dt < cooldown_dt:
+                        _append_jsonl(SIGNALS_PATH, {
+                            "ts": now_iso, "engine": t.get("strategy"),
+                            "symbol": t.get("symbol"),
+                            "direction": t.get("direction"),
+                            "decision": "skipped",
+                            "reason": "sym_loss_cooldown",
+                            "cooldown_until": cooldown_iso,
+                        })
+                        continue
+                    # cooldown expired — clear stale entry
+                    state.sym_loss_cooldown_until.pop(t_sym_cd, None)
 
             # Portfolio gate V2: reject opening a position on a symbol that
             # already has an open position in the OPPOSITE direction. Prevents
