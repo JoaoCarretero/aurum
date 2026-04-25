@@ -766,7 +766,7 @@ def test_render_run_row_smoke(gui_root):
     rows = frame.winfo_children()
     assert len(rows) == 1  # one row frame
     cells = rows[0].winfo_children()
-    assert len(cells) == len(_COLUMNS)  # 11 cells, matches column schema
+    assert len(cells) == len(_COLUMNS)  # matches len(_COLUMNS) — currently 14 cells
 
 
 def test_section_helper_deleted():

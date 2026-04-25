@@ -120,7 +120,7 @@ def test_positions_block_renders_open_positions(gui_root):
         "positions": [
             {"symbol": "BTCUSDT", "direction": "long",
              "entry_price": 50000.0, "mark_price": 50500.0,
-             "size_usd": 200.0, "pnl_usd": 2.0, "pnl_pct": 1.0,
+             "pnl_usd": 2.0, "pnl_pct": 1.0,
              "stop": 49500.0, "target": 51000.0,
              "opened_at": "2026-04-24T18:00:00Z"},
         ],

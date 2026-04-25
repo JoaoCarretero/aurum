@@ -18,11 +18,19 @@ Blocos:
 """
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from datetime import datetime, timezone
+from pathlib import Path
 
+from core.analytics.run_metrics import (
+    avg_r_multiple, sharpe_rolling, sortino, win_rate,
+)
 from core.ui.ui_palette import (
     AMBER, AMBER_D, BG, BORDER, DIM, DIM2, FONT, GREEN, RED, WHITE,
+)
+from launcher_support.engine_detail_fetchers import (
+    _fetch_log_tail, _fetch_signals, _fetch_trades, _load_latest_audit,
 )
 from launcher_support.runs_history import RunSummary
 
@@ -219,42 +227,6 @@ def render_decisions_block(parent: tk.Widget, run: RunSummary,
                                                           padx=(2, 0))
 
 
-def _fetch_signals(run: RunSummary, limit: int) -> list[dict]:
-    """Tail de signals.jsonl. Local: read file; VPS: cockpit endpoint."""
-    import json
-    from pathlib import Path
-
-    rows: list[dict] = []
-    if run.source == "local" and run.run_dir:
-        candidates = [
-            Path(run.run_dir) / "signals.jsonl",
-            Path(run.run_dir) / "reports" / "signals.jsonl",
-            Path(run.run_dir).parent / "reports" / "signals.jsonl",
-        ]
-        sig_path = next((p for p in candidates if p.exists()), None)
-        if sig_path is not None:
-            try:
-                lines = sig_path.read_text(
-                    encoding="utf-8").splitlines()[-limit:]
-                for ln in lines:
-                    if ln.strip():
-                        rows.append(json.loads(ln))
-            except (OSError, ValueError):
-                pass
-    elif run.source == "vps":
-        try:
-            from launcher_support.engines_live_view import _get_cockpit_client
-            client = _get_cockpit_client()
-            if client is not None:
-                resp = client._get(
-                    f"/v1/runs/{run.run_id}/signals?limit={limit}")
-                if isinstance(resp, dict):
-                    rows = resp.get("signals", []) or []
-        except Exception:
-            pass
-    return rows
-
-
 # ─── Block ❺ POSITIONS ─────────────────────────────────────────────
 
 
@@ -380,9 +352,6 @@ def render_trades_block(parent: tk.Widget, run: RunSummary,
                      bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
 
     # Footer agregado.
-    from core.analytics.run_metrics import (
-        sharpe_rolling, win_rate, avg_r_multiple, sortino,
-    )
     s = sharpe_rolling(trades)
     wr = win_rate(trades)
     ar = avg_r_multiple(trades)
@@ -399,37 +368,6 @@ def render_trades_block(parent: tk.Widget, run: RunSummary,
              if all(v is not None for v in (s, ar, so))
              else f"  total {len(trades)} · win {wr*100:.0f}%",
              font=(FONT, 7, "bold"), fg=AMBER, bg=BG).pack(anchor="w")
-
-
-def _fetch_trades(run: RunSummary) -> list[dict]:
-    """Local trades.jsonl tail OR cockpit /v1/runs/{id}/trades."""
-    import json
-    rows: list[dict] = []
-    if run.source == "local" and run.run_dir:
-        from pathlib import Path
-        tp = Path(run.run_dir) / "trades.jsonl"
-        if not tp.exists():
-            tp = Path(run.run_dir) / "reports" / "trades.jsonl"
-        if not tp.exists():
-            tp = Path(run.run_dir).parent / "reports" / "trades.jsonl"
-        if tp.exists():
-            try:
-                for ln in tp.read_text(encoding="utf-8").splitlines():
-                    if ln.strip():
-                        rows.append(json.loads(ln))
-            except Exception:
-                pass
-    elif run.source == "vps":
-        try:
-            from launcher_support.engines_live_view import _get_cockpit_client
-            client = _get_cockpit_client()
-            if client is not None:
-                resp = client._get(f"/v1/runs/{run.run_id}/trades")
-                if resp and isinstance(resp, dict):
-                    rows = resp.get("trades", [])
-        except Exception:
-            pass
-    return rows
 
 
 # ─── Block ❼ DATA FRESHNESS ────────────────────────────────────────
@@ -508,33 +446,6 @@ def render_log_tail_block(parent: tk.Widget, run: RunSummary,
     txt.see("end")
 
 
-def _fetch_log_tail(run: RunSummary, limit: int) -> list[str]:
-    """Local log.txt tail OR cockpit /v1/runs/{id}/log."""
-    rows: list[str] = []
-    if run.source == "local" and run.run_dir:
-        from pathlib import Path
-        lp = Path(run.run_dir) / "log.txt"
-        if not lp.exists():
-            lp = Path(run.run_dir) / "logs" / "live.log"
-        if lp.exists():
-            try:
-                rows = lp.read_text(encoding="utf-8",
-                                    errors="replace").splitlines()[-limit:]
-            except Exception:
-                pass
-    elif run.source == "vps":
-        try:
-            from launcher_support.engines_live_view import _get_cockpit_client
-            client = _get_cockpit_client()
-            if client is not None:
-                resp = client._get(f"/v1/runs/{run.run_id}/log?tail={limit}")
-                if resp and isinstance(resp, dict):
-                    rows = resp.get("lines", []) or []
-        except Exception:
-            pass
-    return rows
-
-
 # ─── Block ❾ ADERÊNCIA ─────────────────────────────────────────────
 
 
@@ -551,29 +462,11 @@ def render_aderencia_block(parent: tk.Widget, run: RunSummary) -> None:
                  font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
         return
 
-    import json, os
-    from pathlib import Path
-
     audit_dir = Path(os.environ.get("AURUM_AUDIT_DIR", "data/audit"))
-    if not audit_dir.exists():
+    payload = _load_latest_audit(audit_dir)
+    if payload is None:
         tk.Label(parent, text="  (no audit data)",
                  font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
-        return
-
-    candidates = sorted(audit_dir.glob("*.json"),
-                        key=lambda p: p.stat().st_mtime, reverse=True)
-    candidates = [p for p in candidates if p.name[0].isdigit()]  # YYYY-*.json
-    if not candidates:
-        tk.Label(parent, text="  (no audit data)",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
-        return
-
-    latest = candidates[0]
-    try:
-        payload = json.loads(latest.read_text(encoding="utf-8"))
-    except Exception:
-        tk.Label(parent, text=f"  (audit parse error: {latest.name})",
-                 font=(FONT, 7), fg=RED, bg=BG).pack(anchor="w", padx=12)
         return
 
     engine_key = run.engine.lower()
@@ -588,7 +481,7 @@ def render_aderencia_block(parent: tk.Widget, run: RunSummary) -> None:
         AMBER if (match or 0) > 70 else RED)
     _kv_row(parent, "match %",
             f"{match:.1f}%" if match is not None else "—", color)
-    _kv_row(parent, "audit date", latest.stem)
+    _kv_row(parent, "audit date", payload.get("_audit_stem", "—"))
 
     missed = info.get("missed") or []
     extra = info.get("extra") or []
