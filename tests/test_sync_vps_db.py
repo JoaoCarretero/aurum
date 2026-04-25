@@ -25,6 +25,13 @@ def vps_db(tmp_path):
     )
     migration_001_live_runs.apply(conn)
     migration_002_live_trades.apply(conn)
+    # one run row (so the live_runs mirror has something to copy)
+    conn.execute(
+        "INSERT INTO live_runs (run_id, engine, mode, started_at, run_dir, "
+        "status, tick_count) VALUES (?,?,?,?,?,?,?)",
+        ("vps-run-1", "JUMP", "paper", "2026-04-25T16:00:00+00:00",
+         "/srv/aurum.finance/data/jump_paper/vps-run-1", "running", 5),
+    )
     # one trade
     conn.execute(
         "INSERT INTO live_trades (run_id, ts, symbol, strategy, direction, "
@@ -65,9 +72,10 @@ def test_mirror_copies_trades_and_signals(vps_db, local_db):
     """End-to-end: vps_db → local_db gets the trade + signal."""
     from tools.maintenance.sync_vps_db import mirror_db_file
 
-    n_trades, n_signals = mirror_db_file(str(vps_db), str(local_db))
+    n_trades, n_signals, n_runs = mirror_db_file(str(vps_db), str(local_db))
     assert n_trades == 1
     assert n_signals == 1
+    assert n_runs == 1
 
     conn = sqlite3.connect(str(local_db))
     trades = list(conn.execute(
@@ -119,12 +127,65 @@ def test_mirror_does_not_clobber_local_only_rows(vps_db, local_db):
 
 
 def test_mirror_handles_missing_vps_tables(tmp_path, local_db):
-    """If VPS DB exists but tables don't, mirror returns (0,0) cleanly."""
+    """If VPS DB exists but tables don't, mirror returns zeros cleanly."""
     from tools.maintenance.sync_vps_db import mirror_db_file
 
     empty_vps = tmp_path / "empty_vps.db"
     sqlite3.connect(str(empty_vps)).close()
 
-    n_trades, n_signals = mirror_db_file(str(empty_vps), str(local_db))
-    assert n_trades == 0
-    assert n_signals == 0
+    result = mirror_db_file(str(empty_vps), str(local_db))
+    # Result is a tuple of integers (trades, signals[, runs]); all zeros.
+    assert all(n == 0 for n in result)
+
+
+def test_mirror_copies_live_runs(vps_db, local_db):
+    """live_runs must mirror too — without it, local launcher misses
+    today's runs (run_id appears in trades/signals but not live_runs).
+    """
+    from tools.maintenance.sync_vps_db import mirror_db_file
+
+    mirror_db_file(str(vps_db), str(local_db))
+
+    conn = sqlite3.connect(str(local_db))
+    rows = list(conn.execute(
+        "SELECT run_id, engine, mode, status, tick_count FROM live_runs"
+    ))
+    assert rows == [("vps-run-1", "JUMP", "paper", "running", 5)]
+
+
+def test_live_runs_mirror_is_idempotent(vps_db, local_db):
+    """Re-mirror keeps live_runs at exactly 1 row, no duplicates."""
+    from tools.maintenance.sync_vps_db import mirror_db_file
+
+    mirror_db_file(str(vps_db), str(local_db))
+    mirror_db_file(str(vps_db), str(local_db))
+
+    conn = sqlite3.connect(str(local_db))
+    n = conn.execute("SELECT COUNT(*) FROM live_runs").fetchone()[0]
+    assert n == 1
+
+
+def test_live_runs_mirror_updates_mutable_fields(vps_db, local_db, tmp_path):
+    """If VPS row evolves (tick_count grew), local picks up the new value."""
+    from tools.maintenance.sync_vps_db import mirror_db_file
+
+    # First sync brings in tick_count=5
+    mirror_db_file(str(vps_db), str(local_db))
+
+    # Simulate VPS tick advancing
+    conn = sqlite3.connect(str(vps_db))
+    conn.execute(
+        "UPDATE live_runs SET tick_count=42, status=? WHERE run_id=?",
+        ("stopped", "vps-run-1"),
+    )
+    conn.commit()
+    conn.close()
+
+    mirror_db_file(str(vps_db), str(local_db))
+
+    conn = sqlite3.connect(str(local_db))
+    row = conn.execute(
+        "SELECT tick_count, status FROM live_runs WHERE run_id=?",
+        ("vps-run-1",),
+    ).fetchone()
+    assert row == (42, "stopped")

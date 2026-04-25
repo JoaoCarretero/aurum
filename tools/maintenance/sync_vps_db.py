@@ -61,37 +61,71 @@ def _row_to_signal_payload(row: dict) -> dict:
     return payload
 
 
-def mirror_db_file(vps_db_path: str, local_db_path: str) -> tuple[int, int]:
-    """Mirror live_trades + live_signals from a downloaded VPS DB file
-    into the local DB. Returns (trades_inserted, signals_inserted)."""
+_LIVE_RUNS_COLS = (
+    "engine", "mode", "started_at", "ended_at", "run_dir", "status",
+    "tick_count", "novel_count", "open_count", "equity", "last_tick_at",
+    "host", "label", "notes",
+)
+
+
+def _mirror_live_runs(vps_conn: sqlite3.Connection,
+                      local_conn: sqlite3.Connection) -> int:
+    """Mirror live_runs via INSERT OR REPLACE keyed on run_id.
+
+    db_live_runs.upsert is global-DB-bound (uses module-level DB_PATH), so
+    bypass it: write rows directly. live_runs.run_id is PRIMARY KEY, so
+    INSERT OR REPLACE is idempotent and absorbs mutable-field updates.
+    """
+    rows = _table_rows_as_dicts(vps_conn, "live_runs")
+    n = 0
+    for row in rows:
+        run_id = row.get("run_id")
+        if not run_id:
+            continue
+        cols = ["run_id"] + [c for c in _LIVE_RUNS_COLS if row.get(c) is not None]
+        placeholders = ",".join("?" * len(cols))
+        values = [run_id] + [row[c] for c in cols[1:]]
+        local_conn.execute(
+            f"INSERT OR REPLACE INTO live_runs ({','.join(cols)}) "
+            f"VALUES ({placeholders})",
+            values,
+        )
+        n += 1
+    return n
+
+
+def mirror_db_file(vps_db_path: str, local_db_path: str) -> tuple[int, int, int]:
+    """Mirror live_trades + live_signals + live_runs from a downloaded VPS
+    DB file into the local DB. Returns (trades, signals, runs) inserted."""
     vps_conn = sqlite3.connect(vps_db_path)
     try:
         trade_rows = _table_rows_as_dicts(vps_conn, "live_trades")
         signal_rows = _table_rows_as_dicts(vps_conn, "live_signals")
+        local_conn = sqlite3.connect(local_db_path)
+        try:
+            n_trades = 0
+            for row in trade_rows:
+                run_id = row.get("run_id")
+                if not run_id:
+                    continue
+                if upsert_trade(local_conn, run_id,
+                                  _row_to_trade_payload(row)):
+                    n_trades += 1
+            n_signals = 0
+            for row in signal_rows:
+                run_id = row.get("run_id")
+                if not run_id:
+                    continue
+                if upsert_signal(local_conn, run_id,
+                                  _row_to_signal_payload(row)):
+                    n_signals += 1
+            n_runs = _mirror_live_runs(vps_conn, local_conn)
+            local_conn.commit()
+            return n_trades, n_signals, n_runs
+        finally:
+            local_conn.close()
     finally:
         vps_conn.close()
-
-    local_conn = sqlite3.connect(local_db_path)
-    try:
-        n_trades = 0
-        for row in trade_rows:
-            run_id = row.get("run_id")
-            if not run_id:
-                continue
-            if upsert_trade(local_conn, run_id, _row_to_trade_payload(row)):
-                n_trades += 1
-        n_signals = 0
-        for row in signal_rows:
-            run_id = row.get("run_id")
-            if not run_id:
-                continue
-            if upsert_signal(local_conn, run_id,
-                              _row_to_signal_payload(row)):
-                n_signals += 1
-        local_conn.commit()
-        return n_trades, n_signals
-    finally:
-        local_conn.close()
 
 
 def _ssh_args(ssh_cfg: dict) -> tuple[list[str], str, str, int]:
@@ -189,8 +223,9 @@ def main() -> int:
         cleanup = True
 
     try:
-        n_t, n_s = mirror_db_file(str(vps_path), args.local_db)
-        print(f"merged {n_t} trades + {n_s} signals into {args.local_db}")
+        n_t, n_s, n_r = mirror_db_file(str(vps_path), args.local_db)
+        print(f"merged {n_t} trades + {n_s} signals + {n_r} runs "
+              f"into {args.local_db}")
         return 0
     finally:
         if cleanup:

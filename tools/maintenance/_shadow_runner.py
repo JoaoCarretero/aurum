@@ -277,6 +277,26 @@ def _upsert_live_run(
         log.exception("db_live_runs upsert failed (shadow continues)")
 
 
+def _persist_signal_to_db(record: dict) -> None:
+    """Persist one shadow signal to live_signals without risking the runner.
+
+    Mirror of millennium_shadow._persist_signal_to_db so per-engine shadows
+    (citadel/jump/renaissance) also land in live_signals — without this
+    the table only ever sees MILLENNIUM-shadow rows.
+    """
+    try:
+        import sqlite3
+        from core.ops.db_live_trades import upsert_signal  # noqa: PLC0415
+        db_path = ROOT / "data" / "aurum.db"
+        if not db_path.exists():
+            return
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            upsert_signal(conn, RUN_ID, record)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("live_signals upsert failed (non-fatal): %s", exc)
+
+
 def _append_trade(trade: dict) -> None:
     """Append one trade to shadow_trades.jsonl."""
     line = json.dumps(trade, ensure_ascii=True, default=str)
@@ -432,6 +452,7 @@ def _run_tick(
                 )
             continue
         _append_trade(record)
+        _persist_signal_to_db(record)
         novel += 1
         if notify:
             last_novel_at = observed_at
