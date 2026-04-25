@@ -241,9 +241,10 @@ class LiveRunsScreen(Screen):
         self._current_rows = list(runs)
         for run in runs:
             self._render_row(run)
-        # auto-select newest if nothing selected
-        # TODO(task-10): clear _selected_run_id if it no longer appears in list
-        # (e.g., after ARCHIVE). For now, detail panel falls back to "run not found".
+        if self._selected_run_id is not None and not any(
+            r.run_id == self._selected_run_id for r in runs
+        ):
+            self._selected_run_id = None
         if self._selected_run_id is None and runs:
             self._select(runs[0].run_id)
 
