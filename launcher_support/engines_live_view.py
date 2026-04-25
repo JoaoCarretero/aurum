@@ -1969,7 +1969,14 @@ def _view_code(launcher, script_path):
 
 
 _LEVERAGE_OPTS = [("1x", "1.0"), ("2x", "2.0"), ("3x", "3.0"), ("5x", "5.0")]
-_LIVE_FS_CACHE_TTL_S = 1.0
+# TTL pros caches de filesystem (positions.json, log tail, latest run_dir).
+# Pre-fix era 1.0s — cada render tick (5s pra paper, 60s pra shadow) achava
+# o cache expirado e re-lia o disco. Com TTL=5s, cada tick le 1x os arquivos
+# necessarios e reusa pra todos os helpers que pedirem dentro da janela.
+# Para shadow runs que ticam a cada 15min, 5s de stale e invisivel. Para
+# logs ticking continuo, _schedule_log_tail forca refresh ativo via seu
+# proprio tick de 5s — TTL nao impede a leitura agendada.
+_LIVE_FS_CACHE_TTL_S = 5.0
 _LATEST_RUN_DIR_CACHE: dict[str, tuple[float, Path | None]] = {}
 _POSITIONS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _LOG_TAIL_CACHE: dict[tuple[str, int], tuple[float, list[str]]] = {}
