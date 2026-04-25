@@ -578,6 +578,10 @@ def render_runs_history(parent: tk.Widget, launcher,
         # launcher stash — _load_detail precisa pra marshal de volta
         # do async heartbeat fetch pra Tk main thread (launcher.after).
         "launcher": launcher,
+        # mode stash — _render_run_row usa pra dispatch de click:
+        # "list" navega via launcher.screens.show("engine_detail"),
+        # "split" (default/legacy) carrega no detail pane direito.
+        "mode": mode,
     }
 
     split = tk.Frame(root, bg=BG)
@@ -939,11 +943,28 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
         lbl.pack(side="left", padx=(2, 0))
         labels.append(lbl)
 
-    def _click(_e=None, _r=r):
-        state["selected_run_id"] = _r.run_id
-        _load_detail(_r, state)
+    def _click(_e=None, _r=r, _state=state):
+        # mode dispatch: "list" navega via launcher.screens.show pra
+        # engine_detail screen full-canvas; "split" (legacy) carrega
+        # no detail pane direito do mesmo screen. Defaulta pra "split"
+        # se ausente — preserva backward-compat com call sites que nao
+        # passam mode kwarg.
+        mode = _state.get("mode", "split")
+        if mode == "list":
+            launcher = _state.get("launcher")
+            if launcher is not None and hasattr(launcher, "screens"):
+                try:
+                    launcher.screens.show("engine_detail", run=_r)
+                except Exception:
+                    pass
+            # list mode nao tem detail_host — nao cai pra _load_detail
+            # mesmo se a navegacao falhar (crash garantido se tentasse).
+            return
+        # split mode (default/legacy)
+        _state["selected_run_id"] = _r.run_id
+        _load_detail(_r, _state)
         # Re-paint rows to highlight
-        _paint_rows(state)
+        _paint_rows(_state)
 
     def _hover_on(_e=None, _labels=labels):
         for l in _labels:
