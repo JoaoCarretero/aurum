@@ -648,15 +648,34 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
     current = state.get("filter_mode", "all")
     f_row = tk.Frame(parent, bg=BG)
     f_row.pack(fill="x", padx=10, pady=(10, 8))
+    chips: dict[str, tk.Label] = {}
+
+    def _restyle_chips(active_key: str) -> None:
+        for k, w in chips.items():
+            is_act = (active_key == "all" and k == "all") or (active_key == k)
+            try:
+                w.configure(
+                    fg=AMBER_D if is_act else DIM,
+                    bg=BG3 if is_act else BG,
+                    highlightbackground=BORDER if is_act else BG,
+                )
+            except Exception:
+                pass
+
     for idx, label in enumerate(("ALL", "SHADOW", "PAPER"), start=1):
         key = label.lower()
         is_active = (current == "all" and key == "all") or (current == key)
 
         def _pick(_e=None, _k=key):
+            # Filter mudar nao precisa refetch — `_paint_rows` ja filtra
+            # local via `state["filter_mode"]`. Antes chamava `refresh_fn`
+            # (`_refresh_runs`) que spawnava VPS thread; clicar
+            # ALL->SHADOW->PAPER em <2s spawnava 3 threads paralelas via
+            # SSH tunnel. Agora repaint instantaneo com cache.
             state["filter_mode"] = "all" if _k == "all" else _k
-            fn = state.get("refresh_fn")
-            if fn:
-                fn()
+            _restyle_chips(state["filter_mode"])
+            _paint_rows(state)
+
         chip = tk.Label(
             f_row, text=f" {idx}:{label} ",
             font=(FONT, 8, "bold"),
@@ -668,6 +687,7 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
         )
         chip.pack(side="left", padx=(0, 6))
         chip.bind("<Button-1>", _pick)
+        chips[key] = chip
 
     # Divider between filter block and table block — BORDER (structural).
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10)
@@ -803,9 +823,16 @@ def _paint_rows(state: dict) -> None:
         rows = [r for r in rows if r.mode == flt]
 
     if not rows:
-        tk.Label(wrap,
-                 text="— nenhum run visível (local ou VPS) —",
-                 fg=DIM2, bg=BG,
+        # Distingui "VPS ainda nao respondeu" de "nada existe": no
+        # bootstrap (state["last_sig"] is None), o worker VPS ainda esta
+        # em flight; mostrar "no runs" agora pode confundir o operador
+        # — em ~1s ele recebe os dados de verdade. Apos a primeira
+        # resposta VPS (last_sig != None), se ainda esta vazio, e
+        # genuinamente "nada visivel".
+        bootstrap = state.get("last_sig") is None
+        msg = ("Aguardando VPS…" if bootstrap
+               else "— nenhum run visível (local ou VPS) —")
+        tk.Label(wrap, text=msg, fg=DIM2, bg=BG,
                  font=(FONT, 7, "italic")).pack(pady=16)
         return
 
@@ -1444,6 +1471,41 @@ def _render_detail_equity_metrics(parent: tk.Widget, r: RunSummary) -> None:
     _detail_section(parent, "ACCOUNT", rows)
 
 
+def _read_jsonl_tail(path: Path, n: int = 10, *, max_bytes: int = 16384) -> list[dict]:
+    """Le os ultimos `n` records de um JSONL sem carregar o arquivo todo.
+
+    Seek pra `max_bytes` antes do EOF e parseia pra tras. Pre-fix:
+    `path.read_text() + splitlines()[-10:]` lia o arquivo inteiro a cada
+    click — pra runs com milhares de trades em weeks-old shadow.jsonl
+    isso era megabytes lidos a cada selecao + cada
+    `_reload_if_still_selected` callback. Tail-read mantem custo
+    constante O(max_bytes) independente do tamanho do file.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    out: list[dict] = []
+    try:
+        with path.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+                # discarta primeira linha (provavelmente truncada no seek)
+                f.readline()
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    for ln in chunk.splitlines()[-n:]:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
     """Read last 10 trades. Shadow runs write shadow_trades.jsonl; paper/live
     write trades.jsonl. Each run_dir only has one of the two — try shadow
@@ -1455,19 +1517,7 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
         trades_path = r.run_dir / "reports" / "trades.jsonl"
     if not trades_path.exists():
         return
-    lines = []
-    try:
-        raw = trades_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    for ln in raw.splitlines()[-10:]:
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            lines.append(json.loads(ln))
-        except Exception:  # noqa: BLE001
-            continue
+    lines = _read_jsonl_tail(trades_path, n=10)
     if not lines:
         return
     box = tk.Frame(parent, bg=PANEL)
