@@ -177,6 +177,17 @@ class EngineDetailScreen(Screen):
         render_log_tail_block(body, run)
         render_aderencia_block(body, run)
 
+        # Drift footer — quem deu os dados, quando.
+        from datetime import datetime, timezone
+        foot = tk.Frame(body, bg=BG)
+        foot.pack(fill="x", pady=(20, 4))
+        tk.Frame(foot, bg=BORDER, height=1).pack(fill="x", padx=12)
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+        tk.Label(foot,
+                 text=f"  source: {run.source}  ·  refreshed {ts}",
+                 font=(FONT, 7), fg=DIM, bg=BG,
+                 anchor="w").pack(anchor="w", padx=12, pady=(4, 0))
+
     def _tick(self) -> None:
         if self._run is not None:
             self._paint_body(self._run)

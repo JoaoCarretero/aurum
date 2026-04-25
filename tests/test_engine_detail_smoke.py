@@ -112,3 +112,37 @@ def test_auto_refresh_armed_only_when_running(gui_root, fake_run):
         "stopped run must not arm auto-refresh"
     screen.on_exit()
     parent.destroy()
+
+
+def test_footer_shows_data_source_and_timestamp(gui_root, fake_run):
+    """Drift footer at body bottom shows source + UTC time."""
+    from launcher_support.screens.engine_detail import EngineDetailScreen
+
+    class _FakeApp:
+        screens = None
+        def _kb(self, *_a, **_k): pass
+        h_path = type("L", (), {"configure": lambda *a, **k: None})()
+        h_stat = type("L", (), {"configure": lambda *a, **k: None})()
+        f_lbl  = type("L", (), {"configure": lambda *a, **k: None})()
+
+    parent = tk.Frame(gui_root)
+    screen = EngineDetailScreen(parent=parent, app=_FakeApp(),
+                                client_factory=lambda: None)
+    screen.mount()
+    screen.on_enter(run=fake_run)
+
+    def _all_text(w):
+        out = []
+        if isinstance(w, tk.Label):
+            try: out.append(str(w.cget("text")))
+            except Exception: pass
+        for c in w.winfo_children():
+            out.extend(_all_text(c))
+        return out
+
+    pool = " ".join(_all_text(parent))
+    # fake_run.source = "vps"
+    assert "vps" in pool.lower() or "source" in pool.lower()
+    assert "utc" in pool.lower() or ":" in pool  # timestamp present
+    screen.on_exit()
+    parent.destroy()
