@@ -1104,13 +1104,22 @@ def _load_detail(r: RunSummary, state: dict) -> None:
     # repintar com heartbeat populado.
     client_factory = state.get("client_factory")
     launcher = state.get("launcher")
-    attempted = state.setdefault("_hb_fetch_attempted", set())
+    # Retry-aware tracking — pre-fix era `set[str]` que crescia infinito;
+    # quando o fetch falhava (tunnel blip) o run_id ficava marcado pra
+    # sempre e o operator tinha que navegar pra outra tela e voltar pra
+    # ter retry. Agora: dict mapeia run_id -> monotonic_ts; permite
+    # retry apos 60s do ultimo attempt — cobre tunnel reconnect tipico.
+    import time as _time
+    attempted = state.setdefault("_hb_fetch_attempted", {})
+    last_attempt = attempted.get(r.run_id, 0.0)
+    age = _time.monotonic() - last_attempt
+    can_retry = age > 60.0
     if (r.heartbeat is None and r.source == "vps"
-            and launcher is not None and r.run_id not in attempted):
-        # One-shot fetch per run — marcar ANTES de disparar pra nao
-        # entrar em loop quando fetch falhar (heartbeat fica None mas
-        # ja tentamos, nao re-dispara).
-        attempted.add(r.run_id)
+            and launcher is not None
+            and (r.run_id not in attempted or can_retry)):
+        # Mark BEFORE dispatching so concurrent clicks no mesmo run nao
+        # spawnam fetches paralelos.
+        attempted[r.run_id] = _time.monotonic()
 
         def _after_fetch(_r=r, _state=state, _launcher=launcher):
             # Marshal de volta pra Tk main thread.

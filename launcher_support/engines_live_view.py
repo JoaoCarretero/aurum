@@ -4511,10 +4511,34 @@ def _bind_hold_to_confirm(widget, *, on_confirm, duration_ms):
 
 
 def _stop_engine(launcher, state, proc):
+    # VPS-sourced procs (de `_active_mode_runs`) nao tem `pid` local —
+    # stop_proc precisa de PID local. Surface a mensagem em vez de bare
+    # except: operator hold-to-stop, espera 1.5s, solta, e nao recebia
+    # feedback nenhum. Agora toast amber explica que o engine roda no
+    # VPS e indica o caminho correto (systemctl).
+    pid_raw = proc.get("pid") if isinstance(proc, dict) else None
+    if pid_raw is None:
+        try:
+            _toast(launcher, "engine roda no VPS — use systemctl",
+                   error=True)
+        except Exception:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "stop_engine: VPS-sourced proc, no local pid"
+            )
+        return
     try:
         from core.ops.proc import stop_proc
-        stop_proc(int(proc["pid"]), expected=proc)
-    except Exception:
+        stop_proc(int(pid_raw), expected=proc)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            _toast(launcher, f"stop falhou: {type(exc).__name__}",
+                   error=True)
+        except Exception:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "stop_engine failed: %s", exc
+            )
         return
     refresh = state.get("refresh")
     if callable(refresh):
