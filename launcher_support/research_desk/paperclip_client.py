@@ -5,8 +5,8 @@ de launcher_support/cockpit_client.py (para consistencia na casa).
 
 Paperclip opera em modo local_trusted: sem token, rede 127.0.0.1 so.
 Circuit breaker evita floodar requests quando o server ta offline
-(3 falhas -> 300s fechado; probe de reabertura automatico). Cache em
-disco preserva ultimo snapshot conhecido pra fallback offline do UI.
+(3 falhas -> 300s aberto; probe de reabertura automatico em half-open).
+Cache em disco preserva ultimo snapshot conhecido pra fallback offline do UI.
 
 Uso:
 
@@ -47,7 +47,6 @@ from typing import Any
 class PaperclipConfig:
     base_url: str = "http://127.0.0.1:3100"
     timeout_sec: float = 5.0
-    poll_interval_sec: float = 5.0
 
 
 class CircuitOpen(RuntimeError):

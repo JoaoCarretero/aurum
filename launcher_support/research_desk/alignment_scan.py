@@ -31,7 +31,11 @@ _OPERATIVE_NAMES: frozenset[str] = frozenset({
 })
 
 # Tokens that legitimately appear bolded in prose but are NOT engine refs.
-# Keep minimal; extend only when new false positives emerge.
+# Defensive denylist — engine_roster check requires bolded uppercase tokens
+# to be either (a) in registered_display_names from config/engines.py,
+# (b) operative names, or (c) listed here. Anything else flips engine_roster
+# to RED. Adding common quant/AURUM acronyms keeps future docs from tripping
+# the check when authors emphasize indicator/risk/data terms.
 _BOLD_IGNORE: frozenset[str] = frozenset({
     # Portuguese prose emphasis
     "NUNCA", "ARQUIVA", "ATENCAO", "ATENÇÃO", "SEMPRE", "MUITO IMPORTANTE",
@@ -41,11 +45,29 @@ _BOLD_IGNORE: frozenset[str] = frozenset({
     "PASS", "FAIL", "SHIP", "ITERATE", "KILL", "BLOCKER",
     "KILL IMEDIATO", "GATE FINAL",
     "VALIDATED", "REJECTED", "CONDITIONAL",
+    # Severity markers (audit logs / reviews)
+    "CRIT", "HIGH", "MED", "LOW", "MAJOR", "MINOR",
     # Engine stages (bolded in MEMORY.md §4 headers)
     "BOOTSTRAP", "RESEARCH", "QUARANTINED", "EXPERIMENTAL",
     # Common tech acronyms that might get bolded
     "VPS", "GUI", "API", "CLI", "CORE", "TBD", "TODO", "NO", "YES", "OK",
     "N", "M", "X", "Y", "Z",
+    # Indicator / quant acronyms (CORE-protected core/indicators.py exports)
+    "EMA", "RSI", "ATR", "BB", "MACD", "ADX", "OBV", "VWAP",
+    # Regime / chronos / sentiment
+    "HMM", "GARCH", "HURST", "OI", "LS", "CVD",
+    # Timeframes
+    "HTF", "LTF", "MTF", "INTRADAY", "INTRA",
+    # Validation / methodology
+    "OOS", "MC", "WF", "DSR", "IS", "TBA", "WIP",
+    # Risk / sizing
+    "RR", "SL", "TP", "DD", "FVG", "BOS",
+    # Market data
+    "BTC", "ETH", "USDT", "USDC", "OHLCV", "TBB",
+    # Data formats / system layers
+    "CSV", "JSON", "XML", "YAML", "HTML", "SQL", "WAL", "TTL", "TZ",
+    "L1", "L2", "L3", "L4", "L5", "L6", "L7",
+    "C1", "C2", "SST",
 })
 
 # Bold uppercase marker: `**NAME**` (possibly with internal spaces/underscores)
