@@ -83,6 +83,53 @@ class TestEvaluateStartGates:
 
 
 # ────────────────────────────────────────────────────────────
+# Snapshot fetch failure semantics
+#
+# Audit 2026-04-25 Lane 5: PortfolioMonitor raising on a network blip made
+# _fetch_snapshot return None → build_start_state emitted equity=0 → every
+# balance gate's `<= 0` guard early-returned allow. On live capital, that
+# silently disabled every circuit breaker. Fix: real-money modes (live,
+# arbitrage_live) fail closed with a soft_block sentinel; paper/demo/testnet
+# preserve the documented fail-open.
+# ────────────────────────────────────────────────────────────
+
+class TestFetchFailureSemantics:
+    def test_fetch_failure_in_paper_preserves_fail_open(self, monkeypatch):
+        monkeypatch.setattr("api.risk_check._fetch_snapshot", lambda mode: None)
+        d = evaluate_start_gates("paper")
+        assert d.severity == "allow"
+
+    def test_fetch_failure_in_live_returns_soft_block(self, monkeypatch):
+        monkeypatch.setattr("api.risk_check._fetch_snapshot", lambda mode: None)
+        d = evaluate_start_gates("live")
+        assert d.severity == "soft_block"
+        assert d.gate == "snapshot_fetch"
+
+    def test_fetch_failure_in_arbitrage_live_returns_soft_block(self, monkeypatch):
+        monkeypatch.setattr("api.risk_check._fetch_snapshot", lambda mode: None)
+        d = evaluate_start_gates("arbitrage_live")
+        assert d.severity == "soft_block"
+        assert d.gate == "snapshot_fetch"
+
+    def test_explicit_empty_snapshot_in_live_does_not_trigger_fetch_block(self):
+        # Caller injecting snapshot={} is asserting "I have data, no positions" —
+        # that's a different signal than _fetch_snapshot failing. Don't conflate.
+        d = evaluate_start_gates("live", snapshot={})
+        assert d.gate != "snapshot_fetch"
+
+    def test_successful_fetch_in_live_runs_gates_normally(self, monkeypatch):
+        snap = {
+            "equity": 10_000,
+            "positions": [{"symbol": "BTC", "side": "LONG", "size": 0.01, "mark": 60_000}],
+        }
+        monkeypatch.setattr("api.risk_check._fetch_snapshot", lambda mode: snap)
+        d = evaluate_start_gates("live")
+        # Decision could be allow or freeze_window depending on UTC hour, but
+        # never snapshot_fetch when fetch succeeded.
+        assert d.gate != "snapshot_fetch"
+
+
+# ────────────────────────────────────────────────────────────
 # /api/trading/start integration
 # ────────────────────────────────────────────────────────────
 
