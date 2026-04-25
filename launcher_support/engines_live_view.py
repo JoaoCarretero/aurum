@@ -79,20 +79,16 @@ _PAPER_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[dict | None, list[dict], lis
 _PAPER_SNAPSHOT_LOADING: set[str] = set()
 _PAPER_SNAPSHOT_LOCK = threading.Lock()
 _SHADOW_SNAPSHOT_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
-_SHADOW_SNAPSHOT_LOADING = False
+# Per-engine loading flag (set keyed by cache_key, e.g. "latest:millennium").
+# Pre-fix: single bool shared by all engines — citadel worker finishing
+# zerou o flag enquanto millennium worker ainda em flight; novos cache misses
+# viam False, spawnavam threads redundantes; resultados podiam pintar dados
+# do engine errado. Bug B2 surfaced 2026-04-25 audit.
+_SHADOW_SNAPSHOT_LOADING: set[str] = set()
 _SHADOW_SNAPSHOT_LOCK = threading.Lock()
 _REMOTE_SHADOW_RUN_CACHE: dict[str, tuple[float, tuple[Path | None, dict | None, list[dict]]]] = {}
 _REMOTE_SHADOW_RUN_LOADING: set[str] = set()
 _REMOTE_SHADOW_RUN_LOCK = threading.Lock()
-# Cross-run paper trade history: per engine slug (lowercase), aggregates
-# the last N closed trades across ALL paper runs (running + stopped). The
-# operator expects TRADE HISTORY to cover the engine's whole paper activity
-# — a position that closed earlier today in a run that was since stopped
-# must still surface in the cockpit, not disappear with the run.
-_PAPER_ENGINE_TRADES_CACHE_TTL_S = 60.0
-_PAPER_ENGINE_TRADES_CACHE: dict[str, tuple[float, list[dict]]] = {}
-_PAPER_ENGINE_TRADES_LOADING: set[str] = set()
-_PAPER_ENGINE_TRADES_LOCK = threading.Lock()
 
 
 def _show_new_instance_dialog(launcher, state) -> None:
@@ -422,7 +418,6 @@ def _load_cockpit_runs_cached(*, launcher=None, state=None,
 
 
 def _clear_cockpit_view_caches() -> None:
-    global _SHADOW_SNAPSHOT_LOADING
     with _COCKPIT_RUNS_LOCK:
         _COCKPIT_RUNS_CACHE["ts"] = 0.0
         _COCKPIT_RUNS_CACHE["runs"] = None
@@ -432,13 +427,10 @@ def _clear_cockpit_view_caches() -> None:
         _PAPER_SNAPSHOT_LOADING.clear()
     with _SHADOW_SNAPSHOT_LOCK:
         _SHADOW_SNAPSHOT_CACHE.clear()
-        _SHADOW_SNAPSHOT_LOADING = False
+        _SHADOW_SNAPSHOT_LOADING.clear()
     with _REMOTE_SHADOW_RUN_LOCK:
         _REMOTE_SHADOW_RUN_CACHE.clear()
         _REMOTE_SHADOW_RUN_LOADING.clear()
-    with _PAPER_ENGINE_TRADES_LOCK:
-        _PAPER_ENGINE_TRADES_CACHE.clear()
-        _PAPER_ENGINE_TRADES_LOADING.clear()
 
 
 def _cockpit_runs_loading() -> bool:
@@ -586,7 +578,7 @@ def render(launcher, parent, *, on_escape) -> dict:
         stacking destroy+rebuild cycles that freeze the main loop.
         """
         for key in ("shadow_after_id", "shadow_refresh_aid",
-                    "paper_refresh_aid"):
+                    "paper_refresh_aid", "log_tail_after_id"):
             aid = state.pop(key, None)
             if aid is not None:
                 try:
@@ -617,6 +609,12 @@ def render(launcher, parent, *, on_escape) -> dict:
             return
         # Kill the prior mode's refresh timers BEFORE touching state so no
         # callback lands on a detail_host that's about to be destroyed.
+        # Also cancel the pending after_idle detail render — sem isso,
+        # rapid mode switching (1→2→3) deixava um _render_detail_stage do
+        # modo anterior na fila idle do Tk; quando disparava, state["mode"]
+        # ja era o novo modo e o render dispatchava o caminho errado dentro
+        # do detail_host atual (flicker visivel pra operador).
+        _cancel_pending_detail_refresh()
         _cancel_refresh_timers()
         state["mode"] = mode
         try:
@@ -838,8 +836,9 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
                                  engine: str = "millennium") -> tuple[Path | None, dict | None, list[dict]]:
     """Cached shadow snapshot fetch per engine. Cache is keyed by engine
     so citadel/jump/renaissance nao colidem com millennium nem entre si.
+    Loading flag tambem por engine (set) — espelha o pattern correto de
+    `_PAPER_SNAPSHOT_LOADING` e `_REMOTE_SHADOW_RUN_LOADING`.
     """
-    global _SHADOW_SNAPSHOT_LOADING
     cache_key = f"latest:{engine}"
     now = time.monotonic()
     with _SHADOW_SNAPSHOT_LOCK:
@@ -847,18 +846,17 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
         if cached is not None and (now - cached[0]) <= _SHADOW_SNAPSHOT_CACHE_TTL_S:
             return cached[1]
         if allow_sync:
-            _SHADOW_SNAPSHOT_LOADING = True
-        elif _SHADOW_SNAPSHOT_LOADING:
+            _SHADOW_SNAPSHOT_LOADING.add(cache_key)
+        elif cache_key in _SHADOW_SNAPSHOT_LOADING:
             return cached[1] if cached is not None else (None, None, [])
         else:
-            _SHADOW_SNAPSHOT_LOADING = True
+            _SHADOW_SNAPSHOT_LOADING.add(cache_key)
 
             def _worker() -> None:
-                global _SHADOW_SNAPSHOT_LOADING
                 payload = _call_load_shadow_snapshot_sync(engine)
                 with _SHADOW_SNAPSHOT_LOCK:
                     _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
-                    _SHADOW_SNAPSHOT_LOADING = False
+                    _SHADOW_SNAPSHOT_LOADING.discard(cache_key)
                 _schedule_state_refresh(launcher, state)
 
             threading.Thread(
@@ -870,7 +868,7 @@ def _load_shadow_snapshot_cached(*, launcher=None, state=None,
     payload = _call_load_shadow_snapshot_sync(engine)
     with _SHADOW_SNAPSHOT_LOCK:
         _SHADOW_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), payload)
-        _SHADOW_SNAPSHOT_LOADING = False
+        _SHADOW_SNAPSHOT_LOADING.discard(cache_key)
     return payload
 
 
@@ -2329,13 +2327,21 @@ def _get_tunnel_error_hint() -> str | None:
     return None
 
 
-def _find_latest_shadow_run() -> tuple[Path, dict] | None:
+def _find_latest_shadow_run(launcher=None, state=None) -> tuple[Path, dict] | None:
     """Return (run_dir, heartbeat_payload) for the most recent shadow run.
 
     Le do ShadowPoller cache (atualizado em background thread) em vez
     de fazer HTTP sync aqui no UI thread — HTTP sync congela TkInter
     por ate timeout_sec quando o tunnel esta lento/down. Se nao tem
     poller ativo, cai pro disco local (dev workflow preservado).
+
+    `launcher` e `state` sao threadados pro `_fetch_shadow_snapshot` que
+    precisa deles pra debounce + per-engine loading set. Pre-fix, esta
+    funcao chamava `_fetch_shadow_snapshot(launcher=launcher, state=state)`
+    com nomes que nao existiam no escopo — NameError silenciosamente
+    swallowed pelo `except Exception` do caller, deixava a SHADOW LOOP
+    card permanentemente em branco quando nao havia disco local. Bug
+    surfaced 2026-04-25 audit.
     """
     if Path.cwd().resolve() == _REPO_ROOT.resolve():
         latest = run_catalog.latest_active_run(engine="MILLENNIUM", mode="shadow")
@@ -2489,7 +2495,7 @@ def _render_shadow_panel(parent, launcher, state, slug: str) -> None:
         except Exception:
             pass
 
-    result = _find_latest_shadow_run()
+    result = _find_latest_shadow_run(launcher=launcher, state=state)
 
     shadow = tk.Frame(parent, bg=BG2,
                       highlightbackground=BORDER_H, highlightthickness=1)
@@ -2766,9 +2772,14 @@ def _paper_content_sig_cheap(state) -> tuple:
     cached_runs = _COCKPIT_RUNS_CACHE.get("runs")
     if not cached_runs:
         return ("loading",)
+    # Honra `selected_slug` em vez de hardcodar "millennium". Pre-fix:
+    # CITADEL/JUMP/RENAISSANCE em paper mode ficavam congelados — o sig
+    # devolvia ("no-run",) pra qualquer engine != millennium e o
+    # _render_detail early-return pulava o repaint. Bug surfaced 2026-04-25.
+    target_slug = str((state or {}).get("selected_slug") or "millennium").lower()
     run_id: str | None = None
     for r in cached_runs:
-        if (str(r.get("engine") or "").lower() == "millennium"
+        if (str(r.get("engine") or "").lower() == target_slug
                 and str(r.get("mode") or "").lower() == "paper"
                 and str(r.get("status") or "").lower() == "running"):
             run_id = str(r.get("run_id") or "")
@@ -3580,145 +3591,6 @@ def _fetch_paper_extras(run_id: str, *, launcher=None, state=None,
     with _PAPER_SNAPSHOT_LOCK:
         _PAPER_SNAPSHOT_CACHE[run_id] = (time.monotonic(), payload)
         _PAPER_SNAPSHOT_LOADING.discard(run_id)
-    return payload
-
-
-def _dedupe_and_sort_trades(raw: list[dict], *, limit: int) -> list[dict]:
-    """Dedupe trade records on (timestamp, symbol, strategy) and sort
-    newest-first. Instance-a + instance-b of the same engine typically
-    detect the same signal tick, so without dedupe the same OPUSDT LONG
-    shows up twice in the aggregated history."""
-    seen: set[tuple] = set()
-    unique: list[dict] = []
-    for t in raw:
-        if not isinstance(t, dict):
-            continue
-        if t.get("primed", False):
-            continue
-        key = (
-            str(t.get("timestamp") or ""),
-            str(t.get("symbol") or ""),
-            str(t.get("strategy") or ""),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(t)
-
-    def _sort_key(t: dict) -> str:
-        return str(
-            t.get("exit_time")
-            or t.get("timestamp")
-            or t.get("entry_time")
-            or ""
-        )
-    unique.sort(key=_sort_key, reverse=True)
-    return unique[:limit]
-
-
-def _fetch_paper_engine_trades_sync(engine_slug: str, *,
-                                    limit: int = 50,
-                                    per_run_limit: int = 50,
-                                    max_runs: int = 15,
-                                    recency_window: int = 50) -> list[dict]:
-    """Aggregate closed trades across every paper run of ``engine_slug``.
-
-    Cockpit's per-run fetch only covers the *currently selected* run, so
-    trades that closed in a run since stopped (e.g. after a restart
-    earlier today) never surface. This helper walks recent paper runs,
-    fans their /v1/runs/{id}/trades fetches out in parallel, then
-    dedupes + sorts newest-first via _dedupe_and_sort_trades.
-
-    Run selection: of the ``recency_window`` most-recent paper runs,
-    filter to those that reported signals (``novel_total`` > 0) — runs
-    with zero signals have zero trades by construction, so including
-    them only wastes HTTP calls — then cap the fan-out at ``max_runs``.
-    Without the signal filter, the recency window alone was too tight:
-    four restarts of an idle engine would occupy the top 10 by
-    started_at and push the one run that actually closed a trade below
-    the cutoff.
-    """
-    client = _get_cockpit_client()
-    if client is None:
-        return []
-    rows = _load_cockpit_runs_cached()
-    paper_runs = [
-        r for r in rows
-        if str(r.get("engine") or "").lower() == engine_slug.lower()
-        and str(r.get("mode") or "").lower() == "paper"
-    ]
-    paper_runs.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
-    recent = paper_runs[:recency_window]
-    with_signals = [r for r in recent if int(r.get("novel_total") or 0) > 0]
-    paper_runs = with_signals[:max_runs]
-    if not paper_runs:
-        return []
-
-    def _fetch(run_id: str) -> list[dict]:
-        try:
-            payload = client._get(f"/v1/runs/{run_id}/trades?limit={per_run_limit}")
-        except Exception:
-            return []
-        if not isinstance(payload, dict):
-            return []
-        tagged: list[dict] = []
-        for t in (payload.get("trades") or []):
-            if not isinstance(t, dict):
-                continue
-            tagged.append({**t, "_source_run_id": run_id})
-        return tagged
-
-    merged: list[dict] = []
-    with ThreadPoolExecutor(max_workers=min(len(paper_runs), 6)) as pool:
-        futures = [pool.submit(_fetch, str(r.get("run_id"))) for r in paper_runs]
-        for fut in as_completed(futures):
-            try:
-                merged.extend(fut.result())
-            except Exception:
-                continue
-    return _dedupe_and_sort_trades(merged, limit=limit)
-
-
-def _fetch_paper_engine_trades(engine_slug: str, *, launcher=None, state=None,
-                               allow_sync: bool = False) -> list[dict]:
-    """TTL-cached wrapper around _fetch_paper_engine_trades_sync.
-
-    Worker-mode (default): returns the last cached list immediately and
-    dispatches a background fetch; the next render picks up the fresh
-    list via _schedule_state_refresh. allow_sync=True blocks on the fan-
-    out, used during the first render so the operator doesn't see an
-    empty pane before the first worker completes.
-    """
-    now = time.monotonic()
-    key = engine_slug.lower()
-    with _PAPER_ENGINE_TRADES_LOCK:
-        cached = _PAPER_ENGINE_TRADES_CACHE.get(key)
-        if cached is not None and (now - cached[0]) <= _PAPER_ENGINE_TRADES_CACHE_TTL_S:
-            return list(cached[1])
-        if allow_sync:
-            _PAPER_ENGINE_TRADES_LOADING.add(key)
-        elif key in _PAPER_ENGINE_TRADES_LOADING:
-            return list(cached[1]) if cached is not None else []
-        else:
-            _PAPER_ENGINE_TRADES_LOADING.add(key)
-
-            def _worker() -> None:
-                payload = _fetch_paper_engine_trades_sync(engine_slug)
-                with _PAPER_ENGINE_TRADES_LOCK:
-                    _PAPER_ENGINE_TRADES_CACHE[key] = (time.monotonic(), payload)
-                    _PAPER_ENGINE_TRADES_LOADING.discard(key)
-                _schedule_state_refresh(launcher, state)
-
-            threading.Thread(
-                target=_worker,
-                name=f"paper-engine-trades-{key}",
-                daemon=True,
-            ).start()
-            return list(cached[1]) if cached is not None else []
-    payload = _fetch_paper_engine_trades_sync(engine_slug)
-    with _PAPER_ENGINE_TRADES_LOCK:
-        _PAPER_ENGINE_TRADES_CACHE[key] = (time.monotonic(), payload)
-        _PAPER_ENGINE_TRADES_LOADING.discard(key)
     return payload
 
 
@@ -4573,10 +4445,23 @@ def _schedule_log_tail(state, launcher, proc):
         box.insert("end", "(no log available)")
     box.configure(state="disabled")
     box.see("end")
+    # Single-slot handle: cancela o anterior antes de agendar o proximo.
+    # Pre-fix, cada tick appendava um handle novo em `after_handles` e nunca
+    # cancelava — list crescia infinitamente, chains antigas disparavam
+    # contra widgets ja destroyed (TclError invisivel mas custoso na main
+    # loop, sintoma "trava"). Tick 1s -> 5s tambem reduz I/O: log de runner
+    # shadow/paper atualiza em ticks de 15min, refresh por segundo era
+    # waste de file open + 18 regex scans por classify_log_level.
+    prev_aid = state.pop("log_tail_after_id", None)
+    if prev_aid is not None:
+        try:
+            launcher.after_cancel(prev_aid)
+        except Exception:
+            pass
     try:
-        aid = launcher.after(1000,
+        aid = launcher.after(5000,
                              lambda: _schedule_log_tail(state, launcher, proc))
-        state["after_handles"].append(aid)
+        state["log_tail_after_id"] = aid
     except Exception:
         pass
 
