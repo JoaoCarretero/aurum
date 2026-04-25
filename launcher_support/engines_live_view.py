@@ -2739,8 +2739,13 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
                      lambda _e: _force_refresh_shadow(launcher, state))
 
     # Cada render completa (scheduled OU click-triggered) atualiza o sig
-    # pra que o proximo ciclo de refresh compare corretamente.
-    state["shadow_last_render_sig"] = _shadow_content_sig(state, launcher)
+    # pra que o proximo ciclo de refresh compare corretamente. Usa o
+    # sig cheap pra match com `_refresh_shadow_detail` — sem mismatch
+    # entre seed sig e tick sig (que disparava rebuild no primeiro tick).
+    state["shadow_last_render_sig"] = (
+        "shadow", state.get("selected_slug"),
+        _shadow_content_sig_cheap(state),
+    )
     _schedule_shadow_refresh(launcher, state)
 
 
@@ -2909,7 +2914,14 @@ def _refresh_shadow_detail(launcher, state) -> None:
             return
     except Exception:
         return
-    sig = _shadow_content_sig(state, launcher)
+    # Usa o sig "cheap" (cache-only, sem lock) em vez do heavy
+    # `_shadow_content_sig` que entrava em `_fetch_shadow_snapshot`.
+    # Pre-fix: tick de 60s acquiria `_SHADOW_SNAPSHOT_LOCK` mesmo quando
+    # nao havia mudanca real, custo escalava com numero de cached_runs.
+    # Cheap version le `_COCKPIT_RUNS_CACHE` + `_SHADOW_SNAPSHOT_CACHE`
+    # via dict.get sem lock — mesma info pra change detection.
+    sig = ("shadow", state.get("selected_slug"),
+           _shadow_content_sig_cheap(state))
     last_sig = state.get("shadow_last_render_sig")
     if sig == last_sig and last_sig is not None:
         # Nada mudou — so reagenda o proximo ciclo.

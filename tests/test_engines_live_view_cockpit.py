@@ -822,13 +822,19 @@ def test_refresh_shadow_detail_skips_rerender_when_signature_unchanged(monkeypat
         def after_cancel(self, _aid):
             return None
 
-    monkeypatch.setattr(evv, "_shadow_content_sig", lambda state, launcher=None: ("same",))
+    # `_refresh_shadow_detail` agora usa `_shadow_content_sig_cheap` em
+    # vez do heavy version (perf — evita lock acquisition num tick que
+    # so detecta change). Sig completo construido inline:
+    # `("shadow", selected_slug, _shadow_content_sig_cheap(state))`.
+    monkeypatch.setattr(evv, "_shadow_content_sig_cheap",
+                        lambda state: ("cheap-same",))
     monkeypatch.setattr(evv, "_render_detail", lambda state, launcher: calls.append("render"))
 
     state = {
         "mode": "shadow",
         "detail_host": _Host(),
-        "shadow_last_render_sig": ("same",),
+        "selected_slug": "millennium",
+        "shadow_last_render_sig": ("shadow", "millennium", ("cheap-same",)),
     }
     evv._refresh_shadow_detail(_Launcher(), state)
 
