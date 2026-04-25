@@ -572,6 +572,12 @@ def render_runs_history(parent: tk.Widget, launcher,
         # launcher stash — _load_detail precisa pra marshal de volta
         # do async heartbeat fetch pra Tk main thread (launcher.after).
         "launcher": launcher,
+        # Lifecycle flag — pause_runs_history zera, _apply_vps_rows e
+        # callbacks async checam antes de tocar widgets/state. Sem isso,
+        # worker thread VPS que termina apos teardown ainda escrevia em
+        # state["rows"]/state["last_sig"]; o stale sig depois bloqueava o
+        # repaint quando o operator voltava.
+        "active": True,
     }
 
     split = tk.Frame(root, bg=BG)
@@ -609,6 +615,7 @@ def resume_runs_history(root: tk.Widget, launcher) -> None:
     state = getattr(root, "_runs_history_state", None)
     if not isinstance(state, dict):
         return
+    state["active"] = True
     refresh_fn = state.get("refresh_fn")
     if callable(refresh_fn):
         refresh_fn()
@@ -620,6 +627,7 @@ def pause_runs_history(root: tk.Widget, launcher) -> None:
     state = getattr(root, "_runs_history_state", None)
     if not isinstance(state, dict):
         return
+    state["active"] = False
     aid = state.get("refresh_aid")
     if aid is not None:
         try:
@@ -735,6 +743,11 @@ def _refresh_runs(state: dict, launcher,
             vps = []
         merged = merge_runs(local, vps, db_rows)
         def _apply_vps_rows():
+            # Drop o resultado se a tela foi unmounted enquanto o worker
+            # estava em flight — sem isso, state["rows"]/last_sig escreve
+            # em obj zumbi e bloqueia o repaint quando o operator volta.
+            if not state.get("active"):
+                return
             new_sig = _sig(merged)
             if state.get("last_sig") == new_sig:
                 return
@@ -779,6 +792,10 @@ def _paint_rows(state: dict) -> None:
             w.destroy()
         except Exception:
             pass
+    # Reset o registry — _render_run_row registra cada row aqui pra
+    # _select_row poder fazer update in-place sem rebuildar o DOM inteiro
+    # quando o operador so clica numa row pra ver detail.
+    state["row_widgets"] = {}
 
     rows = state.get("rows") or []
     flt = state.get("filter_mode", "all")
@@ -856,6 +873,40 @@ def _render_list_section_header(parent: tk.Widget, title: str,
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(1, 2))
 
 
+def _select_row(state: dict, new_run_id: str, run: RunSummary | None = None) -> None:
+    """Atualiza row selection in-place: muda bg do row anterior + novo,
+    chama _load_detail. Evita o rebuild completo do DOM que `_paint_rows`
+    fazia em cada click (~1200 widget ops sincrono na main thread por
+    click — operator perceived clicks como sluggish). Fallback pra
+    _paint_rows se o registry estiver inconsistente (ex: row destruido
+    no meio de um refresh tick).
+    """
+    prev_run_id = state.get("selected_run_id")
+    state["selected_run_id"] = new_run_id
+    registry = state.get("row_widgets") or {}
+
+    def _set_bg(widgets, color):
+        if not widgets:
+            return
+        row, labels = widgets
+        try:
+            row.configure(bg=color)
+            for l in labels:
+                l.configure(bg=color)
+        except Exception:
+            pass
+
+    if prev_run_id and prev_run_id != new_run_id:
+        _set_bg(registry.get(prev_run_id), BG)
+    _set_bg(registry.get(new_run_id), BG2)
+
+    if run is not None:
+        try:
+            _load_detail(run, state)
+        except Exception:
+            pass
+
+
 def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     is_sel = state.get("selected_run_id") == r.run_id
     bg = BG2 if is_sel else BG
@@ -902,12 +953,14 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
                        anchor=anchor)
         lbl.pack(side="left", padx=(2, 0))
         labels.append(lbl)
+    # Registra (row + labels) pra _select_row poder atualizar bg sem
+    # destruir/recriar o DOM inteiro (era o comportamento antigo:
+    # _click -> _paint_rows -> destroy_all -> rebuild ~100 rows = ~1200
+    # widget operations sincrono na main thread por click, sluggish).
+    state.setdefault("row_widgets", {})[r.run_id] = (row, list(labels))
 
-    def _click(_e=None, _r=r):
-        state["selected_run_id"] = _r.run_id
-        _load_detail(_r, state)
-        # Re-paint rows to highlight
-        _paint_rows(state)
+    def _click(_e=None, _rid=r.run_id, _r=r):
+        _select_row(state, _rid, _r)
 
     def _hover_on(_e=None, _labels=labels):
         for l in _labels:
