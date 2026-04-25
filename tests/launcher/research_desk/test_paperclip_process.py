@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -157,6 +158,143 @@ def test_buffer_is_bounded() -> None:
     for i in range(1000):
         p._stdout_buffer.append(f"line{i}")  # noqa: SLF001
     assert len(p._stdout_buffer) <= 500  # noqa: SLF001
+
+
+# ── New behavior: lifecycle hardening (FASE B Block 1) ────────────
+
+
+def test_mark_online_noop_during_stopping() -> None:
+    """mark_online() must NOT resurrect a process mid-stop.
+
+    Race: user clicks Stop -> status=STOPPING. Before the kill lands,
+    the 5s health poller fires, finds /api/health still 200, and calls
+    mark_online(). Without the guard, status flips back to ONLINE; UI
+    flickers and any code path reading status==ONLINE acts on a doomed
+    server.
+    """
+    p = PaperclipProcess()
+    p._proc = _fake_popen(alive=True)  # noqa: SLF001
+    p.status = ServerStatus.STOPPING
+    p.mark_online()
+    assert p.status == ServerStatus.STOPPING
+
+
+def test_mark_offline_preserves_stopping() -> None:
+    """mark_offline() during STOPPING leaves status alone — only stop()
+    finalizes the OFFLINE transition."""
+    p = PaperclipProcess()
+    dead = _fake_popen(alive=False)
+    p._proc = dead  # noqa: SLF001
+    p.status = ServerStatus.STOPPING
+    p.mark_offline()
+    # _proc cleared, but status stays STOPPING
+    assert p._proc is None  # noqa: SLF001
+    assert p.status == ServerStatus.STOPPING
+
+
+def test_start_rejects_during_stopping() -> None:
+    """start() refuses while a stop is in progress — prevents spawning
+    a duplicate node before the previous one releases port 3100."""
+    p = PaperclipProcess()
+    p.status = ServerStatus.STOPPING
+    ok, msg = p.start()
+    assert ok is False
+    assert "stop em andamento" in msg
+
+
+def test_start_detects_fast_crash() -> None:
+    """start() detects when the spawned proc dies in <0.3s (e.g. port
+    in use, package crash). Returns ok=False and resets to OFFLINE
+    instead of leaving status stuck on STARTING.
+    """
+    fake = _fake_popen(alive=True)
+    # poll() returns 1 (dead) — fast-crash check after the 0.3s sleep
+    # detects this and resets to OFFLINE. is_owned() guard at top of
+    # start() short-circuits on _proc is None and never reaches poll().
+    fake.poll.return_value = 1
+    with patch("shutil.which", return_value="/x/fake"), \
+         patch("subprocess.Popen", return_value=fake), \
+         patch("time.sleep"):  # skip the 0.3s wait
+        p = PaperclipProcess(cmd=("fake", "run"))
+        # Pre-load buffer so we can verify tail surfacing
+        p._stdout_buffer.append("EADDRINUSE: port 3100 in use")  # noqa: SLF001
+        ok, msg = p.start()
+
+    assert ok is False
+    assert "morreu" in msg or "rc=1" in msg
+    assert p.status == ServerStatus.OFFLINE
+    assert p._proc is None  # noqa: SLF001
+
+
+def test_start_succeeds_when_proc_stays_alive() -> None:
+    """Full happy path: Popen succeeds, fast-crash check passes,
+    status lands STARTING (poller will flip to ONLINE later)."""
+    fake = _fake_popen(alive=True)
+    # Stays alive across both polls (start guard + fast-crash check).
+    fake.poll.return_value = None
+    with patch("shutil.which", return_value="/x/fake"), \
+         patch("subprocess.Popen", return_value=fake), \
+         patch("time.sleep"):
+        p = PaperclipProcess(cmd=("fake", "run"))
+        ok, msg = p.start()
+
+    assert ok is True
+    assert "pid=12345" in msg
+    assert p.status == ServerStatus.STARTING
+    assert p.is_owned() is True
+
+
+def test_drain_truncates_pathological_line() -> None:
+    """A multi-MB log line must be truncated before append to keep
+    the bounded deque from holding gigabytes of memory."""
+    import io as _io
+
+    huge = "X" * 50_000  # well above 4096 truncate threshold
+    fake = _fake_popen(alive=True)
+    fake.stdout = _io.StringIO(f"{huge}\nshort\n")
+    p = PaperclipProcess()
+    p._proc = fake  # noqa: SLF001
+    p._start_reader()  # noqa: SLF001
+    if p._reader_thread is not None:  # noqa: SLF001
+        p._reader_thread.join(timeout=1.0)  # noqa: SLF001
+
+    lines = p.recent_lines(10)
+    assert any(len(line) <= 4096 for line in lines)
+    # Truncated line still has X-marker prefix
+    assert any(line.startswith("XXX") and len(line) == 4096 for line in lines)
+    assert "short" in lines
+
+
+def test_state_lock_serializes_concurrent_starts() -> None:
+    """Two threads calling start() concurrently must result in exactly
+    one Popen call — not two duplicate spawns racing for port 3100."""
+    fake = _fake_popen(alive=True)
+    fake.poll.return_value = None
+    popen_calls: list[Any] = []
+
+    def fake_popen(*args: Any, **kwargs: Any) -> Any:
+        popen_calls.append((args, kwargs))
+        return fake
+
+    with patch("shutil.which", return_value="/x/fake"), \
+         patch("subprocess.Popen", side_effect=fake_popen), \
+         patch("time.sleep"):
+        p = PaperclipProcess(cmd=("fake", "run"))
+        results: list[tuple[bool, str]] = []
+        threads = [
+            threading.Thread(target=lambda: results.append(p.start()))
+            for _ in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=2.0)
+
+    # Exactly one start should have spawned; the other 3 are rejected
+    # (most as "ja rodando" once the first wins the lock).
+    assert len(popen_calls) == 1
+    assert sum(1 for ok, _ in results if ok) == 1
+    assert sum(1 for ok, _ in results if not ok) == 3
 
 
 # ── Helpers ───────────────────────────────────────────────────────
