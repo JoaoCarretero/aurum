@@ -284,18 +284,32 @@ class TunnelManager:
         """Build the ssh command line. Assumes config is not None."""
         assert self._config is not None, "_build_cmd called with None config"
         cfg = self._config
-        # `-F NUL` (Windows) / `-F /dev/null` (POSIX): ignora ~/.ssh/config.
-        # Sem isso, um config file world-readable em
-        # `~/.ssh/config` faz ssh recusar com "Bad permissions" e a tunnel
-        # nunca sobe — bug surfaced 2026-04-25 quando um config criado
-        # via tooling com perms herdadas (CodexSandboxUsers no grupo)
-        # bloqueou o tunnel da launcher por horas. Esta flag isola o
-        # tunnel da launcher de qualquer ~/.ssh/config do operador, bom
-        # ou mau — todas as opcoes vem do _build_cmd via -o, autonomo.
-        null_path = "NUL" if os.name == "nt" else "/dev/null"
+        # `-F <empty-file>`: ignora ~/.ssh/config sem depender de null device.
+        # Sem isso, um config file world-readable em ~/.ssh/config faz ssh
+        # recusar com "Bad permissions" e a tunnel nunca sobe — bug surfaced
+        # 2026-04-25 quando um config criado via tooling com perms herdadas
+        # bloqueou o tunnel por horas. Esta flag isola o tunnel da launcher
+        # de qualquer ~/.ssh/config do operador, bom ou mau — todas as
+        # opcoes vem do _build_cmd via -o, autonomo.
+        #
+        # Por que empty-file e nao NUL/dev/null: Git for Windows ships um
+        # ssh.exe MSYS-based que NAO reconhece "NUL" como null device —
+        # trata como filename literal e falha com "Can't open user config
+        # file NUL: No such file or directory". Real Windows OpenSSH faz
+        # mapear, mas a launcher tambem roda de git-bash. Empty file real
+        # funciona em qualquer ssh (Windows native, MSYS, POSIX).
+        empty_cfg_path = self._log_dir / "empty_ssh_config"
+        try:
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            empty_cfg_path.touch(exist_ok=True)
+        except OSError:
+            # Fallback pra null device se nao conseguir criar o file
+            # (read-only fs, etc). Mantem comportamento anterior — quebrado
+            # em git-bash mas pelo menos a maquina nao hangs no command build.
+            empty_cfg_path = "NUL" if os.name == "nt" else "/dev/null"  # type: ignore[assignment]
         cmd: list[str] = [
             "ssh",
-            "-F", null_path,
+            "-F", str(empty_cfg_path),
             "-N",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=30",
