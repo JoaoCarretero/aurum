@@ -120,3 +120,99 @@ def test_heartbeat_status_running_but_no_last_tick_forced_stopped(
     rows = db_live_runs.list_live_runs()
     assert len(rows) == 1
     assert rows[0]["status"] == "stopped"
+
+
+def test_backfill_covers_non_millennium_engines(fake_data_root: Path) -> None:
+    """Pre-fix, only millennium_* dirs were catalogued; citadel/jump/
+    renaissance/probe were silently skipped, which is why the live-
+    engines audit kept flagging them as DB-missing."""
+    _make_run(
+        fake_data_root, "citadel_shadow", "2026-04-22_1500",
+        heartbeat={
+            "started_at": "2026-04-22T15:00:00+00:00",
+            "last_tick_at": "2026-04-22T15:05:00+00:00",
+            "ticks_ok": 3, "novel_total": 0, "equity": 10000.0,
+            "status": "running", "mode": "shadow",
+        },
+    )
+    _make_run(
+        fake_data_root, "jump_paper", "2026-04-22_1502",
+        heartbeat={
+            "started_at": "2026-04-22T15:02:00+00:00",
+            "last_tick_at": "2026-04-22T15:05:00+00:00",
+            "ticks_ok": 1, "novel_total": 0, "equity": 10000.0,
+            "status": "running", "mode": "paper",
+        },
+    )
+    n = bf.run(dry_run=False)
+    assert n == 2
+    engines = {r["engine"] for r in db_live_runs.list_live_runs()}
+    assert engines == {"citadel", "jump"}
+
+
+def test_parse_vps_row_maps_payload_fields() -> None:
+    """VPS /v1/runs payload → live_runs upsert dict conversion."""
+    row = {
+        "run_id": "2026-04-24_174018p_desk-paper-b",
+        "engine": "MILLENNIUM",
+        "mode": "paper",
+        "status": "running",
+        "started_at": "2026-04-24T17:40:18.130356+00:00",
+        "last_tick_at": "2026-04-24T18:15:00+00:00",
+        "ticks_ok": 9,
+        "novel_total": 1,
+        "equity": 10010.5,
+        "host": "srv-01",
+        "label": "desk-paper-b",
+    }
+    parsed = bf._parse_vps_row(row)
+    assert parsed is not None
+    # engine/mode normalized to lowercase for consistency with local-disk
+    # rows (which come from the parent dir name, also lowercase).
+    assert parsed["engine"] == "millennium"
+    assert parsed["mode"] == "paper"
+    assert parsed["status"] == "running"
+    assert parsed["tick_count"] == 9
+    assert parsed["novel_count"] == 1
+    # run_dir is the vps:// sentinel so the row has a non-null path
+    # without pretending the files are on local disk.
+    assert parsed["run_dir"].startswith("vps://")
+
+
+def test_parse_vps_row_skips_rows_without_run_id() -> None:
+    assert bf._parse_vps_row({"engine": "citadel", "mode": "paper"}) is None
+
+
+def test_run_from_vps_upserts_all_runs(
+    fake_data_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_rows = [
+        {
+            "run_id": "RUN_A", "engine": "citadel", "mode": "paper",
+            "status": "running", "started_at": "2026-04-24T17:00:00+00:00",
+            "ticks_ok": 5, "novel_total": 1, "equity": 10005.0,
+        },
+        {
+            "run_id": "RUN_B", "engine": "jump", "mode": "shadow",
+            "status": "stopped", "started_at": "2026-04-23T10:00:00+00:00",
+            "ticks_ok": 30, "novel_total": 2,
+        },
+    ]
+
+    class _FakeClient:
+        def _get(self, path):
+            assert path == "/v1/runs"
+            return fake_rows
+
+    # Patch the lazy import inside run_from_vps — the function imports
+    # the client factory from engines_live_view at call time, so we
+    # monkeypatch there rather than at module scope.
+    import launcher_support.engines_live_view as evv
+    monkeypatch.setattr(evv, "_get_cockpit_client", lambda: _FakeClient())
+
+    seen, written = bf.run_from_vps(dry_run=False)
+    assert seen == 2
+    assert written == 2
+    rows = db_live_runs.list_live_runs()
+    run_ids = {r["run_id"] for r in rows}
+    assert run_ids == {"RUN_A", "RUN_B"}

@@ -162,6 +162,32 @@ def test_ssh_command_shape(tmp_path: Path) -> None:
     assert f"UserKnownHostsFile={tmp_path / 'known_hosts'}" in opts3
 
 
+def test_ssh_F_arg_is_real_file_path(tmp_path: Path) -> None:
+    """-F must point to a real file, not the literal string "NUL".
+
+    Git for Windows ships an MSYS-based ssh.exe that treats "NUL" as a
+    literal filename (not the Windows null device), causing
+    `Can't open user config file NUL: No such file or directory`.
+    Real Windows OpenSSH does map NUL, but launcher.py runs from
+    git-bash often. Solution: write a real empty file once and point
+    -F at it. Works on every shell + every ssh flavor.
+    """
+    cfg = _default_cfg()
+    manager = TunnelManager(cfg, log_dir=tmp_path)
+    cmd = manager._build_cmd()
+    assert "-F" in cmd
+    f_arg = cmd[cmd.index("-F") + 1]
+    assert f_arg not in ("NUL", "/dev/null"), \
+        f"-F must be a real file, got OS-specific null device: {f_arg!r}"
+    f_path = Path(f_arg)
+    assert f_path.exists(), f"-F path {f_arg!r} must exist on disk"
+    assert f_path.is_file(), f"-F path {f_arg!r} must be a regular file"
+    # Empty (no real ssh config — that's the whole point: isolate from
+    # ~/.ssh/config). 0 bytes acceptable.
+    assert f_path.stat().st_size == 0, \
+        f"-F config file must be empty, has {f_path.stat().st_size} bytes"
+
+
 # ---------------------------------------------------------------------------
 # 4. Fast-death (rc=255) → RECONNECTING
 # ---------------------------------------------------------------------------

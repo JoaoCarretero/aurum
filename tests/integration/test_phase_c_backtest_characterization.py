@@ -11,9 +11,15 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "phase_c" / "backtest"
 RUN_DIR = ROOT / "data" / "runs" / "citadel_2026-04-10_1122"
 
-pytestmark = pytest.mark.skipif(
-    not RUN_DIR.exists(),
-    reason="characterization run dir cleaned up — fixture-only replay not yet wired",
+pytestmark = pytest.mark.skip(
+    reason=(
+        "Characterization test for citadel_2026-04-10_1122 — that run dir "
+        "was cleaned up and won't be regenerated. Reviving requires either "
+        "(a) synthesising minimal equity.json + report.html fixtures that "
+        "exercise _collect_run, or (b) writing a new test against a current "
+        "run. Sister test (live characterization) was rewired to fixtures "
+        "in commit 6a6fde4; this one was deferred — see audit 2026-04-25."
+    ),
 )
 
 

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600&display=swap');
 
 /* ═══════════════════════════════════════════════════════════
    AURUM — QUANT FUND DESIGN SYSTEM
@@ -176,6 +176,12 @@ a { color: inherit; text-decoration: none; }
   display: inline-flex;
   gap: 40px;
   white-space: nowrap;
+  animation: tickerScroll 48s linear infinite;
+  will-change: transform;
+}
+@keyframes tickerScroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
 }
 .ticker__item {
   display: inline-flex;
@@ -1130,6 +1136,122 @@ a { color: inherit; text-decoration: none; }
   border-top: 1px dashed var(--brd);
 }
 
+/* ═══════════════════════════════════════════════════════════
+   IRIDESCENT SURFACE
+   Cursor-tracked metallic amber sheen for premium cards.
+   Restricted to amber + cream luminance variations — no rainbow.
+   Direct rgba overlays (no mix-blend-mode) — bulletproof in any
+   browser/stacking-context combo.
+   ═══════════════════════════════════════════════════════════ */
+.iridescent {
+  position: relative;
+  isolation: isolate;
+  transition:
+    transform 380ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 320ms ease,
+    box-shadow 380ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+.iridescent__sheen,
+.iridescent__glow,
+.iridescent__edge,
+.iridescent__noise {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 380ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.iridescent > *:not(.iridescent__sheen):not(.iridescent__glow):not(.iridescent__edge):not(.iridescent__noise) {
+  position: relative;
+  z-index: 2;
+}
+
+.iridescent:hover .iridescent__sheen { opacity: 0.95; }
+.iridescent:hover .iridescent__glow  { opacity: 1; }
+.iridescent:hover .iridescent__edge  { opacity: 1; }
+.iridescent:hover .iridescent__noise { opacity: 0.10; }
+
+.iridescent__sheen {
+  background: conic-gradient(
+    from var(--ang, 0deg) at var(--mx, 50%) var(--my, 50%),
+    rgba(240, 168, 71, 0)    0deg,
+    rgba(240, 168, 71, 0.34) 55deg,
+    rgba(237, 224, 177, 0.26) 110deg,
+    rgba(208, 143, 54, 0.06) 175deg,
+    rgba(143, 122, 69, 0.14) 230deg,
+    rgba(240, 168, 71, 0.30) 295deg,
+    rgba(240, 168, 71, 0)    360deg
+  );
+}
+
+.iridescent__glow {
+  background: radial-gradient(
+    circle 380px at var(--mx, 50%) var(--my, 50%),
+    rgba(240, 168, 71, 0.42),
+    rgba(208, 143, 54, 0.14) 30%,
+    transparent 62%
+  );
+}
+
+.iridescent__edge {
+  background: radial-gradient(
+    circle 280px at var(--mx, 50%) var(--my, 50%),
+    rgba(237, 224, 177, 0.75),
+    rgba(240, 168, 71, 0.28) 35%,
+    transparent 70%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  padding: 1.5px;
+}
+
+.iridescent__noise {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='2' stitchTiles='stitch'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.55'/></svg>");
+  background-size: 200px 200px;
+}
+
+.iridescent.engine-card:hover {
+  border-color: var(--brd-gold);
+  transform:
+    perspective(1100px)
+    rotateX(var(--rx, 0deg))
+    rotateY(var(--ry, 0deg))
+    translateY(-3px);
+  box-shadow:
+    0 26px 56px -22px rgba(0, 0, 0, 0.7),
+    0 0 0 1px var(--brd-gold),
+    0 0 64px -22px var(--goldGlow);
+}
+
+.iridescent.engine-card--lead::before { z-index: 3; }
+
+@media (prefers-reduced-motion: reduce) {
+  .iridescent.engine-card:hover { transform: none !important; }
+  .iridescent__sheen,
+  .iridescent__glow,
+  .iridescent__edge,
+  .iridescent__noise { opacity: 0 !important; }
+}
+
+@media (hover: none) {
+  .iridescent.engine-card:hover { transform: none; }
+  .iridescent__sheen,
+  .iridescent__glow,
+  .iridescent__edge,
+  .iridescent__noise { display: none; }
+}
+
 /* perf table */
 .perf-table {
   border: 1px solid var(--brd);
@@ -1679,6 +1801,21 @@ a { color: inherit; text-decoration: none; }
 .footer__meta code { font-family: inherit; color: var(--gold); }
 
 /* ═══════════════════════════════════════════════════════════
+   REVEAL (scroll-in fade + translate, IntersectionObserver-driven)
+   ═══════════════════════════════════════════════════════════ */
+.reveal {
+  opacity: 0;
+  transform: translateY(var(--reveal-y, 12px));
+  transition: opacity 800ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 800ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ═══════════════════════════════════════════════════════════
    REDUCED MOTION
    ═══════════════════════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
@@ -1687,5 +1824,10 @@ a { color: inherit; text-decoration: none; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
   }
 }

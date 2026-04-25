@@ -288,6 +288,21 @@ def _append_trade(trade: dict) -> None:
         fh.flush()
 
 
+def _persist_signal_to_db(record: dict) -> None:
+    """Persist one shadow signal to live_signals without risking the runner."""
+    try:
+        import sqlite3
+        from core.ops.db_live_trades import upsert_signal  # noqa: PLC0415
+        db_path = ROOT / "data" / "aurum.db"
+        if not db_path.exists():
+            return
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            upsert_signal(conn, RUN_ID, record)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("live_signals upsert failed (non-fatal): %s", exc)
+
+
 # Per-engine run dirs espelham o layout do backtest: data/<engine>_shadow/
 # <RUN_ID>/{reports,state}. Cada engine ganha seu proprio trades.jsonl +
 # manifest + summary — navegavel via launcher/runs e reports existentes.
@@ -537,6 +552,7 @@ def _run_tick(
                 )
             continue
         _append_trade(record)
+        _persist_signal_to_db(record)
         _append_per_engine(record)
         novel += 1
         if notify:

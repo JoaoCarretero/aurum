@@ -373,6 +373,42 @@ def build_app() -> FastAPI:
             "total_lines": len(all_lines),
         }
 
+    @app.get("/v1/runs/{run_id}/signals")
+    def run_signals(run_id: str, request: Request, limit: int = 30):
+        """Tail de reports/signals.jsonl do run_dir.
+
+        Cada linha do JSONL é um decision record:
+          {ts, symbol, decision, score, reason, ...features}
+        decision ∈ {opened, stale, max_open, dir_conflict, corr_block, ...}.
+
+        Vazio com source='missing' se signals.jsonl não existe ainda
+        (runner novo, sem ticks). 404 só se o run_id não for descoberto.
+        """
+        _check_auth(request)
+        if limit < 1 or limit > 1000:
+            raise HTTPException(status_code=400, detail="limit must be 1..1000")
+        run_dir = _find_run_by_id(data_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        sig_path = run_dir / "reports" / "signals.jsonl"
+        if not sig_path.exists():
+            return {"run_id": run_id, "signals": [], "source": "missing"}
+        try:
+            text = sig_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"read failed: {exc}") from exc
+        import json as _json
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        tail = lines[-limit:]
+        out: list[dict] = []
+        for ln in tail:
+            try:
+                out.append(_json.loads(ln))
+            except ValueError:
+                continue
+        return {"run_id": run_id, "signals": out, "source": "jsonl"}
+
     @app.get("/v1/runs/{run_id}/telegram-diag")
     def telegram_diag(run_id: str, request: Request):
         """Extrai contadores e timestamps de atividade Telegram no

@@ -28,10 +28,28 @@ _configure_windows_tk()
 os.environ.setdefault("AURUM_DISABLE_BOOT_WORKERS", "1")
 os.environ.setdefault("AURUM_TEST_MODE", "1")
 
+
 # Windows + synced/sandboxed filesystems can deny pytest's dead-symlink
 # cleanup scan on basetemp. Disable that best-effort cleanup so the suite
 # reports real test results instead of crashing in session teardown.
-pytest_pathlib.cleanup_dead_symlinks = lambda root: None
+#
+# Wrapped in pytest_sessionstart/finish so the monkey-patch is applied
+# AND restored — mutating a private pytest internal at module-import
+# time was leaking across pytest invocations in the same Python process
+# (e.g., when a test runner reuses the interpreter for multiple
+# `pytest.main()` calls, the second invocation found the original
+# function gone). Audit 2026-04-25 Lane 4 finding.
+
+_ORIGINAL_CLEANUP_DEAD_SYMLINKS = pytest_pathlib.cleanup_dead_symlinks
+
+
+def pytest_sessionstart(session):
+    pytest_pathlib.cleanup_dead_symlinks = lambda root: None
+
+
+def pytest_sessionfinish(session, exitstatus):
+    pytest_pathlib.cleanup_dead_symlinks = _ORIGINAL_CLEANUP_DEAD_SYMLINKS
+
 
 TMP_ROOT = Path.home() / ".codex" / "memories" / "aurum.finance" / "pytest_tmp"
 

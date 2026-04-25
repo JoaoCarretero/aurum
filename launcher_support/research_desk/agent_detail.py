@@ -1,9 +1,7 @@
 """AgentDetailModal — view expandido de um operativo.
 
 Toplevel window com:
-  - Sigil grande (size=128) no topo
-  - Nome em tipografia distintiva do agente
-  - Titulo (role) + archetype + pedra
+  - Nome, role e tagline em tipografia terminal
   - Tagline
   - Statblock (tickets done/active, artifacts, cost, birthday)
   - Recent work grid (ate 5 artefatos recentes clicaveis)
@@ -67,8 +65,6 @@ from launcher_support.research_desk.markdown_editor import (
 )
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.stats_db import RatiosView
-from launcher_support.research_desk.sigils import SigilCanvas
-from launcher_support.research_desk.typography import agent_font
 
 # Status -> cor do dot/label no painel LIVE RUNS
 _RUN_STATUS_COLOR = {
@@ -103,39 +99,36 @@ def build_agent_header(
     stats: StatsView,
     on_toggle_pause: Callable[[AgentIdentity, bool], None],
 ) -> BuilderHandles:
-    """Monta hero (sigil+nome) + statblock (budget/tokens/custo) +
+    """Monta hero operacional + statblock (budget/tokens/custo) +
     actions (pause/resume). Retorna handles pra refresh posterior."""
     handles = BuilderHandles()
     palette = AGENT_COLORS[agent.key]
 
-    # ── Hero (sigil + nome + tagline) ─────────────────────────────
+    # Hero: accent rail + name + role + tagline.
     hero = tk.Frame(parent, bg=BG)
     hero.pack(fill="x", pady=(0, 6))
 
-    sigil = SigilCanvas(hero, agent.key, size=96, bg=BG)
-    sigil.pack(side="left", padx=(0, 16))
+    tk.Frame(hero, bg=palette.primary, width=4).pack(
+        side="left", fill="y", padx=(0, 12)
+    )
 
     meta = tk.Frame(hero, bg=BG)
     meta.pack(side="left", fill="both", expand=True)
 
     tk.Label(
         meta, text=agent.key,
-        font=agent_font(agent.key, size=22, weight="bold"),
+        font=(FONT, 18, "bold"),
         fg=palette.primary, bg=BG, anchor="w",
     ).pack(anchor="w")
     tk.Label(
         meta, text=agent.role,
-        font=agent_font(agent.key, size=11),
+        font=(FONT, 10),
         fg=WHITE, bg=BG, anchor="w",
     ).pack(anchor="w", pady=(2, 0))
     tk.Label(
-        meta, text=f"{agent.archetype}  ·  {agent.stone}",
+        meta, text=agent.tagline,
         font=(FONT, 8), fg=DIM, bg=BG, anchor="w",
     ).pack(anchor="w", pady=(4, 0))
-    tk.Label(
-        meta, text=agent.tagline,
-        font=(FONT, 8, "italic"), fg=DIM2, bg=BG, anchor="w",
-    ).pack(anchor="w", pady=(8, 0))
 
     # ── Statblock ─────────────────────────────────────────────────
     section = tk.Frame(parent, bg=BG)
@@ -162,7 +155,7 @@ def build_agent_header(
         ).pack(side="left")
         tk.Label(
             cell, text=value,
-            font=agent_font(agent.key, size=9, weight="bold"),
+            font=(FONT, 9, "bold"),
             fg=WHITE, bg=BG, anchor="w",
         ).pack(side="left")
 
@@ -222,7 +215,6 @@ def build_linked_work(
     agent: AgentIdentity,
     chains: list[LinkedChain],
     root_path: Path,
-    client: Any,
 ) -> BuilderHandles:
     """Lista chains filtradas do agent. COPY CMD + OPEN buttons.
     Se chains vazia → label stub '(sem artifacts deste agent)'."""
@@ -246,7 +238,7 @@ def build_linked_work(
         return handles
 
     for chain in chains[:8]:  # max 8 pra nao estourar modal
-        _render_chain_row(section, chain, palette=palette, root_path=root_path, client=client)
+        _render_chain_row(section, chain, palette=palette, root_path=root_path)
 
     handles.widgets["section"] = section
     return handles
@@ -258,7 +250,6 @@ def _render_chain_row(
     *,
     palette: Any,
     root_path: Path,
-    client: Any,
 ) -> None:
     row = tk.Frame(parent, bg=BG)
     row.pack(fill="x", pady=2)
@@ -561,6 +552,20 @@ def build_persona_stats(
 
         handles.widgets["ratios_section"] = section
 
+    # ── EDIT PERSONA button ──────────────────────────────────────
+    edit_btn = tk.Label(
+        parent, text="  EDIT PERSONA  ",
+        font=(FONT, 8, "bold"),
+        fg=WHITE, bg=BG3, cursor="hand2",
+        padx=8, pady=4,
+    )
+    edit_btn.pack(anchor="w", pady=(10, 0))
+    edit_btn.bind(
+        "<Button-1>",
+        lambda _e: _open_persona_editor(toplevel, agent=agent, root_path=root_path),
+    )
+    handles.widgets["edit_persona_btn"] = edit_btn
+
     # ── Recent work panel ─────────────────────────────────────────
     if artifacts is not None:
         tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(10, 0))
@@ -595,12 +600,15 @@ def build_persona_stats(
 def _open_persona_editor(
     toplevel: tk.Misc, *, agent: AgentIdentity, root_path: Path,
 ) -> None:
-    """Abre markdown_editor sobre AGENTS.md do agent. Standalone
-    (antes era método de AgentDetailModal)."""
-    from launcher_support.research_desk.markdown_editor import (
-        open_markdown_editor,
-        persona_path,
-    )
+    """Abre markdown_editor sobre AGENTS.md do agent. Standalone helper
+    (antes era método de AgentDetailModal com anti-double-click guard).
+
+    Note: original class method tracked self._persona_editor attr, calling
+    focus_set() on existing window instead of opening a duplicate. This
+    module-level helper is stateless by design. open_markdown_editor()
+    uses transient(parent) but has no internal instance tracking. If
+    double-click becomes an issue, reintroduce guard via module-level dict
+    keyed by (agent.key, root_path) tuple, or add grab_set() to editor."""
     target = persona_path(agent.key, root_path)
     open_markdown_editor(
         toplevel, path=target,
@@ -768,7 +776,6 @@ class AgentDetailModal:
                 agent=self.agent,
                 chains=self._chains,
                 root_path=self.root_path,
-                client=None,
             )
 
         # Live runs

@@ -76,13 +76,13 @@ Cada agente recebe prompt self-contained: contexto, caminhos, output format <500
 
 Cinco personas configuráveis via Paperclip API (porta 3100), gerenciadas pelo `launcher_support/research_desk/`:
 
-| Sigil | Operativo | Foco | Model | Budget/mês |
-|---|---|---|---|---|
-| 👁️ | **RESEARCH** | Detecção / observação — scanning de mercado, anomaly flags, regime shifts, **research specs** | sonnet-4-6 | $80 |
-| ⚖️ | **REVIEW** | Julgamento — validação de hipóteses, scoring de edges, ship/iterate/kill calls em **TIPO 1 (spec) e TIPO 2 (code)** reviews | opus-4-7 | $100 |
-| 🔨 | **BUILD** | Construção — geração de código/engine novos, implementação de features em `experiment/*` branches | opus-4-7 | $250 |
-| 📚 | **CURATE** | Curadoria — docs, audits, consolidação de findings, session logs, **alignment drift** (Fase 2) | sonnet-4-6 | $50 |
-| 🔮 | **AUDIT** | Integridade — **gate final** entre `stage=research` e `live_ready`, protocolo 6-block de audit forense | opus-4-7 | $80 |
+| Operativo | Foco | Model | Budget/mes |
+|---|---|---|---|
+| **RESEARCH** | Deteccao / observacao - scanning de mercado, anomaly flags, regime shifts, **research specs** | sonnet-4-6 | $80 |
+| **REVIEW** | Julgamento - validacao de hipoteses, scoring de edges, ship/iterate/kill calls em **TIPO 1 (spec) e TIPO 2 (code)** reviews | opus-4-7 | $100 |
+| **BUILD** | Construcao - geracao de codigo/engine novos, implementacao de features em `experiment/*` branches | opus-4-7 | $250 |
+| **CURATE** | Curadoria - docs, audits, consolidacao de findings, session logs, **alignment drift** (Fase 2) | sonnet-4-6 | $50 |
+| **AUDIT** | Integridade - **gate final** entre `stage=research` e `live_ready`, protocolo 6-block de audit forense | opus-4-7 | $80 |
 
 Cada operativo tem:
 - **Persona editável**: `docs/agents/{key}.md` (markdown inline editor no launcher)

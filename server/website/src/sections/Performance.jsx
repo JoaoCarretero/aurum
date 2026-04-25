@@ -1,6 +1,7 @@
 import { Reveal } from "../components/Reveal";
 import { Metric } from "../components/Metric";
 import { EquityCurve } from "../components/charts/EquityCurve";
+import { IridescentCard } from "../components/IridescentCard";
 import { ENGINES, curve } from "../lib/data";
 
 const EQUITY_CITADEL = curve(1, 120, 0.0055, 0.014);
@@ -31,7 +32,7 @@ export function Performance() {
 
         <div className="perf-grid">
           <Reveal>
-            <article className="engine-card engine-card--lead">
+            <IridescentCard className="engine-card engine-card--lead">
               <header className="engine-card__head">
                 <div>
                   <h3 className="engine-card__name">{citadel.name}</h3>
@@ -58,11 +59,11 @@ export function Performance() {
                 Positive Sharpe across three disjoint regime windows. Edge
                 does not depend on the calibration period.
               </p>
-            </article>
+            </IridescentCard>
           </Reveal>
 
           <Reveal delay={0.1}>
-            <article className="engine-card">
+            <IridescentCard className="engine-card">
               <header className="engine-card__head">
                 <div>
                   <h3 className="engine-card__name">{jump.name}</h3>
@@ -88,11 +89,11 @@ export function Performance() {
                 OOS surpassed in-sample. Max drawdown held below 2% in a
                 360-day BEAR window.
               </p>
-            </article>
+            </IridescentCard>
           </Reveal>
 
           <Reveal delay={0.15}>
-            <article className="engine-card engine-card--moderate">
+            <IridescentCard className="engine-card engine-card--moderate">
               <header className="engine-card__head">
                 <div>
                   <h3 className="engine-card__name">{renaissance.name}</h3>
@@ -117,7 +118,7 @@ export function Performance() {
                 moderate edge at honest Sharpe. Reporting the gap is part
                 of the protocol.
               </p>
-            </article>
+            </IridescentCard>
           </Reveal>
         </div>
 

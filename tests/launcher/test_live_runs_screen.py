@@ -152,6 +152,33 @@ def test_detail_panel_renders_sections(
 
 
 @pytest.mark.gui
+def test_render_clears_selection_when_selected_run_disappears(
+    gui_root, fake_app, fake_runs, monkeypatch,
+):
+    """When the selected run is no longer in the catalog (e.g., archived),
+    rendering must clear `_selected_run_id` and auto-select the newest
+    remaining run instead of leaving a dangling 'run not found' detail."""
+    state = {"runs": fake_runs}
+    monkeypatch.setattr(
+        "launcher_support.screens.live_runs.run_catalog.list_runs_catalog",
+        lambda **kw: state["runs"],
+    )
+    s = LiveRunsScreen(parent=gui_root, app=fake_app)
+    s.mount()
+    s.on_enter()
+    assert s._selected_run_id == "r1"  # auto-selected newest
+
+    # Simulate r1 being archived: catalog now returns only r2
+    state["runs"] = [fake_runs[1]]
+    s._list_cache = (0.0, s._mode_filter, [])  # invalidate TTL cache
+    s._render()
+
+    assert s._selected_run_id == "r2", (
+        "stale selection should be cleared and newest auto-selected"
+    )
+
+
+@pytest.mark.gui
 def test_archive_action_calls_archiver(
     gui_root, fake_app, fake_runs, monkeypatch,
 ):

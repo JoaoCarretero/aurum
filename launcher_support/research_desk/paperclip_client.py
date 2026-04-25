@@ -5,8 +5,8 @@ de launcher_support/cockpit_client.py (para consistencia na casa).
 
 Paperclip opera em modo local_trusted: sem token, rede 127.0.0.1 so.
 Circuit breaker evita floodar requests quando o server ta offline
-(3 falhas -> 300s fechado; probe de reabertura automatico). Cache em
-disco preserva ultimo snapshot conhecido pra fallback offline do UI.
+(3 falhas -> 300s aberto; probe de reabertura automatico em half-open).
+Cache em disco preserva ultimo snapshot conhecido pra fallback offline do UI.
 
 Uso:
 
@@ -34,9 +34,11 @@ Sprints 2-3 adicionam os demais.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,7 +49,6 @@ from typing import Any
 class PaperclipConfig:
     base_url: str = "http://127.0.0.1:3100"
     timeout_sec: float = 5.0
-    poll_interval_sec: float = 5.0
 
 
 class CircuitOpen(RuntimeError):
@@ -77,11 +78,19 @@ class PaperclipClient:
     # ── Public API ────────────────────────────────────────────────
 
     def is_online(self) -> bool:
-        """True se health check passa agora. Swallow de todos os erros —
-        nao dispara CircuitOpen pra cima; o caller so quer um bool."""
+        """True se health check retorna status=='ok'.
+
+        Stricter than just-no-exception: a 200 with `{"status":"degraded"}`
+        or `{"status":"error"}` would otherwise register as online and
+        clear the breaker via _record_success. Live Paperclip server
+        returns `{"status":"ok",...}` on healthy startup.
+
+        Swallow de todos os erros — nao dispara CircuitOpen pra cima;
+        o caller so quer um bool.
+        """
         try:
-            self.health()
-            return True
+            data = self.health()
+            return data.get("status") == "ok"
         except (urllib.error.URLError, urllib.error.HTTPError, OSError,
                 TimeoutError, CircuitOpen, json.JSONDecodeError):
             return False
@@ -119,7 +128,7 @@ class PaperclipClient:
 
     def list_issues(self, company_id: str,
                     status: str | None = None) -> list[dict]:
-        qs = f"?status={status}" if status else ""
+        qs = f"?status={urllib.parse.quote(status)}" if status else ""
         data = self._get(f"/api/companies/{company_id}/issues{qs}")
         issues = data if isinstance(data, list) else data.get("issues", [])
         self._save_cache(f"issues_{company_id}.json", issues)
@@ -165,7 +174,8 @@ class PaperclipClient:
         Retorna lista (ordenada DESC por started_at pelo server). Tolera
         shapes {'runs': [...]} e [...] — normaliza pra list.
         """
-        path = f"/api/heartbeat-runs?agent_id={agent_id}&limit={limit}"
+        qs = urllib.parse.urlencode({"agent_id": agent_id, "limit": limit})
+        path = f"/api/heartbeat-runs?{qs}"
         data = self._get(path)
         runs = data if isinstance(data, list) else data.get("runs", [])
         return runs if isinstance(runs, list) else []
@@ -186,14 +196,30 @@ class PaperclipClient:
     # ── Circuit breaker ───────────────────────────────────────────
 
     def _check_breaker(self) -> None:
+        """Gate request entry by breaker state.
+
+        State machine:
+          CLOSED      consecutive_failures < threshold; passes
+          OPEN        breaker_open_until > now; raises CircuitOpen
+          HALF_OPEN   one probe in flight; OTHER threads raise; probe
+                      thread proceeds and outcome (success/failure)
+                      transitions to CLOSED or OPEN
+
+        Without the half-open gate, every concurrent caller after timeout
+        elapses passes through and hammers the server simultaneously
+        instead of one probe.
+        """
         with self._breaker_lock:
             now = time.time()
+            if self._half_open_probe:
+                # Probe in flight — block other callers
+                raise CircuitOpen("half-open probe in flight")
             if self._breaker_open_until > now:
                 raise CircuitOpen(
                     f"breaker open for {self._breaker_open_until - now:.0f}s more"
                 )
             if self._breaker_open_until != 0.0 and self._breaker_open_until <= now:
-                # open -> half-open: libera um probe
+                # open -> half-open: this thread becomes the sole probe
                 self._consecutive_failures = 0
                 self._breaker_open_until = 0.0
                 self._half_open_probe = True
@@ -201,6 +227,7 @@ class PaperclipClient:
     def _record_failure(self) -> None:
         with self._breaker_lock:
             if self._half_open_probe:
+                # Half-open probe failed — re-open the breaker
                 self._half_open_probe = False
                 self._consecutive_failures = self._BREAKER_THRESHOLD
                 self._breaker_open_until = time.time() + self._BREAKER_TIMEOUT_SEC
@@ -234,9 +261,13 @@ class PaperclipClient:
                 self._record_success()
                 return result
         except urllib.error.HTTPError as exc:
-            # 5xx conta; 4xx eh culpa do caller, nao do server
+            # 5xx conta como falha de server; 4xx significa que o server
+            # esta vivo mas rejeitou o request — counts as success pra
+            # nao deixar o breaker abrir por bad caller IDs em sequencia.
             if 500 <= exc.code < 600:
                 self._record_failure()
+            else:
+                self._record_success()
             raise
         except (urllib.error.URLError, OSError, TimeoutError):
             self._record_failure()
@@ -252,12 +283,25 @@ class PaperclipClient:
     # ── Cache ─────────────────────────────────────────────────────
 
     def _save_cache(self, fname: str, data: object) -> None:
+        """Atomic JSON write: write to .tmp then os.replace.
+
+        Without this, two threads writing the same key (e.g. poll_state
+        + modal both calling list_agents) can produce a partially-written
+        file. _load_cache swallows JSONDecodeError, so the failure mode
+        is silent cache loss — cache becomes worthless under contention.
+        OneDrive sync compounds this on Windows.
+        """
+        target = self.cache_dir / fname
+        tmp = self.cache_dir / f"{fname}.tmp"
         try:
-            (self.cache_dir / fname).write_text(
-                json.dumps(data, default=str), encoding="utf-8",
-            )
+            tmp.write_text(json.dumps(data, default=str), encoding="utf-8")
+            os.replace(tmp, target)
         except OSError:
-            pass
+            # Best-effort: clean up the tmp if it exists
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _load_cache(self, fname: str) -> object | None:
         path = self.cache_dir / fname

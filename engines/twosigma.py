@@ -124,7 +124,7 @@ def build_target(df: pd.DataFrame, lookahead: int = 10) -> pd.Series:
         best = by_strat.idxmax()
         targets.append(_STRAT_MAP.get(best, 0))
 
-    return pd.Series(targets, index=df.index)
+    return pd.Series(targets, index=df.index[:-1])
 
 
 # ══════════════════════════════════════════════════════════════

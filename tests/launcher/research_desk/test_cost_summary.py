@@ -80,15 +80,45 @@ def test_shape_agent_cost_no_dict() -> None:
     assert view.level == LEVEL_GREEN
 
 
-def test_shape_agent_cost_trend_from_history() -> None:
+def test_shape_agent_cost_trend_is_daily_delta() -> None:
+    """trend_cents are DAILY DELTAS (daily burn), not cumulative.
+
+    Paperclip's monthly_spent_cents is a running monthly total — a
+    cumulative plot is just a monotone-ascending line that resets at
+    month-end and tells the user nothing useful. Daily delta shows
+    actual day-by-day burn rate.
+    """
     rows = [
-        _row(date="2026-04-18", spent_cents=100),
-        _row(date="2026-04-20", spent_cents=300),
-        _row(date="2026-04-19", spent_cents=200),
+        _row(date="2026-04-18", spent_cents=100),  # cumulative day 1
+        _row(date="2026-04-20", spent_cents=350),  # day 3 (skip 19)
+        _row(date="2026-04-19", spent_cents=200),  # day 2
     ]
     view = shape_agent_cost(RESEARCH, None, rows)
-    # ASC por data -> 100, 200, 300
-    assert view.trend_cents == [100, 200, 300]
+    # ASC sorted: 100, 200, 350. First day uses cumulative as delta
+    # (assume yesterday=0), then day-over-day diffs.
+    # 100, 200-100=100, 350-200=150
+    assert view.trend_cents == [100, 100, 150]
+
+
+def test_shape_agent_cost_trend_handles_month_rollover() -> None:
+    """When cumulative resets at month boundary (cur < prev), use cur
+    as that day's burn rather than producing a negative delta."""
+    rows = [
+        _row(date="2026-04-29", spent_cents=2400),
+        _row(date="2026-04-30", spent_cents=2500),
+        _row(date="2026-05-01", spent_cents=80),    # new month: reset
+        _row(date="2026-05-02", spent_cents=180),
+    ]
+    view = shape_agent_cost(RESEARCH, None, rows)
+    # First day = 2400 (assume previous month's last day was 0 / unknown)
+    # 2500-2400=100, then rollover: 80, then 180-80=100
+    assert view.trend_cents == [2400, 100, 80, 100]
+
+
+def test_shape_agent_cost_trend_empty_history() -> None:
+    """Zero history -> empty trend, not crash."""
+    view = shape_agent_cost(RESEARCH, None, [])
+    assert view.trend_cents == []
 
 
 def test_shape_agent_cost_alert_level() -> None:
@@ -147,6 +177,24 @@ def test_shape_summary_over_alert_list() -> None:
     summary = shape_cost_summary(agents_raw, {})
     assert len(summary.agents_over_alert) == 1
     assert summary.agents_over_alert[0] == AGENTS[0].key
+
+
+def test_shape_summary_over_alert_includes_exact_80_pct_boundary() -> None:
+    """An agent with spent=800 cap=1000 (pct == 0.80 EXACTLY) MUST
+    appear in agents_over_alert. The boundary `_T_ALERT = 0.80` is
+    `>=`, not `>` — off-by-one would silently exclude an agent right
+    at the threshold (lane 5 audit HIGH #7).
+    """
+    agents_raw = [{
+        "id": AGENTS[0].uuid,
+        "monthly_spent_cents": 800,
+        "monthly_budget_cents": 1000,
+    }]
+    summary = shape_cost_summary(agents_raw, {})
+    target = next(v for v in summary.by_agent if v.agent_key == AGENTS[0].key)
+    assert target.pct == 0.80
+    assert target.level == LEVEL_ALERT
+    assert AGENTS[0].key in summary.agents_over_alert
 
 
 # ── normalize_trend ───────────────────────────────────────────────

@@ -1,0 +1,21 @@
+[Unit]
+Description=AURUM · Zombie runner scanner (one-shot, invoked by timer)
+Documentation=https://github.com/joao/aurum.finance
+
+[Service]
+Type=oneshot
+User=aurum
+WorkingDirectory=/srv/aurum.finance
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 tools/maintenance/zombie_scanner.py
+
+# Hardening — scanner is read-only over heartbeats and writes only to
+# data/.zombie_notified.json.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/aurum.finance/data
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aurum-zombie-scanner

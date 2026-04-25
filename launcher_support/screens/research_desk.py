@@ -19,6 +19,7 @@ sao canceladas em on_exit.
 """
 from __future__ import annotations
 
+import atexit
 import logging
 import tkinter as tk
 from pathlib import Path
@@ -76,7 +77,9 @@ from launcher_support.research_desk.agent_view import (
     offline_view,
     shape_agents_by_uuid,
 )
-from launcher_support.research_desk.agents import AGENTS, COMPANY_ID, AgentIdentity
+from launcher_support.research_desk.agent_tab import AgentTab
+from launcher_support.research_desk.tab_strip import TabStrip
+from launcher_support.research_desk.agents import AGENTS, BY_KEY, COMPANY_ID, AgentIdentity
 from launcher_support.research_desk.artifact_scanner import (
     ArtifactEntry,
     scan_artifacts,
@@ -116,6 +119,11 @@ from launcher_support.screens.base import Screen
 # timeout pra nao bloquear UI quando server ta offline.
 _POLL_INTERVAL_MS = 5000
 _HEALTH_TIMEOUT_SEC = 1.5
+
+# Scan artifacts TTL — walking the whole repo every 5s tick (poll cadence)
+# meant 720 FS walks/hr in steady state. At 30s TTL we re-walk at most
+# 120/hr — 6x reduction in main-thread blocking.
+_SCAN_TTL_SEC = 30.0
 
 
 def _count_tickets_for(agent_uuid: str, issues_raw: list[dict]) -> tuple[int, int]:
@@ -166,6 +174,13 @@ class ResearchDeskScreen(Screen):
         # ownership do subprocess (se o user navega pra outro screen e
         # volta, o paperclip continua rodando).
         self._process = PaperclipProcess(cmd=default_paperclip_cmd())
+        # atexit hook — para o subprocess quando o launcher fechar.
+        # Sem isto, o `node paperclipai` fica orfao bound em :3100; na
+        # proxima abertura do launcher, start() falha em fast-crash
+        # detect (EADDRINUSE) ou marca EXTERNAL e o user fica preso.
+        # Idempotente: stop() so faz algo se is_owned() — multiple
+        # screen instances em testes nao causam side effects.
+        atexit.register(self._shutdown_paperclip)
         # Ultimo estado conhecido, pra o label piscar somente em mudanca
         # real (evita redraw desnecessario a cada tick).
         self._last_online: bool | None = None
@@ -180,6 +195,71 @@ class ResearchDeskScreen(Screen):
         self._last_snapshot_date = ""  # detecta rollover de dia
         # Widgets do toggle paperclip
         self._action_btn: tk.Label | None = None
+        # Tab strip state
+        self._active_tab: str = "overview"
+        self._tab_frames: dict[str, tk.Frame] = {}
+        self._tab_strip: TabStrip | None = None
+        self._tab_container: tk.Frame | None = None
+        self._overview_frame: tk.Frame | None = None
+
+    def _shutdown_paperclip(self) -> None:
+        """atexit hook — stops owned Paperclip process before launcher exits.
+
+        Idempotent: returns early if no proc owned (most cases). Catches
+        all exceptions because exit-time is too late for diagnostics —
+        we just want the port released.
+        """
+        try:
+            if self._process.is_owned():
+                self._process.stop(wait_sec=3.0)
+        except Exception:
+            pass
+
+    def _enforce_budget_caps(self, agents_raw: list[dict]) -> None:
+        """Pause agents that hit their effective hard cap.
+
+        Runs in the daemon poll thread (off-UI). Idempotent: skips
+        agents already paused. Errors swallowed since enforcement is
+        best-effort — daily snapshot will still record the event.
+
+        AGENTS.md §4 spec: $80/$100/$250/$50/$80 caps per agent. Server
+        value preferred (Joao's authoritative knob); HARD_BUDGETS_CENTS
+        is the fallback when Paperclip server returns 0 (e.g. fresh
+        instance, API drift). Without this, alerts at 90% are theatre —
+        nothing actually stops the agent from blowing past the cap.
+        """
+        from launcher_support.research_desk.agents import (
+            BY_UUID, effective_budget_cents,
+        )
+        for a_dict in agents_raw:
+            uid = a_dict.get("id")
+            if not uid:
+                continue
+            agent = BY_UUID.get(uid)
+            if agent is None:
+                continue
+            if a_dict.get("paused"):
+                continue  # already paused — no-op
+            spent = int(
+                a_dict.get("monthly_spent_cents") or
+                a_dict.get("spent_cents") or 0
+            )
+            server_cap = int(
+                a_dict.get("monthly_budget_cents") or
+                a_dict.get("budget_cents") or 0
+            )
+            cap = effective_budget_cents(agent, server_cap)
+            if cap <= 0:
+                continue  # no cap set — can't enforce
+            if spent >= cap:
+                try:
+                    self._client.pause_agent(uid)
+                    _LOG.warning(
+                        "auto-pause %s: spent=%d >= cap=%d cents",
+                        agent.key, spent, cap,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    _LOG.warning("auto-pause %s failed: %s", agent.key, e)
 
     # ── Build ─────────────────────────────────────────────────────
 
@@ -252,6 +332,27 @@ class ResearchDeskScreen(Screen):
         tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(0, 12))
 
     def _build_content(self, parent: tk.Frame) -> None:
+        # Tab strip — nav entre OVERVIEW e 5 agent tabs
+        tabs = [("overview", "OVERVIEW")] + [(a.key, a.key) for a in AGENTS]
+        self._tab_strip = TabStrip(
+            parent,
+            tabs=tabs,
+            on_select=self._switch_tab,
+            initial_key="overview",
+        )
+        self._tab_strip.pack(fill="x", pady=(8, 0))
+
+        # Tab container — onde os frames das tabs se empilham
+        self._tab_container = tk.Frame(parent, bg=BG)
+        self._tab_container.pack(fill="both", expand=True)
+
+        # OVERVIEW frame = todo o conteudo existente
+        self._overview_frame = tk.Frame(self._tab_container, bg=BG)
+        self._build_overview_content(self._overview_frame)
+        self._overview_frame.pack(fill="both", expand=True)
+        self._tab_frames["overview"] = self._overview_frame
+
+    def _build_overview_content(self, parent: tk.Frame) -> None:
         content = tk.Frame(parent, bg=BG)
         content.pack(fill="both", expand=True)
 
@@ -281,10 +382,95 @@ class ResearchDeskScreen(Screen):
                 on_assign=self._stub_action("assign"),
                 on_configure=lambda a=agent: self._on_configure_click(a),
                 on_history=self._stub_action("history"),
-                on_inspect=self._open_agent_detail,
+                on_inspect=lambda a=agent: self._switch_tab(a.key),
             )
             card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0))
             self._agent_cards[agent.key] = card
+
+    # ── Tab navigation ────────────────────────────────────────────
+
+    def _switch_tab(self, key: str) -> None:
+        """Troca tab ativa. Lazy-builds AgentTab se ainda nao existe."""
+        if key == self._active_tab:
+            return
+        # Esconde tab atual
+        current = self._tab_frames.get(self._active_tab)
+        if current is not None and current.winfo_exists():
+            if hasattr(current, "on_hide"):
+                try:
+                    current.on_hide()
+                except Exception as e:
+                    _LOG.exception("tab on_hide failed: %s", e)
+            try:
+                current.pack_forget()
+            except Exception as e:
+                _LOG.exception("tab hide failed: %s", e)
+        # Mostra / constroi target
+        if key not in self._tab_frames:
+            try:
+                self._tab_frames[key] = self._build_agent_tab(key)
+            except Exception as e:
+                _LOG.exception("build AgentTab %s failed: %s", key, e)
+                self._flash_feedback(ok=False, msg=f"tab {key} falhou")
+                # Mantém tab atual visível
+                if current is not None and current.winfo_exists():
+                    current.pack(fill="both", expand=True)
+                return
+        target = self._tab_frames[key]
+        try:
+            target.pack(fill="both", expand=True)
+        except Exception as e:
+            _LOG.exception("tab pack failed: %s", e)
+            self._flash_feedback(ok=False, msg=f"tab {key} pack falhou")
+            if current is not None and current.winfo_exists():
+                try:
+                    current.pack(fill="both", expand=True)
+                    if hasattr(current, "on_show"):
+                        current.on_show()
+                except Exception as e2:
+                    _LOG.exception("restore current tab failed: %s", e2)
+            return
+        if hasattr(target, "on_show"):
+            try:
+                target.on_show()
+            except Exception as e:
+                _LOG.exception("tab on_show failed: %s", e)
+        self._active_tab = key
+        if self._tab_strip is not None:
+            self._tab_strip.set_active(key)
+
+    def _build_agent_tab(self, agent_key: str) -> AgentTab:
+        """Factory pra AgentTab. Encontra AgentIdentity pelo key."""
+        agent = BY_KEY[agent_key]
+        return AgentTab(
+            self._tab_container,
+            agent=agent,
+            fetch_runs=self._fetch_runs_for_agent,
+            root_path=self.root_path,
+            fetch_ratios=self._fetch_ratios_for_agent,
+            on_toggle_pause=self._toggle_agent_pause,
+            toplevel=self.app,
+        )
+
+    def _fetch_runs_for_agent(self, agent: AgentIdentity) -> list[dict]:
+        """Callable passado ao AgentTab via on_show pra live runs polling."""
+        try:
+            return self._client.list_heartbeat_runs_cached(agent.uuid, limit=10)
+        except Exception as e:
+            _LOG.debug("fetch_runs for %s failed: %s", agent.key, e)
+            return []
+
+    def _fetch_ratios_for_agent(self, agent: AgentIdentity):
+        """Callable passado ao AgentTab; retorna RatiosView | None via stats_db."""
+        conn = self._ensure_stats_db()
+        if conn is None:
+            return None
+        try:
+            rows = stats_db.list_days(conn, agent.key, days=30)
+            return stats_db.compute_ratios(rows)
+        except Exception as e:
+            _LOG.debug("fetch_ratios for %s failed: %s", agent.key, e)
+            return None
 
     def _stub_action(self, action: str) -> Any:
         """Retorna handler generico que mostra msg no h_stat.
@@ -638,6 +824,9 @@ class ResearchDeskScreen(Screen):
                     agents_raw = self._client.list_agents_cached(COMPANY_ID)
                     issues_raw = self._client.list_issues_cached(COMPANY_ID)
                     used_cents, cap_cents = total_budget_cents(agents_raw)
+                    # Enforce hard budget caps off-UI-thread; idempotent
+                    # via paused flag check (no double-pause spam).
+                    self._enforce_budget_caps(agents_raw)
             except (CircuitOpen, urllib.error.URLError, TimeoutError):
                 online = False
                 agents_raw = []
@@ -699,23 +888,72 @@ class ResearchDeskScreen(Screen):
             except Exception:
                 pass  # DB opcional — nao bloqueia UI
 
+        # Distribui poll pras agent tabs ja construidas
+        agents_state = {a.get("id"): a for a in agents_raw if a.get("id")}
+        for key, tab in list(self._tab_frames.items()):
+            if key == "overview":
+                continue
+            if not isinstance(tab, AgentTab):
+                continue
+            try:
+                tab.update(
+                    agents_state=agents_state,
+                    issues_raw=issues_raw,
+                    full_scan=full_scan,
+                )
+            except Exception as e:
+                _LOG.exception("tab %s update failed: %s", key, e)
+
     def _apply_artifacts(self) -> list[ArtifactEntry]:
-        """Atualiza panels + retorna o scan pra reuso (snapshots)."""
+        """Atualiza panels + retorna o scan pra reuso (snapshots).
+
+        TTL cache: scan_artifacts walks the entire repo (docs/, data/,
+        git refs). At 5s poll cadence that's 720 walks/hour; with
+        ~hundreds of files it adds up. Cache the result for SCAN_TTL_SEC
+        seconds — re-walk at most 1x/30s instead of every tick. New
+        issues still flow into merge_events on every tick (issues are
+        passed in from poll_state, not cached here).
+
+        On scan failure, fall back to last-known good. Stale-fallback
+        is tracked via `_scan_cache_ts` so a permanently-broken scan
+        eventually surfaces a flash + log warning every N misses.
+        """
         if self._artifacts_panel is None:
             return []
-        # Scan unico por tick. Panel usa os 30 mais recentes; activity
-        # feed recebe ate 200 (pagina internamente via LOAD MORE).
-        try:
-            full_scan = scan_artifacts(self.root_path, limit=200, issues=self._last_issues_raw)
-        except Exception as e:
-            full_scan = getattr(self, "_last_full_scan", [])
-            _LOG.warning("scan_artifacts falhou: %s", e)
-            if not getattr(self, "_scan_error_flashed", False):
-                self._flash_feedback(ok=False, msg="scan artifacts falhou")
-                self._scan_error_flashed = True
-        else:
-            self._last_full_scan = full_scan
+
+        import time as _time
+        now = _time.time()
+        cache_age = now - getattr(self, "_scan_cache_ts", 0.0)
+        cached = getattr(self, "_last_full_scan", None)
+
+        if cache_age < _SCAN_TTL_SEC and cached:
+            # Warm cache — skip FS walk this tick
+            full_scan = cached
             self._scan_error_flashed = False
+        else:
+            try:
+                full_scan = scan_artifacts(
+                    self.root_path, limit=200,
+                    issues=self._last_issues_raw,
+                )
+                self._last_full_scan = full_scan
+                self._scan_cache_ts = now
+                self._scan_error_flashed = False
+            except Exception as e:
+                full_scan = cached or []
+                _LOG.warning("scan_artifacts falhou: %s", e)
+                # Surface staleness when fallback cache is older than 2x TTL —
+                # masking permanent failures behind 'use last good' was the
+                # original audit complaint (Lane 4 HIGH #6).
+                stale_for = now - getattr(self, "_scan_cache_ts", 0.0)
+                if stale_for > _SCAN_TTL_SEC * 2 and not getattr(
+                    self, "_scan_error_flashed", False,
+                ):
+                    self._flash_feedback(
+                        ok=False,
+                        msg=f"scan artifacts stale {int(stale_for)}s",
+                    )
+                    self._scan_error_flashed = True
 
         try:
             self._artifacts_panel.update(full_scan[:30])
@@ -744,6 +982,11 @@ class ResearchDeskScreen(Screen):
     ) -> None:
         """Grava snapshot diario por agente no SQLite. Idempotente via
         upsert por (agent_key, date). Skipa se ja gravou hoje neste processo.
+
+        Wires runs_total/success/error from heartbeat per agent — without
+        this, the kill-leg of ship/iterate/kill is permanently 0 and the
+        ratio chart only ever shows ship vs iterate. Heartbeat fetches
+        run 1x/day/agent (5 HTTP calls total) and tolerate cache miss.
         """
         today = stats_db.today_utc()
         if today == self._last_snapshot_date:
@@ -761,6 +1004,9 @@ class ResearchDeskScreen(Screen):
                         a_dict.get("spent_cents") or 0)
             done, active = _count_tickets_for(agent.uuid, issues_raw)
             arts = sum(1 for a in artifacts if a.agent_key == agent.key)
+            runs_total, runs_success, runs_error = self._fetch_run_counts(
+                agent.uuid,
+            )
             stats_db.record_snapshot(
                 conn,
                 agent_key=agent.key,
@@ -769,8 +1015,36 @@ class ResearchDeskScreen(Screen):
                 tickets_active=active,
                 artifacts_total=arts,
                 spent_cents=spent,
+                runs_total=runs_total,
+                runs_success=runs_success,
+                runs_error=runs_error,
             )
         self._last_snapshot_date = today
+
+    def _fetch_run_counts(self, agent_uuid: str) -> tuple[int, int, int]:
+        """Fetch heartbeat runs and bucket statuses into (total, success, error).
+
+        Statuses observed in Paperclip API: 'running', 'completed',
+        'failed', 'error', 'cancelled', 'timeout'. Anything not matching
+        success/error patterns is counted in `total` only.
+
+        Returns (0, 0, 0) on any fetch failure — snapshots stay coherent
+        even when Paperclip flips offline mid-snapshot.
+        """
+        try:
+            runs = self._client.list_heartbeat_runs_cached(agent_uuid, limit=50)
+        except Exception:  # noqa: BLE001
+            return 0, 0, 0
+        total = len(runs)
+        success = 0
+        error = 0
+        for r in runs:
+            status = (r.get("status") or "").lower()
+            if status in ("completed", "success", "succeeded"):
+                success += 1
+            elif status in ("failed", "error", "cancelled", "canceled", "timeout"):
+                error += 1
+        return total, success, error
 
     def _apply_pipeline(self, issues_raw: list[dict], *, online: bool) -> None:
         if self._pipeline_panel is None:

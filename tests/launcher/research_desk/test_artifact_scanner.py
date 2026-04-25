@@ -261,3 +261,70 @@ def test_detect_origin_agent_ignores_non_experiment_checkout(tmp_path):
         tmp_path, "phi", "2026-04-23_1403", [], mtime_epoch=mtime,
     )
     assert origin == "human"
+
+
+# ── New behavior: engine allow-list + reflog-once (FASE B Block 3) ─
+
+
+def test_scan_backtests_filters_non_engine_dirs(tmp_path):
+    """data/ in production has _archive/, db/, exports/, aurum.db.backup-*
+    alongside engines. Without the allow-list, those got picked up as
+    engines polluting the backtest activity feed.
+    """
+    from launcher_support.research_desk.artifact_scanner import scan_artifacts
+
+    # Real engine — should be picked up
+    (tmp_path / "data" / "citadel" / "2026-04-25_1500").mkdir(parents=True)
+    # Non-engine sibling dirs in data/ — should be skipped
+    (tmp_path / "data" / "_archive" / "2026-04-25_1501").mkdir(parents=True)
+    (tmp_path / "data" / "db" / "2026-04-25_1502").mkdir(parents=True)
+    (tmp_path / "data" / "exports" / "2026-04-25_1503").mkdir(parents=True)
+
+    entries = scan_artifacts(tmp_path)
+    backtests = [e for e in entries if e.kind == "backtest"]
+    engines = {e.engine for e in backtests}
+    assert "citadel" in engines
+    assert "_archive" not in engines
+    assert "db" not in engines
+    assert "exports" not in engines
+
+
+def test_parse_reflog_once_returns_experiment_events_only(tmp_path):
+    """_parse_reflog_once filters reflog to checkout-of-experiment lines
+    only — non-experiment checkouts and non-checkout entries skipped.
+    """
+    from launcher_support.research_desk.artifact_scanner import (
+        _parse_reflog_once,
+    )
+
+    gitlogs = tmp_path / ".git" / "logs"
+    gitlogs.mkdir(parents=True)
+    (gitlogs / "HEAD").write_text(
+        "0000 aaaa Joao <j@e.com> 1700000000 -0300\t"
+        "checkout: moving from main to experiment/phi\n"
+        "aaaa bbbb Joao <j@e.com> 1700000100 -0300\t"
+        "commit: refactor stuff\n"
+        "bbbb cccc Joao <j@e.com> 1700000200 -0300\t"
+        "checkout: moving from experiment/phi to feat/unrelated\n"
+        "cccc dddd Joao <j@e.com> 1700000300 -0300\t"
+        "checkout: moving from feat/unrelated to experiment/jump\n",
+        encoding="utf-8",
+    )
+
+    events = _parse_reflog_once(tmp_path)
+    # Two experiment-related checkouts (one INTO experiment/phi, one
+    # away FROM it back to feat/, plus one INTO experiment/jump = 3)
+    timestamps = [ts for ts, _ in events]
+    assert 1700000000 in timestamps
+    assert 1700000200 in timestamps
+    assert 1700000300 in timestamps
+    # Non-experiment commit not included
+    assert 1700000100 not in timestamps
+
+
+def test_parse_reflog_once_missing_file_returns_empty(tmp_path):
+    """No reflog (e.g. fresh repo, or non-git dir) -> []."""
+    from launcher_support.research_desk.artifact_scanner import (
+        _parse_reflog_once,
+    )
+    assert _parse_reflog_once(tmp_path) == []

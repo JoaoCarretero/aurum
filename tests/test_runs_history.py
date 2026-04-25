@@ -706,17 +706,22 @@ def test_render_runs_history_smoke(tmp_path, monkeypatch, gui_root):
 
 
 def test_columns_schema():
-    """_COLUMNS defines 11 cells in a fixed order. Widths fit the longest
-    realistic value (RENAISSANCE for engine, +999.99% for roi, LOCAL for src)."""
+    """_COLUMNS defines 14 cells in a fixed order. Widths fit the longest
+    realistic value (RENAISSANCE for engine, +999.99% for roi, LOCAL for src).
+    DD%/SHARPE/#POS added between ROI and TRADES for inline triage."""
     from launcher_support.runs_history import _COLUMNS
     labels = [c[0] for c in _COLUMNS]
     assert labels == ["ST", "ENGINE", "MODE", "STARTED", "DUR",
-                      "TICKS", "SIG", "EQUITY", "ROI", "TRADES", "SRC"]
+                      "TICKS", "SIG", "EQUITY", "ROI",
+                      "DD%", "SHARPE", "#POS", "TRADES", "SRC"]
     widths = dict(_COLUMNS)
-    assert widths["ENGINE"] == 11
+    assert widths["ENGINE"] == 14
     assert widths["ROI"] == 8
     assert widths["SRC"] == 5
     assert widths["TRADES"] == 6
+    assert widths["DD%"] == 6
+    assert widths["SHARPE"] == 7
+    assert widths["#POS"] == 5
 
 
 def test_render_left_header_smoke(gui_root):
@@ -745,7 +750,7 @@ def test_render_list_section_header_smoke(gui_root):
 
 def test_render_run_row_smoke(gui_root):
     """_render_run_row paints without exception. Verifies cell count
-    matches _COLUMNS (11 cells, no drift after polish)."""
+    matches _COLUMNS (14 cells after DD%/SHARPE/#POS bump)."""
     import tkinter as tk
     from launcher_support.runs_history import _render_run_row, _COLUMNS, RunSummary
     frame = tk.Frame(gui_root)
@@ -761,7 +766,7 @@ def test_render_run_row_smoke(gui_root):
     rows = frame.winfo_children()
     assert len(rows) == 1  # one row frame
     cells = rows[0].winfo_children()
-    assert len(cells) == len(_COLUMNS)  # 11 cells, matches column schema
+    assert len(cells) == len(_COLUMNS)  # matches len(_COLUMNS) — currently 14 cells
 
 
 def test_section_helper_deleted():

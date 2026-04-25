@@ -100,6 +100,7 @@ def _reap_tunnel_windows(local_port: int) -> int:
         if parts and parts[-1].isdigit():
             pids.add(int(parts[-1]))
     killed = 0
+    netstat_pid_dead = False
     for pid in pids:
         try:
             img = subprocess.check_output(
@@ -107,7 +108,13 @@ def _reap_tunnel_windows(local_port: int) -> int:
                 timeout=3, stderr=subprocess.DEVNULL,
                 creationflags=_NO_WINDOW,
             ).decode("latin-1", errors="replace")
+            # tasklist returns "INFO: No tasks..." when PID is gone. This
+            # happens with `ssh -f` (the parent forks + exits, leaving the
+            # netstat owner-PID dangling while the actual listener child
+            # owns the socket via fd inheritance under a different PID).
             if "ssh.exe" not in img.lower():
+                if "no tasks" in img.lower() or "nenhuma tarefa" in img.lower():
+                    netstat_pid_dead = True
                 continue
             subprocess.run(
                 ["taskkill", "/F", "/PID", str(pid)],
@@ -117,6 +124,38 @@ def _reap_tunnel_windows(local_port: int) -> int:
             killed += 1
         except Exception:
             continue
+    # Fallback: netstat reported a PID that doesn't exist (typical of
+    # `ssh -f` orphans on Windows where the daemonised parent PID survives
+    # in the kernel's socket-owner table). Sweep every running ssh.exe —
+    # any that's binding our port silently will release it on kill, the
+    # OS reclaims the socket, and start() can bind cleanly. Other ssh.exe
+    # instances unrelated to the cockpit still die: cost of recovery from
+    # a fairly rare state, accepted because the launcher's port=8787 is
+    # known and any ssh.exe holding it is presumed stale.
+    if killed == 0 and netstat_pid_dead:
+        try:
+            ssh_list = subprocess.check_output(
+                ["tasklist", "/FI", "IMAGENAME eq ssh.exe", "/FO", "CSV", "/NH"],
+                timeout=3, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            ).decode("latin-1", errors="replace")
+            for line in ssh_list.splitlines():
+                # CSV row: "ssh.exe","17656","Console","10","10,596 K"
+                parts = [p.strip().strip('"') for p in line.split(",")]
+                if len(parts) >= 2 and parts[1].isdigit():
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/PID", parts[1]],
+                            timeout=3,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=_NO_WINDOW,
+                        )
+                        killed += 1
+                    except Exception:
+                        continue
+        except Exception:
+            pass
     return killed
 
 
@@ -245,8 +284,32 @@ class TunnelManager:
         """Build the ssh command line. Assumes config is not None."""
         assert self._config is not None, "_build_cmd called with None config"
         cfg = self._config
+        # `-F <empty-file>`: ignora ~/.ssh/config sem depender de null device.
+        # Sem isso, um config file world-readable em ~/.ssh/config faz ssh
+        # recusar com "Bad permissions" e a tunnel nunca sobe — bug surfaced
+        # 2026-04-25 quando um config criado via tooling com perms herdadas
+        # bloqueou o tunnel por horas. Esta flag isola o tunnel da launcher
+        # de qualquer ~/.ssh/config do operador, bom ou mau — todas as
+        # opcoes vem do _build_cmd via -o, autonomo.
+        #
+        # Por que empty-file e nao NUL/dev/null: Git for Windows ships um
+        # ssh.exe MSYS-based que NAO reconhece "NUL" como null device —
+        # trata como filename literal e falha com "Can't open user config
+        # file NUL: No such file or directory". Real Windows OpenSSH faz
+        # mapear, mas a launcher tambem roda de git-bash. Empty file real
+        # funciona em qualquer ssh (Windows native, MSYS, POSIX).
+        empty_cfg_path = self._log_dir / "empty_ssh_config"
+        try:
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            empty_cfg_path.touch(exist_ok=True)
+        except OSError:
+            # Fallback pra null device se nao conseguir criar o file
+            # (read-only fs, etc). Mantem comportamento anterior — quebrado
+            # em git-bash mas pelo menos a maquina nao hangs no command build.
+            empty_cfg_path = "NUL" if os.name == "nt" else "/dev/null"  # type: ignore[assignment]
         cmd: list[str] = [
             "ssh",
+            "-F", str(empty_cfg_path),
             "-N",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=30",

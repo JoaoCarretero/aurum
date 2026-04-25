@@ -21,16 +21,15 @@ Nao-Windows: terminate() (SIGTERM) + fallback kill() (SIGKILL) ja funciona.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import signal
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
 
 
 class ServerStatus(Enum):
@@ -41,7 +40,9 @@ class ServerStatus(Enum):
     EXTERNAL = "external"   # health OK mas nos nao spawnamos — ignora stop
 
 
-_STDOUT_BUFFER_MAX = 500  # linhas retidas pro live-log reader
+_STDOUT_BUFFER_MAX = 500       # linhas retidas pro live-log reader
+_LINE_TRUNCATE = 4096          # truncate mega-lines no buffer (OOM guard)
+_FAST_CRASH_DETECT_SEC = 0.3   # tempo apos Popen pra confirmar que nao crashou
 
 
 @dataclass
@@ -51,6 +52,15 @@ class PaperclipProcess:
     Uma instancia gerencia no maximo 1 processo vivo. Se ja existe um
     server externo (spawned na mao pelo user), nao tentamos stop — o
     status vira EXTERNAL e o botao de stop fica desabilitado.
+
+    Concurrency model:
+      - `_state_lock` protege transicoes da status machine + binding do
+        `_proc` (start/stop/mark_online/mark_offline). Re-entrant pra
+        que helpers consigam chamar `is_owned()` debaixo do lock sem
+        deadlock — embora `is_owned()` em si seja lockless por design
+        (so le `_proc.poll()`).
+      - `_buffer_lock` protege o stdout deque. Separado de `_state_lock`
+        pra que o reader thread nao bloqueie a status machine.
     """
 
     cmd: tuple[str, ...] = ("paperclipai", "run")
@@ -60,30 +70,46 @@ class PaperclipProcess:
     _reader_thread: threading.Thread | None = None
     _stdout_buffer: deque[str] = field(default_factory=lambda: deque(maxlen=_STDOUT_BUFFER_MAX))
     _buffer_lock: threading.Lock = field(default_factory=threading.Lock)
+    _state_lock: threading.RLock = field(default_factory=threading.RLock)
 
     def is_owned(self) -> bool:
-        """True se nos spawnamos o processo e ele ta vivo."""
+        """True se nos spawnamos o processo e ele ta vivo.
+
+        Lockless por design: leitura atomica de `_proc` + chamada
+        idempotente de `poll()`. Chamavel sob ou fora do `_state_lock`.
+        """
         return self._proc is not None and self._proc.poll() is None
 
     def mark_online(self) -> None:
         """Chamado pelo poller quando health confirma ONLINE.
 
-        Se nao temos proc owned, marca EXTERNAL (server foi spawnado
-        fora — CLI, outro launcher, etc). Se owned, vira ONLINE.
+        Se status e STOPPING, no-op: o caller pediu stop e o poller
+        ainda viu o server vivo no ultimo round-trip — nao queremos
+        ressuscitar pro UI. Se nao temos proc owned, marca EXTERNAL
+        (server foi spawnado fora — CLI, outro launcher, etc). Se
+        owned, vira ONLINE.
         """
-        if self.is_owned():
-            self.status = ServerStatus.ONLINE
-        else:
-            self.status = ServerStatus.EXTERNAL
+        with self._state_lock:
+            if self.status == ServerStatus.STOPPING:
+                return  # mid-stop — nao desfaz a transicao
+            if self.is_owned():
+                self.status = ServerStatus.ONLINE
+            else:
+                self.status = ServerStatus.EXTERNAL
 
     def mark_offline(self) -> None:
-        """Health falhou. Se processo owned morreu, limpa refs."""
-        if self._proc is not None and self._proc.poll() is not None:
-            # Morreu por si so
-            self._proc = None
-            self._reader_thread = None
-        if not self.is_owned():
-            self.status = ServerStatus.OFFLINE
+        """Health falhou. Se processo owned morreu, limpa refs.
+
+        Nao sobrescreve STOPPING — `stop()` faz a transicao final
+        pra OFFLINE quando termina o wait.
+        """
+        with self._state_lock:
+            if self._proc is not None and self._proc.poll() is not None:
+                # Morreu por si so
+                self._proc = None
+                self._reader_thread = None
+            if not self.is_owned() and self.status != ServerStatus.STOPPING:
+                self.status = ServerStatus.OFFLINE
 
     def can_start(self) -> bool:
         return self.status in (ServerStatus.OFFLINE,) and not self.is_owned()
@@ -97,39 +123,75 @@ class PaperclipProcess:
     # ── Start ─────────────────────────────────────────────────────
 
     def start(self) -> tuple[bool, str]:
-        """Dispara subprocess.Popen. Retorna (ok, msg)."""
-        if self.is_owned():
-            return False, "paperclip ja rodando (owned)"
-        if self.status == ServerStatus.EXTERNAL:
-            return False, "server externo ja ativo — stop via CLI"
+        """Dispara subprocess.Popen + verifica que nao crashou em <0.3s.
 
-        argv = _resolve_argv(self.cmd)
-        if argv is None:
-            return False, f"comando nao encontrado no PATH: {self.cmd[0]}"
+        Detecta o caso comum em que `npx paperclipai run` retorna ok
+        do Popen mas o `node` filho morre imediatamente (port em uso,
+        package crash, EADDRINUSE). Sem este check, status fica preso
+        em STARTING ate o poller HTTP rodar 5s depois — janela em
+        que `can_start()` e `can_stop()` ambos retornam False.
+        """
+        with self._state_lock:
+            if self.is_owned():
+                return False, "paperclip ja rodando (owned)"
+            if self.status == ServerStatus.EXTERNAL:
+                return False, "server externo ja ativo — stop via CLI"
+            if self.status == ServerStatus.STOPPING:
+                return False, "stop em andamento — aguarde"
 
-        try:
-            self._proc = subprocess.Popen(
-                argv,
-                cwd=self.cwd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,  # line-buffered
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=_spawn_flags(),
-            )
-        except (OSError, ValueError) as exc:
-            self._proc = None
-            return False, f"spawn falhou: {exc}"
+            argv = _resolve_argv(self.cmd)
+            if argv is None:
+                return False, f"comando nao encontrado no PATH: {self.cmd[0]}"
 
-        self.status = ServerStatus.STARTING
-        self._start_reader()
-        return True, f"spawned pid={self._proc.pid}"
+            try:
+                self._proc = subprocess.Popen(
+                    argv,
+                    cwd=self.cwd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=1,  # line-buffered
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=_spawn_flags(),
+                )
+            except (OSError, ValueError) as exc:
+                self._proc = None
+                return False, f"spawn falhou: {exc}"
+
+            self.status = ServerStatus.STARTING
+            self._start_reader()
+            pid = self._proc.pid
+
+        # Fast-crash detect — fora do state lock pra nao bloquear o
+        # poller. Se o proc morrer em < 0.3s, retorna False com tail
+        # do stdout. Senao, segue com STARTING (poller HTTP confirma
+        # ONLINE quando estiver pronto).
+        time.sleep(_FAST_CRASH_DETECT_SEC)
+        with self._state_lock:
+            proc = self._proc
+            if proc is None:
+                # stop() correu em paralelo (improvavel mas guard)
+                return False, f"spawn cancelado pid={pid}"
+            rc = proc.poll()
+            if rc is not None:
+                tail = " | ".join(self.recent_lines(10))[-500:]
+                self._proc = None
+                self._reader_thread = None
+                self.status = ServerStatus.OFFLINE
+                return False, f"spawn morreu rc={rc} pid={pid}; tail: {tail}"
+
+        return True, f"spawned pid={pid}"
 
     def _start_reader(self) -> None:
-        """Thread daemon que drena stdout line-by-line pro buffer."""
+        """Thread daemon que drena stdout line-by-line pro buffer.
+
+        Linhas > _LINE_TRUNCATE chars sao truncadas pra evitar OOM em
+        log lines patologicas (json blob no debug print). O drain
+        verifica identidade do `_proc` antes de cada append, terminando
+        cedo se outra start() ja substituiu o proc.
+        """
         if self._proc is None or self._proc.stdout is None:
             return
         proc = self._proc
@@ -138,8 +200,11 @@ class PaperclipProcess:
             assert proc.stdout is not None
             try:
                 for line in proc.stdout:
+                    if self._proc is not proc:
+                        return  # superseded por nova start() — exit cedo
+                    truncated = line.rstrip("\r\n")[:_LINE_TRUNCATE]
                     with self._buffer_lock:
-                        self._stdout_buffer.append(line.rstrip("\r\n"))
+                        self._stdout_buffer.append(truncated)
             except (OSError, ValueError):
                 pass
 
@@ -151,15 +216,24 @@ class PaperclipProcess:
 
     def stop(self, wait_sec: float = 5.0) -> tuple[bool, str]:
         """Stop gracioso. CTRL_BREAK no Win, SIGTERM em outros.
-        Fallback kill() apos wait_sec se nao saiu."""
-        if not self.is_owned():
-            if self.status == ServerStatus.EXTERNAL:
-                return False, "server externo — nao posso stop"
-            return False, "sem processo owned"
+        Fallback kill() apos wait_sec se nao saiu.
 
-        proc = self._proc
-        assert proc is not None
-        self.status = ServerStatus.STOPPING
+        Marca STOPPING dentro do state lock, libera o lock pro
+        proc.wait() (que pode tomar segundos), e re-adquire pra
+        finalizar OFFLINE. mark_online() respeita STOPPING entre
+        as duas fases — sem race UI flicker.
+        """
+        with self._state_lock:
+            if not self.is_owned():
+                if self.status == ServerStatus.EXTERNAL:
+                    return False, "server externo — nao posso stop"
+                return False, "sem processo owned"
+
+            proc = self._proc
+            assert proc is not None
+            self.status = ServerStatus.STOPPING
+
+        # Fora do lock — kill steps + wait podem tomar segundos.
         try:
             if sys.platform == "win32" and hasattr(signal, "CTRL_BREAK_EVENT"):
                 # Requere CREATE_NEW_PROCESS_GROUP no spawn
@@ -182,9 +256,10 @@ class PaperclipProcess:
             except (OSError, subprocess.TimeoutExpired):
                 pass
 
-        self._proc = None
-        self._reader_thread = None
-        self.status = ServerStatus.OFFLINE
+        with self._state_lock:
+            self._proc = None
+            self._reader_thread = None
+            self.status = ServerStatus.OFFLINE
         return True, "stopped"
 
     # ── Log buffer access ─────────────────────────────────────────
@@ -193,12 +268,6 @@ class PaperclipProcess:
         """Snapshot das ultimas n linhas de stdout. Thread-safe."""
         with self._buffer_lock:
             return list(self._stdout_buffer)[-n:]
-
-    def set_line_callback(self, callback: Callable[[str], None] | None) -> None:
-        """Sprint 3.1 plug real-time line subscriber. No-op por enquanto."""
-        # Reservado pra extensao do live streaming sem mudar shape.
-        # Implementacao real: wrap _drain pra emitir via callback.
-        _ = callback  # avoid-unused
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -238,7 +307,3 @@ def default_paperclip_cmd() -> tuple[str, ...]:
     if shutil.which("paperclipai"):
         return ("paperclipai", "run")
     return ("npx", "paperclipai", "run")
-
-
-# Re-export pra test/UI — evita precisar conhecer os.environ aqui
-ENV_PATH = os.environ.get("PATH", "")

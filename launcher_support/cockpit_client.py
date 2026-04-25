@@ -75,6 +75,38 @@ class CockpitClient:
             qs += f"&since={since}"
         return self._get(f"/v1/runs/{run_id}/trades{qs}")
 
+    def get_run_signals(self, run_id: str, limit: int = 30) -> dict:
+        """Tail of signals.jsonl for a VPS run. Returns {signals, source}.
+
+        Endpoint: /v1/runs/{id}/signals?limit=N (signals takes ?limit=).
+        """
+        resp = self._get(f"/v1/runs/{run_id}/signals?limit={limit}")
+        return resp if isinstance(resp, dict) else {}
+
+    def get_run_trades(self, run_id: str) -> dict:
+        """All closed trades for a VPS run. Returns {trades, ...}."""
+        resp = self._get(f"/v1/runs/{run_id}/trades")
+        return resp if isinstance(resp, dict) else {}
+
+    def get_run_log_tail(self, run_id: str, limit: int = 200) -> dict:
+        """Last N lines of log for a VPS run. Returns {lines, ...}.
+
+        Endpoint: /v1/runs/{id}/log?tail=N — note the parameter is
+        ?tail= (not ?limit=) per the cockpit API contract.
+        """
+        resp = self._get(f"/v1/runs/{run_id}/log?tail={limit}")
+        return resp if isinstance(resp, dict) else {}
+
+    def get_run_account(self, run_id: str) -> dict:
+        """Account snapshot for a VPS run. Returns account.json shape."""
+        resp = self._get(f"/v1/runs/{run_id}/account")
+        return resp if isinstance(resp, dict) else {}
+
+    def get_run_positions(self, run_id: str) -> dict:
+        """Open positions snapshot for a VPS run. Returns {positions, ...}."""
+        resp = self._get(f"/v1/runs/{run_id}/positions")
+        return resp if isinstance(resp, dict) else {}
+
     def drop_kill(self, run_id: str) -> dict:
         if not self.cfg.admin_token:
             raise PermissionError("admin_token não configurado em CockpitConfig")

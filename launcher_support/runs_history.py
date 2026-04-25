@@ -76,6 +76,9 @@ class RunSummary:
     host: str | None = None
     label: str | None = None
     open_count: int | None = None
+    drawdown_pct: float | None = None
+    sharpe_rolling: float | None = None
+    open_positions: int | None = None
     notes: str | None = None
     _raw: dict = field(default_factory=dict)
 
@@ -160,6 +163,26 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str,
             trades_closed = int(account.get("trades_closed") or 0)
         except Exception:  # noqa: BLE001
             pass
+    drawdown_pct = _as_float(hb.get("drawdown_pct") or hb.get("dd_pct"))
+    sharpe_rolling = None
+    open_positions = None
+    if isinstance(account, dict):
+        metrics = account.get("metrics")
+        if isinstance(metrics, dict):
+            sharpe_rolling = _as_float(
+                metrics.get("sharpe_rolling") or metrics.get("sharpe")
+            )
+        open_positions = _as_int(
+            account.get("open_count")
+            if account.get("open_count") is not None
+            else account.get("positions_open")
+        )
+    if open_positions is None:
+        open_positions = _as_int(
+            hb.get("open_positions_count")
+            if hb.get("open_positions_count") is not None
+            else hb.get("positions_open")
+        )
     novel = hb.get("novel_since_prime")
     if novel is None:
         novel = hb.get("novel_total")
@@ -181,12 +204,28 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str,
         source="local",
         run_dir=run_dir,
         heartbeat=hb,
-        open_count=None,
+        open_count=open_positions,
+        drawdown_pct=drawdown_pct,
+        sharpe_rolling=sharpe_rolling,
+        open_positions=open_positions,
     )
 
 
 def collect_vps_runs(client) -> list[RunSummary]:
-    """Fetch /v1/runs from cockpit and pull per-run heartbeat+account."""
+    """Fast list of VPS runs — single round-trip GET /v1/runs.
+
+    Why: the previous fan-out (per-run /heartbeat + /account) was 1 + 2*N
+    serialised round-trips through the SSH tunnel. With ~160 catalogued
+    runs that's ~320 round-trips — the ENGINES screen sat empty for
+    several seconds before the table populated, and the user had to
+    click on a row to force a repaint after the data finally arrived.
+
+    The /v1/runs payload already includes everything _render_run_row
+    needs (engine, mode, status, ticks_ok, novel_total, equity). For
+    paper runs we compute ROI directly from equity (initial=10000 by
+    convention). trades_closed and initial_balance stay None until the
+    detail pane lazy-fetches them via _collect_single_vps_run on click.
+    """
     rows: list[RunSummary] = []
     if client is None:
         return rows
@@ -200,26 +239,59 @@ def collect_vps_runs(client) -> list[RunSummary]:
         return rows
     if not isinstance(runs, list):
         return rows
-    indexed_runs = [(idx, r) for idx, r in enumerate(runs) if r.get("run_id")]
-    built_rows: dict[int, RunSummary] = {}
-    max_workers = min(8, max(1, len(indexed_runs)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_collect_single_vps_run, client, r): idx
-            for idx, r in indexed_runs
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                row = future.result()
-            except Exception:
-                row = None
-            if row is not None:
-                built_rows[idx] = row
-    for idx, _ in indexed_runs:
-        row = built_rows.get(idx)
-        if row is not None:
-            rows.append(row)
+    for payload in runs:
+        rid = payload.get("run_id")
+        if not rid:
+            continue
+        equity_raw = payload.get("equity")
+        try:
+            equity_f = float(equity_raw) if equity_raw is not None else None
+        except (TypeError, ValueError):
+            equity_f = None
+        mode = str(payload.get("mode") or "?")
+        # Only compute ROI when the API exposes the real starting balance.
+        # Paper runners accept --account-size/env overrides, so hardcoding
+        # 10k here can make the table lie.
+        initial = _as_float(
+            payload.get("initial_balance") or payload.get("account_size")
+        )
+        roi = ((equity_f - initial) / initial * 100.0
+               if initial and equity_f is not None else None)
+        drawdown_pct = _as_float(payload.get("drawdown_pct")
+                                 or payload.get("dd_pct"))
+        sharpe_rolling = _as_float(payload.get("sharpe_rolling")
+                                   or payload.get("sharpe"))
+        open_positions = _as_int(
+            payload.get("open_positions_count")
+            if payload.get("open_positions_count") is not None
+            else payload.get("open_count")
+        )
+        rows.append(RunSummary(
+            run_id=rid,
+            engine=str(payload.get("engine") or "?").upper(),
+            mode=mode,
+            status=str(payload.get("status") or "unknown"),
+            started_at=payload.get("started_at"),
+            stopped_at=None,
+            last_tick_at=payload.get("last_tick_at"),
+            ticks_ok=_as_int(payload.get("ticks_ok")),
+            ticks_fail=_as_int(payload.get("ticks_fail")),
+            novel=_as_int(payload.get("novel_total") or payload.get("novel_count")),
+            equity=equity_f,
+            initial_balance=initial,
+            roi_pct=roi,
+            trades_closed=None,
+            source="vps",
+            run_dir=None,
+            heartbeat=None,
+            host=str(payload.get("host") or "") or None,
+            label=str(payload.get("label") or "") or None,
+            open_count=open_positions,
+            drawdown_pct=drawdown_pct,
+            sharpe_rolling=sharpe_rolling,
+            open_positions=open_positions,
+            _raw=payload,
+        ))
     _store_cached_rows(_VPS_RUNS_CACHE, cache_key, rows)
     return rows
 
@@ -253,6 +325,17 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
             trades_closed = int(account.get("trades_closed") or 0)
         except Exception:  # noqa: BLE001
             pass
+    drawdown_pct = _as_float(hb.get("drawdown_pct") or hb.get("dd_pct"))
+    sharpe_rolling = None
+    if isinstance(account, dict):
+        metrics = account.get("metrics")
+        if isinstance(metrics, dict):
+            sharpe_rolling = _as_float(
+                metrics.get("sharpe_rolling") or metrics.get("sharpe")
+            )
+    open_positions = _as_int(
+        account.get("open_count") if isinstance(account, dict) else None
+    )
     novel = hb.get("novel_since_prime")
     if novel is None:
         novel = hb.get("novel_total", payload.get("novel_total"))
@@ -276,7 +359,10 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
         heartbeat=hb,
         host=str(payload.get("host") or hb.get("host") or "") or None,
         label=str(payload.get("label") or hb.get("label") or "") or None,
-        open_count=_as_int(account.get("open_count") if isinstance(account, dict) else None),
+        open_count=open_positions,
+        drawdown_pct=drawdown_pct,
+        sharpe_rolling=sharpe_rolling,
+        open_positions=open_positions,
         _raw=payload,
     )
 
@@ -323,6 +409,7 @@ def collect_db_runs(*, mode: str | None = None, limit: int = 500) -> list[RunSum
                 host=str(row.get("host") or "") or None,
                 label=str(row.get("label") or "") or None,
                 open_count=open_count,
+                open_positions=open_count,
                 notes=str(row.get("notes") or "") or None,
                 _raw=dict(row),
             )
@@ -386,8 +473,23 @@ def merge_runs(local: list[RunSummary],
                 v.label = db_match.label
             if v.open_count is None:
                 v.open_count = db_match.open_count
+            if v.open_positions is None:
+                v.open_positions = db_match.open_positions
+            if v.drawdown_pct is None:
+                v.drawdown_pct = db_match.drawdown_pct
+            if v.sharpe_rolling is None:
+                v.sharpe_rolling = db_match.sharpe_rolling
             if not v.notes:
                 v.notes = db_match.notes
+        if local_match is not None:
+            if v.open_positions is None:
+                v.open_positions = local_match.open_positions
+            if v.open_count is None:
+                v.open_count = local_match.open_count
+            if v.drawdown_pct is None:
+                v.drawdown_pct = local_match.drawdown_pct
+            if v.sharpe_rolling is None:
+                v.sharpe_rolling = local_match.sharpe_rolling
         out.append(v)
         seen.add(v.run_id)
 
@@ -406,6 +508,14 @@ def merge_runs(local: list[RunSummary],
                 d.roi_pct = local_match.roi_pct
             if d.trades_closed is None:
                 d.trades_closed = local_match.trades_closed
+            if d.open_positions is None:
+                d.open_positions = local_match.open_positions
+            if d.open_count is None:
+                d.open_count = local_match.open_count
+            if d.drawdown_pct is None:
+                d.drawdown_pct = local_match.drawdown_pct
+            if d.sharpe_rolling is None:
+                d.sharpe_rolling = local_match.sharpe_rolling
         out.append(d)
         seen.add(d.run_id)
 
@@ -517,9 +627,15 @@ def fmt_roi(roi: float | None) -> str:
 # ─── Tk rendering ─────────────────────────────────────────────────
 
 def render_runs_history(parent: tk.Widget, launcher,
-                        client_factory: Callable[[], object | None]
+                        client_factory: Callable[[], object | None],
+                        *,
+                        mode: str = "split",
                         ) -> tk.Frame:
-    """Full RUNS HISTORY screen. Two-column split: table left, detail right.
+    """Full RUNS HISTORY screen.
+
+    mode="split" (default): table esquerda + detail pane direita.
+    mode="list":  table esquerda full-width, sem detail pane.
+                  Click numa row dispara navegação via launcher.screens.show.
 
     `client_factory` mirrors the lazy cockpit pattern used elsewhere —
     must return a cockpit client or None.
@@ -540,27 +656,45 @@ def render_runs_history(parent: tk.Widget, launcher,
         # launcher stash — _load_detail precisa pra marshal de volta
         # do async heartbeat fetch pra Tk main thread (launcher.after).
         "launcher": launcher,
+        # mode stash — _render_run_row usa pra dispatch de click:
+        # "list" navega via launcher.screens.show("engine_detail"),
+        # "split" (default/legacy) carrega no detail pane direito.
+        "mode": mode,
+        # Lifecycle flag — pause_runs_history zera, _apply_vps_rows e
+        # callbacks async checam antes de tocar widgets/state. Sem isso,
+        # worker thread VPS que termina apos teardown ainda escrevia em
+        # state["rows"]/state["last_sig"]; o stale sig depois bloqueava o
+        # repaint quando o operator voltava.
+        "active": True,
     }
 
     split = tk.Frame(root, bg=BG)
     split.pack(fill="both", expand=True)
 
     # LEFT — table
-    left = tk.Frame(split, bg=BG, width=640,
-                    highlightbackground=BORDER, highlightthickness=1)
-    left.pack(side="left", fill="y")
-    left.pack_propagate(False)
+    if mode == "split":
+        left = tk.Frame(split, bg=BG, width=640,
+                        highlightbackground=BORDER, highlightthickness=1)
+        left.pack(side="left", fill="y")
+        left.pack_propagate(False)
+    else:
+        left = tk.Frame(split, bg=BG,
+                        highlightbackground=BORDER, highlightthickness=1)
+        left.pack(side="left", fill="both", expand=True)
 
     _render_left_header(left, state, launcher)
     table_wrap = tk.Frame(left, bg=BG)
     table_wrap.pack(fill="both", expand=True)
     state["table_wrap"] = table_wrap
 
-    # RIGHT — detail
-    right = tk.Frame(split, bg=PANEL,
-                     highlightbackground=BORDER, highlightthickness=1)
-    right.pack(side="right", fill="both", expand=True)
-    state["detail_host"] = right
+    if mode == "split":
+        # RIGHT — detail
+        right = tk.Frame(split, bg=PANEL,
+                         highlightbackground=BORDER, highlightthickness=1)
+        right.pack(side="right", fill="both", expand=True)
+        state["detail_host"] = right
+    else:
+        state["detail_host"] = None
 
     def _refresh():
         _refresh_runs(state, launcher, client_factory)
@@ -577,6 +711,7 @@ def resume_runs_history(root: tk.Widget, launcher) -> None:
     state = getattr(root, "_runs_history_state", None)
     if not isinstance(state, dict):
         return
+    state["active"] = True
     refresh_fn = state.get("refresh_fn")
     if callable(refresh_fn):
         refresh_fn()
@@ -588,6 +723,7 @@ def pause_runs_history(root: tk.Widget, launcher) -> None:
     state = getattr(root, "_runs_history_state", None)
     if not isinstance(state, dict):
         return
+    state["active"] = False
     aid = state.get("refresh_aid")
     if aid is not None:
         try:
@@ -608,15 +744,34 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
     current = state.get("filter_mode", "all")
     f_row = tk.Frame(parent, bg=BG)
     f_row.pack(fill="x", padx=10, pady=(10, 8))
+    chips: dict[str, tk.Label] = {}
+
+    def _restyle_chips(active_key: str) -> None:
+        for k, w in chips.items():
+            is_act = (active_key == "all" and k == "all") or (active_key == k)
+            try:
+                w.configure(
+                    fg=AMBER_D if is_act else DIM,
+                    bg=BG3 if is_act else BG,
+                    highlightbackground=BORDER if is_act else BG,
+                )
+            except Exception:
+                pass
+
     for idx, label in enumerate(("ALL", "SHADOW", "PAPER"), start=1):
         key = label.lower()
         is_active = (current == "all" and key == "all") or (current == key)
 
         def _pick(_e=None, _k=key):
+            # Filter mudar nao precisa refetch — `_paint_rows` ja filtra
+            # local via `state["filter_mode"]`. Antes chamava `refresh_fn`
+            # (`_refresh_runs`) que spawnava VPS thread; clicar
+            # ALL->SHADOW->PAPER em <2s spawnava 3 threads paralelas via
+            # SSH tunnel. Agora repaint instantaneo com cache.
             state["filter_mode"] = "all" if _k == "all" else _k
-            fn = state.get("refresh_fn")
-            if fn:
-                fn()
+            _restyle_chips(state["filter_mode"])
+            _paint_rows(state)
+
         chip = tk.Label(
             f_row, text=f" {idx}:{label} ",
             font=(FONT, 8, "bold"),
@@ -628,13 +783,14 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
         )
         chip.pack(side="left", padx=(0, 6))
         chip.bind("<Button-1>", _pick)
+        chips[key] = chip
 
     # Divider between filter block and table block — BORDER (structural).
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10)
 
     # Column header — 7pt bold (COL tier, preserves alignment with rows).
     # Numeric columns right-aligned.
-    numeric = {"TICKS", "SIG", "EQUITY", "ROI", "TRADES"}
+    numeric = {"TICKS", "SIG", "EQUITY", "ROI", "DD%", "SHARPE", "#POS", "TRADES"}
     col_hdr = tk.Frame(parent, bg=BG)
     col_hdr.pack(fill="x", padx=10, pady=(6, 2))
     for label, w in _COLUMNS:
@@ -648,7 +804,7 @@ def _render_left_header(parent: tk.Widget, state: dict, launcher) -> None:
 
 _COLUMNS = [
     ("ST",      2),
-    ("ENGINE",  11),
+    ("ENGINE",  14),   # bumped 11→14 (RENAISSANCE/BRIDGEWATER inteiros + folga)
     ("MODE",    6),
     ("STARTED", 13),
     ("DUR",     7),
@@ -656,6 +812,9 @@ _COLUMNS = [
     ("SIG",     5),
     ("EQUITY",  9),
     ("ROI",     8),
+    ("DD%",     6),    # NEW — drawdown percent atual
+    ("SHARPE",  7),    # NEW — sharpe rolling do run
+    ("#POS",    5),    # NEW — open positions count
     ("TRADES",  6),
     ("SRC",     5),
 ]
@@ -703,6 +862,11 @@ def _refresh_runs(state: dict, launcher,
             vps = []
         merged = merge_runs(local, vps, db_rows)
         def _apply_vps_rows():
+            # Drop o resultado se a tela foi unmounted enquanto o worker
+            # estava em flight — sem isso, state["rows"]/last_sig escreve
+            # em obj zumbi e bloqueia o repaint quando o operator volta.
+            if not state.get("active"):
+                return
             new_sig = _sig(merged)
             if state.get("last_sig") == new_sig:
                 return
@@ -747,6 +911,10 @@ def _paint_rows(state: dict) -> None:
             w.destroy()
         except Exception:
             pass
+    # Reset o registry — _render_run_row registra cada row aqui pra
+    # _select_row poder fazer update in-place sem rebuildar o DOM inteiro
+    # quando o operador so clica numa row pra ver detail.
+    state["row_widgets"] = {}
 
     rows = state.get("rows") or []
     flt = state.get("filter_mode", "all")
@@ -754,9 +922,16 @@ def _paint_rows(state: dict) -> None:
         rows = [r for r in rows if r.mode == flt]
 
     if not rows:
-        tk.Label(wrap,
-                 text="— nenhum run visível (local ou VPS) —",
-                 fg=DIM2, bg=BG,
+        # Distingui "VPS ainda nao respondeu" de "nada existe": no
+        # bootstrap (state["last_sig"] is None), o worker VPS ainda esta
+        # em flight; mostrar "no runs" agora pode confundir o operador
+        # — em ~1s ele recebe os dados de verdade. Apos a primeira
+        # resposta VPS (last_sig != None), se ainda esta vazio, e
+        # genuinamente "nada visivel".
+        bootstrap = state.get("last_sig") is None
+        msg = ("Aguardando VPS…" if bootstrap
+               else "— nenhum run visível (local ou VPS) —")
+        tk.Label(wrap, text=msg, fg=DIM2, bg=BG,
                  font=(FONT, 7, "italic")).pack(pady=16)
         return
 
@@ -824,6 +999,40 @@ def _render_list_section_header(parent: tk.Widget, title: str,
     tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(1, 2))
 
 
+def _select_row(state: dict, new_run_id: str, run: RunSummary | None = None) -> None:
+    """Atualiza row selection in-place: muda bg do row anterior + novo,
+    chama _load_detail. Evita o rebuild completo do DOM que `_paint_rows`
+    fazia em cada click (~1200 widget ops sincrono na main thread por
+    click — operator perceived clicks como sluggish). Fallback pra
+    _paint_rows se o registry estiver inconsistente (ex: row destruido
+    no meio de um refresh tick).
+    """
+    prev_run_id = state.get("selected_run_id")
+    state["selected_run_id"] = new_run_id
+    registry = state.get("row_widgets") or {}
+
+    def _set_bg(widgets, color):
+        if not widgets:
+            return
+        row, labels = widgets
+        try:
+            row.configure(bg=color)
+            for l in labels:
+                l.configure(bg=color)
+        except Exception:
+            pass
+
+    if prev_run_id and prev_run_id != new_run_id:
+        _set_bg(registry.get(prev_run_id), BG)
+    _set_bg(registry.get(new_run_id), BG2)
+
+    if run is not None:
+        try:
+            _load_detail(run, state)
+        except Exception:
+            pass
+
+
 def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     is_sel = state.get("selected_run_id") == r.run_id
     bg = BG2 if is_sel else BG
@@ -849,9 +1058,25 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
     # Weight rule: bold only on identity + outcome — ENGINE, ROI, SRC,
     # and SIG when > 0. Anchor rule: right-align numerics for decimal
     # alignment, left-align text for readability.
+    dd_pct = r.drawdown_pct
+    sharpe = r.sharpe_rolling
+    pos_count = r.open_positions
+    dd_txt = "—" if dd_pct is None else f"{dd_pct:+.2f}%"
+    dd_color = (RED if dd_pct is not None and dd_pct < -2 else DIM)
+    sharpe_txt = "—" if sharpe is None else f"{sharpe:+.2f}"
+    if sharpe is None:
+        sharpe_color = DIM
+    elif sharpe > 1:
+        sharpe_color = GREEN
+    elif sharpe < 0:
+        sharpe_color = RED
+    else:
+        sharpe_color = DIM
+    pos_txt = "—" if pos_count is None else str(pos_count)
+    pos_color = WHITE if pos_count else DIM
     cells = [
         (dot, dot_color, 2, "bold", "w"),
-        (r.engine[:11], WHITE, 11, "bold", "w"),
+        (r.engine[:14], WHITE, 14, "bold", "w"),
         (r.mode[:6], mode_color, 6, "normal", "w"),
         (fmt_started(r.started_at), DIM, 13, "normal", "w"),
         (dur, WHITE, 7, "normal", "w"),
@@ -860,6 +1085,9 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
          "bold" if (r.novel or 0) > 0 else "normal", "e"),
         (fmt_equity(r.equity), WHITE, 9, "normal", "e"),
         (roi_txt, roi_color, 8, "bold", "e"),
+        (dd_txt, dd_color, 6, "normal", "e"),
+        (sharpe_txt, sharpe_color, 7, "normal", "e"),
+        (pos_txt, pos_color, 5, "normal", "e"),
         (tr, WHITE, 6, "normal", "e"),
         (r.source.upper(), src_color, 5, "bold", "w"),
     ]
@@ -870,12 +1098,31 @@ def _render_run_row(parent: tk.Widget, r: RunSummary, state: dict) -> None:
                        anchor=anchor)
         lbl.pack(side="left", padx=(2, 0))
         labels.append(lbl)
+    # Registra (row + labels) pra _select_row poder atualizar bg sem
+    # destruir/recriar o DOM inteiro (era o comportamento antigo:
+    # _click -> _paint_rows -> destroy_all -> rebuild ~100 rows = ~1200
+    # widget operations sincrono na main thread por click, sluggish).
+    state.setdefault("row_widgets", {})[r.run_id] = (row, list(labels))
 
-    def _click(_e=None, _r=r):
-        state["selected_run_id"] = _r.run_id
-        _load_detail(_r, state)
-        # Re-paint rows to highlight
-        _paint_rows(state)
+    def _click(_e=None, _rid=r.run_id, _r=r):
+        # mode dispatch: "list" navega via launcher.screens.show pra
+        # engine_detail screen full-canvas; "split" (legacy) usa
+        # _select_row pra in-place bg flip + _load_detail no pane direito.
+        # Defaulta pra "split" se ausente — preserva backward-compat.
+        mode = state.get("mode", "split")
+        if mode == "list":
+            launcher = state.get("launcher")
+            if launcher is not None and hasattr(launcher, "screens"):
+                try:
+                    launcher.screens.show("engine_detail", run=_r)
+                except Exception:
+                    pass
+            # list mode nao tem detail_host — nao cai pra _select_row
+            # mesmo se a navegacao falhar (crash garantido se tentasse).
+            return
+        # split mode (default/legacy) — uses new in-place _select_row helper
+        # ao inves de _paint_rows rebuild completo (refactor performance).
+        _select_row(state, _rid, _r)
 
     def _hover_on(_e=None, _labels=labels):
         for l in _labels:
@@ -992,13 +1239,22 @@ def _load_detail(r: RunSummary, state: dict) -> None:
     # repintar com heartbeat populado.
     client_factory = state.get("client_factory")
     launcher = state.get("launcher")
-    attempted = state.setdefault("_hb_fetch_attempted", set())
+    # Retry-aware tracking — pre-fix era `set[str]` que crescia infinito;
+    # quando o fetch falhava (tunnel blip) o run_id ficava marcado pra
+    # sempre e o operator tinha que navegar pra outra tela e voltar pra
+    # ter retry. Agora: dict mapeia run_id -> monotonic_ts; permite
+    # retry apos 60s do ultimo attempt — cobre tunnel reconnect tipico.
+    import time as _time
+    attempted = state.setdefault("_hb_fetch_attempted", {})
+    last_attempt = attempted.get(r.run_id, 0.0)
+    age = _time.monotonic() - last_attempt
+    can_retry = age > 60.0
     if (r.heartbeat is None and r.source == "vps"
-            and launcher is not None and r.run_id not in attempted):
-        # One-shot fetch per run — marcar ANTES de disparar pra nao
-        # entrar em loop quando fetch falhar (heartbeat fica None mas
-        # ja tentamos, nao re-dispara).
-        attempted.add(r.run_id)
+            and launcher is not None
+            and (r.run_id not in attempted or can_retry)):
+        # Mark BEFORE dispatching so concurrent clicks no mesmo run nao
+        # spawnam fetches paralelos.
+        attempted[r.run_id] = _time.monotonic()
 
         def _after_fetch(_r=r, _state=state, _launcher=launcher):
             # Marshal de volta pra Tk main thread.
@@ -1359,6 +1615,41 @@ def _render_detail_equity_metrics(parent: tk.Widget, r: RunSummary) -> None:
     _detail_section(parent, "ACCOUNT", rows)
 
 
+def _read_jsonl_tail(path: Path, n: int = 10, *, max_bytes: int = 16384) -> list[dict]:
+    """Le os ultimos `n` records de um JSONL sem carregar o arquivo todo.
+
+    Seek pra `max_bytes` antes do EOF e parseia pra tras. Pre-fix:
+    `path.read_text() + splitlines()[-10:]` lia o arquivo inteiro a cada
+    click — pra runs com milhares de trades em weeks-old shadow.jsonl
+    isso era megabytes lidos a cada selecao + cada
+    `_reload_if_still_selected` callback. Tail-read mantem custo
+    constante O(max_bytes) independente do tamanho do file.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    out: list[dict] = []
+    try:
+        with path.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+                # discarta primeira linha (provavelmente truncada no seek)
+                f.readline()
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    for ln in chunk.splitlines()[-n:]:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
     """Read last 10 trades. Shadow runs write shadow_trades.jsonl; paper/live
     write trades.jsonl. Each run_dir only has one of the two — try shadow
@@ -1370,19 +1661,7 @@ def _render_detail_trades(parent: tk.Widget, r: RunSummary) -> None:
         trades_path = r.run_dir / "reports" / "trades.jsonl"
     if not trades_path.exists():
         return
-    lines = []
-    try:
-        raw = trades_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    for ln in raw.splitlines()[-10:]:
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            lines.append(json.loads(ln))
-        except Exception:  # noqa: BLE001
-            continue
+    lines = _read_jsonl_tail(trades_path, n=10)
     if not lines:
         return
     box = tk.Frame(parent, bg=PANEL)

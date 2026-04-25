@@ -328,7 +328,8 @@ PERIODS_UI = [
     ("30 DIAS",   "~1 mês — validação rápida",        "30"),
     ("90 DIAS",   "~3 meses — backtest padrão",        "90"),
     ("180 DIAS",  "~6 meses — médio prazo",            "180"),
-    ("365 DIAS",  "~1 ano — ciclo completo",           "365"),
+    ("360 DIAS",  "~1 ano — ciclo completo",           "360"),
+    ("720 DIAS",  "~2 anos — walk-forward longo",      "720"),
 ]
 
 
@@ -555,6 +556,7 @@ class App(tk.Tk):
         emit_timing_metric("boot.palette", ms=(time.perf_counter() - _palette_t0) * 1000.0)
         _dpi_t0 = time.perf_counter()
         self._configure_windows_dpi()
+        self._configure_windows_titlebar()
         self.geometry("960x660")
         self.minsize(860, 560)
         emit_timing_metric("boot.dpi_geometry", ms=(time.perf_counter() - _dpi_t0) * 1000.0)
@@ -572,6 +574,10 @@ class App(tk.Tk):
                 ico = ROOT / "server" / "logo" / "aurum.ico"
                 if ico.exists(): self.iconbitmap(str(ico))
             except: pass
+            try:
+                self._apply_titlebar_dwm()
+            except Exception:
+                pass
             emit_timing_metric("boot.icon_deferred", ms=(time.perf_counter() - _icon_t0) * 1000.0)
         self.after_idle(_apply_taskbar_icon)
         emit_timing_metric("boot.icon", ms=(time.perf_counter() - _icon_scheduled_t0) * 1000.0)
@@ -882,6 +888,129 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _configure_windows_titlebar(self) -> None:
+        """Defer DWM title bar painting until after the window is mapped.
+        winfo_id()/wm_frame() só são confiaveis depois da janela existir
+        no compositor — por isso after_idle."""
+        if sys.platform != "win32":
+            return
+        self.after_idle(self._apply_titlebar_dwm)
+        # Tk/Win11 can recreate or finish binding the decorated frame after
+        # the first idle paint. Reapply across the early lifecycle so the DWM
+        # attributes land on the real toplevel HWND, not only the client area.
+        for delay_ms in (50, 200, 700, 1500):
+            self.after(delay_ms, self._apply_titlebar_dwm)
+        self.bind("<Map>", lambda _e: self.after_idle(self._apply_titlebar_dwm), add="+")
+        self.bind("<FocusIn>", lambda _e: self.after_idle(self._apply_titlebar_dwm), add="+")
+
+    def _apply_titlebar_dwm(self) -> None:
+        """Pinta a title bar com a paleta HL2 via DwmSetWindowAttribute.
+        Sem isso, Win11 mostra a barra branca padrao do sistema."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            if sys.platform != "win32":
+                return
+
+            def _hex_to_colorref(hex_str: str) -> int:
+                # COLORREF é 0x00BBGGRR (BGR little-endian, nao RGB).
+                h = hex_str.lstrip("#")
+                r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                return (b << 16) | (g << 8) | r
+
+            def _parse_hwnd(value) -> int:
+                if not value:
+                    return 0
+                if isinstance(value, int):
+                    return value
+                text = str(value).strip()
+                if not text:
+                    return 0
+                try:
+                    return int(text, 0)
+                except ValueError:
+                    try:
+                        return int(text, 16)
+                    except ValueError:
+                        return 0
+
+            user32 = ctypes.windll.user32
+            user32.GetParent.argtypes = [wintypes.HWND]
+            user32.GetParent.restype = wintypes.HWND
+            user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            user32.GetAncestor.restype = wintypes.HWND
+            user32.SetWindowPos.argtypes = [
+                wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, wintypes.UINT,
+            ]
+            user32.SetWindowPos.restype = wintypes.BOOL
+
+            dwm = ctypes.windll.dwmapi
+            dwm.DwmSetWindowAttribute.argtypes = [
+                wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD
+            ]
+            dwm.DwmSetWindowAttribute.restype = ctypes.c_long  # HRESULT
+
+            candidates: list[int] = []
+
+            def _add_candidate(value) -> None:
+                hwnd_int = _parse_hwnd(value)
+                if hwnd_int and hwnd_int not in candidates:
+                    candidates.append(hwnd_int)
+
+            try:
+                _add_candidate(self.wm_frame())
+            except Exception:
+                pass
+            try:
+                client_hwnd = self.winfo_id()
+                _add_candidate(user32.GetParent(wintypes.HWND(client_hwnd)))
+                _add_candidate(user32.GetAncestor(wintypes.HWND(client_hwnd), 2))  # GA_ROOT
+                _add_candidate(client_hwnd)
+            except Exception:
+                pass
+            if not candidates:
+                return
+
+            def _set_attr(hwnd, attr: int, value) -> bool:
+                if isinstance(value, str):
+                    data = ctypes.c_uint32(_hex_to_colorref(value))
+                else:
+                    data = ctypes.c_int(int(value))
+                hr = dwm.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(data), ctypes.sizeof(data)
+                )
+                return hr == 0
+
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED
+
+            for hwnd_int in candidates:
+                hwnd = wintypes.HWND(hwnd_int)
+                # Attr 20 is current Win10/11 dark mode; attr 19 covers older
+                # Windows 10 builds. Invalid client HWNDs simply return failure.
+                _set_attr(hwnd, 20, 1)
+                _set_attr(hwnd, 19, 1)
+                ok = False
+                for attr, hex_color in (
+                    (35, BG),       # DWMWA_CAPTION_COLOR
+                    (36, WHITE),    # DWMWA_TEXT_COLOR
+                    (34, BORDER),   # DWMWA_BORDER_COLOR
+                ):
+                    ok = _set_attr(hwnd, attr, hex_color) or ok
+                try:
+                    user32.SetWindowPos(hwnd, wintypes.HWND(0), 0, 0, 0, 0, flags)
+                except Exception:
+                    pass
+                if ok:
+                    return
+        except Exception:
+            pass
+
     # --- CHROME ------------------------------------------
     def _chrome(self):
         # Ticker
@@ -918,6 +1047,9 @@ class App(tk.Tk):
         self.h_data_btn     = _mk_nav_btn(" ▤ DATA ",      self._data_center)
         self.h_arb_btn      = _mk_nav_btn(" ⇄ ARBITRAGE ", self._arbitrage_hub)
         self.h_agents_btn   = _mk_nav_btn(" ◎ AGENTS ",    self._research_desk)
+        self.h_roadmap_btn  = _mk_nav_btn(" △ ROADMAP ",   self._roadmap)
+        self.h_vps_btn      = _mk_nav_btn(" ⛁ VPS ",       self._vps)
+        self.h_config_btn   = _mk_nav_btn(" ⚙ CONFIG ",    self._config)
         # Extra left padding for the first button so it clears the AURUM brand.
         self.h_macro_btn.pack_configure(padx=(8, 0))
 
@@ -1278,7 +1410,14 @@ class App(tk.Tk):
         self._menu_live["control"]  = self._fetch_tile_control()
 
     def _menu_live_fetch_async(self) -> None:
-        """Spawn a worker thread that refreshes the cache, then schedules a repaint."""
+        """Spawn a worker thread that refreshes the cache, then schedules a repaint.
+
+        Also pre-warms the ENGINES LIVE cockpit cache in parallel so when the
+        operator clicks EXECUTE > ENGINES LIVE, the master list paints with
+        VPS data immediately (instead of blocking ~1s on the first sync
+        round-trip there). Cache TTL on `_COCKPIT_RUNS_CACHE` is 60s, so
+        repeated calls during the menu's 5s refresh tick are no-ops once warm.
+        """
         def _worker():
             try:
                 self._menu_live_fetch_sync()
@@ -1289,6 +1428,18 @@ class App(tk.Tk):
             except Exception:
                 pass
         threading.Thread(target=_worker, daemon=True).start()
+
+        def _cockpit_prewarm():
+            try:
+                from launcher_support import engines_live_view
+                engines_live_view._load_cockpit_runs_cached(allow_sync=True)
+            except Exception:
+                pass
+        threading.Thread(
+            target=_cockpit_prewarm,
+            name="menu-cockpit-prewarm",
+            daemon=True,
+        ).start()
 
     def _menu_live_apply(self) -> None:
         """Main-thread: redraw tile texts from self._menu_live if the main menu is shown.
@@ -2265,7 +2416,6 @@ class App(tk.Tk):
         face_color = color if focused else self._dim_color(color, TILE_DIM_FACTOR)
         panel_fill = BG2 if focused else PANEL
         text_color = WHITE if focused else "#b8b8b8"
-        sub_color = AMBER_B if focused else DIM
         tag = f"tile{idx}"
 
         canvas.delete(tag)
@@ -2305,10 +2455,14 @@ class App(tk.Tk):
                            font=(FONT, 6, "bold"),
                            fill=(face_color if focused else DIM), tags=tag)
 
-        # Module preview (up to 2 rows)
+        # Module list — todos os filhos visíveis (sem clicar pra expandir).
+        # Clip a quantos cabem entre MODULES label (y1+48) e o footer
+        # divider (y2-18) com stride 17px. Se MARKETS um dia ganhar um
+        # 8o item, o ultimo chip parava 2px dentro do footer — clip
+        # silencioso preserva o layout em vez de overflow visual.
         preview_y = y1 + 48
-        shown = _children[:2]
-        for child_idx, (child_label, _method) in enumerate(shown):
+        max_rows = max(0, (y2 - 18 - preview_y) // 17)
+        for child_idx, (child_label, _method) in enumerate(_children[:max_rows]):
             py1 = preview_y + child_idx * 17
             py2 = py1 + 13
             chip_fill = BG3 if focused else BG
@@ -2323,11 +2477,6 @@ class App(tk.Tk):
                                text=label_txt,
                                font=(FONT, 6, "bold"),
                                fill=text_color, tags=tag)
-        if len(_children) > 2:
-            hint_y = preview_y + 2 * 17 + 4
-            canvas.create_text(x2 - 14, hint_y, anchor="e",
-                               text=f"+{len(_children) - 2} MORE",
-                               font=(FONT, 6, "bold"), fill=sub_color, tags=tag)
 
         # Footer hint (no more LIVE STATUS — removido a pedido do usuário)
         hint_y = y2 - 14
@@ -5257,6 +5406,41 @@ class App(tk.Tk):
         if not self.screens_container.winfo_manager():
             self.screens_container.pack(fill="both", expand=True)
         self.screens.show("settings")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _vps(self):
+        """Open VPS · INFRA dashboard — tunnel/cockpit/host/keys at a glance."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("vps")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _roadmap(self, item_id: str | None = None):
+        """Open ROADMAP · COMING SOON — capabilities planned vs shipped.
+
+        Optional ``item_id`` deep-links to a specific roadmap entry —
+        the screen jumps to its tier and pre-renders the detail panel.
+        """
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        if item_id:
+            self.screens.show("roadmap", item_id=item_id)
+        else:
+            self.screens.show("roadmap")
         try:
             self.focus_set()
         except Exception:

@@ -1,7 +1,7 @@
-import { motion } from "framer-motion";
-
 // Live-style ticker at the top — institutional marquee with data slugs.
 // Conveys "the platform is running" without selling uptime as a feature.
+// CSS animation (not framer) for the marquee — keyframes-on-transform-x
+// in framer-motion 12.38 throws "a is not a function" in the mixer.
 const ITEMS = [
   "MILLENNIUM v4.0 · orchestrator live",
   "CITADEL · EDGE_REAL · Sharpe 5.68 OOS",
@@ -22,18 +22,14 @@ export function StatusTicker() {
         LIVE
       </div>
       <div className="ticker__viewport">
-        <motion.div
-          className="ticker__track"
-          animate={{ x: ["0%", "-50%"] }}
-          transition={{ duration: 48, ease: "linear", repeat: Infinity }}
-        >
+        <div className="ticker__track">
           {loop.map((item, i) => (
             <span key={i} className="ticker__item">
               <span className="ticker__bullet">◆</span>
               {item}
             </span>
           ))}
-        </motion.div>
+        </div>
       </div>
     </div>
   );

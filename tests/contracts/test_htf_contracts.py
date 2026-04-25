@@ -13,6 +13,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+import pytest
 
 # Usar sys.modules pois core/__init__.py re-exporta funções com o mesmo nome
 # dos submódulos (core.indicators função vs core.indicators módulo).
@@ -87,13 +88,15 @@ class TestPrepareHtf:
         assert saved == after
 
     def test_restores_params_even_on_exception(self):
-        # Passar df vazio pode crashear; params devem ser restaurados via finally
+        # Passar df vazio CRASHA (KeyError: 'close'); params devem ser
+        # restaurados via finally. pytest.raises asserta que a exception
+        # de fato dispara — o `try/except: pass` original passava mesmo se
+        # a função (silenciosamente) começasse a aceitar df vazio, escondendo
+        # quebra real do contrato "exception ⇒ restore via finally".
         saved = (_ind.SLOPE_N, _ind.PIVOT_N,
                  _sig.CHOP_S21, _sig.CHOP_S200, _sig.MIN_STOP_PCT)
-        try:
+        with pytest.raises((KeyError, ValueError, AttributeError)):
             prepare_htf(pd.DataFrame(), "4h")
-        except Exception:
-            pass
         after = (_ind.SLOPE_N, _ind.PIVOT_N,
                  _sig.CHOP_S21, _sig.CHOP_S200, _sig.MIN_STOP_PCT)
         assert saved == after

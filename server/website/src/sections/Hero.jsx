@@ -1,20 +1,13 @@
-import { motion, useScroll, useTransform } from "framer-motion";
-import { useRef } from "react";
+import { motion } from "framer-motion";
 import { ease } from "../lib/tokens";
 import { Terminal } from "../components/Terminal";
 import { Metric } from "../components/Metric";
 
 export function Hero() {
-  const ref = useRef(null);
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end start"] });
-  // Parallax apenas nos orbs — conteúdo NÃO fade-out. (bug anterior: content sumia ao rolar)
-  const yOrbA = useTransform(scrollYProgress, [0, 1], [0, -140]);
-  const yOrbB = useTransform(scrollYProgress, [0, 1], [0, -80]);
-
   return (
-    <section id="top" className="hero" ref={ref}>
-      <motion.div className="hero__orb hero__orb--a" style={{ y: yOrbA }} />
-      <motion.div className="hero__orb hero__orb--b" style={{ y: yOrbB }} />
+    <section id="top" className="hero">
+      <div className="hero__orb hero__orb--a" />
+      <div className="hero__orb hero__orb--b" />
       <div className="grid-bg" />
       <div className="scanline" />
 

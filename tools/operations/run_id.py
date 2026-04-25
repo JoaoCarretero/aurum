@@ -54,6 +54,7 @@ def build_run_id(
     ts: datetime | None = None,
     label: str | None = None,
     mode: str | None = None,
+    engine: str | None = None,
 ) -> str:
     """Compose a RUN_ID from timestamp (YYYY-MM-DD_HHMMSS) + optional label.
 
@@ -65,11 +66,19 @@ def build_run_id(
       seconds — ``"paper"`` → ``"p"``, ``"shadow"`` → ``"s"``, etc. Unknown
       modes are ignored silently (treated as ``None``). This avoids run_id
       collisions when paper+shadow boot in the same second.
+    - ``engine`` (optional) appends an engine token between mode suffix and
+      label. Needed when per-engine runners (citadel/jump/renaissance) boot
+      in the same second with the same label — without this they share a
+      RUN_ID and the live_runs PK collides (later writers update mutable
+      fields of the earlier row instead of inserting their own).
     """
     if ts is None:
         ts = datetime.now(timezone.utc)
     base = ts.strftime("%Y-%m-%d_%H%M%S")
     if mode and mode in _MODE_SUFFIX:
         base = f"{base}{_MODE_SUFFIX[mode]}"
+    eng_slug = sanitize_label(engine)
+    if eng_slug:
+        base = f"{base}_{eng_slug}"
     slug = sanitize_label(label)
     return f"{base}_{slug}" if slug else base

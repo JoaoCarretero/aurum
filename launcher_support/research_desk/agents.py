@@ -9,8 +9,8 @@ Estrutura de cada AgentIdentity:
               (RESEARCH, REVIEW, BUILD, CURATE, AUDIT)
   uuid       — Paperclip agent id
   role       — cargo na mesa (Research Analyst, Risk Reviewer, ...)
-  archetype  — nome arquetipico (The Seer, The Judge, ...) - flavor metadata
-  stone      — pedra/metal alquimico associado - flavor metadata
+  archetype  — legacy label kept for API compatibility; now operational scope
+  stone      — legacy label kept for API compatibility; now artifact scope
   tagline    — frase curta que vai no card
   typeface   — hint de fonte distintiva (Sprint 2 aplica)
 
@@ -44,10 +44,10 @@ RESEARCH = AgentIdentity(
     key="RESEARCH",
     uuid="c28d2218-9941-4c44-a318-6d9d2df129d2",
     role="Research Analyst",
-    archetype="The Seer",
-    stone="Amethyst",
-    tagline="Scans, specs, hypothesis.",
-    typeface="serif",
+    archetype="Market Intel",
+    stone="Specs",
+    tagline="Anomaly scans and research specs.",
+    typeface="mono",
     artifact_dir="docs/specs",
 )
 
@@ -55,10 +55,10 @@ REVIEW = AgentIdentity(
     key="REVIEW",
     uuid="246a2339-1cb1-4732-b588-16764487d05d",
     role="Risk & Code Reviewer",
-    archetype="The Judge",
-    stone="Onyx",
-    tagline="Adversarial, concise, ruthless.",
-    typeface="sans-rigorous",
+    archetype="Validation",
+    stone="Reviews",
+    tagline="Hypothesis and code review gates.",
+    typeface="mono",
     artifact_dir="docs/reviews",
 )
 
@@ -66,9 +66,9 @@ BUILD = AgentIdentity(
     key="BUILD",
     uuid="34d56cfa-014e-4b20-903d-96f4ae5c2b05",
     role="Quant Developer",
-    archetype="The Forger",
-    stone="Copper",
-    tagline="Metodical, engineer, hammer-in-hand.",
+    archetype="Implementation",
+    stone="Branches",
+    tagline="Feature and engine implementation.",
     typeface="mono",
     artifact_dir="",  # usa branches experiment/* no git, nao dir fixo
 )
@@ -77,10 +77,10 @@ CURATE = AgentIdentity(
     key="CURATE",
     uuid="a424432d-be6d-44ea-80e3-f9b2c3b9d534",
     role="Repository Curator",
-    archetype="The Keeper",
-    stone="Silver",
-    tagline="Quiet, minimal, observant.",
-    typeface="sans-neutral",
+    archetype="Knowledge Base",
+    stone="Docs",
+    tagline="Docs, audits and session memory.",
+    typeface="mono",
     artifact_dir="docs/audits",
 )
 
@@ -88,10 +88,10 @@ AUDIT = AgentIdentity(
     key="AUDIT",
     uuid="2f790a10-55d1-4b4c-9a48-30db1e4cb73b",
     role="Integrity Auditor",
-    archetype="The Oracle",
-    stone="Gold",
-    tagline="Oracular, cirurgical, veredito com evidencia.",
-    typeface="serif-grave",
+    archetype="Integrity Gate",
+    stone="Audits",
+    tagline="Final evidence-based validation.",
+    typeface="mono",
     artifact_dir="docs/audits/engines",
 )
 
@@ -99,6 +99,40 @@ AUDIT = AgentIdentity(
 AGENTS: tuple[AgentIdentity, ...] = (RESEARCH, REVIEW, BUILD, CURATE, AUDIT)
 BY_KEY: dict[str, AgentIdentity] = {a.key: a for a in AGENTS}
 BY_UUID: dict[str, AgentIdentity] = {a.uuid: a for a in AGENTS}
+
+
+# Hard budget caps per agent in cents (USD). Values from AGENTS.md §4
+# (RESEARCH $80 / REVIEW $100 / BUILD $250 / CURATE $50 / AUDIT $80).
+#
+# Acts as a defensive ceiling: when Paperclip's `monthly_budget_cents`
+# returns 0 (server hasn't been configured / API shape drift), the
+# cockpit still has a budget to enforce against. Without this fallback,
+# `cap_text` shows "—" and the agent appears unbounded — alerts become
+# theatre.
+#
+# The enforcer (screens/research_desk.py:_enforce_budget_caps) calls
+# `pause_agent` when `spent_cents >= effective_cap` AND the agent is
+# not already paused — idempotent. Joao can edit caps via Paperclip
+# server config; client-side floor stays as the safety net.
+HARD_BUDGETS_CENTS: dict[str, int] = {
+    "RESEARCH": 8000,
+    "REVIEW": 10000,
+    "BUILD": 25000,
+    "CURATE": 5000,
+    "AUDIT": 8000,
+}
+
+
+def effective_budget_cents(agent: AgentIdentity, server_cap: int) -> int:
+    """Return the active cap for budget enforcement.
+
+    Prefers the server value when non-zero (Joao's authoritative knob).
+    Falls back to HARD_BUDGETS_CENTS when server returns 0 — typical
+    when a fresh Paperclip instance hasn't seeded budgets yet.
+    """
+    if server_cap > 0:
+        return server_cap
+    return HARD_BUDGETS_CENTS.get(agent.key, 0)
 
 
 # ── Paperclip company / project context ───────────────────────────

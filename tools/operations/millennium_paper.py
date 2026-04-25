@@ -73,6 +73,18 @@ POSITIONS_PATH = STATE_DIR / "positions.json"
 ACCOUNT_PATH = STATE_DIR / "account.json"
 HEARTBEAT_PATH = STATE_DIR / "heartbeat.json"
 MANIFEST_PATH = STATE_DIR / "manifest.json"
+
+# Symbol cooldown after a stop-loss exit. Mirrors engines.millennium
+# SYMBOL_COOLDOWN_BARS_AFTER_LOSS (24 bars). Hardcoded here to avoid
+# importing the heavy engines/millennium module at startup just for a
+# single int. Override via env for tests/operations:
+#   AURUM_SYM_LOSS_COOLDOWN_BARS=0  → disable
+#   AURUM_SYM_LOSS_COOLDOWN_BARS=N  → N bars × tick_sec
+SYM_LOSS_COOLDOWN_BARS = int(os.environ.get("AURUM_SYM_LOSS_COOLDOWN_BARS", "24"))
+# Exit reasons that classify as a real loss → arm the cooldown. "breakeven"
+# is excluded (scratch outcome at entry price), "target" is a win, "ks_abort"
+# / "manual_flatten" are forced exits unrelated to signal quality.
+_LOSS_EXIT_REASONS = frozenset({"stop_initial", "trailing"})
 KILL_FLAG = RUN_DIR / ".kill"
 
 
@@ -123,18 +135,15 @@ def _telegram_cfg() -> dict | None:
     global _TELEGRAM_CFG
     if _TELEGRAM_CFG is not None:
         return _TELEGRAM_CFG or None
-    keys_path = ROOT / "config" / "keys.json"
-    if not keys_path.exists():
-        _TELEGRAM_CFG = {}
-        return None
     try:
-        data = json.loads(keys_path.read_text(encoding="utf-8"))
+        from core.risk.key_store import load_runtime_keys  # noqa: PLC0415
+        data = load_runtime_keys()
         tg = data.get("telegram") or {}
         if tg.get("bot_token") and tg.get("chat_id"):
             _TELEGRAM_CFG = {"token": str(tg["bot_token"]),
                              "chat_id": str(tg["chat_id"])}
             return _TELEGRAM_CFG
-    except (json.JSONDecodeError, OSError):
+    except Exception:  # noqa: BLE001
         pass
     _TELEGRAM_CFG = {}
     return None
@@ -168,6 +177,96 @@ def _tg_send(text: str) -> None:
 def _append_jsonl(path: Path, record: dict) -> None:
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
+
+
+def _persist_signal_to_db(record: dict, *, observed_at: str) -> None:
+    """Persist one paper LIVE signal (non-stale) to SQLite live_signals.
+
+    Companion to _persist_trade_to_db: closed trades land in live_trades,
+    fired (live, non-stale) signals land in live_signals — together they
+    let the operator SQL-query "what was the JUMP score of the signal
+    that opened pos_X?" without parsing JSONLs from the run_dir.
+
+    Failures NEVER bubble — tick loop must never crash on DB issue.
+    Connection is short-lived (per-call) to avoid long-lived locks.
+
+    Aliasing: the runner's signal dict uses 'engine' (paper vocabulary);
+    table column is 'strategy'. We map engine→strategy if the canonical
+    is missing. observed_at is injected by the caller (= now_iso of the
+    tick that observed the signal) and feeds the unique key together
+    with (run_id, symbol).
+    """
+    try:
+        import sqlite3
+        from core.ops.db_live_trades import upsert_signal  # noqa: PLC0415
+        db_path = ROOT / "data" / "aurum.db"
+        if not db_path.exists():
+            return  # DB not initialised on this host — silent skip
+        payload = dict(record)
+        # 'engine' (paper-runner term) → 'strategy' (DB column term)
+        if "engine" in payload and "strategy" not in payload:
+            payload["strategy"] = payload["engine"]
+        # observed_at is required for the unique key — caller passes it
+        payload["observed_at"] = observed_at
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            upsert_signal(conn, RUN_ID, payload)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            import logging as _log
+            _log.getLogger("aurum.paper").warning(
+                "live_signals upsert failed (non-fatal): %s", exc,
+            )
+        except Exception:
+            pass
+
+
+def _persist_trade_to_db(record: dict) -> None:
+    """Persist a closed-trade record to SQLite live_trades table.
+
+    Belt-and-suspenders companion to _append_jsonl(TRADES_PATH, ...):
+    JSONL stays the source of truth; DB is convenience for cross-run
+    SQL queries ("all citadel paper trades this week"). Failures here
+    NEVER bubble — trade lifecycle must not depend on DB availability.
+
+    Connection is opened per-call and closed immediately to keep zero
+    long-lived locks and survive concurrent writers (multiple paper
+    runners on same VPS, or operator running ad-hoc backfills).
+
+    The runner's record uses 'engine'/'entry_price'/'pnl_after_fees' —
+    `db_live_trades._norm_trade` knows the aliases (entry_price→entry,
+    pnl→pnl_usd, etc), so we forward the raw record. We additionally
+    map 'engine'→'strategy' (the table column for which sub-engine
+    inside millennium emitted the signal) before forwarding.
+    """
+    try:
+        import sqlite3
+        from core.ops.db_live_trades import upsert_trade  # noqa: PLC0415
+        db_path = ROOT / "data" / "aurum.db"
+        if not db_path.exists():
+            return  # DB not initialised on this host — silent skip
+        payload = dict(record)
+        # 'engine' (paper-runner term) → 'strategy' (DB column term)
+        if "engine" in payload and "strategy" not in payload:
+            payload["strategy"] = payload["engine"]
+        # canonical 'ts' for UNIQUE key — paper writer uses entry_at
+        if "ts" not in payload and payload.get("entry_at"):
+            payload["ts"] = payload["entry_at"]
+        # canonical pnl_usd — paper uses pnl_after_fees as the realised pnl
+        if "pnl_usd" not in payload and payload.get("pnl_after_fees") is not None:
+            payload["pnl_usd"] = payload["pnl_after_fees"]
+        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+            upsert_trade(conn, RUN_ID, payload)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        # Never crash trading on DB issue — log via PAPER_LOG handler
+        try:
+            import logging as _log
+            _log.getLogger("aurum.paper").warning(
+                "live_trades upsert failed (non-fatal): %s", exc,
+            )
+        except Exception:
+            pass
 
 
 def _pos_snapshot(pos: Position) -> dict:
@@ -308,6 +407,12 @@ class RunnerState:
     open_positions: list[Position] = field(default_factory=list)
     seen_keys: set = field(default_factory=set)
     last_bar_ts_by_symbol: dict[str, str] = field(default_factory=dict)
+    # symbol → ISO timestamp until which new opens on that symbol are blocked
+    # after a stop-loss exit. Mirrors engines.millennium.SYMBOL_COOLDOWN_BARS_AFTER_LOSS
+    # (24 bars × tick_sec = 6h default at 15m tf). Without this, a stop-out can
+    # be re-entered the next tick on the very same setup (XRP 2026-04-25 13:30
+    # incident: pos_000001 stopped 16:30, pos_000002 opened 16:47, same JUMP LONG).
+    sym_loss_cooldown_until: dict[str, str] = field(default_factory=dict)
     ticks_ok: int = 0
     ticks_fail: int = 0
     novel_total: int = 0
@@ -374,16 +479,19 @@ def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
             "strategy": c.engine, "symbol": c.symbol,
             "exit_reason": c.exit_reason,
         })
-        _append_jsonl(TRADES_PATH, {
+        trade_record = {
             "id": c.id, "engine": c.engine, "symbol": c.symbol,
             "direction": c.direction, "entry_price": c.entry_price,
             "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
-            "size": c.size, "entry_at": c.opened_at,
+            "size": c.size, "notional": c.entry_price * c.size,
+            "entry_at": c.opened_at,
             "exit_at": c.closed_at, "exit_reason": reason,
             "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
             "r_multiple": c.r_multiple, "bars_held": c.bars_held,
             "primed": False,
-        })
+        }
+        _append_jsonl(TRADES_PATH, trade_record)
+        _persist_trade_to_db(trade_record)
         _append_jsonl(FILLS_PATH, {
             "event": "close", "pos_id": c.id, "ts": c.closed_at,
             "reason": reason, "price": c.exit_price,
@@ -426,22 +534,40 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "strategy": c.engine, "symbol": c.symbol,
                 "exit_reason": c.exit_reason,
             })
-            _append_jsonl(TRADES_PATH, {
+            trade_record = {
                 "id": c.id, "engine": c.engine, "symbol": c.symbol,
                 "direction": c.direction, "entry_price": c.entry_price,
                 "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
-                "size": c.size, "entry_at": c.opened_at,
+                "size": c.size, "notional": c.entry_price * c.size,
+                "entry_at": c.opened_at,
                 "exit_at": c.closed_at, "exit_reason": c.exit_reason,
                 "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
                 "r_multiple": c.r_multiple, "bars_held": c.bars_held,
                 "primed": False,
-            })
+            }
+            _append_jsonl(TRADES_PATH, trade_record)
+            _persist_trade_to_db(trade_record)
             _append_jsonl(FILLS_PATH, {
                 "event": "close", "pos_id": c.id, "ts": c.closed_at,
                 "reason": c.exit_reason, "price": c.exit_price,
                 "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
                 "commission": c.exit_commission,
             })
+            if c.exit_reason in _LOSS_EXIT_REASONS and SYM_LOSS_COOLDOWN_BARS > 0:
+                cooldown_until = (
+                    datetime.fromisoformat(
+                        str(c.closed_at).replace("Z", "+00:00")
+                    )
+                    if isinstance(c.closed_at, str)
+                    else c.closed_at
+                )
+                if cooldown_until.tzinfo is None:
+                    cooldown_until = cooldown_until.replace(tzinfo=timezone.utc)
+                from datetime import timedelta
+                cooldown_until = cooldown_until + timedelta(
+                    seconds=SYM_LOSS_COOLDOWN_BARS * state.tick_sec
+                )
+                state.sym_loss_cooldown_until[c.symbol] = cooldown_until.isoformat()
             if notify:
                 _tg_send(
                     f"<b>PAPER · {c.engine} {c.symbol}</b> · {c.exit_reason.upper()}\n"
@@ -522,6 +648,13 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
             live_count += 1
             state.last_novel_at = now_iso
 
+            # Persist live signal to live_signals — captures pre-gate
+            # context (score/struct/entropy/hurst/primed) that JSONL has
+            # but live_trades doesn't. Fires for every non-stale signal,
+            # regardless of whether the gates below let it open. Pairs
+            # with _persist_trade_to_db on close. Silent on DB failure.
+            _persist_signal_to_db(t, observed_at=now_iso)
+
             # 4. Portfolio gate V1: MAX_OPEN_POSITIONS only
             try:
                 from config.params import MAX_OPEN_POSITIONS
@@ -536,6 +669,37 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                     "reason": "max_open_positions",
                 })
                 continue
+
+            # Portfolio gate V3: reject opening a position on a symbol whose
+            # cooldown after a recent stop-loss has not expired yet. Without
+            # this, JUMP/CITADEL signals can re-fire the same setup tick after
+            # the stop fills and re-enter on the very same noise that just
+            # stopped them out (XRP 2026-04-25 incident).
+            t_sym_cd = str(t.get("symbol") or "").upper()
+            cooldown_iso = state.sym_loss_cooldown_until.get(t_sym_cd)
+            if cooldown_iso:
+                try:
+                    cooldown_dt = datetime.fromisoformat(
+                        cooldown_iso.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    cooldown_dt = None
+                if cooldown_dt is not None:
+                    now_dt = datetime.now(timezone.utc)
+                    if cooldown_dt.tzinfo is None:
+                        cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
+                    if now_dt < cooldown_dt:
+                        _append_jsonl(SIGNALS_PATH, {
+                            "ts": now_iso, "engine": t.get("strategy"),
+                            "symbol": t.get("symbol"),
+                            "direction": t.get("direction"),
+                            "decision": "skipped",
+                            "reason": "sym_loss_cooldown",
+                            "cooldown_until": cooldown_iso,
+                        })
+                        continue
+                    # cooldown expired — clear stale entry
+                    state.sym_loss_cooldown_until.pop(t_sym_cd, None)
 
             # Portfolio gate V2: reject opening a position on a symbol that
             # already has an open position in the OPPOSITE direction. Prevents

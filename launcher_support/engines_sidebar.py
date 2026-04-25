@@ -524,14 +524,52 @@ def _hl2_paper_body(parent: tk.Widget, hb: dict, account: dict | None,
         render_inline(parent, selected_trade,
                       on_close_detail or (lambda: None))
     else:
-        extra = (f"{len(trades)} closed · click row for detail"
-                 if trades else "aguardando primeiro trade fechado")
+        # Detect the VPS runner bug where account.trades_closed > 0 +
+        # realized_pnl != 0 but /v1/runs/{id}/trades returns count=0.
+        # The runner posts Telegram notices + updates heartbeat/account
+        # when a paper trade closes, but doesn't always flush to
+        # reports/trades.jsonl — the only source the API reads. Without
+        # an explicit banner the operator sees "nenhum trade fechado"
+        # despite account clearly showing realized pnl.
+        acct_trades_closed = 0
+        acct_realized = 0.0
+        if isinstance(account, dict):
+            try:
+                acct_trades_closed = int(account.get("trades_closed") or 0)
+            except (TypeError, ValueError):
+                acct_trades_closed = 0
+            try:
+                acct_realized = float(account.get("realized_pnl") or 0.0)
+            except (TypeError, ValueError):
+                acct_realized = 0.0
+        unserialized = (
+            acct_trades_closed > len(trades)
+            and (acct_trades_closed > 0 or acct_realized != 0.0)
+        )
+
+        if unserialized:
+            missing = acct_trades_closed - len(trades)
+            extra = (f"{acct_trades_closed} closed · {missing} sem detalhe · "
+                     f"realized {acct_realized:+.2f}")
+        else:
+            extra = (f"{len(trades)} closed · click row for detail"
+                     if trades else "aguardando primeiro trade fechado")
         _hl2_section(parent, "TRADE HISTORY", extra=extra)
         if trades:
             sig_box = tk.Frame(parent, bg=PANEL)
             sig_box.pack(fill="x", padx=10, pady=(0, 6))
             _render_signals_table_rich(sig_box, trades[-6:][::-1], on_row_click)
-        else:
+        if unserialized:
+            missing = acct_trades_closed - len(trades)
+            tk.Label(
+                parent,
+                text=(f"   !! {missing} trade(s) fecharam mas o runner nao "
+                      f"gravou em reports/trades.jsonl "
+                      f"(realized_pnl {acct_realized:+.2f}, equity ok)"),
+                fg=AMBER, bg=PANEL, font=(FONT, 7, "bold"),
+                wraplength=520, justify="left",
+            ).pack(anchor="w", padx=12, pady=(2, 6))
+        elif not trades:
             tk.Label(parent, text="   — nenhum trade fechado ainda —",
                      fg=DIM2, bg=PANEL, font=(FONT, 7, "italic")).pack(
                          anchor="w", padx=12, pady=(2, 6))

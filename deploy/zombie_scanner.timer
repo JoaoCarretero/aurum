@@ -1,0 +1,13 @@
+[Unit]
+Description=AURUM · Zombie runner scanner timer (every 5 min)
+
+[Timer]
+# First run 2min after boot (lets runners settle), then every 5min.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Persistent=true ensures missed triggers fire on reboot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -37,8 +37,8 @@ Ficheiros de output:
 import os, sys, json, time, asyncio, logging, signal, random, requests
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, timezone
-from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from collections import defaultdict, deque
 from typing import Optional
 
 # ── PATH ──────────────────────────────────────────────────────
@@ -921,6 +921,15 @@ class LiveEngine:
         # on the first tick of each UTC day by _status_ticker.
         self._sod_equity = ACCOUNT_SIZE
         self._sod_date   = datetime.now(timezone.utc).date()
+        # Rolling equity history for gate_dd_velocity. Sampled 1/minute;
+        # capacity 120 = up to 2 hours of history. Caller (this class)
+        # populates per-tick inside _check_risk_gates.
+        self._equity_history: deque[tuple[datetime, float]] = deque(maxlen=120)
+        # Rolling API latency history for gate_anomaly (kill-switch layer 3).
+        # Stores every measured broker REST/order call in the recent window;
+        # capacity 1000 is enough for bursty retries without making p99 stale.
+        # _check_risk_gates reads it via _compute_api_latency_p99().
+        self._api_latency_history: deque[tuple[datetime, float]] = deque(maxlen=1000)
         self.positions: list[Position] = []
         self.closed_trades: list = []
         self.macro_series: Optional[pd.Series] = None
@@ -1443,6 +1452,124 @@ class LiveEngine:
         log.critical(f"  kill-switch complete — self.running = False")
 
     # ── RISK GATES (Fase 4-C) ─────────────────────────────────
+    def _record_equity_sample(self, now: datetime, equity: float) -> None:
+        """Append (now, equity) to _equity_history, subsampling to one
+        sample per UTC minute. Per-tick callers can fire freely; the
+        de-duplication keeps the buffer's time-distribution clean.
+
+        Subsample logic: drop the call if the last recorded sample is
+        within the same minute as `now`. The earliest sample of a minute
+        wins — equity readings later in the same minute are usually
+        identical (account changes only on close events, which are rare
+        within a minute) and the earliest tick gives a slight time-anchor
+        advantage to the velocity computation.
+        """
+        last = self._equity_history[-1] if self._equity_history else None
+        if last is not None:
+            last_ts = last[0]
+            if (last_ts.year   == now.year
+                and last_ts.month  == now.month
+                and last_ts.day    == now.day
+                and last_ts.hour   == now.hour
+                and last_ts.minute == now.minute):
+                return
+        self._equity_history.append((now, equity))
+
+    def _compute_dd_velocity_pct_per_hour(self, now: datetime,
+                                          window_min: int = 60) -> float:
+        """Return drawdown velocity in %/hour computed from the rolling
+        equity history.
+
+        Algorithm: find the OLDEST sample whose timestamp is within
+        ``[now - window_min, now]`` and use it as the anchor. Then::
+
+            dd_pct  = (anchor_equity - account) / anchor_equity * 100
+            age_hr  = (now - anchor_ts) / 3600
+            return dd_pct / age_hr
+
+        Sign convention matches gate_dd_velocity:
+          * positive = losing equity (anchor was higher than current)
+          * zero = stationary or insufficient history
+          * negative = recovering equity (anchor was lower than current)
+
+        Defensive guards return 0.0 (= allow) on:
+          * empty history
+          * no sample within window (engine just started)
+          * anchor sample is the current call (age_hr ≈ 0)
+          * anchor equity is zero (avoid division by zero)
+        """
+        if not self._equity_history:
+            return 0.0
+        cutoff = now - timedelta(minutes=window_min)
+        anchor: tuple[datetime, float] | None = None
+        for ts, eq in self._equity_history:
+            if ts >= cutoff:
+                anchor = (ts, eq)
+                break
+        if anchor is None:
+            return 0.0
+        anchor_ts, anchor_eq = anchor
+        if anchor_eq <= 0:
+            return 0.0
+        age_hr = (now - anchor_ts).total_seconds() / 3600.0
+        if age_hr <= 0.01:
+            # Sample is "now" — no meaningful delta yet.
+            return 0.0
+        dd_pct = (anchor_eq - self.account) / anchor_eq * 100.0
+        return dd_pct / age_hr
+
+    def _record_api_latency(self, now: datetime, latency_ms: float) -> None:
+        """Append one broker REST/order latency sample.
+
+        Latency in milliseconds (REST request → response wall-clock).
+        Negative values are dropped defensively — non-physical. Unlike
+        equity sampling, latency must not be deduplicated by minute:
+        p99 over a 5-minute window needs the actual request distribution.
+        """
+        if latency_ms < 0:
+            return
+        self._api_latency_history.append((now, latency_ms))
+
+    def _compute_api_latency_p99(self, now: datetime | None = None,
+                                 window_min: int = 5) -> float:
+        """Return API latency p99 (milliseconds) computed over the rolling
+        window.
+
+        Algorithm: collect all samples whose timestamp is within
+        ``[now - window_min, now]``. If no samples are in the window,
+        return 0.0 (gate_anomaly treats 0.0 as "no signal"). Otherwise
+        compute the p99 (99th percentile) of the latency values.
+
+        Sign convention matches gate_anomaly:
+          * positive = degraded latency
+          * 0.0 = insufficient samples (engine just started, or no API
+                  calls in the window)
+
+        Defensive guards return 0.0 (= allow) on:
+          * empty history
+          * no samples in window
+        """
+        if not self._api_latency_history:
+            return 0.0
+        if now is None:
+            now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=window_min)
+        samples = [lat for ts, lat in self._api_latency_history if ts >= cutoff]
+        if not samples:
+            return 0.0
+        # p99: position 99% of the way through the sorted samples. For a
+        # small window this is essentially the max with a safety margin
+        # (in 100 samples, p99 = the 2nd-largest). Use linear-interp
+        # convention — same as numpy.percentile default.
+        samples.sort()
+        n = len(samples)
+        # Index in [0, n-1]. p99 = 0.99 * (n - 1).
+        idx_f = 0.99 * (n - 1)
+        idx_lo = int(idx_f)
+        idx_hi = min(idx_lo + 1, n - 1)
+        frac = idx_f - idx_lo
+        return samples[idx_lo] + frac * (samples[idx_hi] - samples[idx_lo])
+
     def _check_risk_gates(self) -> GateDecision:
         """Build a RiskState snapshot from current engine state and run
         the full gate chain. Returns the first non-allow decision (hard
@@ -1453,6 +1580,16 @@ class LiveEngine:
         if now.date() != self._sod_date:
             self._sod_equity = self.account
             self._sod_date = now.date()
+
+        # Sample equity for the velocity gate. Subsamples to 1/minute
+        # so per-tick gate evaluations don't pollute the buffer.
+        self._record_equity_sample(now, self.account)
+        dd_velocity = self._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        # API latency p99 for gate_anomaly (kill-switch layer 3). The
+        # _api_latency_history deque is populated externally by the
+        # HTTP/order-submit layer via _record_api_latency(). 0.0 on
+        # insufficient samples → gate_anomaly returns allow.
+        api_latency_p99 = self._compute_api_latency_p99(now, window_min=5)
 
         open_positions = []
         for p in self.positions:
@@ -1472,6 +1609,8 @@ class LiveEngine:
             consecutive_losses  = self.consecutive_losses,
             open_positions      = open_positions,
             current_hour_utc    = now.hour,
+            dd_velocity_pct_per_hour = dd_velocity,
+            api_latency_ms_p99  = api_latency_p99,
         )
         return check_gates(state, self.risk_cfg)
 
@@ -1584,11 +1723,17 @@ class LiveEngine:
             },
         ))
 
+        order_t0 = time.perf_counter()
         fill = await self.orders.place_order(
             sig["symbol"], sig["direction"],
             sig["entry"], sig["size"],
             sig["stop"], sig["target"]
         )
+        if not self.orders.paper:
+            self._record_api_latency(
+                datetime.now(timezone.utc),
+                (time.perf_counter() - order_t0) * 1000.0,
+            )
 
         # [Item 6] API error rate gate — track consecutive failures
         if fill["status"] == "FAILED":
@@ -1687,7 +1832,13 @@ class LiveEngine:
 
     async def _close_position(self, pos: Position, result: str, exit_price: float):
         """Fecha posição, calcula PnL real, actualiza kill-switch e drift."""
+        close_t0 = time.perf_counter()
         fill = await self.orders.close_position(pos, exit_price)
+        if not self.orders.paper:
+            self._record_api_latency(
+                datetime.now(timezone.utc),
+                (time.perf_counter() - close_t0) * 1000.0,
+            )
         real_exit = fill["fill_price"]
 
         slip_exit = (random.uniform(0.5, 1.2) * PAPER_SLIPPAGE

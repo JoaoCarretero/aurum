@@ -18,6 +18,7 @@ def register_default_screens(
     from launcher_support.screens.data_center import DataCenterScreen
     from launcher_support.screens.data_reports import DataReportsScreen
     from launcher_support.screens.deploy_pipeline import DeployPipelineScreen
+    from launcher_support.screens.engine_detail import EngineDetailScreen
     from launcher_support.screens.engine_logs import EngineLogsScreen
     from launcher_support.screens.engines import EnginesScreen
     from launcher_support.screens.engines_live import EnginesLiveScreen
@@ -28,10 +29,12 @@ def register_default_screens(
     from launcher_support.screens.processes import ProcessesScreen
     from launcher_support.screens.research_desk import ResearchDeskScreen
     from launcher_support.screens.risk import RiskScreen
+    from launcher_support.screens.roadmap import RoadmapScreen
     from launcher_support.screens.runs_history import RunsHistoryScreen
     from launcher_support.screens.settings import SettingsScreen
     from launcher_support.screens.splash import SplashScreen
     from launcher_support.screens.terminal import TerminalScreen
+    from launcher_support.screens.vps import VpsScreen
 
     manager.register(
         "splash",
@@ -82,6 +85,10 @@ def register_default_screens(
         lambda parent: SettingsScreen(parent=parent, app=app),
     )
     manager.register(
+        "vps",
+        lambda parent: VpsScreen(parent=parent, app=app),
+    )
+    manager.register(
         "processes",
         lambda parent: ProcessesScreen(parent=parent, app=app),
     )
@@ -92,6 +99,10 @@ def register_default_screens(
     manager.register(
         "risk",
         lambda parent: RiskScreen(parent=parent, app=app),
+    )
+    manager.register(
+        "roadmap",
+        lambda parent: RoadmapScreen(parent=parent, app=app),
     )
     manager.register(
         "live_runs",
@@ -124,6 +135,17 @@ def register_default_screens(
     manager.register(
         "engines",
         lambda parent: EnginesScreen(
+            parent=parent,
+            app=app,
+            client_factory=__import__(
+                "launcher_support.engines_live_view",
+                fromlist=["_get_cockpit_client"],
+            )._get_cockpit_client,
+        ),
+    )
+    manager.register(
+        "engine_detail",
+        lambda parent: EngineDetailScreen(
             parent=parent,
             app=app,
             client_factory=__import__(
