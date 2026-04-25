@@ -3726,14 +3726,10 @@ def _paper_content_sig(state, launcher=None) -> tuple:
     run_id = _fetch_paper_run_id(launcher, state)
     if run_id is None:
         return ("no-run", bool(_cockpit_runs_loading()))
-    slug = str(state.get("selected_slug") or "millennium")
     hb, positions, series, account, trades = _fetch_paper_extras(
         run_id,
         launcher=launcher,
         state=state,
-    )
-    aggregate_trades = _fetch_paper_engine_trades(
-        slug, launcher=launcher, state=state,
     )
     if hb is None:
         return ("loading", run_id)
@@ -3764,11 +3760,6 @@ def _paper_content_sig(state, launcher=None) -> tuple:
         len(trades),
         trades[-1].get("timestamp") if trades else None,
     )
-    agg_sig = (
-        slug,
-        len(aggregate_trades),
-        aggregate_trades[0].get("timestamp") if aggregate_trades else None,
-    )
     return (
         run_id,
         hb_sig,
@@ -3777,7 +3768,6 @@ def _paper_content_sig(state, launcher=None) -> tuple:
         last_equity,
         account_sig,
         trades_sig,
-        agg_sig,
         state.get("selected_paper_run_id"),
     )
 
@@ -3841,17 +3831,15 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
         state.pop("paper_selected_trade", None)
         _render_detail(state, launcher)
 
-    # Cross-run trade history: the per-run `trades` fetched above only
-    # covers the currently-selected instance. A trade that closed earlier
-    # today on a run that was since stopped (e.g. OPUSDT LONG at 13:48
-    # in 2026-04-24_134817p_desk-paper-b) would vanish when the new run
-    # started. Aggregate over every paper run of this engine so the
-    # history reads as "what this engine traded in paper today", not
-    # "what this specific instance has in its tail window".
-    aggregate_trades = _fetch_paper_engine_trades(
-        slug, launcher=launcher, state=state,
-    )
-    display_trades = aggregate_trades if aggregate_trades else trades
+    # Per-run trade history: TRADE HISTORY do detail pane mostra APENAS
+    # trades da run selecionada atual (`run_id`). O cross-run aggregator
+    # `_fetch_paper_engine_trades` (que mergeava trades de todas as runs
+    # paper deste engine) era confuso — operador via trades de runs
+    # antigas como se fossem da run atual. User feedback 2026-04-25:
+    # "trades historys tem que estar sempre sincronizados com as runs
+    # de cada um". Pra ver trades de runs anteriores, use DATA > ENGINES
+    # (timeline unificada com detail pane por run).
+    display_trades = trades
 
     # Drop stale selection if the trade fell off the tail window.
     paper_selected = state.get("paper_selected_trade")
