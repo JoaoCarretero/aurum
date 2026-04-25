@@ -2265,7 +2265,6 @@ class App(tk.Tk):
         face_color = color if focused else self._dim_color(color, TILE_DIM_FACTOR)
         panel_fill = BG2 if focused else PANEL
         text_color = WHITE if focused else "#b8b8b8"
-        sub_color = AMBER_B if focused else DIM
         tag = f"tile{idx}"
 
         canvas.delete(tag)
@@ -2305,10 +2304,14 @@ class App(tk.Tk):
                            font=(FONT, 6, "bold"),
                            fill=(face_color if focused else DIM), tags=tag)
 
-        # Module preview (up to 2 rows)
+        # Module list — todos os filhos visíveis (sem clicar pra expandir).
+        # Clip a quantos cabem entre MODULES label (y1+48) e o footer
+        # divider (y2-18) com stride 17px. Se MARKETS um dia ganhar um
+        # 8o item, o ultimo chip parava 2px dentro do footer — clip
+        # silencioso preserva o layout em vez de overflow visual.
         preview_y = y1 + 48
-        shown = _children[:2]
-        for child_idx, (child_label, _method) in enumerate(shown):
+        max_rows = max(0, (y2 - 18 - preview_y) // 17)
+        for child_idx, (child_label, _method) in enumerate(_children[:max_rows]):
             py1 = preview_y + child_idx * 17
             py2 = py1 + 13
             chip_fill = BG3 if focused else BG
@@ -2323,11 +2326,6 @@ class App(tk.Tk):
                                text=label_txt,
                                font=(FONT, 6, "bold"),
                                fill=text_color, tags=tag)
-        if len(_children) > 2:
-            hint_y = preview_y + 2 * 17 + 4
-            canvas.create_text(x2 - 14, hint_y, anchor="e",
-                               text=f"+{len(_children) - 2} MORE",
-                               font=(FONT, 6, "bold"), fill=sub_color, tags=tag)
 
         # Footer hint (no more LIVE STATUS — removido a pedido do usuário)
         hint_y = y2 - 14
