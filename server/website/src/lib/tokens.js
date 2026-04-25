@@ -22,6 +22,11 @@ export const tokens = {
   t3: "#8F8F8F",       // metadado
   t4: "#565656",       // quiet
 
+  // legacy silver aliases — match the --silver/--silverBright CSS vars
+  // so JS consumers can use the same identifiers as the stylesheet.
+  silver: "#D6C99A",
+  silverBright: "#EDE0B1",
+
   // amber — HL2 orange (primary accent)
   amber: "#D08F36",
   amberBright: "#F0A847",
@@ -52,8 +57,13 @@ export const fonts = {
   mono: "'Geist Mono', 'JetBrains Mono', ui-monospace, monospace",
 };
 
-export const ease = {
-  out: [0.16, 1, 0.3, 1],
-  inOut: [0.65, 0, 0.35, 1],
-  smooth: [0.32, 0.72, 0, 1],
-};
+// Bezier ease curves. `ease` itself is the default (out) — consumers
+// pass it straight to framer-motion's transition.ease, which expects
+// either a bezier 4-tuple, a named easing string, or a function.
+// Previously this was an object { out, inOut, smooth }; framer-motion
+// 12 silently fell through and tried to call the object as a mixer
+// function, throwing "a is not a function" deep inside the rAF loop
+// and freezing every Reveal animation past the first.
+export const ease = [0.16, 1, 0.3, 1];
+export const easeInOut = [0.65, 0, 0.35, 1];
+export const easeSmooth = [0.32, 0.72, 0, 1];

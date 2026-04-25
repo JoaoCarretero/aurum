@@ -8,8 +8,8 @@ export function EquityCurve({ data, height = 180, id = "eq" }) {
         <AreaChart data={data} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}>
           <defs>
             <linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={tokens.silverBright} stopOpacity={0.28} />
-              <stop offset="100%" stopColor={tokens.silver} stopOpacity={0} />
+              <stop offset="0%" stopColor={tokens.amberBright} stopOpacity={0.28} />
+              <stop offset="100%" stopColor={tokens.amber} stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid stroke={tokens.brd} vertical={false} strokeDasharray="1 4" />
@@ -32,7 +32,7 @@ export function EquityCurve({ data, height = 180, id = "eq" }) {
           <Area
             type="monotone"
             dataKey="v"
-            stroke={tokens.silverBright}
+            stroke={tokens.amberBright}
             strokeWidth={1.5}
             fill={`url(#${id}-fill)`}
             dot={false}
