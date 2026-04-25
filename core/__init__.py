@@ -56,6 +56,29 @@ def __getattr__(name: str):
     return value
 
 
+# Resolve collisions eagerly: when a lazy attr shares its name with the
+# submodule it lives in (e.g. ``indicators`` is both a submodule and a
+# function inside it), Python's import machinery sets
+# ``core.indicators = <submodule>`` as a side-effect of the first
+# ``import core.indicators`` call elsewhere in the codebase — this
+# shadows the lazy ``__getattr__`` and callers get the module instead
+# of the function. Force-resolve these eagerly so ``from core import
+# indicators`` always lands on the callable. Cheap: one import per
+# colliding name (only ``indicators`` today, which the engines import
+# immediately anyway).
+def _resolve_shadow_collisions():
+    import importlib
+    for name, target in _LAZY.items():
+        modname, attr = target.split(":")
+        submodule_name = modname.rsplit(".", 1)[-1]
+        if name == submodule_name:
+            mod = importlib.import_module(modname)
+            globals()[name] = getattr(mod, attr)
+
+
+_resolve_shadow_collisions()
+
+
 def __dir__():
     """Public attribute listing — lazy names + already-resolved public globals."""
     public_globals = {
