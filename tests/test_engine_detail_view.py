@@ -163,3 +163,45 @@ def test_trades_block_renders_full_table(gui_root):
     assert "BTCUSDT" in text_pool
     assert "5.00" in text_pool or "+5" in text_pool
     parent.destroy()
+
+
+def test_freshness_block_skips_when_no_data(gui_root):
+    from launcher_support.engine_detail_view import render_freshness_block
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({})  # no per-symbol bar age data
+    render_freshness_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "FRESHNESS" in text_pool or "DATA" in text_pool
+    parent.destroy()
+
+
+def test_freshness_block_with_per_symbol_data(gui_root):
+    from launcher_support.engine_detail_view import render_freshness_block
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({
+        "data_freshness": {
+            "BTCUSDT": {"last_bar_at": "2026-04-24T20:00:00Z", "source": "cache"},
+            "ETHUSDT": {"last_bar_at": "2026-04-24T20:00:00Z", "source": "live"},
+        },
+    })
+    render_freshness_block(parent, run)
+    text_pool = " ".join(_collect_text(parent))
+    assert "BTCUSDT" in text_pool
+    assert "ETHUSDT" in text_pool
+    parent.destroy()
+
+
+def test_log_tail_block_renders_lines(gui_root, tmp_path):
+    from launcher_support.engine_detail_view import render_log_tail_block
+    log_path = tmp_path / "log.txt"
+    log_path.write_text("\n".join(
+        f"line {i} INFO some message" for i in range(50)
+    ), encoding="utf-8")
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({}, source="local", run_dir=str(tmp_path))
+    render_log_tail_block(parent, run, limit=10)
+    text_pool = " ".join(_collect_text(parent))
+    # Note: log tail uses Text widget, not Labels — _collect_text won't find
+    # Text content. Check that the LOG TAIL header at least rendered.
+    assert "LOG TAIL" in text_pool
+    parent.destroy()

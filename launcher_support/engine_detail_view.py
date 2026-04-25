@@ -430,3 +430,106 @@ def _fetch_trades(run: RunSummary) -> list[dict]:
         except Exception:
             pass
     return rows
+
+
+# ─── Block ❼ DATA FRESHNESS ────────────────────────────────────────
+
+
+def render_freshness_block(parent: tk.Widget, run: RunSummary) -> None:
+    """❼ DATA FRESHNESS — bar age per symbol + cache state."""
+    _block_header(parent, "❼ DATA FRESHNESS")
+    hb = run.heartbeat or {}
+    fresh_map = hb.get("data_freshness") or {}
+
+    if not fresh_map:
+        tk.Label(parent, text="  (no per-symbol freshness data)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    hdr = tk.Frame(parent, bg=BG)
+    hdr.pack(fill="x", padx=12, pady=(2, 1))
+    for label, w, anchor in (("SYMBOL", 12, "w"), ("LAST_BAR", 22, "w"),
+                              ("AGE", 12, "w"), ("SOURCE", 8, "w")):
+        tk.Label(hdr, text=label, font=(FONT, 7, "bold"), fg=DIM,
+                 bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
+
+    for symbol, info in sorted(fresh_map.items()):
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", padx=12, pady=0)
+        last = info.get("last_bar_at", "—")
+        age = _format_age(last)
+        src = str(info.get("source", "?"))
+        for val, w, anchor, color in (
+            (str(symbol)[:12], 12, "w", WHITE),
+            (str(last)[:22], 22, "w", DIM),
+            (age, 12, "w", DIM),
+            (src, 8, "w",
+             GREEN if src == "cache" else (AMBER_D if src == "live" else DIM)),
+        ):
+            tk.Label(row, text=val, font=(FONT, 7), fg=color,
+                     bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
+
+
+# ─── Block ❽ LOG TAIL ──────────────────────────────────────────────
+
+
+def render_log_tail_block(parent: tk.Widget, run: RunSummary,
+                          limit: int = 200) -> None:
+    """❽ LOG TAIL — last N lines do log.txt do run."""
+    _block_header(parent, f"❽ LOG TAIL (last {limit})")
+
+    lines = _fetch_log_tail(run, limit=limit)
+    if not lines:
+        tk.Label(parent, text="  (log unavailable)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    txt_wrap = tk.Frame(parent, bg=BG)
+    txt_wrap.pack(fill="both", expand=False, padx=12, pady=4)
+    txt = tk.Text(txt_wrap, height=14, bg=BG, fg=WHITE,
+                  font=(FONT, 7), wrap="none", state="normal",
+                  highlightbackground=BORDER, highlightthickness=1)
+    sb = tk.Scrollbar(txt_wrap, orient="vertical", command=txt.yview)
+    txt.configure(yscrollcommand=sb.set)
+    sb.pack(side="right", fill="y")
+    txt.pack(side="left", fill="both", expand=True)
+    for ln in lines:
+        if " ERROR" in ln:
+            color = RED
+        elif " WARN" in ln:
+            color = AMBER
+        elif " DEBUG" in ln:
+            color = DIM
+        else:
+            color = WHITE
+        txt.insert("end", ln + "\n", color)
+        txt.tag_configure(color, foreground=color)
+    txt.configure(state="disabled")
+    txt.see("end")
+
+
+def _fetch_log_tail(run: RunSummary, limit: int) -> list[str]:
+    """Local log.txt tail OR cockpit /v1/runs/{id}/log."""
+    rows: list[str] = []
+    if run.source == "local" and run.run_dir:
+        from pathlib import Path
+        lp = Path(run.run_dir) / "log.txt"
+        if not lp.exists():
+            lp = Path(run.run_dir) / "logs" / "live.log"
+        if lp.exists():
+            try:
+                rows = lp.read_text(encoding="utf-8",
+                                    errors="replace").splitlines()[-limit:]
+            except Exception:
+                pass
+    elif run.source == "vps":
+        try:
+            from launcher_support.engines_live_view import _get_cockpit_client
+            client = _get_cockpit_client()
+            if client is not None:
+                resp = client._get(f"/v1/runs/{run.run_id}/log?limit={limit}")
+                if resp and isinstance(resp, dict):
+                    rows = resp.get("lines", []) or []
+        except Exception:
+            pass
+    return rows
