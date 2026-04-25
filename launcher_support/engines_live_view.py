@@ -58,6 +58,10 @@ from launcher_support.engines_live_helpers import (
     _sanitize_instance_label,
 )
 from launcher_support.screens._metrics import emit_timing_metric
+from launcher_support import trade_history_panel
+from launcher_support.trade_chart_popup import (
+    open_trade_chart, resolve_tf, tf_to_seconds,
+)
 # signal_detail_popup.render_inline eh chamado via engines_sidebar.render_detail
 # (inline, sem Toplevel). show() legacy continua disponivel no modulo.
 
@@ -2703,41 +2707,54 @@ def _render_detail_shadow(parent, slug, meta, state, launcher):
     status = str(hb.get("status") or "unknown").upper()
     status_color = GREEN if status == "RUNNING" else DIM2
 
-    # Drill-down inline: click em row seta selected_trade e rerender;
-    # click em ✕ limpa e volta pra tabela. Tudo dentro do proprio
-    # detail pane — sem Toplevel modal.
-    def _on_row_click(trade: dict):
-        state["shadow_selected_trade"] = trade
-        _render_detail(state, launcher)
-
-    def _on_close_detail():
-        state.pop("shadow_selected_trade", None)
-        _render_detail(state, launcher)
-
-    selected = state.get("shadow_selected_trade")
-    # Se o trade selecionado nao esta mais na lista de trades (ex. sumiu
-    # do cache apos poll novo), limpa selection pra evitar stale state.
-    if selected is not None and trades:
-        sel_key = (selected.get("strategy"), selected.get("symbol"),
-                   selected.get("timestamp"))
-        known_keys = {(t.get("strategy"), t.get("symbol"), t.get("timestamp"))
-                      for t in trades}
-        if sel_key not in known_keys:
-            state.pop("shadow_selected_trade", None)
-            selected = None
-
+    # Trades list rendered by the new trade_history_panel block below.
+    # render_detail keeps its telemetry strip but skips signals here.
     detail_frame = render_detail(
         parent=parent,
         engine_display=name,
         mode="shadow",
         heartbeat=hb,
         manifest=None,
-        trades=trades,
-        on_row_click=_on_row_click,
+        trades=[],
+        on_row_click=lambda _t: None,
         status_badge_text=f"TUNNEL {tun_text}  ·  {status}",
         status_badge_color=status_color,
-        selected_trade=selected,
-        on_close_detail=_on_close_detail,
+    )
+    # Drop stale shadow_selected_trade leftover from the old drill-down UX.
+    state.pop("shadow_selected_trade", None)
+
+    # Trade history block — click opens TradeChartPopup (Binance candles +
+    # entry/stop/tp/exit markers). Same wiring as PAPER mode.
+    trades_display = list(reversed(trades)) if trades else []
+    _engine_for_tf = (
+        (trades_display[0].get("strategy") if trades_display else None) or slug
+    )
+    try:
+        _tf_sec_panel = tf_to_seconds(resolve_tf(_engine_for_tf))
+    except ValueError:
+        _tf_sec_panel = 900
+
+    _panel_colors = {
+        "BG": BG, "PANEL": PANEL, "BG2": BG2, "AMBER": AMBER,
+        "AMBER_B": AMBER_B, "AMBER_D": AMBER_D, "GREEN": GREEN,
+        "RED": RED, "WHITE": WHITE, "DIM": DIM, "DIM2": DIM2,
+        "BORDER": BORDER,
+    }
+
+    _run_id_key = str(run_dir) if run_dir is not None else slug
+
+    def _open_chart_shadow(t: dict, _rid=_run_id_key):
+        open_trade_chart(
+            launcher, t, run_id=_rid,
+            colors=_panel_colors, font_name=FONT,
+        )
+
+    trade_history_panel.render(
+        parent, trades=trades_display,
+        on_click=_open_chart_shadow,
+        colors=_panel_colors, font_name=FONT,
+        tf_sec=_tf_sec_panel,
+        title="SHADOW SIGNALS",
     )
 
     # Actions row — só START (quando parado) + REFRESH. STOP e RESTART
@@ -2979,59 +2996,6 @@ def _shadow_info_row(parent, key, value, fg=WHITE):
     tk.Label(row, text=str(value), fg=fg, bg=PANEL,
              font=(FONT, 7), anchor="w").pack(
                  side="left", fill="x", expand=True)
-
-
-def _render_signals_table(parent, trades):
-    """Render compact table of signals. `trades` ordered newest-first."""
-    if not trades:
-        tk.Label(parent,
-                 text="(sem sinais ainda — aguardando primeiros ticks)",
-                 fg=DIM, bg=PANEL, font=(FONT, 7, "italic")).pack(
-                     anchor="w", pady=(4, 4))
-        return
-    # Header row
-    hdr = tk.Frame(parent, bg=BG2)
-    hdr.pack(fill="x", pady=(2, 0))
-    cols = [("TIME", 16), ("SYMBOL", 10), ("STRAT", 10),
-            ("DIR", 6), ("ENTRY", 12)]
-    for col_name, w in cols:
-        tk.Label(hdr, text=col_name, fg=DIM2, bg=BG2,
-                 font=(FONT, 6, "bold"),
-                 width=w, anchor="w").pack(side="left", padx=(4, 0))
-    # Data rows
-    for trade in trades:
-        row = tk.Frame(parent, bg=PANEL)
-        row.pack(fill="x", pady=(1, 0))
-        ts_raw = str(trade.get("timestamp", "—"))
-        ts = ts_raw[:19].replace("T", " ")
-        symbol = str(trade.get("symbol", "—"))
-        strat = str(trade.get("strategy", "—"))[:10]
-        direction = str(trade.get("direction", "—"))
-        dir_upper = direction.upper()
-        if dir_upper == "LONG":
-            dir_color = GREEN
-        elif dir_upper == "SHORT":
-            dir_color = RED
-        else:
-            dir_color = DIM
-        entry = trade.get("entry")
-        try:
-            entry_str = (f"{float(entry):,.4f}"
-                         if entry is not None else "—")
-        except (TypeError, ValueError):
-            entry_str = str(entry)[:12]
-        tk.Label(row, text=ts, fg=DIM, bg=PANEL, font=(FONT, 6),
-                 width=16, anchor="w").pack(side="left", padx=(4, 0))
-        tk.Label(row, text=symbol, fg=WHITE, bg=PANEL,
-                 font=(FONT, 6, "bold"),
-                 width=10, anchor="w").pack(side="left", padx=(4, 0))
-        tk.Label(row, text=strat, fg=DIM, bg=PANEL, font=(FONT, 6),
-                 width=10, anchor="w").pack(side="left", padx=(4, 0))
-        tk.Label(row, text=direction, fg=dir_color, bg=PANEL,
-                 font=(FONT, 6, "bold"),
-                 width=6, anchor="w").pack(side="left", padx=(4, 0))
-        tk.Label(row, text=entry_str, fg=WHITE, bg=PANEL, font=(FONT, 6),
-                 width=12, anchor="w").pack(side="left", padx=(4, 0))
 
 
 def _render_hl2_empty(parent, *, title: str, blurb: str,
@@ -3693,6 +3657,57 @@ def _paper_content_sig(state, launcher=None) -> tuple:
     )
 
 
+def _fetch_paper_trades(run_id: str) -> list[dict]:
+    """Fetch recent paper trades via cockpit API. Empty list on error.
+
+    Only returns CLOSED trades (written to reports/trades.jsonl). Open
+    positions live in state/positions.json and are surfaced via
+    _position_to_live_trade() below.
+    """
+    client = _get_cockpit_client()
+    if client is None:
+        return []
+    try:
+        payload = client.get_trades(run_id, limit=200)
+    except Exception:
+        return []
+    raw = (payload or {}).get("trades") or []
+    return [t for t in raw if isinstance(t, dict)]
+
+
+def _position_to_live_trade(pos: dict) -> dict:
+    """Normalize paper positions.json record to the trade history schema.
+
+    Position fields from cockpit /positions: id, engine, symbol, direction
+    (already LONG/SHORT), entry_price, stop, target, size, notional,
+    opened_at, opened_at_idx, unrealized_pnl, mtm_price, bars_held.
+
+    Mapped to trade schema so trade_history_panel + TradeChartPopup treat
+    it like a LIVE trade (result=LIVE). exit_p defaults to mtm_price
+    when the tick has marked the position; falls back to entry_price for
+    freshly-opened positions (no mark yet).
+    """
+    entry_price = pos.get("entry_price")
+    mtm = pos.get("mtm_price")
+    return {
+        "symbol": pos.get("symbol"),
+        "strategy": pos.get("engine"),
+        "direction": pos.get("direction"),
+        "timestamp": pos.get("opened_at"),
+        "entry": entry_price,
+        "stop": pos.get("stop"),
+        "target": pos.get("target"),
+        "exit_p": mtm if mtm is not None else entry_price,
+        "size": pos.get("size"),
+        "duration": int(pos.get("bars_held") or 0),
+        "result": "LIVE",
+        "exit_reason": "live",
+        "pnl": pos.get("unrealized_pnl") or 0.0,
+        "r_multiple": 0.0,
+        "_position_id": pos.get("id"),  # preserved for popup registry dedup
+    }
+
+
 def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
     """Render PAPER mode detail pane with full trading dashboard.
     Reuses render_detail (mode='paper') extended kwargs: account_snapshot,
@@ -3786,6 +3801,49 @@ def _render_detail_paper(parent, slug, meta, state, launcher) -> None:
         equity_series=series,
         selected_trade=paper_selected,
         on_close_detail=_on_paper_close_detail,
+    )
+
+    # Trade history block — clickable rows open matplotlib chart popup.
+    # Merges LIVE positions (from state/positions.json, still open) with
+    # closed trades (from reports/trades.jsonl via cockpit API). LIVE rows
+    # appear first so they're immediately clickable; closed rows follow
+    # newest-first.
+    live_trades = [
+        _position_to_live_trade(p) for p in (positions or [])
+        if isinstance(p, dict)
+    ]
+    closed_trades = _fetch_paper_trades(run_id)
+    trades_display = live_trades + (
+        list(reversed(closed_trades)) if closed_trades else []
+    )
+
+    _engine_for_tf = (
+        (trades_display[0].get("strategy") if trades_display else None) or slug
+    )
+    try:
+        _tf_sec_panel = tf_to_seconds(resolve_tf(_engine_for_tf))
+    except ValueError:
+        _tf_sec_panel = 900  # 15m fallback
+
+    _panel_colors = {
+        "BG": BG, "PANEL": PANEL, "BG2": BG2, "AMBER": AMBER,
+        "AMBER_B": AMBER_B, "AMBER_D": AMBER_D, "GREEN": GREEN,
+        "RED": RED, "WHITE": WHITE, "DIM": DIM, "DIM2": DIM2,
+        "BORDER": BORDER,
+    }
+
+    def _open_chart_paper(t: dict, _rid=run_id):
+        open_trade_chart(
+            launcher, t, run_id=str(_rid),
+            colors=_panel_colors, font_name=FONT,
+        )
+
+    trade_history_panel.render(
+        parent, trades=trades_display,
+        on_click=_open_chart_paper,
+        colors=_panel_colors, font_name=FONT,
+        tf_sec=_tf_sec_panel,
+        title="PAPER TRADES",
     )
 
     state["paper_last_render_sig"] = _paper_content_sig(state, launcher)
