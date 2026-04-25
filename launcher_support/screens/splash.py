@@ -342,6 +342,25 @@ class SplashScreen(Screen):
         if total:
             items.append(("EDGE", f"{ok_n}/{total} ENGINES", GREEN if ok_n > 0 else DIM))
 
+        # Roadmap counters — surfacing planned/in-flight capabilities so
+        # the operator sees the gap-analysis pulse on the splash.
+        try:
+            from launcher_support.roadmap_data import counters as _rm_counters
+            rc = _rm_counters()
+            wip = rc.get("in_progress", 0)
+            planned = rc.get("planned", 0)
+            if rc.get("total", 0):
+                if wip:
+                    items.append(("ROADMAP",
+                                  f"{wip} WIP / {planned} PLANNED",
+                                  AMBER_B))
+                else:
+                    items.append(("ROADMAP",
+                                  f"{planned} PLANNED",
+                                  AMBER_D))
+        except Exception:
+            pass
+
         # Render os items inline
         cur_x = x1 + 104
         for label, val, col in items:
