@@ -925,6 +925,12 @@ class LiveEngine:
         # capacity 120 = up to 2 hours of history. Caller (this class)
         # populates per-tick inside _check_risk_gates.
         self._equity_history: deque[tuple[datetime, float]] = deque(maxlen=120)
+        # Rolling API latency history for gate_anomaly (kill-switch layer 3).
+        # Sampled 1/minute; capacity 120 = up to 2 hours of history.
+        # Populated externally by the HTTP/order-submit layer via
+        # _record_api_latency(now, elapsed_ms) after each REST call.
+        # _check_risk_gates reads it via _compute_api_latency_p99().
+        self._api_latency_history: deque[tuple[datetime, float]] = deque(maxlen=120)
         self.positions: list[Position] = []
         self.closed_trades: list = []
         self.macro_series: Optional[pd.Series] = None
@@ -1513,6 +1519,71 @@ class LiveEngine:
         dd_pct = (anchor_eq - self.account) / anchor_eq * 100.0
         return dd_pct / age_hr
 
+    def _record_api_latency(self, now: datetime, latency_ms: float) -> None:
+        """Append (now, latency_ms) to _api_latency_history, subsampling
+        to one sample per UTC minute.
+
+        Same subsample policy as _record_equity_sample: per-tick callers
+        (HTTP/order-submit layer) can fire freely; same-minute calls drop.
+        Earliest sample of the minute wins.
+
+        Latency in milliseconds (REST request → response wall-clock).
+        Negative values are dropped defensively — non-physical.
+        """
+        if latency_ms < 0:
+            return
+        last = self._api_latency_history[-1] if self._api_latency_history else None
+        if last is not None:
+            last_ts = last[0]
+            if (last_ts.year   == now.year
+                and last_ts.month  == now.month
+                and last_ts.day    == now.day
+                and last_ts.hour   == now.hour
+                and last_ts.minute == now.minute):
+                return
+        self._api_latency_history.append((now, latency_ms))
+
+    def _compute_api_latency_p99(self, now: datetime | None = None,
+                                 window_min: int = 5) -> float:
+        """Return API latency p99 (milliseconds) computed over the rolling
+        window.
+
+        Algorithm: collect all samples whose timestamp is within
+        ``[now - window_min, now]``. If fewer than 10 samples are in the
+        window, return 0.0 (insufficient data — gate_anomaly treats 0.0
+        as "no signal" and allows). Otherwise compute the p99 (99th
+        percentile) of the latency values.
+
+        Sign convention matches gate_anomaly:
+          * positive = degraded latency
+          * 0.0 = insufficient samples (engine just started, or no API
+                  calls in the window)
+
+        Defensive guards return 0.0 (= allow) on:
+          * empty history
+          * < 10 samples in window (statistically meaningless p99)
+        """
+        if not self._api_latency_history:
+            return 0.0
+        if now is None:
+            now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=window_min)
+        samples = [lat for ts, lat in self._api_latency_history if ts >= cutoff]
+        if len(samples) < 10:
+            return 0.0
+        # p99: position 99% of the way through the sorted samples. For a
+        # small window this is essentially the max with a safety margin
+        # (in 100 samples, p99 = the 2nd-largest). Use linear-interp
+        # convention — same as numpy.percentile default.
+        samples.sort()
+        n = len(samples)
+        # Index in [0, n-1]. p99 = 0.99 * (n - 1).
+        idx_f = 0.99 * (n - 1)
+        idx_lo = int(idx_f)
+        idx_hi = min(idx_lo + 1, n - 1)
+        frac = idx_f - idx_lo
+        return samples[idx_lo] + frac * (samples[idx_hi] - samples[idx_lo])
+
     def _check_risk_gates(self) -> GateDecision:
         """Build a RiskState snapshot from current engine state and run
         the full gate chain. Returns the first non-allow decision (hard
@@ -1528,6 +1599,11 @@ class LiveEngine:
         # so per-tick gate evaluations don't pollute the buffer.
         self._record_equity_sample(now, self.account)
         dd_velocity = self._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        # API latency p99 for gate_anomaly (kill-switch layer 3). The
+        # _api_latency_history deque is populated externally by the
+        # HTTP/order-submit layer via _record_api_latency(). 0.0 on
+        # insufficient samples → gate_anomaly returns allow.
+        api_latency_p99 = self._compute_api_latency_p99(now, window_min=5)
 
         open_positions = []
         for p in self.positions:
@@ -1548,6 +1624,7 @@ class LiveEngine:
             open_positions      = open_positions,
             current_hour_utc    = now.hour,
             dd_velocity_pct_per_hour = dd_velocity,
+            api_latency_ms_p99  = api_latency_p99,
         )
         return check_gates(state, self.risk_cfg)
 

@@ -680,3 +680,112 @@ class TestDdVelocityCallerSide:
         eng.account = 1_000.0
         v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
         assert v == 0.0
+
+
+# ────────────────────────────────────────────────────────────
+# LiveEngine api_latency caller-side wiring (gate_anomaly)
+# ────────────────────────────────────────────────────────────
+# gate_anomaly is stateless — depends on the caller computing
+# api_latency_ms_p99 over a rolling window of REST call latencies and
+# populating RiskState. These tests pin the helpers in LiveEngine that
+# do that computation: _record_api_latency (subsamples 1/min) and
+# _compute_api_latency_p99 (rolling p99 over a 5-min window).
+#
+# Without these helpers populating RiskState.api_latency_ms_p99, the
+# gate (kill-switch layer 3) would stay dormant in prod.
+
+class TestApiLatencyCallerSide:
+    def _engine(self):
+        """Minimal engine stub for helper testing — same pattern as
+        TestDdVelocityCallerSide. Avoids spinning a full LiveEngine."""
+        from collections import deque
+        from types import SimpleNamespace
+        from engines.live import LiveEngine
+
+        eng = SimpleNamespace()
+        eng._api_latency_history = deque(maxlen=120)
+        # Bind unbound methods.
+        eng._record_api_latency = (
+            LiveEngine._record_api_latency.__get__(eng)
+        )
+        eng._compute_api_latency_p99 = (
+            LiveEngine._compute_api_latency_p99.__get__(eng)
+        )
+        return eng
+
+    def test_empty_history_returns_zero(self):
+        from datetime import datetime, timezone
+        eng = self._engine()
+        v = eng._compute_api_latency_p99(
+            datetime.now(timezone.utc), window_min=5
+        )
+        assert v == 0.0
+
+    def test_few_samples_returns_zero(self):
+        # Insufficient — p99 needs >= 10 samples to be meaningful.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        for i in range(5):
+            eng._record_api_latency(t0 + timedelta(minutes=i), 100.0)
+        now = t0 + timedelta(minutes=5)
+        v = eng._compute_api_latency_p99(now, window_min=10)
+        assert v == 0.0
+
+    def test_sufficient_samples_compute_p99(self):
+        # 100 samples ranging 100..199ms. p99 should be near the top.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        # Use unique seconds (still 1/min subsample drops most) — bypass
+        # subsample by spreading across minutes.
+        for i in range(100):
+            eng._record_api_latency(t0 + timedelta(minutes=i),
+                                     100.0 + i)
+        now = t0 + timedelta(minutes=99)
+        # Window covers all samples (>=100 min).
+        v = eng._compute_api_latency_p99(now, window_min=200)
+        # p99 of 100..199 with linear interp ≈ 198.0 (idx_f = 0.99 * 99 = 98.01).
+        assert 197.0 <= v <= 199.0, f"expected p99 ~198, got {v}"
+
+    def test_subsamples_to_one_per_minute(self):
+        # 60 calls in same minute → only 1 entry in history.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        for sec in range(60):
+            ts = t0.replace(second=sec)
+            eng._record_api_latency(ts, 200.0 + sec)
+        assert len(eng._api_latency_history) == 1
+
+    def test_window_min_excludes_older_samples(self):
+        # Default window is 5 min. Samples older than that should not
+        # contribute to p99.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        # Ancient: 10 samples at 5000ms each, at t0..t0+9min.
+        for i in range(10):
+            eng._record_api_latency(t0 + timedelta(minutes=i), 5000.0)
+        # Recent: 10 samples at 100ms each, starting at t0+30min.
+        for i in range(10):
+            eng._record_api_latency(t0 + timedelta(minutes=30 + i), 100.0)
+        # now = t0+39min, window=5min: cutoff = t0+34min. Only 5 of the
+        # recent samples qualify (35..39) → < 10, returns 0.0.
+        now = t0 + timedelta(minutes=39)
+        v = eng._compute_api_latency_p99(now, window_min=5)
+        assert v == 0.0, f"expected 0.0 (insufficient in-window), got {v}"
+        # Widening to 10min picks up all 10 recent (30..39); ancient
+        # at 0..9 still falls outside.
+        v = eng._compute_api_latency_p99(now, window_min=10)
+        assert 99.0 <= v <= 101.0, (
+            f"expected ~100ms (only recent samples qualify), got {v}"
+        )
+
+    def test_negative_latency_dropped(self):
+        # Defensive: negative is non-physical, must be ignored.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_api_latency(t0, -50.0)
+        assert len(eng._api_latency_history) == 0
