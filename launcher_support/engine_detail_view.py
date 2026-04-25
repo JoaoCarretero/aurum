@@ -327,3 +327,106 @@ def render_equity_block(parent: tk.Widget, run: RunSummary) -> None:
             f"{exposure:.1f}%" if exposure is not None else "—")
     _kv_row(parent, "ROI", f"{run.roi_pct:+.3f}%" if run.roi_pct is not None else "—",
             GREEN if (run.roi_pct or 0) > 0 else (RED if (run.roi_pct or 0) < 0 else DIM))
+
+
+# ─── Block ❻ TRADES ────────────────────────────────────────────────
+
+
+def render_trades_block(parent: tk.Widget, run: RunSummary,
+                        *, trades_override: list[dict] | None = None,
+                        ) -> None:
+    """❻ TRADES — closed trades full audit + footer."""
+    _block_header(parent, "❻ TRADES (closed)")
+
+    trades = trades_override if trades_override is not None \
+             else _fetch_trades(run)
+    if not trades:
+        tk.Label(parent, text="  (no closed trades)",
+                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w", padx=12)
+        return
+
+    # Header
+    hdr = tk.Frame(parent, bg=BG)
+    hdr.pack(fill="x", padx=12, pady=(2, 1))
+    cols = (("TS", 16, "w"), ("SYM", 9, "w"), ("DIR", 5, "w"),
+            ("ENTRY", 11, "e"), ("EXIT", 11, "e"), ("PNL$", 9, "e"),
+            ("R", 6, "e"), ("EXIT_REASON", 14, "w"),
+            ("SLIPP", 7, "e"), ("COMM", 7, "e"), ("FUND", 7, "e"))
+    for label, w, anchor in cols:
+        tk.Label(hdr, text=label, font=(FONT, 7, "bold"), fg=DIM,
+                 bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
+
+    for t in trades:
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", padx=12, pady=0)
+        pnl = t.get("pnl_usd") or 0
+        pnl_color = GREEN if pnl > 0 else (RED if pnl < 0 else DIM)
+        for val, w, anchor, color in (
+            (str(t.get("ts", ""))[:16], 16, "w", DIM),
+            (str(t.get("symbol", ""))[:9], 9, "w", WHITE),
+            (str(t.get("direction", ""))[:5], 5, "w",
+             GREEN if t.get("direction") == "long" else RED),
+            (f"{t.get('entry', 0):.4f}", 11, "e", WHITE),
+            (f"{t.get('exit', 0):.4f}", 11, "e", WHITE),
+            (f"{pnl:+.2f}", 9, "e", pnl_color),
+            (f"{t.get('r_multiple', 0):+.2f}" if t.get('r_multiple') is not None else "—",
+             6, "e", pnl_color),
+            (str(t.get("exit_reason", ""))[:14], 14, "w", DIM),
+            (f"{t.get('slippage_usd', 0):.3f}", 7, "e", DIM),
+            (f"{t.get('commission_usd', 0):.3f}", 7, "e", DIM),
+            (f"{t.get('funding_usd', 0):.3f}", 7, "e", DIM),
+        ):
+            tk.Label(row, text=val, font=(FONT, 7), fg=color,
+                     bg=BG, width=w, anchor=anchor).pack(side="left", padx=(2, 0))
+
+    # Footer agregado.
+    from core.analytics.run_metrics import (
+        sharpe_rolling, win_rate, avg_r_multiple, sortino,
+    )
+    s = sharpe_rolling(trades)
+    wr = win_rate(trades)
+    ar = avg_r_multiple(trades)
+    so = sortino(trades)
+
+    foot = tk.Frame(parent, bg=BG)
+    foot.pack(fill="x", padx=12, pady=(6, 0))
+    tk.Frame(parent, bg=DIM2, height=1).pack(fill="x", padx=12)
+    foot2 = tk.Frame(parent, bg=BG)
+    foot2.pack(fill="x", padx=12, pady=(2, 0))
+    tk.Label(foot2,
+             text=f"  total {len(trades)} · win {wr*100:.0f}% · "
+                  f"avgR {ar:+.2f} · sharpe {s:+.2f} · sortino {so:+.2f}"
+             if all(v is not None for v in (s, ar, so))
+             else f"  total {len(trades)} · win {wr*100:.0f}%",
+             font=(FONT, 7, "bold"), fg=AMBER, bg=BG).pack(anchor="w")
+
+
+def _fetch_trades(run: RunSummary) -> list[dict]:
+    """Local trades.jsonl tail OR cockpit /v1/runs/{id}/trades."""
+    import json
+    rows: list[dict] = []
+    if run.source == "local" and run.run_dir:
+        from pathlib import Path
+        tp = Path(run.run_dir) / "trades.jsonl"
+        if not tp.exists():
+            tp = Path(run.run_dir) / "reports" / "trades.jsonl"
+        if not tp.exists():
+            tp = Path(run.run_dir).parent / "reports" / "trades.jsonl"
+        if tp.exists():
+            try:
+                for ln in tp.read_text(encoding="utf-8").splitlines():
+                    if ln.strip():
+                        rows.append(json.loads(ln))
+            except Exception:
+                pass
+    elif run.source == "vps":
+        try:
+            from launcher_support.engines_live_view import _get_cockpit_client
+            client = _get_cockpit_client()
+            if client is not None:
+                resp = client._get(f"/v1/runs/{run.run_id}/trades")
+                if resp and isinstance(resp, dict):
+                    rows = resp.get("trades", [])
+        except Exception:
+            pass
+    return rows

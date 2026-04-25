@@ -145,3 +145,21 @@ def test_equity_block_shows_drawdown(gui_root):
     assert "9850" in text_pool or "9,850" in text_pool
     assert "drawdown" in text_pool.lower() or "dd" in text_pool.lower()
     parent.destroy()
+
+
+def test_trades_block_renders_full_table(gui_root):
+    from launcher_support.engine_detail_view import render_trades_block
+    parent = tk.Frame(gui_root)
+    run = _run_with_hb({}, source="local", run_dir="/tmp/no_such_run")
+    trades = [
+        {"ts": "2026-04-24T18:00:00Z", "symbol": "BTCUSDT",
+         "direction": "long", "entry": 50000, "exit": 50500,
+         "pnl_usd": 5.0, "r_multiple": 1.0,
+         "exit_reason": "target", "slippage_usd": 0.1,
+         "commission_usd": 0.05, "funding_usd": 0.02},
+    ]
+    render_trades_block(parent, run, trades_override=trades)
+    text_pool = " ".join(_collect_text(parent))
+    assert "BTCUSDT" in text_pool
+    assert "5.00" in text_pool or "+5" in text_pool
+    parent.destroy()
