@@ -36,7 +36,7 @@ class CommentView:
     body: str
     created_at_iso: str
     age_text: str
-    author_sigil: str         # agent key ou "—"
+    author_label: str         # agent key or "-"
     author_color: str         # hex
 
 
@@ -58,18 +58,18 @@ def _shape_comments(raw: list[dict] | None) -> list[CommentView]:
         body = (c.get("body") or c.get("text") or "").strip()
         iso = c.get("created_at") or ""
         author_uuid = c.get("author_agent_id") or c.get("agent_id") or ""
-        sigil = "—"
+        author_label = "-"
         color = DIM
         agent = BY_UUID.get(author_uuid) if author_uuid else None
         if agent is not None:
-            sigil = agent.key
+            author_label = agent.key
             color = AGENT_COLORS[agent.key].primary
         out.append(CommentView(
             id=cid,
             body=body,
             created_at_iso=iso,
             age_text=_iso_age(iso),
-            author_sigil=sigil,
+            author_label=author_label,
             author_color=color,
         ))
     out.sort(key=lambda v: v.created_at_iso)  # oldest first
@@ -257,7 +257,7 @@ class IssueDetailModal:
             row = tk.Frame(frame, bg=BG)
             row.pack(fill="x", anchor="w", pady=(4, 0))
             tk.Label(
-                row, text=f"{v.author_sigil}  {v.age_text}",
+                row, text=f"{v.author_label}  {v.age_text}",
                 font=(FONT, 8, "bold"), fg=v.author_color, bg=BG,
             ).pack(anchor="w")
             tk.Label(
