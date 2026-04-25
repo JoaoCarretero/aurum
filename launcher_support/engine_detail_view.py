@@ -527,7 +527,7 @@ def _fetch_log_tail(run: RunSummary, limit: int) -> list[str]:
             from launcher_support.engines_live_view import _get_cockpit_client
             client = _get_cockpit_client()
             if client is not None:
-                resp = client._get(f"/v1/runs/{run.run_id}/log?limit={limit}")
+                resp = client._get(f"/v1/runs/{run.run_id}/log?tail={limit}")
                 if resp and isinstance(resp, dict):
                     rows = resp.get("lines", []) or []
         except Exception:
