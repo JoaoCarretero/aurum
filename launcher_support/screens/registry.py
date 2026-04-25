@@ -29,10 +29,12 @@ def register_default_screens(
     from launcher_support.screens.processes import ProcessesScreen
     from launcher_support.screens.research_desk import ResearchDeskScreen
     from launcher_support.screens.risk import RiskScreen
+    from launcher_support.screens.roadmap import RoadmapScreen
     from launcher_support.screens.runs_history import RunsHistoryScreen
     from launcher_support.screens.settings import SettingsScreen
     from launcher_support.screens.splash import SplashScreen
     from launcher_support.screens.terminal import TerminalScreen
+    from launcher_support.screens.vps import VpsScreen
 
     manager.register(
         "splash",
@@ -83,6 +85,10 @@ def register_default_screens(
         lambda parent: SettingsScreen(parent=parent, app=app),
     )
     manager.register(
+        "vps",
+        lambda parent: VpsScreen(parent=parent, app=app),
+    )
+    manager.register(
         "processes",
         lambda parent: ProcessesScreen(parent=parent, app=app),
     )
@@ -93,6 +99,10 @@ def register_default_screens(
     manager.register(
         "risk",
         lambda parent: RiskScreen(parent=parent, app=app),
+    )
+    manager.register(
+        "roadmap",
+        lambda parent: RoadmapScreen(parent=parent, app=app),
     )
     manager.register(
         "live_runs",

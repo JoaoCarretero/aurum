@@ -918,6 +918,9 @@ class App(tk.Tk):
         self.h_data_btn     = _mk_nav_btn(" ▤ DATA ",      self._data_center)
         self.h_arb_btn      = _mk_nav_btn(" ⇄ ARBITRAGE ", self._arbitrage_hub)
         self.h_agents_btn   = _mk_nav_btn(" ◎ AGENTS ",    self._research_desk)
+        self.h_roadmap_btn  = _mk_nav_btn(" △ ROADMAP ",   self._roadmap)
+        self.h_vps_btn      = _mk_nav_btn(" ⛁ VPS ",       self._vps)
+        self.h_config_btn   = _mk_nav_btn(" ⚙ CONFIG ",    self._config)
         # Extra left padding for the first button so it clears the AURUM brand.
         self.h_macro_btn.pack_configure(padx=(8, 0))
 
@@ -5274,6 +5277,41 @@ class App(tk.Tk):
         if not self.screens_container.winfo_manager():
             self.screens_container.pack(fill="both", expand=True)
         self.screens.show("settings")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _vps(self):
+        """Open VPS · INFRA dashboard — tunnel/cockpit/host/keys at a glance."""
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        self.screens.show("vps")
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _roadmap(self, item_id: str | None = None):
+        """Open ROADMAP · COMING SOON — capabilities planned vs shipped.
+
+        Optional ``item_id`` deep-links to a specific roadmap entry —
+        the screen jumps to its tier and pre-renders the detail panel.
+        """
+        self._clr()
+        self._clear_kb()
+        if self.main.winfo_manager():
+            self.main.pack_forget()
+        if not self.screens_container.winfo_manager():
+            self.screens_container.pack(fill="both", expand=True)
+        if item_id:
+            self.screens.show("roadmap", item_id=item_id)
+        else:
+            self.screens.show("roadmap")
         try:
             self.focus_set()
         except Exception:

@@ -118,6 +118,22 @@ class TerminalScreen(Screen):
                     title_width=22,
                 )
 
+        # Roadmap pointer — research / data / macro plans live in
+        # ROADMAP screen with full detail and references.
+        sec = app._ui_section(panel, "FULL ROADMAP")
+        app._ui_action_row(
+            sec,
+            "R",
+            "Open Roadmap",
+            "Regime console, news sentiment, options chain — detailed plan",
+            command=app._roadmap,
+            available=True,
+            tag="ROADMAP",
+            tag_fg=AMBER_D,
+            tag_bg=BG2,
+            title_width=22,
+        )
+
         app._ui_back_row(panel, lambda: app._menu("main"))
 
     def on_enter(self, **kwargs: Any) -> None:
@@ -125,7 +141,7 @@ class TerminalScreen(Screen):
         app = self.app
         app.h_path.configure(text="> TERMINAL")
         app.h_stat.configure(text="DATA", fg=AMBER_D)
-        app.f_lbl.configure(text="ESC voltar  |  Y deploy  |  D data  |  X procs")
+        app.f_lbl.configure(text="ESC voltar  |  Y deploy  |  D data  |  X procs  |  R roadmap")
         app._kb("<Escape>", lambda: app._menu("main"))
         app._kb("<Key-0>", lambda: app._menu("main"))
         app._bind_global_nav()
@@ -134,5 +150,6 @@ class TerminalScreen(Screen):
             "y": app._deploy_pipeline,
             "d": app._data,
             "x": app._procs,
+            "r": app._roadmap,
         }.items():
             app._kb(f"<Key-{key_label}>", cmd)

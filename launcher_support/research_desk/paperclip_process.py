@@ -21,7 +21,6 @@ Nao-Windows: terminate() (SIGTERM) + fallback kill() (SIGKILL) ja funciona.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import signal
 import subprocess
@@ -30,7 +29,6 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
 
 
 class ServerStatus(Enum):
@@ -194,12 +192,6 @@ class PaperclipProcess:
         with self._buffer_lock:
             return list(self._stdout_buffer)[-n:]
 
-    def set_line_callback(self, callback: Callable[[str], None] | None) -> None:
-        """Sprint 3.1 plug real-time line subscriber. No-op por enquanto."""
-        # Reservado pra extensao do live streaming sem mudar shape.
-        # Implementacao real: wrap _drain pra emitir via callback.
-        _ = callback  # avoid-unused
-
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -238,7 +230,3 @@ def default_paperclip_cmd() -> tuple[str, ...]:
     if shutil.which("paperclipai"):
         return ("paperclipai", "run")
     return ("npx", "paperclipai", "run")
-
-
-# Re-export pra test/UI — evita precisar conhecer os.environ aqui
-ENV_PATH = os.environ.get("PATH", "")

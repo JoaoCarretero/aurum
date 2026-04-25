@@ -17,10 +17,12 @@ from core.risk_gates import (
     RiskGateConfig,
     RiskState,
     check_gates,
+    gate_anomaly,
     gate_concurrent_positions,
     gate_consecutive_losses,
     gate_daily_dd,
     gate_daily_loss,
+    gate_dd_velocity,
     gate_freeze_window,
     gate_gross_notional,
     gate_net_exposure,
@@ -254,6 +256,128 @@ class TestGateSinglePosition:
 
 
 # ────────────────────────────────────────────────────────────
+# gate_dd_velocity
+#
+# CLAUDE.md mandates 3 layers of kill-switch protection:
+# "Drawdown velocity, exposure limits, anomaly". Until 2026-04-25 only
+# static DD (peak-to-current) was implemented. A 3% cliff in 10 minutes
+# would pass every gate until the static threshold tripped — by which
+# point the velocity already showed catastrophic structural failure.
+# This gate is the leading indicator: soft_block on velocity ≥ threshold,
+# pausing new entries before static DD fires hard_block.
+#
+# Caller is responsible for computing dd_velocity_pct_per_hour from a
+# rolling window of equity readings. risk_gates.py stays stateless.
+# ────────────────────────────────────────────────────────────
+
+class TestGateDdVelocity:
+    def test_below_threshold_allows(self):
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=1.0)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+
+    def test_at_threshold_soft_blocks(self):
+        # Exact-equal trips. Pre-empt the cliff before it confirms.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=2.5)
+        d = gate_dd_velocity(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.gate == "dd_velocity"
+
+    def test_above_threshold_soft_blocks_with_metric(self):
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=4.5)
+        d = gate_dd_velocity(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.metric == 4.5
+        assert d.threshold == 2.5
+        assert "4.5" in d.reason or "4.50" in d.reason
+
+    def test_zero_velocity_allows(self):
+        # Default state — caller hasn't provided velocity yet, no reason to block.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+
+    def test_negative_velocity_always_allows(self):
+        # Equity recovering (peak-relative); no cliff.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=-1.5)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+
+    def test_default_threshold_is_permissive(self):
+        # Factory default = 100.0 %/hr; insanely high velocity still allows.
+        cfg = RiskGateConfig()
+        state = RiskState(account_equity=10_000, dd_velocity_pct_per_hour=99.0)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+        # is_default() must still hold after the new field is added.
+        assert cfg.is_default() is True
+
+    def test_zero_equity_allows(self):
+        # Bootstrap state — no equity, no meaningful velocity. Don't block.
+        cfg = RiskGateConfig(max_dd_velocity_pct_per_hour=2.5)
+        state = RiskState(account_equity=0.0, dd_velocity_pct_per_hour=10.0)
+        assert gate_dd_velocity(state, cfg).severity == "allow"
+
+
+# ────────────────────────────────────────────────────────────
+# gate_anomaly
+#
+# CLAUDE.md mandates 3 layers of kill-switch protection:
+# "Drawdown velocity, exposure limits, anomaly". Layer 3 (anomaly) is
+# implemented as API latency p99 — the simplest universal signal that
+# catches "exchange is sick / network blip / rate limited" before bad
+# fills happen. Soft_block tier (same as dd_velocity): leading indicator,
+# not a flatten trigger. Caller computes p99 over a rolling 5-min window
+# of REST call latencies and populates RiskState.api_latency_ms_p99.
+# ────────────────────────────────────────────────────────────
+
+class TestGateAnomaly:
+    def test_below_threshold_allows(self):
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=400.0)
+        assert gate_anomaly(state, cfg).severity == "allow"
+
+    def test_at_threshold_soft_blocks(self):
+        # Exact-equal trips. Pre-empt the spike before it confirms.
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=2000.0)
+        d = gate_anomaly(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.gate == "anomaly"
+
+    def test_above_threshold_soft_blocks_with_metric(self):
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=3500.0)
+        d = gate_anomaly(state, cfg)
+        assert d.severity == "soft_block"
+        assert d.metric == 3500.0
+        assert d.threshold == 2000.0
+        assert "3500" in d.reason
+        assert "2000" in d.reason
+
+    def test_zero_latency_allows(self):
+        # Default state — caller hasn't accumulated enough samples yet.
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000)
+        assert gate_anomaly(state, cfg).severity == "allow"
+
+    def test_negative_latency_allows(self):
+        # Defensive: negative is non-physical, treat as no-data.
+        cfg = RiskGateConfig(max_api_latency_ms=2000.0)
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=-5.0)
+        assert gate_anomaly(state, cfg).severity == "allow"
+
+    def test_default_threshold_is_permissive(self):
+        # Factory default = 1e9 ms; even an absurd 60s p99 still allows.
+        cfg = RiskGateConfig()
+        state = RiskState(account_equity=10_000, api_latency_ms_p99=60_000.0)
+        assert gate_anomaly(state, cfg).severity == "allow"
+        # is_default() must still hold after the new field is added.
+        assert cfg.is_default() is True
+
+
+# ────────────────────────────────────────────────────────────
 # check_gates (composite)
 # ────────────────────────────────────────────────────────────
 
@@ -434,3 +558,234 @@ class TestRealMoneyGuard:
         cfg = load_gate_config("live")
         assert not cfg.is_default(), "live mode needs non-default risk gates"
         self._guard()("live", cfg)  # no raise
+
+
+# ────────────────────────────────────────────────────────────
+# LiveEngine dd_velocity caller-side wiring
+# ────────────────────────────────────────────────────────────
+# gate_dd_velocity é stateless — depende do caller computar
+# dd_velocity_pct_per_hour de uma janela rolante de equity readings e
+# popular o RiskState. Estes testes pinam os helpers em LiveEngine que
+# fazem essa computação: _record_equity_sample (subsampleia 1/min) e
+# _compute_dd_velocity_pct_per_hour (lookup por anchor + per-hour rate).
+#
+# Sem esses helpers populando RiskState.dd_velocity_pct_per_hour, o gate
+# (que existe em risk_gates.py desde 624a57d) ficaria dormente em prod.
+
+class TestDdVelocityCallerSide:
+    def _engine(self):
+        """Minimal engine stub for helper testing — same pattern as
+        TestLiveEnginePlumbing._bind. Avoids spinning a full LiveEngine
+        which needs exchange config + WS tasks."""
+        from collections import deque
+        from types import SimpleNamespace
+        from engines.live import LiveEngine
+
+        eng = SimpleNamespace()
+        eng._equity_history = deque(maxlen=120)
+        eng.account = 10_000.0
+        # Bind unbound methods.
+        eng._record_equity_sample = (
+            LiveEngine._record_equity_sample.__get__(eng)
+        )
+        eng._compute_dd_velocity_pct_per_hour = (
+            LiveEngine._compute_dd_velocity_pct_per_hour.__get__(eng)
+        )
+        return eng
+
+    def test_empty_history_returns_zero(self):
+        from datetime import datetime, timezone
+        eng = self._engine()
+        v = eng._compute_dd_velocity_pct_per_hour(
+            datetime.now(timezone.utc), window_min=60
+        )
+        assert v == 0.0
+
+    def test_single_sample_returns_zero(self):
+        # Only one reading → no time delta → velocity not meaningful.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        now = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(now, 10_000.0)
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert v == 0.0
+
+    def test_decline_over_60min_yields_positive_velocity(self):
+        # equity 10000 at t-60min → 9700 at t → 3% drop / 1.0 hr = 3.0 %/hr
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 10_000.0)
+        now = t0 + timedelta(minutes=60)
+        eng.account = 9_700.0
+        eng._record_equity_sample(now, 9_700.0)
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert 2.95 <= v <= 3.05, f"expected ~3.0 %/hr, got {v}"
+
+    def test_recovery_yields_negative_velocity(self):
+        # equity climbing → velocity < 0 → gate_dd_velocity returns allow.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 10_000.0)
+        now = t0 + timedelta(minutes=30)
+        eng.account = 10_300.0
+        eng._record_equity_sample(now, 10_300.0)
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert v < 0, f"recovery should yield negative velocity, got {v}"
+
+    def test_subsamples_to_one_per_minute(self):
+        # 100 calls in same minute → only 1 entry in history.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        for sec in range(0, 60, 1):
+            ts = t0.replace(second=sec)
+            eng._record_equity_sample(ts, 10_000.0 - sec)
+        # Same minute, should only retain ONE sample (the first).
+        assert len(eng._equity_history) == 1
+
+    def test_subsample_advances_on_minute_boundary(self):
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 10_000.0)
+        eng._record_equity_sample(t0 + timedelta(minutes=1), 9_990.0)
+        eng._record_equity_sample(t0 + timedelta(minutes=2), 9_980.0)
+        assert len(eng._equity_history) == 3
+
+    def test_window_min_excludes_older_samples(self):
+        # Anchor must be within window_min minutes of `now`.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        # Ancient: 90 min before now. Should NOT anchor with window_min=60.
+        eng._record_equity_sample(t0, 10_000.0)
+        # Within window: 30 min before now.
+        eng._record_equity_sample(t0 + timedelta(minutes=60), 9_950.0)
+        now = t0 + timedelta(minutes=90)
+        eng.account = 9_950.0
+        # Anchor should be the 60-min mark, not the 0-min mark.
+        # Drop from 9950 → 9950 over 30 min = 0%/hr (no decline in window).
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert abs(v) < 0.01, f"expected ~0.0 with no in-window decline, got {v}"
+
+    def test_zero_anchor_equity_returns_zero(self):
+        # Defensive: if history has equity=0 entry, don't divide by zero.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 0.0)
+        now = t0 + timedelta(minutes=30)
+        eng.account = 1_000.0
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert v == 0.0
+
+
+# ────────────────────────────────────────────────────────────
+# LiveEngine api_latency caller-side wiring (gate_anomaly)
+# ────────────────────────────────────────────────────────────
+# gate_anomaly is stateless — depends on the caller computing
+# api_latency_ms_p99 over a rolling window of REST call latencies and
+# populating RiskState. These tests pin the helpers in LiveEngine that
+# do that computation: _record_api_latency (subsamples 1/min) and
+# _compute_api_latency_p99 (rolling p99 over a 5-min window).
+#
+# Without these helpers populating RiskState.api_latency_ms_p99, the
+# gate (kill-switch layer 3) would stay dormant in prod.
+
+class TestApiLatencyCallerSide:
+    def _engine(self):
+        """Minimal engine stub for helper testing — same pattern as
+        TestDdVelocityCallerSide. Avoids spinning a full LiveEngine."""
+        from collections import deque
+        from types import SimpleNamespace
+        from engines.live import LiveEngine
+
+        eng = SimpleNamespace()
+        eng._api_latency_history = deque(maxlen=120)
+        # Bind unbound methods.
+        eng._record_api_latency = (
+            LiveEngine._record_api_latency.__get__(eng)
+        )
+        eng._compute_api_latency_p99 = (
+            LiveEngine._compute_api_latency_p99.__get__(eng)
+        )
+        return eng
+
+    def test_empty_history_returns_zero(self):
+        from datetime import datetime, timezone
+        eng = self._engine()
+        v = eng._compute_api_latency_p99(
+            datetime.now(timezone.utc), window_min=5
+        )
+        assert v == 0.0
+
+    def test_few_samples_returns_zero(self):
+        # Insufficient — p99 needs >= 10 samples to be meaningful.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        for i in range(5):
+            eng._record_api_latency(t0 + timedelta(minutes=i), 100.0)
+        now = t0 + timedelta(minutes=5)
+        v = eng._compute_api_latency_p99(now, window_min=10)
+        assert v == 0.0
+
+    def test_sufficient_samples_compute_p99(self):
+        # 100 samples ranging 100..199ms. p99 should be near the top.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        # Use unique seconds (still 1/min subsample drops most) — bypass
+        # subsample by spreading across minutes.
+        for i in range(100):
+            eng._record_api_latency(t0 + timedelta(minutes=i),
+                                     100.0 + i)
+        now = t0 + timedelta(minutes=99)
+        # Window covers all samples (>=100 min).
+        v = eng._compute_api_latency_p99(now, window_min=200)
+        # p99 of 100..199 with linear interp ≈ 198.0 (idx_f = 0.99 * 99 = 98.01).
+        assert 197.0 <= v <= 199.0, f"expected p99 ~198, got {v}"
+
+    def test_subsamples_to_one_per_minute(self):
+        # 60 calls in same minute → only 1 entry in history.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        for sec in range(60):
+            ts = t0.replace(second=sec)
+            eng._record_api_latency(ts, 200.0 + sec)
+        assert len(eng._api_latency_history) == 1
+
+    def test_window_min_excludes_older_samples(self):
+        # Default window is 5 min. Samples older than that should not
+        # contribute to p99.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        # Ancient: 10 samples at 5000ms each, at t0..t0+9min.
+        for i in range(10):
+            eng._record_api_latency(t0 + timedelta(minutes=i), 5000.0)
+        # Recent: 10 samples at 100ms each, starting at t0+30min.
+        for i in range(10):
+            eng._record_api_latency(t0 + timedelta(minutes=30 + i), 100.0)
+        # now = t0+39min, window=5min: cutoff = t0+34min. Only 5 of the
+        # recent samples qualify (35..39) → < 10, returns 0.0.
+        now = t0 + timedelta(minutes=39)
+        v = eng._compute_api_latency_p99(now, window_min=5)
+        assert v == 0.0, f"expected 0.0 (insufficient in-window), got {v}"
+        # Widening to 10min picks up all 10 recent (30..39); ancient
+        # at 0..9 still falls outside.
+        v = eng._compute_api_latency_p99(now, window_min=10)
+        assert 99.0 <= v <= 101.0, (
+            f"expected ~100ms (only recent samples qualify), got {v}"
+        )
+
+    def test_negative_latency_dropped(self):
+        # Defensive: negative is non-physical, must be ignored.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_api_latency(t0, -50.0)
+        assert len(eng._api_latency_history) == 0
