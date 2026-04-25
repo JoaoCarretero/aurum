@@ -284,8 +284,18 @@ class TunnelManager:
         """Build the ssh command line. Assumes config is not None."""
         assert self._config is not None, "_build_cmd called with None config"
         cfg = self._config
+        # `-F NUL` (Windows) / `-F /dev/null` (POSIX): ignora ~/.ssh/config.
+        # Sem isso, um config file world-readable em
+        # `~/.ssh/config` faz ssh recusar com "Bad permissions" e a tunnel
+        # nunca sobe — bug surfaced 2026-04-25 quando um config criado
+        # via tooling com perms herdadas (CodexSandboxUsers no grupo)
+        # bloqueou o tunnel da launcher por horas. Esta flag isola o
+        # tunnel da launcher de qualquer ~/.ssh/config do operador, bom
+        # ou mau — todas as opcoes vem do _build_cmd via -o, autonomo.
+        null_path = "NUL" if os.name == "nt" else "/dev/null"
         cmd: list[str] = [
             "ssh",
+            "-F", null_path,
             "-N",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=30",
