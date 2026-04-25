@@ -79,3 +79,36 @@ def test_engine_detail_requires_run_kwarg(gui_root):
         screen.on_enter()  # missing run kwarg
     screen.on_exit()
     parent.destroy()
+
+
+def test_auto_refresh_armed_only_when_running(gui_root, fake_run):
+    """Status==running arms 5s timer; status==stopped does not."""
+    import dataclasses
+
+    from launcher_support.screens.engine_detail import EngineDetailScreen
+
+    class _FakeApp:
+        screens = None
+        def _kb(self, *_a, **_k): pass
+        h_path = type("L", (), {"configure": lambda *a, **k: None})()
+        h_stat = type("L", (), {"configure": lambda *a, **k: None})()
+        f_lbl  = type("L", (), {"configure": lambda *a, **k: None})()
+
+    parent = tk.Frame(gui_root)
+    screen = EngineDetailScreen(parent=parent, app=_FakeApp(),
+                                client_factory=lambda: None)
+    screen.mount()
+
+    # status=running → timer armed.
+    screen.on_enter(run=fake_run)
+    assert screen._refresh_aid is not None
+    screen.on_exit()
+    assert screen._refresh_aid is None  # cleared on exit
+
+    # status=stopped → no timer.
+    fake_run_stopped = dataclasses.replace(fake_run, status="stopped")
+    screen.on_enter(run=fake_run_stopped)
+    assert screen._refresh_aid is None, \
+        "stopped run must not arm auto-refresh"
+    screen.on_exit()
+    parent.destroy()

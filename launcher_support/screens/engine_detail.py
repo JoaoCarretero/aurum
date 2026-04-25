@@ -89,6 +89,8 @@ class EngineDetailScreen(Screen):
             app.f_lbl.configure(text="ESC voltar  |  R recarregar")
         if hasattr(app, "_kb"):
             app._kb("<Escape>", lambda: self._navigate_back())
+            app._kb("r",         lambda: self._tick())
+            app._kb("R",         lambda: self._tick())
 
         if run.status == "running":
             self._refresh_aid = self._after(5000, self._tick)
@@ -139,7 +141,11 @@ class EngineDetailScreen(Screen):
         body = self._body_frame
         if body is None:
             return
-        for w in body.winfo_children():
+        try:
+            children = list(body.winfo_children())
+        except tk.TclError:
+            return  # body widget destroyed mid-tick
+        for w in children:
             try:
                 w.destroy()
             except Exception:
