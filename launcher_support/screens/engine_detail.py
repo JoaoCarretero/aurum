@@ -144,11 +144,20 @@ class EngineDetailScreen(Screen):
                 w.destroy()
             except Exception:
                 pass
-        tk.Label(body, text=f"[ENGINE DETAIL - {run.run_id}]",
+        # Header card.
+        head = tk.Frame(body, bg=BG)
+        head.pack(fill="x", pady=(4, 8))
+        tk.Label(head, text=f"{run.engine} · {run.mode.upper()} · {run.status}",
                  font=(FONT, 10, "bold"), fg=AMBER, bg=BG,
-                 anchor="w").pack(anchor="w", pady=20)
-        tk.Label(body, text="(blocos 1-9 landed em Tasks 4-9)",
-                 font=(FONT, 7), fg=DIM, bg=BG).pack(anchor="w")
+                 anchor="w").pack(anchor="w")
+        tk.Label(head, text=f"run_id: {run.run_id}",
+                 font=(FONT, 7), fg=DIM, bg=BG, anchor="w").pack(anchor="w")
+
+        from launcher_support.engine_detail_view import (
+            render_triage_block, render_cadence_block,
+        )
+        render_triage_block(body, run)
+        render_cadence_block(body, run)
 
     def _tick(self) -> None:
         if self._run is not None:
