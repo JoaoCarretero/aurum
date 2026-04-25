@@ -80,3 +80,48 @@ def test_list_mode_row_click_triggers_drilldown(gui_root):
 
     mock_screens.show.assert_called_with("engine_detail", run=_fake_run())
     parent.destroy()
+
+
+def test_breadcrumb_engines_click_returns_to_list(gui_root):
+    """Click no breadcrumb 'ENGINES' chama screens.show('engines')."""
+    from launcher_support.screens.engine_detail import EngineDetailScreen
+
+    parent = tk.Frame(gui_root)
+    mock_screens = MagicMock()
+
+    class _FakeApp:
+        screens = mock_screens
+        def _kb(self, *_a, **_k): pass
+        h_path = type("L", (), {"configure": lambda *a, **k: None})()
+        h_stat = type("L", (), {"configure": lambda *a, **k: None})()
+        f_lbl  = type("L", (), {"configure": lambda *a, **k: None})()
+
+    parent.pack(fill="both", expand=True)
+    screen = EngineDetailScreen(parent=parent, app=_FakeApp(),
+                                client_factory=lambda: None)
+    screen.mount()
+    screen.pack()
+    screen.on_enter(run=_fake_run())
+
+    # Find the "ENGINES " label in the breadcrumb and click it.
+    bc = screen._breadcrumb
+    eng_lbl = None
+    for w in bc.winfo_children():
+        try:
+            txt = w.cget("text")
+        except Exception:
+            continue
+        if "ENGINES" in str(txt):
+            eng_lbl = w
+            break
+    assert eng_lbl is not None
+    # Per Tk-on-Windows quirk pattern from earlier tests:
+    gui_root.deiconify()
+    gui_root.update()
+    eng_lbl.event_generate("<Button-1>", when="now")
+    gui_root.update()
+    gui_root.withdraw()
+
+    mock_screens.show.assert_any_call("engines")
+    screen.on_exit()
+    parent.destroy()
