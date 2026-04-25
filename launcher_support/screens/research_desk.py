@@ -19,6 +19,7 @@ sao canceladas em on_exit.
 """
 from __future__ import annotations
 
+import atexit
 import logging
 import tkinter as tk
 from pathlib import Path
@@ -168,6 +169,13 @@ class ResearchDeskScreen(Screen):
         # ownership do subprocess (se o user navega pra outro screen e
         # volta, o paperclip continua rodando).
         self._process = PaperclipProcess(cmd=default_paperclip_cmd())
+        # atexit hook — para o subprocess quando o launcher fechar.
+        # Sem isto, o `node paperclipai` fica orfao bound em :3100; na
+        # proxima abertura do launcher, start() falha em fast-crash
+        # detect (EADDRINUSE) ou marca EXTERNAL e o user fica preso.
+        # Idempotente: stop() so faz algo se is_owned() — multiple
+        # screen instances em testes nao causam side effects.
+        atexit.register(self._shutdown_paperclip)
         # Ultimo estado conhecido, pra o label piscar somente em mudanca
         # real (evita redraw desnecessario a cada tick).
         self._last_online: bool | None = None
@@ -188,6 +196,19 @@ class ResearchDeskScreen(Screen):
         self._tab_strip: TabStrip | None = None
         self._tab_container: tk.Frame | None = None
         self._overview_frame: tk.Frame | None = None
+
+    def _shutdown_paperclip(self) -> None:
+        """atexit hook — stops owned Paperclip process before launcher exits.
+
+        Idempotent: returns early if no proc owned (most cases). Catches
+        all exceptions because exit-time is too late for diagnostics —
+        we just want the port released.
+        """
+        try:
+            if self._process.is_owned():
+                self._process.stop(wait_sec=3.0)
+        except Exception:
+            pass
 
     # ── Build ─────────────────────────────────────────────────────
 

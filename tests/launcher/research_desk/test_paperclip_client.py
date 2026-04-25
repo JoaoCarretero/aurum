@@ -268,3 +268,153 @@ def test_cache_save_invalid_dir_is_noop(tmp_path: Path) -> None:
     )
     # Nao levanta
     client._save_cache("x.json", {"a": 1})  # noqa: SLF001
+
+
+# ── New behavior: client correctness (FASE B Block 2) ─────────────
+
+
+def test_is_online_requires_status_ok(client: PaperclipClient) -> None:
+    """`is_online` must distinguish a 200 with status=='ok' from a
+    degraded server reporting 200 with status=='degraded'/'error'.
+
+    Without this, a half-broken server flips the breaker back to
+    closed via _record_success and the UI shows green pill while
+    the API is actually serving stale or partial data.
+    """
+    # status=='ok' -> True
+    with patch("urllib.request.urlopen",
+               return_value=_FakeResponse(b'{"status":"ok","version":"1"}')):
+        assert client.is_online() is True
+
+    # status=='degraded' -> False
+    with patch("urllib.request.urlopen",
+               return_value=_FakeResponse(b'{"status":"degraded"}')):
+        assert client.is_online() is False
+
+    # status missing -> False
+    with patch("urllib.request.urlopen",
+               return_value=_FakeResponse(b'{"version":"1"}')):
+        assert client.is_online() is False
+
+
+def test_breaker_blocks_concurrent_half_open_probes(client: PaperclipClient) -> None:
+    """When the breaker enters half-open, only ONE thread should be
+    able to probe; all others must raise CircuitOpen until the probe
+    resolves. Without this gate, every concurrent caller after timeout
+    elapses hammers the server simultaneously.
+    """
+    # Trip breaker
+    with patch("urllib.request.urlopen", side_effect=_url_error()):
+        for _ in range(3):
+            with pytest.raises(urllib.error.URLError):
+                client.health()
+    # Force timeout elapsed
+    client._breaker_open_until = time.time() - 1.0  # noqa: SLF001
+    client._half_open_probe = False  # noqa: SLF001
+
+    # Manually flip into "probe in flight" state (simulates the first
+    # thread reserving the probe between _check_breaker and urlopen).
+    with client._breaker_lock:  # noqa: SLF001
+        client._half_open_probe = True  # noqa: SLF001
+
+    # All other threads now raise CircuitOpen instead of probing
+    with pytest.raises(CircuitOpen, match="half-open probe in flight"):
+        client.health()
+
+
+def test_atomic_cache_write_uses_tmp_then_rename(client: PaperclipClient) -> None:
+    """_save_cache must write to .tmp then os.replace, never directly
+    to the target file. Concurrent readers must never see a partially
+    written JSON file.
+    """
+    import os as _os
+
+    captured_writes: list[str] = []
+    original_replace = _os.replace
+
+    def tracking_replace(src: str, dst: str) -> None:
+        captured_writes.append(f"replace({src} -> {dst})")
+        return original_replace(src, dst)
+
+    with patch("os.replace", side_effect=tracking_replace):
+        client._save_cache("test.json", {"key": "value"})  # noqa: SLF001
+
+    target = client.cache_dir / "test.json"
+    tmp = client.cache_dir / "test.json.tmp"
+    assert target.exists(), "target file should exist after rename"
+    assert not tmp.exists(), "tmp file should be gone after rename"
+    assert any("test.json.tmp" in w and "test.json" in w for w in captured_writes), (
+        f"expected os.replace call with tmp -> target, got: {captured_writes}"
+    )
+    assert json.loads(target.read_text(encoding="utf-8")) == {"key": "value"}
+
+
+def test_4xx_resets_breaker_does_not_open(client: PaperclipClient) -> None:
+    """A flood of 4xx responses (caller-side errors, server is alive)
+    must NOT open the breaker. Previously, _record_failure kept counter
+    untouched on 4xx but the next URLError would tip it over the edge
+    even though the server was healthy in between.
+    """
+    def http_404(*_a: Any, **_kw: Any) -> None:
+        raise urllib.error.HTTPError(
+            url="x", code=404, msg="not found", hdrs=None, fp=None,  # type: ignore[arg-type]
+        )
+
+    # 2 network failures -> counter at 2/3
+    with patch("urllib.request.urlopen", side_effect=_url_error()):
+        for _ in range(2):
+            with pytest.raises(urllib.error.URLError):
+                client.health()
+    assert client._consecutive_failures == 2  # noqa: SLF001
+
+    # Now 3 x 404 (server is alive): counter must reset to 0
+    with patch("urllib.request.urlopen", side_effect=http_404):
+        for _ in range(3):
+            with pytest.raises(urllib.error.HTTPError):
+                client.get_agent("missing")
+    assert client._consecutive_failures == 0, (  # noqa: SLF001
+        "4xx should reset breaker counter — server is alive"
+    )
+
+    # Two more URLErrors should now NOT open the breaker (counter at 2)
+    with patch("urllib.request.urlopen", side_effect=_url_error()):
+        for _ in range(2):
+            with pytest.raises(urllib.error.URLError):
+                client.health()
+    assert client._consecutive_failures == 2  # noqa: SLF001
+    assert client._breaker_open_until == 0.0  # noqa: SLF001
+
+
+def test_list_issues_url_encodes_status(client: PaperclipClient) -> None:
+    """status query param must be URL-encoded — defends against future
+    callers passing values with `&`, spaces, or special chars."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0) -> _FakeResponse:
+        del timeout
+        captured["url"] = req.full_url
+        return _FakeResponse(b"[]")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.list_issues("cid", status="in progress&danger")
+
+    assert "%20" in captured["url"] or "+" in captured["url"]
+    assert "%26" in captured["url"]  # & encoded
+
+
+def test_list_heartbeat_runs_url_encodes_agent_id(client: PaperclipClient) -> None:
+    """agent_id query param must be URL-encoded via urlencode — catches
+    any future caller passing a non-UUID with special characters."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0) -> _FakeResponse:
+        del timeout
+        captured["url"] = req.full_url
+        return _FakeResponse(b"[]")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.list_heartbeat_runs("agent with spaces", limit=5)
+
+    # urlencode renders space as +
+    assert "agent_id=agent+with+spaces" in captured["url"]
+    assert "limit=5" in captured["url"]
