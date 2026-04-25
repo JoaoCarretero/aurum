@@ -629,17 +629,34 @@ def render(launcher, parent, *, on_escape) -> dict:
     state["set_mode"] = set_mode
 
     _bind_keys()
+
     def _initial_refresh():
+        """First paint of the cockpit. Warm the cockpit /v1/runs cache
+        synchronously so the master list ships with VPS data on the
+        first frame. Without this, the master list painted empty for
+        ~1-2s while an async worker fetched, and the schedule-state
+        refresh that should have caught the worker completion
+        sometimes coalesced with no rerender (race in
+        `_refresh_scheduled` flag) — operator perceived "engines não
+        aparecem até clicar". The sync fetch costs one round-trip (~1s
+        through the SSH tunnel) but the screen ends up populated on
+        first paint instead of staring blank."""
         state["initial_refresh_after_id"] = None
         if not getattr(root, "winfo_exists", lambda: False)():
             return
+        try:
+            _load_cockpit_runs_cached(
+                launcher=launcher, state=state, allow_sync=True,
+            )
+        except Exception:
+            pass
         refresh()
 
     try:
         state["initial_refresh_after_id"] = root.after_idle(_initial_refresh)
     except Exception:
         state["initial_refresh_after_id"] = None
-        refresh()
+        _initial_refresh()
     return {
         "refresh": refresh,
         "cleanup": cleanup,
