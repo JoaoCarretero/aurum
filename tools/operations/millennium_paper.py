@@ -123,18 +123,15 @@ def _telegram_cfg() -> dict | None:
     global _TELEGRAM_CFG
     if _TELEGRAM_CFG is not None:
         return _TELEGRAM_CFG or None
-    keys_path = ROOT / "config" / "keys.json"
-    if not keys_path.exists():
-        _TELEGRAM_CFG = {}
-        return None
     try:
-        data = json.loads(keys_path.read_text(encoding="utf-8"))
+        from core.risk.key_store import load_runtime_keys  # noqa: PLC0415
+        data = load_runtime_keys()
         tg = data.get("telegram") or {}
         if tg.get("bot_token") and tg.get("chat_id"):
             _TELEGRAM_CFG = {"token": str(tg["bot_token"]),
                              "chat_id": str(tg["chat_id"])}
             return _TELEGRAM_CFG
-    except (json.JSONDecodeError, OSError):
+    except Exception:  # noqa: BLE001
         pass
     _TELEGRAM_CFG = {}
     return None
@@ -426,7 +423,8 @@ def _flatten_all(state: RunnerState, reason: str, notify: bool) -> None:
             "id": c.id, "engine": c.engine, "symbol": c.symbol,
             "direction": c.direction, "entry_price": c.entry_price,
             "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
-            "size": c.size, "entry_at": c.opened_at,
+            "size": c.size, "notional": c.entry_price * c.size,
+            "entry_at": c.opened_at,
             "exit_at": c.closed_at, "exit_reason": reason,
             "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
             "r_multiple": c.r_multiple, "bars_held": c.bars_held,
@@ -480,7 +478,8 @@ def run_one_tick(state: RunnerState, tick_idx: int, notify: bool = True) -> None
                 "id": c.id, "engine": c.engine, "symbol": c.symbol,
                 "direction": c.direction, "entry_price": c.entry_price,
                 "exit_price": c.exit_price, "stop": c.stop, "target": c.target,
-                "size": c.size, "entry_at": c.opened_at,
+                "size": c.size, "notional": c.entry_price * c.size,
+                "entry_at": c.opened_at,
                 "exit_at": c.closed_at, "exit_reason": c.exit_reason,
                 "pnl": c.pnl, "pnl_after_fees": c.pnl_after_fees,
                 "r_multiple": c.r_multiple, "bars_held": c.bars_held,

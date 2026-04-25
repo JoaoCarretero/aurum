@@ -555,6 +555,7 @@ class App(tk.Tk):
         emit_timing_metric("boot.palette", ms=(time.perf_counter() - _palette_t0) * 1000.0)
         _dpi_t0 = time.perf_counter()
         self._configure_windows_dpi()
+        self._configure_windows_titlebar()
         self.geometry("960x660")
         self.minsize(860, 560)
         emit_timing_metric("boot.dpi_geometry", ms=(time.perf_counter() - _dpi_t0) * 1000.0)
@@ -572,6 +573,10 @@ class App(tk.Tk):
                 ico = ROOT / "server" / "logo" / "aurum.ico"
                 if ico.exists(): self.iconbitmap(str(ico))
             except: pass
+            try:
+                self._apply_titlebar_dwm()
+            except Exception:
+                pass
             emit_timing_metric("boot.icon_deferred", ms=(time.perf_counter() - _icon_t0) * 1000.0)
         self.after_idle(_apply_taskbar_icon)
         emit_timing_metric("boot.icon", ms=(time.perf_counter() - _icon_scheduled_t0) * 1000.0)
@@ -879,6 +884,129 @@ class App(tk.Tk):
                 ctypes.windll.shcore.SetProcessDpiAwareness(2)
             except Exception:
                 ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+    def _configure_windows_titlebar(self) -> None:
+        """Defer DWM title bar painting until after the window is mapped.
+        winfo_id()/wm_frame() só são confiaveis depois da janela existir
+        no compositor — por isso after_idle."""
+        if sys.platform != "win32":
+            return
+        self.after_idle(self._apply_titlebar_dwm)
+        # Tk/Win11 can recreate or finish binding the decorated frame after
+        # the first idle paint. Reapply across the early lifecycle so the DWM
+        # attributes land on the real toplevel HWND, not only the client area.
+        for delay_ms in (50, 200, 700, 1500):
+            self.after(delay_ms, self._apply_titlebar_dwm)
+        self.bind("<Map>", lambda _e: self.after_idle(self._apply_titlebar_dwm), add="+")
+        self.bind("<FocusIn>", lambda _e: self.after_idle(self._apply_titlebar_dwm), add="+")
+
+    def _apply_titlebar_dwm(self) -> None:
+        """Pinta a title bar com a paleta HL2 via DwmSetWindowAttribute.
+        Sem isso, Win11 mostra a barra branca padrao do sistema."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            if sys.platform != "win32":
+                return
+
+            def _hex_to_colorref(hex_str: str) -> int:
+                # COLORREF é 0x00BBGGRR (BGR little-endian, nao RGB).
+                h = hex_str.lstrip("#")
+                r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                return (b << 16) | (g << 8) | r
+
+            def _parse_hwnd(value) -> int:
+                if not value:
+                    return 0
+                if isinstance(value, int):
+                    return value
+                text = str(value).strip()
+                if not text:
+                    return 0
+                try:
+                    return int(text, 0)
+                except ValueError:
+                    try:
+                        return int(text, 16)
+                    except ValueError:
+                        return 0
+
+            user32 = ctypes.windll.user32
+            user32.GetParent.argtypes = [wintypes.HWND]
+            user32.GetParent.restype = wintypes.HWND
+            user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            user32.GetAncestor.restype = wintypes.HWND
+            user32.SetWindowPos.argtypes = [
+                wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, wintypes.UINT,
+            ]
+            user32.SetWindowPos.restype = wintypes.BOOL
+
+            dwm = ctypes.windll.dwmapi
+            dwm.DwmSetWindowAttribute.argtypes = [
+                wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD
+            ]
+            dwm.DwmSetWindowAttribute.restype = ctypes.c_long  # HRESULT
+
+            candidates: list[int] = []
+
+            def _add_candidate(value) -> None:
+                hwnd_int = _parse_hwnd(value)
+                if hwnd_int and hwnd_int not in candidates:
+                    candidates.append(hwnd_int)
+
+            try:
+                _add_candidate(self.wm_frame())
+            except Exception:
+                pass
+            try:
+                client_hwnd = self.winfo_id()
+                _add_candidate(user32.GetParent(wintypes.HWND(client_hwnd)))
+                _add_candidate(user32.GetAncestor(wintypes.HWND(client_hwnd), 2))  # GA_ROOT
+                _add_candidate(client_hwnd)
+            except Exception:
+                pass
+            if not candidates:
+                return
+
+            def _set_attr(hwnd, attr: int, value) -> bool:
+                if isinstance(value, str):
+                    data = ctypes.c_uint32(_hex_to_colorref(value))
+                else:
+                    data = ctypes.c_int(int(value))
+                hr = dwm.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(data), ctypes.sizeof(data)
+                )
+                return hr == 0
+
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED
+
+            for hwnd_int in candidates:
+                hwnd = wintypes.HWND(hwnd_int)
+                # Attr 20 is current Win10/11 dark mode; attr 19 covers older
+                # Windows 10 builds. Invalid client HWNDs simply return failure.
+                _set_attr(hwnd, 20, 1)
+                _set_attr(hwnd, 19, 1)
+                ok = False
+                for attr, hex_color in (
+                    (35, BG),       # DWMWA_CAPTION_COLOR
+                    (36, WHITE),    # DWMWA_TEXT_COLOR
+                    (34, BORDER),   # DWMWA_BORDER_COLOR
+                ):
+                    ok = _set_attr(hwnd, attr, hex_color) or ok
+                try:
+                    user32.SetWindowPos(hwnd, wintypes.HWND(0), 0, 0, 0, 0, flags)
+                except Exception:
+                    pass
+                if ok:
+                    return
         except Exception:
             pass
 

@@ -97,6 +97,16 @@ class CockpitClient:
         resp = self._get(f"/v1/runs/{run_id}/log?tail={limit}")
         return resp if isinstance(resp, dict) else {}
 
+    def get_run_account(self, run_id: str) -> dict:
+        """Account snapshot for a VPS run. Returns account.json shape."""
+        resp = self._get(f"/v1/runs/{run_id}/account")
+        return resp if isinstance(resp, dict) else {}
+
+    def get_run_positions(self, run_id: str) -> dict:
+        """Open positions snapshot for a VPS run. Returns {positions, ...}."""
+        resp = self._get(f"/v1/runs/{run_id}/positions")
+        return resp if isinstance(resp, dict) else {}
+
     def drop_kill(self, run_id: str) -> dict:
         if not self.cfg.admin_token:
             raise PermissionError("admin_token não configurado em CockpitConfig")

@@ -9,6 +9,7 @@ def test_ks_fast_halt_flattens_and_stops(tmp_path, monkeypatch):
     run_dir = tmp_path / "millennium_paper" / "KS_TEST"
     for sub in ("state", "reports", "logs"):
         (run_dir / sub).mkdir(parents=True)
+    monkeypatch.setattr(mp, "ROOT", tmp_path)
     monkeypatch.setattr(mp, "RUN_DIR", run_dir)
     monkeypatch.setattr(mp, "STATE_DIR", run_dir / "state")
     monkeypatch.setattr(mp, "REPORTS_DIR", run_dir / "reports")

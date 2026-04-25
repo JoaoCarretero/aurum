@@ -34,22 +34,22 @@ def test_agent_font_returns_tuple_shape() -> None:
     assert style == "bold"
 
 
-def test_scryer_prefers_serif() -> None:
+def test_research_uses_terminal_font() -> None:
     with patch(
         "tkinter.font.families",
         return_value={"Georgia", "Consolas"},
     ):
         family, _, _ = agent_font("RESEARCH")
-    assert family == "Georgia"
+    assert family == "Consolas"
 
 
-def test_arbiter_prefers_sans_rigorous() -> None:
+def test_review_uses_terminal_font() -> None:
     with patch(
         "tkinter.font.families",
         return_value={"Segoe UI", "Consolas"},
     ):
         family, _, _ = agent_font("REVIEW")
-    assert family == "Segoe UI"
+    assert family == "Consolas"
 
 
 def test_artifex_prefers_mono() -> None:
@@ -61,13 +61,13 @@ def test_artifex_prefers_mono() -> None:
     assert family == "Consolas"
 
 
-def test_curator_prefers_sans_neutral() -> None:
+def test_curate_uses_terminal_font() -> None:
     with patch(
         "tkinter.font.families",
         return_value={"Tahoma", "Consolas"},
     ):
         family, _, _ = agent_font("CURATE")
-    assert family == "Tahoma"
+    assert family == "Consolas"
 
 
 def test_fallback_when_preferred_missing() -> None:
@@ -107,6 +107,6 @@ def test_weight_styles() -> None:
 
 
 def test_each_agent_has_prefs() -> None:
-    for key in ("RESEARCH", "REVIEW", "BUILD", "CURATE"):
+    for key in ("RESEARCH", "REVIEW", "BUILD", "CURATE", "AUDIT"):
         assert key in _AGENT_FONT_PREFS
-        assert len(_AGENT_FONT_PREFS[key]) >= 2
+        assert _AGENT_FONT_PREFS[key] == ("Consolas",)

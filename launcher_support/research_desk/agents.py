@@ -9,8 +9,8 @@ Estrutura de cada AgentIdentity:
               (RESEARCH, REVIEW, BUILD, CURATE, AUDIT)
   uuid       — Paperclip agent id
   role       — cargo na mesa (Research Analyst, Risk Reviewer, ...)
-  archetype  — nome arquetipico (The Seer, The Judge, ...) - flavor metadata
-  stone      — pedra/metal alquimico associado - flavor metadata
+  archetype  — legacy label kept for API compatibility; now operational scope
+  stone      — legacy label kept for API compatibility; now artifact scope
   tagline    — frase curta que vai no card
   typeface   — hint de fonte distintiva (Sprint 2 aplica)
 
@@ -44,10 +44,10 @@ RESEARCH = AgentIdentity(
     key="RESEARCH",
     uuid="c28d2218-9941-4c44-a318-6d9d2df129d2",
     role="Research Analyst",
-    archetype="The Seer",
-    stone="Amethyst",
-    tagline="Scans, specs, hypothesis.",
-    typeface="serif",
+    archetype="Market Intel",
+    stone="Specs",
+    tagline="Anomaly scans and research specs.",
+    typeface="mono",
     artifact_dir="docs/specs",
 )
 
@@ -55,10 +55,10 @@ REVIEW = AgentIdentity(
     key="REVIEW",
     uuid="246a2339-1cb1-4732-b588-16764487d05d",
     role="Risk & Code Reviewer",
-    archetype="The Judge",
-    stone="Onyx",
-    tagline="Adversarial, concise, ruthless.",
-    typeface="sans-rigorous",
+    archetype="Validation",
+    stone="Reviews",
+    tagline="Hypothesis and code review gates.",
+    typeface="mono",
     artifact_dir="docs/reviews",
 )
 
@@ -66,9 +66,9 @@ BUILD = AgentIdentity(
     key="BUILD",
     uuid="34d56cfa-014e-4b20-903d-96f4ae5c2b05",
     role="Quant Developer",
-    archetype="The Forger",
-    stone="Copper",
-    tagline="Metodical, engineer, hammer-in-hand.",
+    archetype="Implementation",
+    stone="Branches",
+    tagline="Feature and engine implementation.",
     typeface="mono",
     artifact_dir="",  # usa branches experiment/* no git, nao dir fixo
 )
@@ -77,10 +77,10 @@ CURATE = AgentIdentity(
     key="CURATE",
     uuid="a424432d-be6d-44ea-80e3-f9b2c3b9d534",
     role="Repository Curator",
-    archetype="The Keeper",
-    stone="Silver",
-    tagline="Quiet, minimal, observant.",
-    typeface="sans-neutral",
+    archetype="Knowledge Base",
+    stone="Docs",
+    tagline="Docs, audits and session memory.",
+    typeface="mono",
     artifact_dir="docs/audits",
 )
 
@@ -88,10 +88,10 @@ AUDIT = AgentIdentity(
     key="AUDIT",
     uuid="2f790a10-55d1-4b4c-9a48-30db1e4cb73b",
     role="Integrity Auditor",
-    archetype="The Oracle",
-    stone="Gold",
-    tagline="Oracular, cirurgical, veredito com evidencia.",
-    typeface="serif-grave",
+    archetype="Integrity Gate",
+    stone="Audits",
+    tagline="Final evidence-based validation.",
+    typeface="mono",
     artifact_dir="docs/audits/engines",
 )
 

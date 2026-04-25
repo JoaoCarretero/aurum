@@ -22,6 +22,7 @@ Skeleton — blocos 1-9 landed em Tasks 4-9.
 from __future__ import annotations
 
 import tkinter as tk
+from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from core.ui.ui_palette import (
@@ -76,6 +77,8 @@ class EngineDetailScreen(Screen):
             raise TypeError(
                 "EngineDetailScreen.on_enter requires run=RunSummary")
         self._run = run
+        self._refresh_run_snapshot()
+        run = self._run or run
         self._render_breadcrumb(run)
         self._paint_body(run)
 
@@ -188,14 +191,130 @@ class EngineDetailScreen(Screen):
                  font=(FONT, 7), fg=DIM, bg=BG,
                  anchor="w").pack(anchor="w", padx=12, pady=(4, 0))
 
+    def _refresh_run_snapshot(self) -> None:
+        """Refresh heartbeat/account/positions before repainting detail.
+
+        The list screen intentionally loads VPS rows cheaply, with
+        heartbeat=None. Detail needs the richer endpoints or every block
+        reads `{}` and looks empty/stale even while the runner is healthy.
+        """
+        run = self._run
+        if run is None or run.source != "vps":
+            return
+        try:
+            client = self._client_factory()
+        except Exception:
+            client = None
+        if client is None:
+            return
+
+        hb = dict(run.heartbeat or {})
+        account: dict = {}
+        positions: dict = {}
+        try:
+            fresh_hb = client.get_heartbeat(run.run_id)
+            if isinstance(fresh_hb, dict):
+                hb.update(fresh_hb)
+        except Exception:
+            pass
+        try:
+            account = client.get_run_account(run.run_id)
+        except Exception:
+            account = {}
+        try:
+            positions = client.get_run_positions(run.run_id)
+        except Exception:
+            positions = {}
+
+        if isinstance(account, dict) and account.get("available", True):
+            for key in (
+                "equity", "drawdown_pct", "ks_state", "primed",
+                "account_size", "positions_open", "trades_closed",
+            ):
+                if key in account:
+                    hb[key] = account[key]
+            metrics = account.get("metrics")
+            if isinstance(metrics, dict):
+                hb["metrics"] = metrics
+
+        if isinstance(positions, dict):
+            pos_rows = positions.get("positions")
+            if isinstance(pos_rows, list):
+                hb["positions"] = pos_rows
+                hb["positions_open"] = len(pos_rows)
+                hb["open_positions_count"] = len(pos_rows)
+
+        equity = run.equity
+        initial = run.initial_balance
+        trades_closed = run.trades_closed
+        drawdown_pct = run.drawdown_pct
+        sharpe_rolling = run.sharpe_rolling
+        open_positions = run.open_positions
+        if isinstance(account, dict) and account.get("available", True):
+            try:
+                equity = float(account.get("equity"))
+            except (TypeError, ValueError):
+                pass
+            try:
+                initial = float(account.get("initial_balance"))
+            except (TypeError, ValueError):
+                pass
+            try:
+                trades_closed = int(account.get("trades_closed"))
+            except (TypeError, ValueError):
+                pass
+            try:
+                drawdown_pct = float(account.get("drawdown_pct"))
+            except (TypeError, ValueError):
+                pass
+            metrics = account.get("metrics")
+            if isinstance(metrics, dict):
+                try:
+                    sharpe_rolling = float(
+                        metrics.get("sharpe_rolling") or metrics.get("sharpe")
+                    )
+                except (TypeError, ValueError):
+                    pass
+        if isinstance(positions, dict):
+            try:
+                open_positions = int(positions.get("count"))
+            except (TypeError, ValueError):
+                pass
+
+        roi = run.roi_pct
+        if equity is not None and initial:
+            roi = (equity - initial) / initial * 100.0
+
+        def _as_int(value: object, fallback: int | None) -> int | None:
+            try:
+                return int(value) if value is not None else fallback
+            except (TypeError, ValueError):
+                return fallback
+
+        self._run = replace(
+            run,
+            heartbeat=hb,
+            last_tick_at=hb.get("last_tick_at") or run.last_tick_at,
+            ticks_ok=_as_int(hb.get("ticks_ok"), run.ticks_ok),
+            ticks_fail=_as_int(hb.get("ticks_fail"), run.ticks_fail),
+            equity=equity,
+            initial_balance=initial,
+            roi_pct=roi,
+            trades_closed=trades_closed,
+            drawdown_pct=drawdown_pct,
+            sharpe_rolling=sharpe_rolling,
+            open_count=open_positions,
+            open_positions=open_positions,
+        )
+
     def _tick(self) -> None:
         """Re-paint body and re-arm 5s timer if status==running.
 
         Called by Screen._after; also invoked manually by R-key reload binding.
-        Idempotent — re-pinta o body inteiro a cada tick (heartbeat fresh fetch
-        não está aqui ainda, fica como follow-up).
+        Idempotent — refreshes rich VPS snapshots, then repaints the body.
         """
         if self._run is not None:
+            self._refresh_run_snapshot()
             self._paint_body(self._run)
         if self._run and self._run.status == "running":
             self._refresh_aid = self._after(5000, self._tick)

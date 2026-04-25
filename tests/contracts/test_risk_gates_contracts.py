@@ -688,7 +688,7 @@ class TestDdVelocityCallerSide:
 # gate_anomaly is stateless — depends on the caller computing
 # api_latency_ms_p99 over a rolling window of REST call latencies and
 # populating RiskState. These tests pin the helpers in LiveEngine that
-# do that computation: _record_api_latency (subsamples 1/min) and
+# do that computation: _record_api_latency (records every REST sample) and
 # _compute_api_latency_p99 (rolling p99 over a 5-min window).
 #
 # Without these helpers populating RiskState.api_latency_ms_p99, the
@@ -703,7 +703,7 @@ class TestApiLatencyCallerSide:
         from engines.live import LiveEngine
 
         eng = SimpleNamespace()
-        eng._api_latency_history = deque(maxlen=120)
+        eng._api_latency_history = deque(maxlen=1000)
         # Bind unbound methods.
         eng._record_api_latency = (
             LiveEngine._record_api_latency.__get__(eng)
@@ -721,8 +721,10 @@ class TestApiLatencyCallerSide:
         )
         assert v == 0.0
 
-    def test_few_samples_returns_zero(self):
-        # Insufficient — p99 needs >= 10 samples to be meaningful.
+    def test_few_samples_still_compute_signal(self):
+        # Even a small number of live REST samples is actionable. The
+        # previous >=10 threshold combined with 1/min subsampling made the
+        # default 5-minute anomaly gate impossible to trip.
         from datetime import datetime, timedelta, timezone
         eng = self._engine()
         t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
@@ -730,33 +732,30 @@ class TestApiLatencyCallerSide:
             eng._record_api_latency(t0 + timedelta(minutes=i), 100.0)
         now = t0 + timedelta(minutes=5)
         v = eng._compute_api_latency_p99(now, window_min=10)
-        assert v == 0.0
+        assert v == 100.0
 
     def test_sufficient_samples_compute_p99(self):
         # 100 samples ranging 100..199ms. p99 should be near the top.
         from datetime import datetime, timedelta, timezone
         eng = self._engine()
         t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
-        # Use unique seconds (still 1/min subsample drops most) — bypass
-        # subsample by spreading across minutes.
         for i in range(100):
-            eng._record_api_latency(t0 + timedelta(minutes=i),
+            eng._record_api_latency(t0 + timedelta(seconds=i),
                                      100.0 + i)
-        now = t0 + timedelta(minutes=99)
-        # Window covers all samples (>=100 min).
-        v = eng._compute_api_latency_p99(now, window_min=200)
+        now = t0 + timedelta(seconds=99)
+        v = eng._compute_api_latency_p99(now, window_min=5)
         # p99 of 100..199 with linear interp ≈ 198.0 (idx_f = 0.99 * 99 = 98.01).
         assert 197.0 <= v <= 199.0, f"expected p99 ~198, got {v}"
 
-    def test_subsamples_to_one_per_minute(self):
-        # 60 calls in same minute → only 1 entry in history.
+    def test_records_every_sample_in_same_minute(self):
+        # 60 calls in same minute stay as 60 entries so p99 is real.
         from datetime import datetime, timezone
         eng = self._engine()
         t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
         for sec in range(60):
             ts = t0.replace(second=sec)
             eng._record_api_latency(ts, 200.0 + sec)
-        assert len(eng._api_latency_history) == 1
+        assert len(eng._api_latency_history) == 60
 
     def test_window_min_excludes_older_samples(self):
         # Default window is 5 min. Samples older than that should not
@@ -770,11 +769,13 @@ class TestApiLatencyCallerSide:
         # Recent: 10 samples at 100ms each, starting at t0+30min.
         for i in range(10):
             eng._record_api_latency(t0 + timedelta(minutes=30 + i), 100.0)
-        # now = t0+39min, window=5min: cutoff = t0+34min. Only 5 of the
-        # recent samples qualify (35..39) → < 10, returns 0.0.
+        # now = t0+39min, window=5min: cutoff = t0+34min. Only the
+        # recent samples qualify; ancient 5000ms spikes stay excluded.
         now = t0 + timedelta(minutes=39)
         v = eng._compute_api_latency_p99(now, window_min=5)
-        assert v == 0.0, f"expected 0.0 (insufficient in-window), got {v}"
+        assert 99.0 <= v <= 101.0, (
+            f"expected ~100ms (only recent samples qualify), got {v}"
+        )
         # Widening to 10min picks up all 10 recent (30..39); ancient
         # at 0..9 still falls outside.
         v = eng._compute_api_latency_p99(now, window_min=10)

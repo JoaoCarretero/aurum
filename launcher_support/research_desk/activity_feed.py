@@ -3,7 +3,7 @@
 Widget standalone, scrollavel. Pagination via "LOAD MORE" button: exibe
 N eventos inicialmente, click duplica ate acabar.
 
-Visual: cada row tem [icone da acao] [tipo] titulo [agente] [age].
+Visual: cada row tem [tipo] titulo [agente] [age].
 Cor do accent = cor do agente. Pipeline/Artifacts panels ficam
 complementares ao feed (feed e visao plana; os painels especificos
 sao focados).
@@ -27,7 +27,6 @@ from core.ui.ui_palette import (
 )
 from launcher_support.research_desk.activity_events import (
     ActivityEvent,
-    action_icon,
     action_label,
     merge_events,
 )
@@ -195,16 +194,12 @@ class ActivityFeed:
         content = tk.Frame(row, bg=PANEL)
         content.pack(side="left", fill="x", expand=True, padx=6, pady=2)
 
-        # Linha 1: [icon] [TYPE] title
+        # Linha 1: [TYPE] title
         line1 = tk.Frame(content, bg=PANEL)
         line1.pack(fill="x")
         tk.Label(
-            line1, text=action_icon(event.action),
-            font=(FONT, 10), fg=accent_color, bg=PANEL, width=2, anchor="w",
-        ).pack(side="left")
-        tk.Label(
             line1, text=action_label(event.action),
-            font=(FONT, 7, "bold"), fg=accent_color, bg=PANEL, width=10,
+            font=(FONT, 7, "bold"), fg=accent_color, bg=PANEL, width=12,
             anchor="w",
         ).pack(side="left")
         tk.Label(

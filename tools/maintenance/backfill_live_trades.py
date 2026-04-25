@@ -30,6 +30,7 @@ from core.ops.db_live_trades import (
 )
 
 DB_PATH = Path("data/aurum.db")
+_COCKPIT_UNAVAILABLE = False
 
 
 def _load_trades_from_disk(run_dir: Path) -> list[dict]:
@@ -61,6 +62,9 @@ def _is_signal_payload(payload: dict) -> bool:
 
 def _fetch_from_cockpit(run_id: str) -> list[dict]:
     """GET /v1/runs/{id}/trades from the local cockpit. Empty list on error."""
+    global _COCKPIT_UNAVAILABLE
+    if _COCKPIT_UNAVAILABLE:
+        return []
     try:
         from core.risk.key_store import load_runtime_keys
         import urllib.request
@@ -71,12 +75,13 @@ def _fetch_from_cockpit(run_id: str) -> list[dict]:
             f"http://127.0.0.1:8787/v1/runs/{run_id}/trades",
             headers={"Authorization": f"Bearer {tok}"},
         )
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=2) as r:
             data = json.loads(r.read())
         if isinstance(data, dict):
             return data.get("trades") or []
         return []
     except Exception:
+        _COCKPIT_UNAVAILABLE = True
         return []
 
 

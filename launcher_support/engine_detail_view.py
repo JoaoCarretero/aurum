@@ -272,15 +272,26 @@ def render_positions_block(parent: tk.Widget, run: RunSummary) -> None:
     for p in positions:
         row = tk.Frame(parent, bg=BG)
         row.pack(fill="x", padx=12, pady=0)
-        pnl_pct = p.get("pnl_pct") or 0.0
+        entry = p.get("entry_price", p.get("entry", 0)) or 0
+        mark = p.get("mark_price", p.get("mtm_price", entry)) or 0
+        pnl_usd = p.get("pnl_usd", p.get("unrealized_pnl", 0)) or 0.0
+        pnl_pct = p.get("pnl_pct")
+        if pnl_pct is None:
+            notional = p.get("notional") or p.get("size_usd") or 0
+            try:
+                pnl_pct = (float(pnl_usd) / float(notional) * 100.0
+                           if float(notional) else 0.0)
+            except (TypeError, ValueError):
+                pnl_pct = 0.0
+        direction = str(p.get("direction", "")).lower()
         pnl_color = GREEN if pnl_pct > 0 else (RED if pnl_pct < 0 else DIM)
         for val, w, anchor, color in (
             (str(p.get("symbol", ""))[:10], 10, "w", WHITE),
             (str(p.get("direction", ""))[:5], 5, "w",
-             GREEN if str(p.get("direction")) == "long" else RED),
-            (f"{p.get('entry_price', 0):.4f}", 11, "e", WHITE),
-            (f"{p.get('mark_price', 0):.4f}", 11, "e", WHITE),
-            (f"{p.get('pnl_usd', 0):+.2f}", 9, "e", pnl_color),
+             GREEN if direction in ("long", "bullish") else RED),
+            (f"{float(entry):.4f}", 11, "e", WHITE),
+            (f"{float(mark):.4f}", 11, "e", WHITE),
+            (f"{float(pnl_usd):+.2f}", 9, "e", pnl_color),
             (f"{pnl_pct:+.2f}%", 7, "e", pnl_color),
             (f"{p.get('stop', 0):.4f}", 11, "e", DIM),
             (f"{p.get('target', 0):.4f}", 11, "e", DIM),

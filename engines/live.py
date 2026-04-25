@@ -926,11 +926,10 @@ class LiveEngine:
         # populates per-tick inside _check_risk_gates.
         self._equity_history: deque[tuple[datetime, float]] = deque(maxlen=120)
         # Rolling API latency history for gate_anomaly (kill-switch layer 3).
-        # Sampled 1/minute; capacity 120 = up to 2 hours of history.
-        # Populated externally by the HTTP/order-submit layer via
-        # _record_api_latency(now, elapsed_ms) after each REST call.
+        # Stores every measured broker REST/order call in the recent window;
+        # capacity 1000 is enough for bursty retries without making p99 stale.
         # _check_risk_gates reads it via _compute_api_latency_p99().
-        self._api_latency_history: deque[tuple[datetime, float]] = deque(maxlen=120)
+        self._api_latency_history: deque[tuple[datetime, float]] = deque(maxlen=1000)
         self.positions: list[Position] = []
         self.closed_trades: list = []
         self.macro_series: Optional[pd.Series] = None
@@ -1520,27 +1519,15 @@ class LiveEngine:
         return dd_pct / age_hr
 
     def _record_api_latency(self, now: datetime, latency_ms: float) -> None:
-        """Append (now, latency_ms) to _api_latency_history, subsampling
-        to one sample per UTC minute.
-
-        Same subsample policy as _record_equity_sample: per-tick callers
-        (HTTP/order-submit layer) can fire freely; same-minute calls drop.
-        Earliest sample of the minute wins.
+        """Append one broker REST/order latency sample.
 
         Latency in milliseconds (REST request → response wall-clock).
-        Negative values are dropped defensively — non-physical.
+        Negative values are dropped defensively — non-physical. Unlike
+        equity sampling, latency must not be deduplicated by minute:
+        p99 over a 5-minute window needs the actual request distribution.
         """
         if latency_ms < 0:
             return
-        last = self._api_latency_history[-1] if self._api_latency_history else None
-        if last is not None:
-            last_ts = last[0]
-            if (last_ts.year   == now.year
-                and last_ts.month  == now.month
-                and last_ts.day    == now.day
-                and last_ts.hour   == now.hour
-                and last_ts.minute == now.minute):
-                return
         self._api_latency_history.append((now, latency_ms))
 
     def _compute_api_latency_p99(self, now: datetime | None = None,
@@ -1549,10 +1536,9 @@ class LiveEngine:
         window.
 
         Algorithm: collect all samples whose timestamp is within
-        ``[now - window_min, now]``. If fewer than 10 samples are in the
-        window, return 0.0 (insufficient data — gate_anomaly treats 0.0
-        as "no signal" and allows). Otherwise compute the p99 (99th
-        percentile) of the latency values.
+        ``[now - window_min, now]``. If no samples are in the window,
+        return 0.0 (gate_anomaly treats 0.0 as "no signal"). Otherwise
+        compute the p99 (99th percentile) of the latency values.
 
         Sign convention matches gate_anomaly:
           * positive = degraded latency
@@ -1561,7 +1547,7 @@ class LiveEngine:
 
         Defensive guards return 0.0 (= allow) on:
           * empty history
-          * < 10 samples in window (statistically meaningless p99)
+          * no samples in window
         """
         if not self._api_latency_history:
             return 0.0
@@ -1569,7 +1555,7 @@ class LiveEngine:
             now = datetime.now(timezone.utc)
         cutoff = now - timedelta(minutes=window_min)
         samples = [lat for ts, lat in self._api_latency_history if ts >= cutoff]
-        if len(samples) < 10:
+        if not samples:
             return 0.0
         # p99: position 99% of the way through the sorted samples. For a
         # small window this is essentially the max with a safety margin
@@ -1737,11 +1723,17 @@ class LiveEngine:
             },
         ))
 
+        order_t0 = time.perf_counter()
         fill = await self.orders.place_order(
             sig["symbol"], sig["direction"],
             sig["entry"], sig["size"],
             sig["stop"], sig["target"]
         )
+        if not self.orders.paper:
+            self._record_api_latency(
+                datetime.now(timezone.utc),
+                (time.perf_counter() - order_t0) * 1000.0,
+            )
 
         # [Item 6] API error rate gate — track consecutive failures
         if fill["status"] == "FAILED":
@@ -1840,7 +1832,13 @@ class LiveEngine:
 
     async def _close_position(self, pos: Position, result: str, exit_price: float):
         """Fecha posição, calcula PnL real, actualiza kill-switch e drift."""
+        close_t0 = time.perf_counter()
         fill = await self.orders.close_position(pos, exit_price)
+        if not self.orders.paper:
+            self._record_api_latency(
+                datetime.now(timezone.utc),
+                (time.perf_counter() - close_t0) * 1000.0,
+            )
         real_exit = fill["fill_price"]
 
         slip_exit = (random.uniform(0.5, 1.2) * PAPER_SLIPPAGE

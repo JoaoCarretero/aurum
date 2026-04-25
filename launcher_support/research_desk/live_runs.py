@@ -30,6 +30,14 @@ _STATUS_ICON: dict[str, str] = {
     STATUS_UNKNOWN: "○",
 }
 
+_STATUS_ICON = {
+    STATUS_RUNNING: "RUN",
+    STATUS_SUCCESS: "OK",
+    STATUS_ERROR: "ERR",
+    STATUS_STALE: "STALE",
+    STATUS_UNKNOWN: "?",
+}
+
 
 @dataclass(frozen=True)
 class RunView:

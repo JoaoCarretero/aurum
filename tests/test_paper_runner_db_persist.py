@@ -52,7 +52,7 @@ def _trade_record(symbol="BTCUSDT", **overrides) -> dict:
         "direction": "long",
         "entry_price": 50000.0, "exit_price": 50500.0,
         "stop": 49500.0, "target": 51000.0,
-        "size": 0.001,
+        "size": 0.001, "notional": 50.0,
         "entry_at": "2026-04-25T10:00:00Z",
         "exit_at": "2026-04-25T11:00:00Z",
         "exit_reason": "target",
@@ -73,7 +73,7 @@ def test_persist_writes_to_live_trades(isolated_runner):
     conn = sqlite3.connect(str(tmp_path / "data" / "aurum.db"))
     rows = conn.execute(
         "SELECT run_id, ts, symbol, strategy, direction, entry, exit, "
-        "exit_reason, pnl_usd, r_multiple FROM live_trades"
+        "exit_ts, pnl_usd, exit_reason, r_multiple, size_usd FROM live_trades"
     ).fetchall()
     conn.close()
 
@@ -86,9 +86,11 @@ def test_persist_writes_to_live_trades(isolated_runner):
     assert row[4] == "long"
     assert row[5] == 50000.0
     assert row[6] == 50500.0
-    assert row[7] == "target"
-    assert row[8] == 0.45  # pnl_after_fees → pnl_usd
-    assert row[9] == 1.0
+    assert row[7] == "2026-04-25T11:00:00Z"
+    assert row[8] == 0.45  # pnl_after_fees -> pnl_usd
+    assert row[9] == "target"
+    assert row[10] == 1.0
+    assert row[11] == 50.0
 
 
 def test_persist_idempotent_on_double_close(isolated_runner):

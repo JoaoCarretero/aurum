@@ -195,7 +195,7 @@ class CostDashboard:
                 child.destroy()
             if summary.agents_over_alert:
                 tk.Label(
-                    self._alert_row, text="⚠  ATENCAO:  ",
+                    self._alert_row, text="ATENCAO:  ",
                     font=(FONT, 8, "bold"), fg=HAZARD, bg=BG,
                 ).pack(side="left")
                 tk.Label(

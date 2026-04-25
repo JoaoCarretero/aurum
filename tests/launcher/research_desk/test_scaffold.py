@@ -32,8 +32,8 @@ def test_audit_registered() -> None:
     assert AUDIT.key == "AUDIT"
     assert AUDIT.uuid == "2f790a10-55d1-4b4c-9a48-30db1e4cb73b"
     assert AUDIT.role == "Integrity Auditor"
-    assert AUDIT.archetype == "The Oracle"  # archetype flavor preservado
-    assert AUDIT.stone == "Gold"
+    assert AUDIT.archetype == "Integrity Gate"
+    assert AUDIT.stone == "Audits"
     assert AUDIT in AGENTS
     assert BY_KEY["AUDIT"] is AUDIT
 
@@ -149,7 +149,7 @@ def test_launcher_has_research_desk_shim() -> None:
 
 @pytest.mark.parametrize("key", ["RESEARCH", "REVIEW", "BUILD", "CURATE", "AUDIT"])
 def test_agent_tagline_and_role_populated(key: str) -> None:
-    """Cada identidade tem role + tagline + archetype nao vazios."""
+    """Cada identidade tem role + tagline + legacy labels nao vazios."""
     from launcher_support.research_desk.agents import BY_KEY
 
     a = BY_KEY[key]

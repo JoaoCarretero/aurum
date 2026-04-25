@@ -210,7 +210,7 @@ class IssueDetailModal:
         if offline:
             label = self._offline_label
             if label is not None:
-                label.configure(text=f"⚠  PAPERCLIP OFFLINE — {error[:40]}", fg=RED)
+                label.configure(text=f"PAPERCLIP OFFLINE - {error[:40]}", fg=RED)
             return
         if self._offline_label is not None:
             self._offline_label.configure(text="")

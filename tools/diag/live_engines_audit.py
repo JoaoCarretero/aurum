@@ -34,13 +34,13 @@ DB_PATH = ROOT / "data" / "aurum.db"
 DATA_DIR = ROOT / "data"
 
 
-def _vps_runs(client) -> list[dict]:
+def _vps_runs(client) -> tuple[list[dict], str | None]:
     try:
         rows = client._get("/v1/runs")
     except Exception as e:
         print(f"!! /v1/runs failed: {e}")
-        return []
-    return list(rows) if isinstance(rows, list) else []
+        return [], str(e)
+    return (list(rows) if isinstance(rows, list) else []), None
 
 
 def _vps_trades_count(client, run_id: str) -> tuple[int | None, list[dict], str | None]:
@@ -129,7 +129,7 @@ def main() -> int:
     print("== LIVE ENGINES AUDIT ==\n")
 
     # 1. VPS side
-    vps_runs = _vps_runs(client)
+    vps_runs, vps_runs_error = _vps_runs(client)
     vps_paper_shadow = [
         r for r in vps_runs
         if str(r.get("mode") or "").lower() in ("paper", "shadow")
@@ -156,6 +156,10 @@ def main() -> int:
     modes = ("paper", "shadow")
 
     mismatches: list[str] = []
+    if vps_runs_error is not None:
+        mismatches.append(
+            f"!! VPS cockpit unavailable: /v1/runs failed ({vps_runs_error[:120]})"
+        )
 
     for engine in engines_all:
         print("\n" + "=" * 64)
@@ -244,6 +248,8 @@ def main() -> int:
         print("\nISSUES:")
         for m in mismatches:
             print(f"  {m}")
+        if vps_runs_error is not None:
+            return 2
     else:
         print("\nAll aligned — no drift detected.")
 

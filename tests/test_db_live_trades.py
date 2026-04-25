@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from core.ops.db_live_trades import (
+    ensure_schema,
     upsert_trade,
     upsert_signal,
     upsert_trades_bulk,
@@ -55,6 +56,17 @@ def test_indexes_present(conn):
     assert "idx_live_trades_symbol_ts" in idx
     assert "idx_live_signals_run" in idx
     assert "idx_live_signals_symbol_obs" in idx
+
+
+def test_ensure_schema_creates_tables_on_plain_connection(tmp_path: Path):
+    db = tmp_path / "plain.db"
+    c = sqlite3.connect(str(db))
+    ensure_schema(c)
+    tables = {r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    assert "live_trades" in tables
+    assert "live_signals" in tables
 
 
 # ─── upsert_trade ───────────────────────────────────────────────────
@@ -116,13 +128,20 @@ def test_upsert_trade_handles_legacy_field_names(conn):
         "direction": "short",
         "entry_price": 3000.0,  # legacy alias
         "exit_price": 2950.0,
+        "exit_at": "2026-04-25T11:00:00Z",
+        "notional": 900.0,
+        "size": 0.3,
         "pnl": 1.67,  # legacy alias
     }
     upsert_trade(conn, "rid_1", payload)
     rows = list_trades_for_run(conn, "rid_1")
     assert rows[0]["entry"] == 3000.0
     assert rows[0]["exit"] == 2950.0
+    assert rows[0]["exit_ts"] == "2026-04-25T11:00:00Z"
     assert rows[0]["pnl_usd"] == 1.67
+    assert rows[0]["size_usd"] == 900.0
+    extras = json.loads(rows[0]["details_json"])
+    assert extras["size"] == 0.3
 
 
 def test_upsert_trade_skips_invalid(conn):

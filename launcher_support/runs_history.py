@@ -76,6 +76,9 @@ class RunSummary:
     host: str | None = None
     label: str | None = None
     open_count: int | None = None
+    drawdown_pct: float | None = None
+    sharpe_rolling: float | None = None
+    open_positions: int | None = None
     notes: str | None = None
     _raw: dict = field(default_factory=dict)
 
@@ -160,6 +163,26 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str,
             trades_closed = int(account.get("trades_closed") or 0)
         except Exception:  # noqa: BLE001
             pass
+    drawdown_pct = _as_float(hb.get("drawdown_pct") or hb.get("dd_pct"))
+    sharpe_rolling = None
+    open_positions = None
+    if isinstance(account, dict):
+        metrics = account.get("metrics")
+        if isinstance(metrics, dict):
+            sharpe_rolling = _as_float(
+                metrics.get("sharpe_rolling") or metrics.get("sharpe")
+            )
+        open_positions = _as_int(
+            account.get("open_count")
+            if account.get("open_count") is not None
+            else account.get("positions_open")
+        )
+    if open_positions is None:
+        open_positions = _as_int(
+            hb.get("open_positions_count")
+            if hb.get("open_positions_count") is not None
+            else hb.get("positions_open")
+        )
     novel = hb.get("novel_since_prime")
     if novel is None:
         novel = hb.get("novel_total")
@@ -181,7 +204,10 @@ def _summary_from_local(run_dir: Path, engine: str, mode: str,
         source="local",
         run_dir=run_dir,
         heartbeat=hb,
-        open_count=None,
+        open_count=open_positions,
+        drawdown_pct=drawdown_pct,
+        sharpe_rolling=sharpe_rolling,
+        open_positions=open_positions,
     )
 
 
@@ -223,12 +249,23 @@ def collect_vps_runs(client) -> list[RunSummary]:
         except (TypeError, ValueError):
             equity_f = None
         mode = str(payload.get("mode") or "?")
-        # Paper runs always seed at 10_000 USDT (config.params PAPER_BALANCE).
-        # Compute ROI inline so the column does not show "—" until the
-        # operator clicks a row.
-        initial = 10000.0 if mode == "paper" and equity_f is not None else None
+        # Only compute ROI when the API exposes the real starting balance.
+        # Paper runners accept --account-size/env overrides, so hardcoding
+        # 10k here can make the table lie.
+        initial = _as_float(
+            payload.get("initial_balance") or payload.get("account_size")
+        )
         roi = ((equity_f - initial) / initial * 100.0
                if initial and equity_f is not None else None)
+        drawdown_pct = _as_float(payload.get("drawdown_pct")
+                                 or payload.get("dd_pct"))
+        sharpe_rolling = _as_float(payload.get("sharpe_rolling")
+                                   or payload.get("sharpe"))
+        open_positions = _as_int(
+            payload.get("open_positions_count")
+            if payload.get("open_positions_count") is not None
+            else payload.get("open_count")
+        )
         rows.append(RunSummary(
             run_id=rid,
             engine=str(payload.get("engine") or "?").upper(),
@@ -249,7 +286,10 @@ def collect_vps_runs(client) -> list[RunSummary]:
             heartbeat=None,
             host=str(payload.get("host") or "") or None,
             label=str(payload.get("label") or "") or None,
-            open_count=None,
+            open_count=open_positions,
+            drawdown_pct=drawdown_pct,
+            sharpe_rolling=sharpe_rolling,
+            open_positions=open_positions,
             _raw=payload,
         ))
     _store_cached_rows(_VPS_RUNS_CACHE, cache_key, rows)
@@ -285,6 +325,17 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
             trades_closed = int(account.get("trades_closed") or 0)
         except Exception:  # noqa: BLE001
             pass
+    drawdown_pct = _as_float(hb.get("drawdown_pct") or hb.get("dd_pct"))
+    sharpe_rolling = None
+    if isinstance(account, dict):
+        metrics = account.get("metrics")
+        if isinstance(metrics, dict):
+            sharpe_rolling = _as_float(
+                metrics.get("sharpe_rolling") or metrics.get("sharpe")
+            )
+    open_positions = _as_int(
+        account.get("open_count") if isinstance(account, dict) else None
+    )
     novel = hb.get("novel_since_prime")
     if novel is None:
         novel = hb.get("novel_total", payload.get("novel_total"))
@@ -308,7 +359,10 @@ def _collect_single_vps_run(client, payload: dict) -> RunSummary | None:
         heartbeat=hb,
         host=str(payload.get("host") or hb.get("host") or "") or None,
         label=str(payload.get("label") or hb.get("label") or "") or None,
-        open_count=_as_int(account.get("open_count") if isinstance(account, dict) else None),
+        open_count=open_positions,
+        drawdown_pct=drawdown_pct,
+        sharpe_rolling=sharpe_rolling,
+        open_positions=open_positions,
         _raw=payload,
     )
 
@@ -355,6 +409,7 @@ def collect_db_runs(*, mode: str | None = None, limit: int = 500) -> list[RunSum
                 host=str(row.get("host") or "") or None,
                 label=str(row.get("label") or "") or None,
                 open_count=open_count,
+                open_positions=open_count,
                 notes=str(row.get("notes") or "") or None,
                 _raw=dict(row),
             )
@@ -418,8 +473,23 @@ def merge_runs(local: list[RunSummary],
                 v.label = db_match.label
             if v.open_count is None:
                 v.open_count = db_match.open_count
+            if v.open_positions is None:
+                v.open_positions = db_match.open_positions
+            if v.drawdown_pct is None:
+                v.drawdown_pct = db_match.drawdown_pct
+            if v.sharpe_rolling is None:
+                v.sharpe_rolling = db_match.sharpe_rolling
             if not v.notes:
                 v.notes = db_match.notes
+        if local_match is not None:
+            if v.open_positions is None:
+                v.open_positions = local_match.open_positions
+            if v.open_count is None:
+                v.open_count = local_match.open_count
+            if v.drawdown_pct is None:
+                v.drawdown_pct = local_match.drawdown_pct
+            if v.sharpe_rolling is None:
+                v.sharpe_rolling = local_match.sharpe_rolling
         out.append(v)
         seen.add(v.run_id)
 
@@ -438,6 +508,14 @@ def merge_runs(local: list[RunSummary],
                 d.roi_pct = local_match.roi_pct
             if d.trades_closed is None:
                 d.trades_closed = local_match.trades_closed
+            if d.open_positions is None:
+                d.open_positions = local_match.open_positions
+            if d.open_count is None:
+                d.open_count = local_match.open_count
+            if d.drawdown_pct is None:
+                d.drawdown_pct = local_match.drawdown_pct
+            if d.sharpe_rolling is None:
+                d.sharpe_rolling = local_match.sharpe_rolling
         out.append(d)
         seen.add(d.run_id)
 

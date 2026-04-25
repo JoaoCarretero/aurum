@@ -10,8 +10,7 @@ Arquitetura:
   - action callbacks (assign/configure/history) sao injetados via
     construtor; card nao conhece Screen — so dispatcha eventos
 
-Sprint 1 aplica paleta ametista/onix/cobre/prata como accent stripe e
-titulo. Sprint 2 substitui o sigil placeholder (1a letra) por SVG real.
+Visual: accent stripe discreto, header textual e metricas operacionais.
 """
 from __future__ import annotations
 
@@ -32,8 +31,6 @@ from core.ui.ui_palette import (
 from launcher_support.research_desk.agent_view import AgentView, offline_view
 from launcher_support.research_desk.agents import AgentIdentity
 from launcher_support.research_desk.palette import AgentPalette
-from launcher_support.research_desk.sigils import SigilCanvas
-from launcher_support.research_desk.typography import agent_font
 
 
 # Mapa status -> cor do badge de status
@@ -91,21 +88,28 @@ class AgentCard:
         body = tk.Frame(self.frame, bg=PANEL)
         body.pack(side="left", fill="both", expand=True, padx=10, pady=8)
 
-        # Sigil alquimico desenhado em Canvas + key name com tipografia
-        # distintiva do agente. Click abre detail view.
+        # Compact operational header. The agent color is already present in
+        # the left rail, so the header uses a small code chip instead of a
+        # second symbolic mark.
         header = tk.Frame(body, bg=PANEL, cursor="hand2")
         header.pack(fill="x")
-        sigil = SigilCanvas(header, self.agent.key, size=40, bg=PANEL)
-        sigil.pack(side="left", padx=(0, 6))
+        code_lbl = tk.Label(
+            header, text=self.agent.key[:2],
+            font=(FONT, 8, "bold"),
+            fg=PANEL, bg=self.palette.primary,
+            width=3, padx=2, pady=1,
+            cursor="hand2",
+        )
+        code_lbl.pack(side="left", padx=(0, 8), pady=(3, 0))
         name_lbl = tk.Label(
             header, text=self.agent.key,
-            font=agent_font(self.agent.key, size=11, weight="bold"),
+            font=(FONT, 11, "bold"),
             fg=self.palette.primary, bg=PANEL, anchor="w",
             cursor="hand2",
         )
         name_lbl.pack(side="left", pady=(4, 0))
-        # Click no hero area (sigil + nome) abre detail
-        for clickable in (header, name_lbl, sigil.canvas):
+        # Click no hero area abre detail
+        for clickable in (header, code_lbl, name_lbl):
             clickable.bind("<Button-1>", lambda _e: self._invoke_inspect())
 
         # Status pill no canto direito do header
@@ -121,8 +125,9 @@ class AgentCard:
             font=(FONT, 8), fg=WHITE, bg=PANEL, anchor="w",
         ).pack(anchor="w", pady=(2, 0))
         tk.Label(
-            body, text=f"{self.agent.archetype} · {self.agent.stone}",
+            body, text=self.agent.tagline,
             font=(FONT, 7), fg=DIM, bg=PANEL, anchor="w",
+            wraplength=210, justify="left",
         ).pack(anchor="w")
 
         tk.Frame(body, bg=DIM2, height=1).pack(fill="x", pady=(6, 4))

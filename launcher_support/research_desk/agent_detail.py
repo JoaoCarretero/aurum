@@ -1,9 +1,7 @@
 """AgentDetailModal — view expandido de um operativo.
 
 Toplevel window com:
-  - Sigil grande (size=128) no topo
-  - Nome em tipografia distintiva do agente
-  - Titulo (role) + archetype + pedra
+  - Nome, role e tagline em tipografia terminal
   - Tagline
   - Statblock (tickets done/active, artifacts, cost, birthday)
   - Recent work grid (ate 5 artefatos recentes clicaveis)
@@ -67,8 +65,6 @@ from launcher_support.research_desk.markdown_editor import (
 )
 from launcher_support.research_desk.palette import AGENT_COLORS
 from launcher_support.research_desk.stats_db import RatiosView
-from launcher_support.research_desk.sigils import SigilCanvas
-from launcher_support.research_desk.typography import agent_font
 
 # Status -> cor do dot/label no painel LIVE RUNS
 _RUN_STATUS_COLOR = {
@@ -103,39 +99,36 @@ def build_agent_header(
     stats: StatsView,
     on_toggle_pause: Callable[[AgentIdentity, bool], None],
 ) -> BuilderHandles:
-    """Monta hero (sigil+nome) + statblock (budget/tokens/custo) +
+    """Monta hero operacional + statblock (budget/tokens/custo) +
     actions (pause/resume). Retorna handles pra refresh posterior."""
     handles = BuilderHandles()
     palette = AGENT_COLORS[agent.key]
 
-    # ── Hero (sigil + nome + tagline) ─────────────────────────────
+    # Hero: accent rail + name + role + tagline.
     hero = tk.Frame(parent, bg=BG)
     hero.pack(fill="x", pady=(0, 6))
 
-    sigil = SigilCanvas(hero, agent.key, size=96, bg=BG)
-    sigil.pack(side="left", padx=(0, 16))
+    tk.Frame(hero, bg=palette.primary, width=4).pack(
+        side="left", fill="y", padx=(0, 12)
+    )
 
     meta = tk.Frame(hero, bg=BG)
     meta.pack(side="left", fill="both", expand=True)
 
     tk.Label(
         meta, text=agent.key,
-        font=agent_font(agent.key, size=22, weight="bold"),
+        font=(FONT, 18, "bold"),
         fg=palette.primary, bg=BG, anchor="w",
     ).pack(anchor="w")
     tk.Label(
         meta, text=agent.role,
-        font=agent_font(agent.key, size=11),
+        font=(FONT, 10),
         fg=WHITE, bg=BG, anchor="w",
     ).pack(anchor="w", pady=(2, 0))
     tk.Label(
-        meta, text=f"{agent.archetype}  ·  {agent.stone}",
+        meta, text=agent.tagline,
         font=(FONT, 8), fg=DIM, bg=BG, anchor="w",
     ).pack(anchor="w", pady=(4, 0))
-    tk.Label(
-        meta, text=agent.tagline,
-        font=(FONT, 8, "italic"), fg=DIM2, bg=BG, anchor="w",
-    ).pack(anchor="w", pady=(8, 0))
 
     # ── Statblock ─────────────────────────────────────────────────
     section = tk.Frame(parent, bg=BG)
@@ -162,7 +155,7 @@ def build_agent_header(
         ).pack(side="left")
         tk.Label(
             cell, text=value,
-            font=agent_font(agent.key, size=9, weight="bold"),
+            font=(FONT, 9, "bold"),
             fg=WHITE, bg=BG, anchor="w",
         ).pack(side="left")
 

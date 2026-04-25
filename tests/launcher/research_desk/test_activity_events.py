@@ -50,7 +50,7 @@ def test_action_icon_has_entry_per_kind() -> None:
 
 
 def test_action_icon_unknown_returns_dot() -> None:
-    assert action_icon("nope") == "·"
+    assert action_icon("nope") == "."
 
 
 def test_action_label_all_uppercase() -> None:

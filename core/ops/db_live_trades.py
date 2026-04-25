@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from typing import Iterable
 
 # ─── Field whitelists ──────────────────────────────────────────────
@@ -40,6 +41,33 @@ _SIGNAL_COLS = (
 # ─── Field normalisation ───────────────────────────────────────────
 
 
+_MIGRATION_LOCK = threading.Lock()
+_MIGRATED_DBS: set[str] = set()
+
+
+def _db_key(conn: sqlite3.Connection) -> str:
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        if row is not None and len(row) >= 3 and row[2]:
+            return str(row[2])
+    except sqlite3.Error:
+        pass
+    return f"<connection:{id(conn)}>"
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Ensure live_trades/live_signals exist on an open connection."""
+    key = _db_key(conn)
+    if key in _MIGRATED_DBS:
+        return
+    with _MIGRATION_LOCK:
+        if key in _MIGRATED_DBS:
+            return
+        from tools.maintenance.migrations import migration_002_live_trades
+        migration_002_live_trades.apply(conn)
+        _MIGRATED_DBS.add(key)
+
+
 def _norm_trade(payload: dict) -> dict:
     """Map various JSONL/cockpit field names to canonical column names.
 
@@ -53,9 +81,9 @@ def _norm_trade(payload: dict) -> dict:
         "ts": ("ts", "open_ts", "open_time", "timestamp"),
         "entry": ("entry", "entry_price"),
         "exit": ("exit", "exit_price"),
-        "exit_ts": ("exit_ts", "close_ts", "exit_time"),
+        "exit_ts": ("exit_ts", "close_ts", "exit_time", "exit_at", "closed_at"),
         "pnl_usd": ("pnl_usd", "pnl"),
-        "size_usd": ("size_usd", "size", "notional"),
+        "size_usd": ("size_usd", "notional"),
     }
     out: dict = {}
     for canon, alts in aliases.items():
@@ -109,6 +137,7 @@ def _norm_signal(payload: dict) -> dict:
 
 def upsert_trade(conn: sqlite3.Connection, run_id: str, payload: dict) -> bool:
     """Insert or update a live paper trade. Returns True if inserted."""
+    ensure_schema(conn)
     norm = _norm_trade(payload)
     if "ts" not in norm or "symbol" not in norm or "direction" not in norm:
         return False
@@ -128,6 +157,7 @@ def upsert_trade(conn: sqlite3.Connection, run_id: str, payload: dict) -> bool:
 
 def upsert_signal(conn: sqlite3.Connection, run_id: str, payload: dict) -> bool:
     """Insert or update a live shadow signal. Returns True if inserted."""
+    ensure_schema(conn)
     norm = _norm_signal(payload)
     if ("observed_at" not in norm or "symbol" not in norm
             or "direction" not in norm or "strategy" not in norm):
@@ -171,6 +201,7 @@ def list_trades_for_run(conn: sqlite3.Connection,
                          run_id: str,
                          limit: int = 200) -> list[dict]:
     """Return live_trades for a run, ordered by ts DESC."""
+    ensure_schema(conn)
     cur = conn.execute(
         "SELECT * FROM live_trades WHERE run_id = ? "
         "ORDER BY ts DESC LIMIT ?",
@@ -184,6 +215,7 @@ def list_signals_for_run(conn: sqlite3.Connection,
                            run_id: str,
                            limit: int = 200) -> list[dict]:
     """Return live_signals for a run, ordered by observed_at DESC."""
+    ensure_schema(conn)
     cur = conn.execute(
         "SELECT * FROM live_signals WHERE run_id = ? "
         "ORDER BY observed_at DESC LIMIT ?",

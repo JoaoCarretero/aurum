@@ -158,7 +158,7 @@ Template completo de output: mantido no `AGENTS.md` do AUDIT (`~/.paperclip/.../
 
 ## 5. Referências cruzadas
 
-- **`AGENTS.md §4`** (repo root) — roster e sigils dos 5 operativos
+- **`AGENTS.md §4`** (repo root) — roster dos 5 operativos
 - **`AGENTS.md §5`** — checklist antes de dispatchar qualquer agente
 - **`MEMORY.md §1`** — CORE protegido (core/indicators, core/signals, core/portfolio, config/params)
 - **`MEMORY.md §2`** — `config/keys.json` INTOCÁVEL
