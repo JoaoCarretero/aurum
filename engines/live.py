@@ -37,8 +37,8 @@ Ficheiros de output:
 import os, sys, json, time, asyncio, logging, signal, random, requests
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, timezone
-from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from collections import defaultdict, deque
 from typing import Optional
 
 # ── PATH ──────────────────────────────────────────────────────
@@ -921,6 +921,10 @@ class LiveEngine:
         # on the first tick of each UTC day by _status_ticker.
         self._sod_equity = ACCOUNT_SIZE
         self._sod_date   = datetime.now(timezone.utc).date()
+        # Rolling equity history for gate_dd_velocity. Sampled 1/minute;
+        # capacity 120 = up to 2 hours of history. Caller (this class)
+        # populates per-tick inside _check_risk_gates.
+        self._equity_history: deque[tuple[datetime, float]] = deque(maxlen=120)
         self.positions: list[Position] = []
         self.closed_trades: list = []
         self.macro_series: Optional[pd.Series] = None
@@ -1443,6 +1447,72 @@ class LiveEngine:
         log.critical(f"  kill-switch complete — self.running = False")
 
     # ── RISK GATES (Fase 4-C) ─────────────────────────────────
+    def _record_equity_sample(self, now: datetime, equity: float) -> None:
+        """Append (now, equity) to _equity_history, subsampling to one
+        sample per UTC minute. Per-tick callers can fire freely; the
+        de-duplication keeps the buffer's time-distribution clean.
+
+        Subsample logic: drop the call if the last recorded sample is
+        within the same minute as `now`. The earliest sample of a minute
+        wins — equity readings later in the same minute are usually
+        identical (account changes only on close events, which are rare
+        within a minute) and the earliest tick gives a slight time-anchor
+        advantage to the velocity computation.
+        """
+        last = self._equity_history[-1] if self._equity_history else None
+        if last is not None:
+            last_ts = last[0]
+            if (last_ts.year   == now.year
+                and last_ts.month  == now.month
+                and last_ts.day    == now.day
+                and last_ts.hour   == now.hour
+                and last_ts.minute == now.minute):
+                return
+        self._equity_history.append((now, equity))
+
+    def _compute_dd_velocity_pct_per_hour(self, now: datetime,
+                                          window_min: int = 60) -> float:
+        """Return drawdown velocity in %/hour computed from the rolling
+        equity history.
+
+        Algorithm: find the OLDEST sample whose timestamp is within
+        ``[now - window_min, now]`` and use it as the anchor. Then::
+
+            dd_pct  = (anchor_equity - account) / anchor_equity * 100
+            age_hr  = (now - anchor_ts) / 3600
+            return dd_pct / age_hr
+
+        Sign convention matches gate_dd_velocity:
+          * positive = losing equity (anchor was higher than current)
+          * zero = stationary or insufficient history
+          * negative = recovering equity (anchor was lower than current)
+
+        Defensive guards return 0.0 (= allow) on:
+          * empty history
+          * no sample within window (engine just started)
+          * anchor sample is the current call (age_hr ≈ 0)
+          * anchor equity is zero (avoid division by zero)
+        """
+        if not self._equity_history:
+            return 0.0
+        cutoff = now - timedelta(minutes=window_min)
+        anchor: tuple[datetime, float] | None = None
+        for ts, eq in self._equity_history:
+            if ts >= cutoff:
+                anchor = (ts, eq)
+                break
+        if anchor is None:
+            return 0.0
+        anchor_ts, anchor_eq = anchor
+        if anchor_eq <= 0:
+            return 0.0
+        age_hr = (now - anchor_ts).total_seconds() / 3600.0
+        if age_hr <= 0.01:
+            # Sample is "now" — no meaningful delta yet.
+            return 0.0
+        dd_pct = (anchor_eq - self.account) / anchor_eq * 100.0
+        return dd_pct / age_hr
+
     def _check_risk_gates(self) -> GateDecision:
         """Build a RiskState snapshot from current engine state and run
         the full gate chain. Returns the first non-allow decision (hard
@@ -1453,6 +1523,11 @@ class LiveEngine:
         if now.date() != self._sod_date:
             self._sod_equity = self.account
             self._sod_date = now.date()
+
+        # Sample equity for the velocity gate. Subsamples to 1/minute
+        # so per-tick gate evaluations don't pollute the buffer.
+        self._record_equity_sample(now, self.account)
+        dd_velocity = self._compute_dd_velocity_pct_per_hour(now, window_min=60)
 
         open_positions = []
         for p in self.positions:
@@ -1472,6 +1547,7 @@ class LiveEngine:
             consecutive_losses  = self.consecutive_losses,
             open_positions      = open_positions,
             current_hour_utc    = now.hour,
+            dd_velocity_pct_per_hour = dd_velocity,
         )
         return check_gates(state, self.risk_cfg)
 

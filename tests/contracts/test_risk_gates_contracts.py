@@ -500,3 +500,125 @@ class TestRealMoneyGuard:
         cfg = load_gate_config("live")
         assert not cfg.is_default(), "live mode needs non-default risk gates"
         self._guard()("live", cfg)  # no raise
+
+
+# ────────────────────────────────────────────────────────────
+# LiveEngine dd_velocity caller-side wiring
+# ────────────────────────────────────────────────────────────
+# gate_dd_velocity é stateless — depende do caller computar
+# dd_velocity_pct_per_hour de uma janela rolante de equity readings e
+# popular o RiskState. Estes testes pinam os helpers em LiveEngine que
+# fazem essa computação: _record_equity_sample (subsampleia 1/min) e
+# _compute_dd_velocity_pct_per_hour (lookup por anchor + per-hour rate).
+#
+# Sem esses helpers populando RiskState.dd_velocity_pct_per_hour, o gate
+# (que existe em risk_gates.py desde 624a57d) ficaria dormente em prod.
+
+class TestDdVelocityCallerSide:
+    def _engine(self):
+        """Minimal engine stub for helper testing — same pattern as
+        TestLiveEnginePlumbing._bind. Avoids spinning a full LiveEngine
+        which needs exchange config + WS tasks."""
+        from collections import deque
+        from types import SimpleNamespace
+        from engines.live import LiveEngine
+
+        eng = SimpleNamespace()
+        eng._equity_history = deque(maxlen=120)
+        eng.account = 10_000.0
+        # Bind unbound methods.
+        eng._record_equity_sample = (
+            LiveEngine._record_equity_sample.__get__(eng)
+        )
+        eng._compute_dd_velocity_pct_per_hour = (
+            LiveEngine._compute_dd_velocity_pct_per_hour.__get__(eng)
+        )
+        return eng
+
+    def test_empty_history_returns_zero(self):
+        from datetime import datetime, timezone
+        eng = self._engine()
+        v = eng._compute_dd_velocity_pct_per_hour(
+            datetime.now(timezone.utc), window_min=60
+        )
+        assert v == 0.0
+
+    def test_single_sample_returns_zero(self):
+        # Only one reading → no time delta → velocity not meaningful.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        now = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(now, 10_000.0)
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert v == 0.0
+
+    def test_decline_over_60min_yields_positive_velocity(self):
+        # equity 10000 at t-60min → 9700 at t → 3% drop / 1.0 hr = 3.0 %/hr
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 10_000.0)
+        now = t0 + timedelta(minutes=60)
+        eng.account = 9_700.0
+        eng._record_equity_sample(now, 9_700.0)
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert 2.95 <= v <= 3.05, f"expected ~3.0 %/hr, got {v}"
+
+    def test_recovery_yields_negative_velocity(self):
+        # equity climbing → velocity < 0 → gate_dd_velocity returns allow.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 10_000.0)
+        now = t0 + timedelta(minutes=30)
+        eng.account = 10_300.0
+        eng._record_equity_sample(now, 10_300.0)
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert v < 0, f"recovery should yield negative velocity, got {v}"
+
+    def test_subsamples_to_one_per_minute(self):
+        # 100 calls in same minute → only 1 entry in history.
+        from datetime import datetime, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        for sec in range(0, 60, 1):
+            ts = t0.replace(second=sec)
+            eng._record_equity_sample(ts, 10_000.0 - sec)
+        # Same minute, should only retain ONE sample (the first).
+        assert len(eng._equity_history) == 1
+
+    def test_subsample_advances_on_minute_boundary(self):
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 10_000.0)
+        eng._record_equity_sample(t0 + timedelta(minutes=1), 9_990.0)
+        eng._record_equity_sample(t0 + timedelta(minutes=2), 9_980.0)
+        assert len(eng._equity_history) == 3
+
+    def test_window_min_excludes_older_samples(self):
+        # Anchor must be within window_min minutes of `now`.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        # Ancient: 90 min before now. Should NOT anchor with window_min=60.
+        eng._record_equity_sample(t0, 10_000.0)
+        # Within window: 30 min before now.
+        eng._record_equity_sample(t0 + timedelta(minutes=60), 9_950.0)
+        now = t0 + timedelta(minutes=90)
+        eng.account = 9_950.0
+        # Anchor should be the 60-min mark, not the 0-min mark.
+        # Drop from 9950 → 9950 over 30 min = 0%/hr (no decline in window).
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert abs(v) < 0.01, f"expected ~0.0 with no in-window decline, got {v}"
+
+    def test_zero_anchor_equity_returns_zero(self):
+        # Defensive: if history has equity=0 entry, don't divide by zero.
+        from datetime import datetime, timedelta, timezone
+        eng = self._engine()
+        t0 = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+        eng._record_equity_sample(t0, 0.0)
+        now = t0 + timedelta(minutes=30)
+        eng.account = 1_000.0
+        v = eng._compute_dd_velocity_pct_per_hour(now, window_min=60)
+        assert v == 0.0
