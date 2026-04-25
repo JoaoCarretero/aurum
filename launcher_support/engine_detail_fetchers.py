@@ -54,16 +54,18 @@ def _fetch_signals(run: RunSummary, limit: int) -> list[dict]:
 
 
 def _fetch_trades(run: RunSummary) -> list[dict]:
-    """Local trades.jsonl OR cockpit /v1/runs/{id}/trades.
+    """Local trades OR cockpit /v1/runs/{id}/trades.
 
-    Layouts suportados (local):
-      - run_dir/trades.jsonl                  (legacy, raiz)
-      - run_dir/reports/trades.jsonl          (canônico, sub-reports)
+    Layouts suportados (local — em ordem de preferencia):
+      - run_dir/reports/trades.jsonl          (paper canonical)
+      - run_dir/reports/shadow_trades.jsonl   (shadow runner usa shadow_trades)
+      - run_dir/trades.jsonl                  (legacy raiz)
     """
     rows: list[dict] = []
     if run.source == "local" and run.run_dir:
         candidates = [
             Path(run.run_dir) / "reports" / "trades.jsonl",
+            Path(run.run_dir) / "reports" / "shadow_trades.jsonl",
             Path(run.run_dir) / "trades.jsonl",
         ]
         tp = next((p for p in candidates if p.exists()), None)

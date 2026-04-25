@@ -178,6 +178,48 @@ def test_trades_block_renders_full_table(gui_root):
     parent.destroy()
 
 
+def test_fetch_trades_reads_shadow_trades_jsonl(tmp_path):
+    """Shadow runner writes shadow_trades.jsonl, not trades.jsonl.
+    Local _fetch_trades must read both layouts (shadow + paper)."""
+    from launcher_support.engine_detail_fetchers import _fetch_trades
+    import json as _j
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    sig = {"symbol": "AVAXUSDT", "strategy": "RENAISSANCE",
+           "direction": "BULLISH", "entry": 9.41, "stop": 9.34,
+           "target": 9.44, "score": 0.66}
+    (reports / "shadow_trades.jsonl").write_text(
+        _j.dumps(sig) + "\n", encoding="utf-8")
+
+    run = _run_with_hb({}, source="local", run_dir=str(tmp_path))
+    rows = _fetch_trades(run)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "AVAXUSDT"
+    assert rows[0]["strategy"] == "RENAISSANCE"
+
+
+def test_fetch_trades_prefers_paper_over_shadow_when_both_exist(tmp_path):
+    """If both files exist (shouldn't normally), prefer canonical paper trades.jsonl."""
+    from launcher_support.engine_detail_fetchers import _fetch_trades
+    import json as _j
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "trades.jsonl").write_text(
+        _j.dumps({"symbol": "PAPER_TRADE", "pnl_usd": 1.0}) + "\n",
+        encoding="utf-8")
+    (reports / "shadow_trades.jsonl").write_text(
+        _j.dumps({"symbol": "SHADOW_SIG", "pnl_usd": 0.0}) + "\n",
+        encoding="utf-8")
+
+    run = _run_with_hb({}, source="local", run_dir=str(tmp_path))
+    rows = _fetch_trades(run)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "PAPER_TRADE", (
+        "trades.jsonl should win when both exist")
+
+
 def test_freshness_block_skips_when_no_data(gui_root):
     from launcher_support.engine_detail_view import render_freshness_block
     parent = tk.Frame(gui_root)
