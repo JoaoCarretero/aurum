@@ -1,16 +1,18 @@
-"""InfraScreen — single dashboard for tunnel/VPS/cockpit/keys + log tail.
+"""VpsScreen — single dashboard for VPS infra: tunnel, cockpit, host, keys.
 
-Operator-facing infrastructure pane. Surface all the moving parts that
-keep the cockpit alive in one place so the operator can diagnose
-"engines não aparecem" without bouncing between SSH terminals, log
-files and Telegram. Read-only cards live-refresh every 5s; the LOG
-TAIL card streams the most recent ``data/.cockpit_cache/tunnel.log``
-entries.
+Operator-facing VPS pane. Surface all the moving parts that keep the
+remote cockpit alive in one place so the operator can diagnose
+"engines não aparecem" without bouncing between SSH terminals and log
+files. Read-only cards live-refresh every 5s; the LOG TAIL card
+streams the most recent ``data/.cockpit_cache/tunnel.log`` entries.
 
-Bloomberg-terminal aesthetic mirrors `engines_live_view`: 4-column
-status header, two-column card grid (TUNNEL / COCKPIT / VPS / KEYS),
-log tail at the bottom. Each card has accent stripe + H2 heading + row
-list (label / value with semantic color).
+Bloomberg-terminal aesthetic mirrors `engines_live_view`: status
+header, two-column card grid (TUNNEL / COCKPIT API / VPS HOST /
+KEYS section), log tail at the bottom. Each card has accent stripe +
+H2 heading + row list (label / value with semantic color).
+
+Acesso pelo botao 🖧 VPS no header. CONFIG (⚙) ao lado abre o router
+de settings gerais (api keys, telegram, risk params, etc).
 """
 from __future__ import annotations
 
@@ -34,8 +36,8 @@ _TUNNEL_LOG = _ROOT / "data" / ".cockpit_cache" / "tunnel.log"
 _REFRESH_TICK_MS = 5000
 
 
-class InfraScreen(Screen):
-    """Dashboard pra todos os componentes de infra: tunnel, VPS, cockpit, keys.
+class VpsScreen(Screen):
+    """Dashboard de infra VPS: tunnel SSH, cockpit API, host, keys section.
 
     Diagnostico fast-path: sem precisar SSH manual nem tail de log,
     operador ve em uma tela so se a infra ta viva. Reduz tempo de
@@ -54,7 +56,7 @@ class InfraScreen(Screen):
         # health, ssh ping). 2 workers e suficiente — fetches sao raros
         # (5s tick) e curtos.
         self._pool = ThreadPoolExecutor(max_workers=2,
-                                        thread_name_prefix="infra-")
+                                        thread_name_prefix="vps-screen-")
         self._latest_metrics: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -72,11 +74,11 @@ class InfraScreen(Screen):
         tk.Frame(strip, bg=AMBER, width=4, height=22).pack(side="left", padx=(0, 8))
         title_wrap = tk.Frame(strip, bg=BG)
         title_wrap.pack(side="left", fill="x", expand=True)
-        tk.Label(title_wrap, text="CONFIG · INFRA",
+        tk.Label(title_wrap, text="VPS · INFRA",
                  font=(FONT, 11, "bold"), fg=AMBER, bg=BG, anchor="w"
                  ).pack(anchor="w")
         tk.Label(title_wrap,
-                 text="Tunnel SSH · Cockpit API · VPS · keys.json — "
+                 text="Tunnel SSH · Cockpit API · Host · keys.json — "
                       "leitura ao vivo, refresh 5s",
                  font=(FONT, 7), fg=DIM, bg=BG, anchor="w"
                  ).pack(anchor="w", pady=(3, 0))
@@ -205,7 +207,7 @@ class InfraScreen(Screen):
         del kwargs
         app = self.app
         if hasattr(app, "h_path"):
-            app.h_path.configure(text="> CONFIG · INFRA")
+            app.h_path.configure(text="> VPS · INFRA")
         if hasattr(app, "h_stat"):
             app.h_stat.configure(text="LIVE", fg=AMBER_D)
         if hasattr(app, "f_lbl"):
