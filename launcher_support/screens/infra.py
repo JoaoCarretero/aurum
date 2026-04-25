@@ -230,6 +230,13 @@ class InfraScreen(Screen):
     # Refresh — collect + paint
     # ------------------------------------------------------------------
     def _refresh_all(self) -> None:
+        # Le keys.json uma vez por tick e compartilha entre cards (3
+        # consumers — keys, vps, cockpit fetch). Sem isso cada card lia
+        # do disco — pequeno mas evitavel.
+        try:
+            self._cached_keys = self._read_keys_json()
+        except Exception:
+            self._cached_keys = {}
         # Sync (cheap) data: tunnel status, keys.json, log tail
         self._refresh_tunnel_card()
         self._refresh_keys_card()
@@ -305,10 +312,7 @@ class InfraScreen(Screen):
 
     # --- VPS (static config from keys.json) ----------------------------
     def _refresh_vps_card_static(self) -> None:
-        try:
-            data = self._read_keys_json()
-        except Exception:
-            data = {}
+        data = getattr(self, "_cached_keys", None) or {}
         vps = (data or {}).get("vps_ssh") or {}
         host = str(vps.get("host") or "—")
         user = str(vps.get("user") or "—")
@@ -412,58 +416,64 @@ class InfraScreen(Screen):
             for k in ("binance", "telegram", "cockpit api", "vps_ssh"):
                 self._set("keys", k, "—", DIM2)
             return
-        # Integrity check via subprocess do verify_keys_intact.py — rapido
-        # (~50ms). Se falhar, integrity = "PLACEHOLDER" em vermelho.
-        integrity_ok = self._verify_keys_intact()
-        self._set("keys", "integrity",
-                 "OK" if integrity_ok else "PLACEHOLDER",
-                 GREEN if integrity_ok else RED)
-        data = self._read_keys_json()
-        # Binance
-        b = (data or {}).get("binance") or {}
-        b_state = self._key_status(b)
+        data = getattr(self, "_cached_keys", None) or self._read_keys_json()
+        # Per-section status — feito inline pra evitar spawn de subprocess
+        # (verify_keys_intact.py custava ~500ms-1s no Windows a cada 5s
+        # tick e travava Tk main loop). Mesma logica de detection
+        # (cole_aqui / <paste / <your) feita aqui.
+        b_state = self._key_status((data or {}).get("binance") or {})
+        t_state = self._key_status((data or {}).get("telegram") or {})
+        c_state = self._key_status(
+            (data or {}).get("cockpit_api") or {},
+            expected_keys=("read_token", "admin_token"),
+        )
+        v_state = self._key_status(
+            (data or {}).get("vps_ssh") or {},
+            expected_keys=("host", "key_path"),
+        )
         self._set("keys", "binance", b_state[0], b_state[1])
-        # Telegram
-        t = (data or {}).get("telegram") or {}
-        t_state = self._key_status(t)
         self._set("keys", "telegram", t_state[0], t_state[1])
-        # Cockpit API
-        c = (data or {}).get("cockpit_api") or {}
-        c_state = self._key_status(c, expected_keys=("read_token", "admin_token"))
         self._set("keys", "cockpit api", c_state[0], c_state[1])
-        # VPS SSH
-        v = (data or {}).get("vps_ssh") or {}
-        v_state = self._key_status(v, expected_keys=("host", "key_path"))
         self._set("keys", "vps_ssh", v_state[0], v_state[1])
+        # Integrity = OK se todas as 4 secoes principais nao tem
+        # placeholder e tem expected keys.
+        any_placeholder = any(
+            "placeholder" in s[0]
+            for s in (b_state, t_state, c_state, v_state)
+        )
+        any_missing = any(
+            "missing" in s[0]
+            for s in (b_state, t_state, c_state, v_state)
+        )
+        if any_placeholder:
+            self._set("keys", "integrity", "PLACEHOLDER", RED)
+        elif any_missing:
+            self._set("keys", "integrity", "PARTIAL", AMBER_B)
+        else:
+            self._set("keys", "integrity", "OK", GREEN)
 
     def _key_status(self, section: dict,
                     expected_keys: tuple[str, ...] = ()) -> tuple[str, str]:
         if not section:
             return ("missing", DIM2)
-        # Detect placeholder values (cole_aqui_*, <paste, etc)
-        for v in section.values():
-            if isinstance(v, str) and any(
-                m in v.lower() for m in ("cole_aqui", "<paste", "<your")
-            ):
-                return ("placeholder", RED)
+        # Detect placeholder values (cole_aqui_*, <paste, etc) — recursivo
+        # pra subdicts (vps_ssh tem keypath aninhado, etc).
+        def _has_placeholder(obj) -> bool:
+            if isinstance(obj, str):
+                low = obj.lower()
+                return any(m in low for m in ("cole_aqui", "<paste", "<your"))
+            if isinstance(obj, dict):
+                return any(_has_placeholder(v) for v in obj.values())
+            if isinstance(obj, list):
+                return any(_has_placeholder(v) for v in obj)
+            return False
+        if _has_placeholder(section):
+            return ("placeholder", RED)
         if expected_keys:
             missing = [k for k in expected_keys if not section.get(k)]
             if missing:
                 return (f"missing {','.join(missing)}", AMBER_B)
         return ("configured", GREEN)
-
-    def _verify_keys_intact(self) -> bool:
-        """Run tools/maintenance/verify_keys_intact.py — exit code 0 = OK."""
-        import subprocess
-        try:
-            r = subprocess.run(
-                ["python", "tools/maintenance/verify_keys_intact.py"],
-                cwd=str(_ROOT), timeout=5,
-                capture_output=True,
-            )
-            return r.returncode == 0
-        except Exception:
-            return False
 
     # --- LOG TAIL ------------------------------------------------------
     def _refresh_log_tail(self) -> None:
