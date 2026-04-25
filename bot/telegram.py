@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from core.risk.failure_policy import BEST_EFFORT, DEGRADE_AND_LOG
+from core.risk.key_store import KeyStoreError, load_runtime_keys
 from core.ops.health import runtime_health
 from core.data.transport import RequestSpec, TransportClient
 
@@ -40,7 +41,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("aurum.telegram")
 
 # ── CONFIG ────────────────────────────────────────────────────
-_KEYS_PATH = Path(__file__).parent.parent / "config" / "keys.json"
+_PROJ_ROOT = Path(__file__).resolve().parent.parent
+_PLAINTEXT_KEYS = _PROJ_ROOT / "config" / "keys.json"
+_ENCRYPTED_KEYS = _PROJ_ROOT / "config" / "keys.json.enc"
 _API = "https://api.telegram.org/bot{token}/{method}"
 _POLL_INTERVAL = 2          # segundos entre polls de updates
 _MAX_MSG_LEN   = 4000       # Telegram limit ~4096
@@ -52,22 +55,29 @@ def _load_telegram_config() -> tuple[str, str, frozenset[str]]:
     allowed_user_ids defaults to {chat_id} when the key is absent — preserves
     the prior DM-only behavior without requiring existing configs to change.
     Returns ('', '', frozenset()) when telegram is not configured.
+
+    Loads via core.risk.key_store.load_runtime_keys so the encrypted key
+    store (config/keys.json.enc) is honored when AURUM_KEY_PASSWORD is set —
+    MEMORY §2 forbids raw json.load on keys.json from new code.
     """
     try:
-        with open(_KEYS_PATH) as f:
-            cfg = json.load(f)
-        tg = cfg.get("telegram", {})
-        token = tg.get("bot_token", "")
-        chat  = str(tg.get("chat_id", ""))
-        raw_ids = tg.get("allowed_user_ids")
-        if raw_ids is None:
-            allowed = frozenset({chat}) if chat else frozenset()
-        else:
-            allowed = frozenset(str(x) for x in raw_ids if str(x))
-        return token, chat, allowed
-    except Exception:
+        cfg = load_runtime_keys(
+            plaintext_path=_PLAINTEXT_KEYS,
+            encrypted_path=_ENCRYPTED_KEYS,
+        )
+    except (KeyStoreError, OSError):
         runtime_health.record("telegram.config_load_failure")
         return "", "", frozenset()
+
+    tg = cfg.get("telegram", {})
+    token = tg.get("bot_token", "")
+    chat  = str(tg.get("chat_id", ""))
+    raw_ids = tg.get("allowed_user_ids")
+    if raw_ids is None:
+        allowed = frozenset({chat}) if chat else frozenset()
+    else:
+        allowed = frozenset(str(x) for x in raw_ids if str(x))
+    return token, chat, allowed
 
 
 class TelegramNotifier:
