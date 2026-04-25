@@ -76,14 +76,22 @@ def _norm_trade(payload: dict) -> dict:
     Cockpit endpoint mirrors the JSONL shape.
     """
     p = dict(payload)
-    # Aliases — if canonical missing, try alternatives.
+    # Aliases — if canonical missing, try alternatives. Order matters:
+    # the first alias key present in the payload wins. Cockpit
+    # /v1/runs/{id}/trades emits entry_at / exit_at / pnl_after_fees,
+    # so those go first to win over JSONL-canonical names that may
+    # also be present.
     aliases = {
-        "ts": ("ts", "open_ts", "open_time", "timestamp"),
+        "ts": ("ts", "entry_at", "open_ts", "open_time", "timestamp"),
         "entry": ("entry", "entry_price"),
         "exit": ("exit", "exit_price"),
-        "exit_ts": ("exit_ts", "close_ts", "exit_time", "exit_at", "closed_at"),
-        "pnl_usd": ("pnl_usd", "pnl"),
-        "size_usd": ("size_usd", "notional"),
+        "exit_ts": ("exit_ts", "exit_at", "close_ts", "exit_time", "closed_at"),
+        # pnl_after_fees is the net pnl the user sees in the UI; prefer it
+        # over the gross 'pnl' so backfilled rows match cockpit numbers.
+        "pnl_usd": ("pnl_after_fees", "pnl_usd", "pnl"),
+        "size_usd": ("notional", "size_usd", "size"),
+        # Cockpit emits 'engine' (=sub-engine name); JSONL emits 'strategy'.
+        "strategy": ("strategy", "engine"),
     }
     out: dict = {}
     for canon, alts in aliases.items():
